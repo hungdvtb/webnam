@@ -52,9 +52,16 @@ function parseVideoLinks(html) {
   );
 }
 
-export default async function ProductDetailPage({ params }) {
+export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
+  const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
+  const requestedBundleOptionKey = String(resolvedSearchParams?.bundle_option_key || '').trim();
+  const requestedBundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const requestedVariantId = Number.parseInt(
+    String(resolvedSearchParams?.variant_id || '').trim(),
+    10,
+  ) || 0;
 
   let product = null;
   let relatedProducts = [];
@@ -97,7 +104,12 @@ export default async function ProductDetailPage({ params }) {
     <div className={styles.productDetail}>
       <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
         <div className={styles.productPageSections}>
-          <ProductDetailContent product={product} />
+          <ProductDetailContent
+            product={product}
+            requestedBundleOptionKey={requestedBundleOptionKey}
+            requestedBundleOptionTitle={requestedBundleOptionTitle}
+            requestedVariantId={requestedVariantId}
+          />
 
           <div className={styles.tabsSection}>
             <div className={styles.tabHeader}>

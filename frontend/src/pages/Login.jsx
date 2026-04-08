@@ -5,7 +5,11 @@ import { useAuth } from '../context/AuthContext';
 
 const Login = () => {
     const [credentials, setCredentials] = useState({ email: '', password: '' });
-    const [error, setError] = useState('');
+    const [error, setError] = useState(() => (
+        typeof window !== 'undefined' && window.sessionStorage.getItem('auth_notice') === 'session-expired'
+            ? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
+            : ''
+    ));
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const { setUser } = useAuth();
@@ -35,8 +39,14 @@ const Login = () => {
             localStorage.setItem('token', response.data.token);
             localStorage.setItem('user', JSON.stringify(response.data.user));
             setUser(response.data.user);
-            
-            if (response.data.user.is_admin) {
+
+            const postLoginRedirect = sessionStorage.getItem('post_login_redirect');
+            sessionStorage.removeItem('auth_notice');
+            sessionStorage.removeItem('post_login_redirect');
+
+            if (postLoginRedirect) {
+                navigate(postLoginRedirect);
+            } else if (response.data.user.is_admin) {
                 navigate('/admin');
             } else {
                 navigate('/dashboard');

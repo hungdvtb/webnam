@@ -5236,6 +5236,17 @@ class ProductController extends Controller
             $this->applySupplierFilter($query, $supplierIds, $includeUnassignedSuppliers);
         }
 
+        $inventoryUnitFilter = trim((string) $request->input('inventory_unit_filter', ''));
+        if ($inventoryUnitFilter !== '') {
+            if ($inventoryUnitFilter === 'assigned') {
+                $query->whereNotNull('products.inventory_unit_id');
+            } elseif ($inventoryUnitFilter === 'unassigned') {
+                $query->whereNull('products.inventory_unit_id');
+            } elseif (is_numeric($inventoryUnitFilter)) {
+                $query->where('products.inventory_unit_id', (int) $inventoryUnitFilter);
+            }
+        }
+
         if ($request->boolean('missing_purchase_price')) {
             $query->whereDoesntHave('supplierPrices', function (Builder $priceQuery) {
                 $priceQuery
@@ -9667,7 +9678,7 @@ class ProductController extends Controller
      */
     public function bulkUpdateAttributes(Request $request)
     {
-        $basicUpdateFields = ['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'is_featured', 'is_new', 'status', 'type', 'specifications', 'additional_info'];
+        $basicUpdateFields = ['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'inventory_unit_id', 'is_featured', 'is_new', 'status', 'type', 'specifications', 'additional_info'];
 
         $request->validate([
             'ids' => 'required|array',
@@ -9675,6 +9686,7 @@ class ProductController extends Controller
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
+            'basic_info.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'basic_info.specifications' => 'nullable|string',
             'basic_info.additional_info' => 'nullable',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],

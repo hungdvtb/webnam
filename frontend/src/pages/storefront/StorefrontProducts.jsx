@@ -586,7 +586,7 @@ const StorefrontProducts = () => {
     const isLayoutTwo = false;
     const activeSortOptions = DEFAULT_SORT_OPTIONS;
     const categoryTitle = currentCategory?.name || (search ? `Kết quả: "${search}"` : 'Tất cả sản phẩm');
-    const categoryDescription = currentCategory?.description || 'Khám phá bộ sưu tập tuyển chọn với bố cục được tối ưu cho mobile, dễ lướt và dễ so sánh.';
+    const categoryDescription = currentCategory?.meta_description || currentCategory?.description || 'Khám phá bộ sưu tập tuyển chọn với bố cục được tối ưu cho mobile, dễ lướt và dễ so sánh.';
     const layoutTwoFilters = availableFilters.filter((filter) => ['select', 'multiselect'].includes(filter.type));
     const priceFilter = availableFilters.find((filter) => filter.type === 'price_range');
 

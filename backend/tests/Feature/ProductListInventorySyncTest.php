@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
@@ -184,6 +185,66 @@ class ProductListInventorySyncTest extends TestCase
         $this->assertTrue($withoutImageRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutImage->id));
     }
 
+    public function test_product_list_can_filter_products_by_inventory_unit(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $pieceUnit = $this->createInventoryUnit($account, 'Cai');
+        $setUnit = $this->createInventoryUnit($account, 'Bo');
+
+        $productWithPieceUnit = $this->createProduct($account, $supplier, [
+            'name' => 'San pham co DVT cai',
+            'sku' => 'SYNC-UNIT-PIECE',
+            'inventory_unit_id' => $pieceUnit->id,
+        ]);
+        $productWithSetUnit = $this->createProduct($account, $supplier, [
+            'name' => 'San pham co DVT bo',
+            'sku' => 'SYNC-UNIT-SET',
+            'inventory_unit_id' => $setUnit->id,
+        ]);
+        $productWithoutUnit = $this->createProduct($account, $supplier, [
+            'name' => 'San pham chua gan DVT',
+            'sku' => 'SYNC-UNIT-NONE',
+            'inventory_unit_id' => null,
+        ]);
+
+        $assignedResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&inventory_unit_filter=assigned');
+
+        $assignedResponse->assertOk();
+
+        $assignedRows = collect($assignedResponse->json('data'));
+
+        $this->assertTrue($assignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithPieceUnit->id));
+        $this->assertTrue($assignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithSetUnit->id));
+        $this->assertFalse($assignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutUnit->id));
+
+        $unassignedResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&inventory_unit_filter=unassigned');
+
+        $unassignedResponse->assertOk();
+
+        $unassignedRows = collect($unassignedResponse->json('data'));
+
+        $this->assertFalse($unassignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithPieceUnit->id));
+        $this->assertFalse($unassignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithSetUnit->id));
+        $this->assertTrue($unassignedRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutUnit->id));
+
+        $specificUnitResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&inventory_unit_filter=' . $pieceUnit->id);
+
+        $specificUnitResponse->assertOk();
+
+        $specificUnitRows = collect($specificUnitResponse->json('data'));
+
+        $this->assertTrue($specificUnitRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithPieceUnit->id));
+        $this->assertFalse($specificUnitRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithSetUnit->id));
+        $this->assertFalse($specificUnitRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutUnit->id));
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([
@@ -219,6 +280,17 @@ class ProductListInventorySyncTest extends TestCase
             'account_id' => $account->id,
             'name' => 'Nha cung cap ' . Str::upper(Str::random(4)),
             'status' => true,
+        ]);
+    }
+
+    private function createInventoryUnit(Account $account, string $name): InventoryUnit
+    {
+        return InventoryUnit::query()->create([
+            'account_id' => $account->id,
+            'name' => $name,
+            'normalized_name' => Str::lower(Str::ascii($name)),
+            'code' => Str::upper(Str::slug($name, '_')) ?: Str::upper(Str::random(6)),
+            'sort_order' => (int) InventoryUnit::query()->max('sort_order') + 1,
         ]);
     }
 

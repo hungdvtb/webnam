@@ -36,6 +36,9 @@ export default function HomeMobileCatalog({ categorySections = [] }) {
                     price: product.currentPrice ?? product.price,
                     primary_image: product.primaryImage,
                     is_new: product.isNew,
+                    itemType: product.itemType,
+                    bundleOptionKey: product.bundleOptionKey,
+                    bundleOptionTitle: product.bundleOptionTitle,
                   })),
                 }}
               />

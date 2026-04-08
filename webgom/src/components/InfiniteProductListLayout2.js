@@ -6,9 +6,10 @@ import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
+import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
-const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
+const FALLBACK_PRODUCT_ALT = 'S\u1ea3n ph\u1ea9m g\u1ed1m s\u1ee9';
 
 export default function InfiniteProductListLayout2({ initialData }) {
   const products = initialData?.data || [];
@@ -17,58 +18,63 @@ export default function InfiniteProductListLayout2({ initialData }) {
   return (
     <>
       <div className={styles.productGrid}>
-        {products.map((product) => (
-          <div key={product.id} className={styles.productCard}>
-            <div className={styles.imageArea}>
-              <Link href={`/product/${product.slug || product.id}`} className={styles.imageLink}>
-                <Image
-                  src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
-                  alt={product.name || FALLBACK_PRODUCT_ALT}
-                  fill
-                  className={styles.image}
-                  sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
-                  unoptimized
-                />
-              </Link>
+        {products.map((product) => {
+          const productHref = buildProductDetailHref(product);
+          const productCardKey = buildProductCardKey(product);
 
-              {product.is_new && <div className={styles.badge}>Bán chạy</div>}
-            </div>
+          return (
+            <div key={productCardKey} className={styles.productCard}>
+              <div className={styles.imageArea}>
+                <Link href={productHref} className={styles.imageLink}>
+                  <Image
+                    src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
+                    alt={product.name || FALLBACK_PRODUCT_ALT}
+                    fill
+                    className={styles.image}
+                    sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
+                    unoptimized
+                  />
+                </Link>
 
-            <div className={styles.cardBody}>
-              <Link href={`/product/${product.slug || product.id}`} className={styles.productLink}>
-                <h3 className={styles.productName}>{product.name}</h3>
-              </Link>
+                {product.is_new && <div className={styles.badge}>B\u00e1n ch\u1ea1y</div>}
+              </div>
 
-              <div className={styles.footer}>
-                <p className={styles.price}>
-                  {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
-                </p>
+              <div className={styles.cardBody}>
+                <Link href={productHref} className={styles.productLink}>
+                  <h3 className={styles.productName}>{product.name}</h3>
+                </Link>
 
-                <div className={styles.actions}>
-                  <button
-                    className={styles.cartAction}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      addToCart(product, 1);
-                      const card = event.currentTarget.closest(`.${styles.productCard}`);
-                      const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
-                      flyToCart(event, imgSrc);
-                    }}
-                  >
-                    <span className={`material-symbols-outlined ${styles.cartActionIcon}`}>add_shopping_cart</span>
-                    Giỏ hàng
-                  </button>
+                <div className={styles.footer}>
+                  <p className={styles.price}>
+                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
+                  </p>
+
+                  <div className={styles.actions}>
+                    <button
+                      className={styles.cartAction}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        addToCart(product, 1);
+                        const card = event.currentTarget.closest(`.${styles.productCard}`);
+                        const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
+                        flyToCart(event, imgSrc);
+                      }}
+                    >
+                      <span className={`material-symbols-outlined ${styles.cartActionIcon}`}>add_shopping_cart</span>
+                      Gi\u1ecf h\u00e0ng
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {products.length === 0 && (
         <div className={styles.emptyState}>
           <span className={`material-symbols-outlined ${styles.emptyStateIcon}`}>search_off</span>
-          <p className={styles.emptyStateText}>Không tìm thấy sản phẩm nào phù hợp.</p>
+          <p className={styles.emptyStateText}>Kh\u00f4ng t\u00ecm th\u1ea5y s\u1ea3n ph\u1ea9m n\u00e0o ph\u00f9 h\u1ee3p.</p>
         </div>
       )}
     </>

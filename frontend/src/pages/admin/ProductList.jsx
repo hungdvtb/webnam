@@ -179,6 +179,7 @@ function buildProductPageUrl(product, domains = []) {
 const DEFAULT_COLUMNS = [
     { id: 'sku', label: 'Mã SP', minWidth: '130px', fixed: true },
     { id: 'name', label: 'Tên Sản Phẩm', minWidth: '220px', fixed: true },
+    { id: 'unit', label: 'ĐVT', minWidth: '96px', align: 'center', sortable: false },
     { id: 'specifications', label: 'Thông số', minWidth: '150px' },
     { id: 'cost_price', label: 'Giá dự kiến', minWidth: '120px' },
     { id: 'price', label: 'Giá bán', minWidth: '120px' },
@@ -197,9 +198,11 @@ const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
 const CONTENT_ONLY_EXPORT_COLUMN_IDS = ['sku', 'name', 'child_names', 'description', 'specifications', 'meta_title', 'meta_description'];
 const CONTENT_ONLY_IMPORT_FIELD_IDS = ['description', 'specifications', 'seo'];
 const LOCAL_STRUCTURE_EXPORT_COLUMN_IDS = ['sku', 'name', 'type', 'bundle_title', 'child_names', 'variant_data', 'component_data', 'description', 'specifications', 'meta_title', 'meta_description'];
-const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images']);
+const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images', 'unit']);
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
+const INVENTORY_UNIT_FILTER_ASSIGNED = 'assigned';
+const INVENTORY_UNIT_FILTER_UNASSIGNED = 'unassigned';
 const EXTRA_EXPORT_FIELDS = [
     { id: 'id', label: 'ID' },
     { id: 'slug', label: 'Slug' },
@@ -382,12 +385,82 @@ function getSupplierFilterLabel(suppliers, supplierId) {
     return supplier.code ? `${supplier.name} - ${supplier.code}` : supplier.name;
 }
 
+function normalizeInventoryUnitFilterValue(value) {
+    if (Array.isArray(value)) {
+        return normalizeInventoryUnitFilterValue(value[0] ?? '');
+    }
+
+    const normalizedValue = String(value ?? '').trim();
+
+    if (
+        normalizedValue === ''
+        || normalizedValue === INVENTORY_UNIT_FILTER_ASSIGNED
+        || normalizedValue === INVENTORY_UNIT_FILTER_UNASSIGNED
+        || /^\d+$/.test(normalizedValue)
+    ) {
+        return normalizedValue;
+    }
+
+    return '';
+}
+
+function getInventoryUnitFilterLabel(units, filterValue) {
+    const normalizedValue = normalizeInventoryUnitFilterValue(filterValue);
+
+    if (!normalizedValue) {
+        return '';
+    }
+
+    if (normalizedValue === INVENTORY_UNIT_FILTER_ASSIGNED) {
+        return 'Đã có ĐVT';
+    }
+
+    if (normalizedValue === INVENTORY_UNIT_FILTER_UNASSIGNED) {
+        return 'Chưa gán ĐVT';
+    }
+
+    return units.find((unit) => String(unit?.id) === normalizedValue)?.name || `ĐVT #${normalizedValue}`;
+}
+
+function resolveProductUnitLabel(product, parentProduct = null) {
+    const candidates = [
+        product?.unit?.name,
+        product?.unit_name,
+        parentProduct?.unit?.name,
+        parentProduct?.unit_name,
+    ];
+
+    const matchedCandidate = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim() !== '');
+
+    return matchedCandidate ? matchedCandidate.trim() : '';
+}
+
+function moveItemAfter(items, itemId, afterId, getId = (item) => item) {
+    const nextItems = Array.isArray(items) ? [...items] : [];
+    const itemIndex = nextItems.findIndex((item) => getId(item) === itemId);
+    if (itemIndex === -1) {
+        return nextItems;
+    }
+
+    const [item] = nextItems.splice(itemIndex, 1);
+    const afterIndex = nextItems.findIndex((entry) => getId(entry) === afterId);
+
+    if (afterIndex === -1) {
+        nextItems.push(item);
+        return nextItems;
+    }
+
+    nextItems.splice(afterIndex + 1, 0, item);
+    return nextItems;
+}
+
 function getDefaultProductFilters() {
     return {
         search: '',
         category_id: [],
         type: [],
         supplier_ids: [],
+        inventory_unit_filter: '',
         has_images: '',
         missing_purchase_price: '',
         multiple_suppliers: '',
@@ -417,6 +490,7 @@ function sanitizeProductFilters(rawFilters) {
     return {
         ...rawFilters,
         has_images: normalizedHasImages,
+        inventory_unit_filter: normalizeInventoryUnitFilterValue(rawFilters?.inventory_unit_filter),
         type: sanitizeActiveProductTypeValues(rawFilters?.type),
     };
 }
@@ -574,6 +648,166 @@ function buildBundleOptionGroups(bundleItems) {
     return groups;
 }
 
+const QUICK_EDIT_DEFAULT_CORE_FIELD_IDS = ['name', 'sku', 'price', 'expected_cost', 'category_id', 'status'];
+const QUICK_EDIT_CORE_FIELDS = [
+    { id: 'name', label: 'Tên SP' },
+    { id: 'sku', label: 'SKU' },
+    { id: 'price', label: 'Giá bán' },
+    { id: 'expected_cost', label: 'Giá nhập dự kiến' },
+    { id: 'category_id', label: 'Danh mục' },
+    { id: 'status', label: 'Trạng thái bán' },
+    { id: 'type', label: 'Loại SP' },
+    { id: 'is_featured', label: 'Nổi bật' },
+    { id: 'is_new', label: 'Mới' },
+];
+
+function normalizeQuickEditSearchText(value) {
+    return String(value ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+function normalizeQuickEditSkuValue(value) {
+    return String(value ?? '').trim().replace(/\s+/g, '-');
+}
+
+function normalizeQuickEditAttributeValue(attribute, rawValue) {
+    const frontendType = String(attribute?.frontend_type || '').toLowerCase();
+
+    if (frontendType === 'multiselect') {
+        if (Array.isArray(rawValue)) {
+            return rawValue.map((value) => String(value));
+        }
+
+        if (rawValue === null || rawValue === undefined || rawValue === '') {
+            return [];
+        }
+
+        if (typeof rawValue === 'string') {
+            try {
+                const parsed = JSON.parse(rawValue);
+                if (Array.isArray(parsed)) {
+                    return parsed.map((value) => String(value));
+                }
+            } catch (error) {
+                return rawValue
+                    .split(',')
+                    .map((value) => value.trim())
+                    .filter(Boolean);
+            }
+        }
+
+        return [];
+    }
+
+    if (frontendType === 'price') {
+        return normalizeWholeMoneyDraft(rawValue);
+    }
+
+    if (rawValue === null || rawValue === undefined) {
+        return '';
+    }
+
+    return String(rawValue);
+}
+
+function getQuickEditAttributeValue(product, attribute) {
+    const attributeValue = product?.attribute_values?.find((item) => String(item?.attribute_id) === String(attribute?.id));
+    return normalizeQuickEditAttributeValue(attribute, attributeValue?.value);
+}
+
+function buildQuickEditProductDraft(product, attributes = []) {
+    const customAttributes = Object.fromEntries(
+        attributes.map((attribute) => [String(attribute.id), getQuickEditAttributeValue(product, attribute)]),
+    );
+
+    return {
+        id: product?.id ?? null,
+        name: String(product?.name || ''),
+        sku: String(product?.sku || ''),
+        price: normalizeWholeMoneyDraft(product?.price),
+        expected_cost: normalizeWholeMoneyDraft(product?.expected_cost ?? product?.cost_price),
+        category_id: product?.category_id ? String(product.category_id) : '',
+        status: Boolean(product?.status),
+        type: String(product?.type || 'simple'),
+        is_featured: Boolean(product?.is_featured),
+        is_new: Boolean(product?.is_new),
+        custom_attributes: customAttributes,
+    };
+}
+
+function getQuickEditCoreComparableValue(fieldId, value) {
+    if (fieldId === 'price') {
+        return normalizeWholeMoneyNumber(value);
+    }
+
+    if (fieldId === 'expected_cost') {
+        return normalizeRoundedImportCostNumber(value);
+    }
+
+    if (fieldId === 'status' || fieldId === 'is_featured' || fieldId === 'is_new') {
+        return Boolean(value);
+    }
+
+    if (fieldId === 'category_id') {
+        return value === '' || value === null || value === undefined ? '' : String(value);
+    }
+
+    if (fieldId === 'sku') {
+        return normalizeQuickEditSkuValue(value);
+    }
+
+    return String(value ?? '').trim();
+}
+
+function getQuickEditAttributeComparableValue(attribute, value) {
+    const frontendType = String(attribute?.frontend_type || '').toLowerCase();
+
+    if (frontendType === 'multiselect') {
+        return JSON.stringify(
+            (Array.isArray(value) ? value : [])
+                .map((item) => String(item))
+                .sort(),
+        );
+    }
+
+    if (frontendType === 'price') {
+        return normalizeWholeMoneyNumber(value);
+    }
+
+    return String(value ?? '').trim();
+}
+
+function createQuickEditProductLookup(products = []) {
+    const productMap = new Map();
+
+    (Array.isArray(products) ? products : []).forEach((product) => {
+        if (product?.id !== undefined && product?.id !== null) {
+            productMap.set(String(product.id), product);
+        }
+
+        const children = product?.type === 'grouped'
+            ? (product.grouped_items || [])
+            : (product?.type === 'bundle' ? [] : (product?.variations || []));
+
+        (Array.isArray(children) ? children : []).forEach((child) => {
+            if (child?.id !== undefined && child?.id !== null) {
+                productMap.set(String(child.id), child);
+            }
+        });
+    });
+
+    return productMap;
+}
+
+function findQuickEditGlazeAttribute(attributes = []) {
+    return (Array.isArray(attributes) ? attributes : []).find((attribute) => (
+        normalizeQuickEditSearchText(attribute?.name).includes('loai men')
+    )) || null;
+}
+
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -596,6 +830,7 @@ const ProductList = () => {
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
+    const [inventoryUnits, setInventoryUnits] = useState([]);
     const [domains, setDomains] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -654,10 +889,444 @@ const ProductList = () => {
     const bulkCopySourceRequestRef = useRef(0);
     const [duplicateConfirm, setDuplicateConfirm] = useState(null);
     const [submittingDuplicate, setSubmittingDuplicate] = useState(false);
+    const [showQuickEditModal, setShowQuickEditModal] = useState(false);
+    const [quickEditTargetIds, setQuickEditTargetIds] = useState([]);
+    const [quickEditProducts, setQuickEditProducts] = useState([]);
+    const [quickEditDrafts, setQuickEditDrafts] = useState({});
+    const [quickEditOriginals, setQuickEditOriginals] = useState({});
+    const [quickEditSelectedCoreFields, setQuickEditSelectedCoreFields] = useState(QUICK_EDIT_DEFAULT_CORE_FIELD_IDS);
+    const [quickEditSelectedAttributeIds, setQuickEditSelectedAttributeIds] = useState([]);
+    const [quickEditLoading, setQuickEditLoading] = useState(false);
+    const [quickEditSubmitting, setQuickEditSubmitting] = useState(false);
+    const [quickEditRowErrors, setQuickEditRowErrors] = useState({});
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
     const [savingId, setSavingId] = useState(null);
+
+    const quickEditSelectedAttributes = allAttributes.filter((attribute) => (
+        quickEditSelectedAttributeIds.includes(String(attribute.id))
+    ));
+
+    const resetQuickEditState = () => {
+        setShowQuickEditModal(false);
+        setQuickEditTargetIds([]);
+        setQuickEditProducts([]);
+        setQuickEditDrafts({});
+        setQuickEditOriginals({});
+        setQuickEditSelectedCoreFields(QUICK_EDIT_DEFAULT_CORE_FIELD_IDS);
+        setQuickEditSelectedAttributeIds([]);
+        setQuickEditLoading(false);
+        setQuickEditSubmitting(false);
+        setQuickEditRowErrors({});
+    };
+
+    const closeQuickEditModal = () => {
+        if (quickEditSubmitting) {
+            return;
+        }
+
+        resetQuickEditState();
+    };
+
+    const updateQuickEditDraft = (productId, field, value) => {
+        const draftKey = String(productId);
+        setQuickEditDrafts((prev) => ({
+            ...prev,
+            [draftKey]: {
+                ...(prev[draftKey] || {}),
+                [field]: value,
+            },
+        }));
+
+        setQuickEditRowErrors((prev) => {
+            if (!prev[draftKey]) {
+                return prev;
+            }
+
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+        });
+    };
+
+    const updateQuickEditAttributeDraft = (productId, attributeId, value) => {
+        const draftKey = String(productId);
+        const attributeKey = String(attributeId);
+
+        setQuickEditDrafts((prev) => ({
+            ...prev,
+            [draftKey]: {
+                ...(prev[draftKey] || {}),
+                custom_attributes: {
+                    ...((prev[draftKey] && prev[draftKey].custom_attributes) || {}),
+                    [attributeKey]: value,
+                },
+            },
+        }));
+
+        setQuickEditRowErrors((prev) => {
+            if (!prev[draftKey]) {
+                return prev;
+            }
+
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+        });
+    };
+
+    const toggleQuickEditCoreField = (fieldId) => {
+        setQuickEditSelectedCoreFields((prev) => (
+            prev.includes(fieldId)
+                ? prev.filter((value) => value !== fieldId)
+                : [...prev, fieldId]
+        ));
+    };
+
+    const toggleQuickEditAttributeField = (attributeId) => {
+        const normalizedId = String(attributeId);
+        setQuickEditSelectedAttributeIds((prev) => (
+            prev.includes(normalizedId)
+                ? prev.filter((value) => value !== normalizedId)
+                : [...prev, normalizedId]
+        ));
+    };
+
+    const isQuickEditCoreFieldDirty = (productId, fieldId) => {
+        const draft = quickEditDrafts[String(productId)];
+        const original = quickEditOriginals[String(productId)];
+
+        if (!draft || !original) {
+            return false;
+        }
+
+        return getQuickEditCoreComparableValue(fieldId, draft[fieldId]) !== getQuickEditCoreComparableValue(fieldId, original[fieldId]);
+    };
+
+    const isQuickEditAttributeFieldDirty = (productId, attribute) => {
+        const productKey = String(productId);
+        const attributeKey = String(attribute.id);
+        const draftValue = quickEditDrafts[productKey]?.custom_attributes?.[attributeKey];
+        const originalValue = quickEditOriginals[productKey]?.custom_attributes?.[attributeKey];
+
+        return getQuickEditAttributeComparableValue(attribute, draftValue) !== getQuickEditAttributeComparableValue(attribute, originalValue);
+    };
+
+    const openQuickEditModal = async (ids, event = null) => {
+        if (event) {
+            event.stopPropagation();
+        }
+
+        const normalizedIds = Array.from(
+            new Map(
+                (Array.isArray(ids) ? ids : [ids])
+                    .map((value) => normalizeStoredId(value))
+                    .filter((value) => value !== null)
+                    .map((value) => [String(value), value]),
+            ).values(),
+        );
+
+        if (normalizedIds.length === 0) {
+            return;
+        }
+
+        setShowQuickEditModal(true);
+        setQuickEditLoading(true);
+        setQuickEditRowErrors({});
+
+        try {
+            const visibleLookup = createQuickEditProductLookup(products);
+            const resolvedLookup = new Map();
+
+            normalizedIds.forEach((id) => {
+                const matched = visibleLookup.get(String(id));
+                if (matched) {
+                    resolvedLookup.set(String(id), matched);
+                }
+            });
+
+            const missingIds = normalizedIds.filter((id) => !resolvedLookup.has(String(id)));
+            if (missingIds.length > 0) {
+                const loadedProducts = await Promise.allSettled(
+                    missingIds.map((id) => productApi.getOne(id)),
+                );
+
+                let failedCount = 0;
+                loadedProducts.forEach((result, index) => {
+                    const targetId = missingIds[index];
+                    if (result.status === 'fulfilled' && result.value?.data) {
+                        resolvedLookup.set(String(targetId), result.value.data);
+                    } else {
+                        failedCount += 1;
+                    }
+                });
+
+                if (failedCount > 0) {
+                    setNotification({
+                        type: 'error',
+                        message: `Không tải được ${failedCount} sản phẩm cho chế độ sửa nhanh.`,
+                    });
+                    setTimeout(() => setNotification(null), 4000);
+                }
+            }
+
+            const resolvedProducts = normalizedIds
+                .map((id) => resolvedLookup.get(String(id)))
+                .filter(Boolean);
+
+            if (resolvedProducts.length === 0) {
+                resetQuickEditState();
+                return;
+            }
+
+            const glazeAttribute = findQuickEditGlazeAttribute(allAttributes);
+            const nextDrafts = Object.fromEntries(
+                resolvedProducts.map((product) => [String(product.id), buildQuickEditProductDraft(product, allAttributes)]),
+            );
+
+            setQuickEditTargetIds(resolvedProducts.map((product) => product.id));
+            setQuickEditProducts(resolvedProducts);
+            setQuickEditDrafts(nextDrafts);
+            setQuickEditOriginals(nextDrafts);
+            setQuickEditSelectedCoreFields(QUICK_EDIT_DEFAULT_CORE_FIELD_IDS);
+            setQuickEditSelectedAttributeIds(glazeAttribute ? [String(glazeAttribute.id)] : []);
+        } catch (error) {
+            console.error('Quick edit load error:', error);
+            setNotification({
+                type: 'error',
+                message: error?.response?.data?.message || 'Không thể mở cửa sổ sửa nhanh.',
+            });
+            setTimeout(() => setNotification(null), 4000);
+            resetQuickEditState();
+        } finally {
+            setQuickEditLoading(false);
+        }
+    };
+
+    const handleQuickEditSave = async () => {
+        if (quickEditSubmitting || quickEditLoading) {
+            return;
+        }
+
+        if (quickEditTargetIds.length === 0) {
+            setNotification({ type: 'error', message: 'Chưa có sản phẩm nào để lưu sửa nhanh.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        if (quickEditSelectedCoreFields.length === 0 && quickEditSelectedAttributeIds.length === 0) {
+            setNotification({ type: 'error', message: 'Hãy bật ít nhất 1 trường cần sửa.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        const validationErrors = {};
+        const updates = [];
+
+        quickEditTargetIds.forEach((productId) => {
+            const draftKey = String(productId);
+            const draft = quickEditDrafts[draftKey];
+            const original = quickEditOriginals[draftKey];
+
+            if (!draft || !original) {
+                return;
+            }
+
+            const payload = {};
+            const customAttributes = {};
+            let rowError = '';
+
+            quickEditSelectedCoreFields.forEach((fieldId) => {
+                if (rowError) {
+                    return;
+                }
+
+                if (fieldId === 'name') {
+                    const nextName = String(draft.name ?? '').trim();
+                    if (getQuickEditCoreComparableValue(fieldId, nextName) !== getQuickEditCoreComparableValue(fieldId, original.name)) {
+                        if (!nextName) {
+                            rowError = 'Tên sản phẩm không được để trống.';
+                            return;
+                        }
+
+                        payload.name = nextName;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'sku') {
+                    const nextSku = normalizeQuickEditSkuValue(draft.sku);
+                    if (getQuickEditCoreComparableValue(fieldId, nextSku) !== getQuickEditCoreComparableValue(fieldId, original.sku)) {
+                        payload.sku = nextSku;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'price') {
+                    const nextPrice = normalizeWholeMoneyNumber(draft.price);
+                    if (nextPrice === null) {
+                        rowError = 'Giá bán phải là số hợp lệ.';
+                        return;
+                    }
+
+                    if (getQuickEditCoreComparableValue(fieldId, nextPrice) !== getQuickEditCoreComparableValue(fieldId, original.price)) {
+                        payload.price = nextPrice;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'expected_cost') {
+                    const nextExpectedCost = normalizeRoundedImportCostNumber(draft.expected_cost);
+                    if (nextExpectedCost === null) {
+                        rowError = 'Giá nhập dự kiến phải là số hợp lệ.';
+                        return;
+                    }
+
+                    if (getQuickEditCoreComparableValue(fieldId, nextExpectedCost) !== getQuickEditCoreComparableValue(fieldId, original.expected_cost)) {
+                        payload.expected_cost = nextExpectedCost;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'category_id') {
+                    const nextCategoryId = draft.category_id ? String(draft.category_id) : '';
+                    if (getQuickEditCoreComparableValue(fieldId, nextCategoryId) !== getQuickEditCoreComparableValue(fieldId, original.category_id)) {
+                        payload.category_id = nextCategoryId ? Number(nextCategoryId) : null;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'type') {
+                    const nextType = String(draft.type || '').trim();
+                    if (nextType && getQuickEditCoreComparableValue(fieldId, nextType) !== getQuickEditCoreComparableValue(fieldId, original.type)) {
+                        payload.type = nextType;
+                    }
+                    return;
+                }
+
+                if (fieldId === 'status' || fieldId === 'is_featured' || fieldId === 'is_new') {
+                    if (getQuickEditCoreComparableValue(fieldId, draft[fieldId]) !== getQuickEditCoreComparableValue(fieldId, original[fieldId])) {
+                        payload[fieldId] = Boolean(draft[fieldId]);
+                    }
+                }
+            });
+
+            quickEditSelectedAttributes.forEach((attribute) => {
+                if (rowError) {
+                    return;
+                }
+
+                const attributeKey = String(attribute.id);
+                const draftValue = draft.custom_attributes?.[attributeKey];
+                const originalValue = original.custom_attributes?.[attributeKey];
+
+                if (getQuickEditAttributeComparableValue(attribute, draftValue) === getQuickEditAttributeComparableValue(attribute, originalValue)) {
+                    return;
+                }
+
+                customAttributes[attributeKey] = Array.isArray(draftValue)
+                    ? draftValue.map((value) => String(value))
+                    : (draftValue ?? '');
+            });
+
+            if (rowError) {
+                validationErrors[draftKey] = rowError;
+                return;
+            }
+
+            if (Object.keys(customAttributes).length > 0) {
+                payload.custom_attributes = customAttributes;
+            }
+
+            if (Object.keys(payload).length > 0) {
+                updates.push({
+                    id: productId,
+                    payload,
+                });
+            }
+        });
+
+        if (Object.keys(validationErrors).length > 0) {
+            setQuickEditRowErrors(validationErrors);
+            setNotification({ type: 'error', message: 'Vui lòng kiểm tra các dòng đang báo lỗi trước khi lưu.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        if (updates.length === 0) {
+            setNotification({ type: 'error', message: 'Chưa có thay đổi nào để lưu.' });
+            setTimeout(() => setNotification(null), 3000);
+            return;
+        }
+
+        setQuickEditSubmitting(true);
+        setQuickEditRowErrors({});
+
+        try {
+            const results = await Promise.allSettled(
+                updates.map((item) => productApi.update(item.id, item.payload)),
+            );
+
+            const failedIds = [];
+            const failedErrors = {};
+            let successCount = 0;
+
+            results.forEach((result, index) => {
+                const updateItem = updates[index];
+                const rowKey = String(updateItem.id);
+
+                if (result.status === 'fulfilled') {
+                    successCount += 1;
+                    return;
+                }
+
+                failedIds.push(updateItem.id);
+                failedErrors[rowKey] = result.reason?.response?.data?.message || result.reason?.message || 'Không thể lưu sản phẩm này.';
+            });
+
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+
+            if (failedIds.length > 0) {
+                const failedLookup = new Set(failedIds.map((id) => String(id)));
+
+                setQuickEditTargetIds(failedIds);
+                setQuickEditProducts((current) => current.filter((product) => failedLookup.has(String(product.id))));
+                setQuickEditDrafts((current) => Object.fromEntries(
+                    Object.entries(current).filter(([key]) => failedLookup.has(String(key))),
+                ));
+                setQuickEditOriginals((current) => Object.fromEntries(
+                    Object.entries(current).filter(([key]) => failedLookup.has(String(key))),
+                ));
+                setQuickEditRowErrors(failedErrors);
+
+                setNotification({
+                    type: 'error',
+                    message: successCount > 0
+                        ? `Đã lưu ${successCount} sản phẩm. Còn ${failedIds.length} sản phẩm cần kiểm tra lại.`
+                        : 'Không thể lưu sửa nhanh cho các sản phẩm đã chọn.',
+                });
+                setTimeout(() => setNotification(null), 5000);
+                return;
+            }
+
+            resetQuickEditState();
+            setNotification({
+                type: 'success',
+                message: `Đã cập nhật nhanh ${successCount} sản phẩm thành công.`,
+            });
+            setTimeout(() => setNotification(null), 4000);
+        } catch (error) {
+            console.error('Quick edit save error:', error);
+            setNotification({
+                type: 'error',
+                message: error?.response?.data?.message || 'Không thể lưu sửa nhanh.',
+            });
+            setTimeout(() => setNotification(null), 4000);
+        } finally {
+            setQuickEditSubmitting(false);
+        }
+    };
 
     const handleStartQuickEdit = (p, e) => {
         e.stopPropagation();
@@ -783,6 +1452,7 @@ const ProductList = () => {
         }
 
         delete baseFilters.supplier_id;
+        baseFilters.inventory_unit_filter = normalizeInventoryUnitFilterValue(baseFilters.inventory_unit_filter);
 
         if (!baseFilters.attributes || typeof baseFilters.attributes !== 'object') {
             baseFilters.attributes = {};
@@ -1164,15 +1834,17 @@ const ProductList = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [catRes, attrRes, supplierRes, domainRes] = await Promise.all([
+            const [catRes, attrRes, supplierRes, unitRes, domainRes] = await Promise.all([
                 categoryApi.getAll(),
                 attributeApi.getAll({ active_only: true }),
                 inventoryApi.getSuppliers({ per_page: 500 }),
+                inventoryApi.getUnits(),
                 cmsApi.domains.getAll().catch(() => ({ data: [] })),
             ]);
             setCategories(catRes.data || []);
             setAllAttributes(attrRes.data || []);
             setSuppliers(supplierRes.data?.data || []);
+            setInventoryUnits(Array.isArray(unitRes.data) ? unitRes.data : []);
             setDomains((domainRes.data || []).filter((item) => item?.is_active));
 
             const attrColumns = (attrRes.data || []).map(attr => ({
@@ -1209,12 +1881,13 @@ const ProductList = () => {
                     return indexA - indexB;
                 });
             }
-            const productLinkSortedIndex = sortedColumns.findIndex((column) => column.id === 'product_link');
-            if (productLinkSortedIndex !== -1) {
-                const [productLinkColumn] = sortedColumns.splice(productLinkSortedIndex, 1);
-                const nameSortedIndex = sortedColumns.findIndex((column) => column.id === 'name');
-                sortedColumns.splice(nameSortedIndex >= 0 ? nameSortedIndex + 1 : 0, 0, productLinkColumn);
-            }
+            sortedColumns = moveItemAfter(sortedColumns, 'product_link', 'name', (column) => column.id);
+            sortedColumns = moveItemAfter(
+                sortedColumns,
+                'unit',
+                sortedColumns.some((column) => column.id === 'product_link') ? 'product_link' : 'name',
+                (column) => column.id,
+            );
             setAvailableColumns(sortedColumns);
 
             const savedVisible = localStorage.getItem('product_list_columns');
@@ -1224,14 +1897,13 @@ const ProductList = () => {
                     ...combinedColumns.map((column) => column.id).filter((id) => savedIds.includes(id)),
                     ...combinedColumns.map((column) => column.id).filter((id) => !savedIds.includes(id)),
                 ];
-                const productLinkVisibleIndex = mergedVisible.indexOf('product_link');
-                if (productLinkVisibleIndex !== -1) {
-                    mergedVisible.splice(productLinkVisibleIndex, 1);
-                    const nameVisibleIndex = mergedVisible.indexOf('name');
-                    mergedVisible.splice(nameVisibleIndex >= 0 ? nameVisibleIndex + 1 : 0, 0, 'product_link');
-                }
-                setVisibleColumns(mergedVisible);
-                localStorage.setItem('product_list_columns', JSON.stringify(mergedVisible));
+                const orderedVisible = moveItemAfter(
+                    moveItemAfter(mergedVisible, 'product_link', 'name'),
+                    'unit',
+                    mergedVisible.includes('product_link') ? 'product_link' : 'name',
+                );
+                setVisibleColumns(orderedVisible);
+                localStorage.setItem('product_list_columns', JSON.stringify(orderedVisible));
             } else {
                 setVisibleColumns(sortedColumns.map(c => c.id));
             }
@@ -1262,6 +1934,10 @@ const ProductList = () => {
 
         if (Array.isArray(normalizedFilters.supplier_ids) && normalizedFilters.supplier_ids.length > 0) {
             params.supplier_ids = normalizedFilters.supplier_ids.join(',');
+        }
+
+        if (normalizedFilters.inventory_unit_filter) {
+            params.inventory_unit_filter = normalizedFilters.inventory_unit_filter;
         }
 
         if (normalizedFilters.missing_purchase_price) {
@@ -2209,7 +2885,7 @@ const ProductList = () => {
 
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
-        const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'is_featured', 'is_new', 'status', 'type'];
+        const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'inventory_unit_id', 'is_featured', 'is_new', 'status', 'type'];
         const basic_info = {};
         const attributes = {};
         
@@ -2244,6 +2920,16 @@ const ProductList = () => {
             basic_info.expected_cost = normalizedExpectedCost;
         }
         
+        if (Object.prototype.hasOwnProperty.call(basic_info, 'inventory_unit_id')) {
+            const normalizedInventoryUnitId = Number(basic_info.inventory_unit_id);
+            if (!Number.isInteger(normalizedInventoryUnitId) || normalizedInventoryUnitId <= 0) {
+                setNotification({ type: 'error', message: 'Đơn vị tính không hợp lệ.' });
+                setTimeout(() => setNotification(null), 4000);
+                return;
+            }
+            basic_info.inventory_unit_id = normalizedInventoryUnitId;
+        }
+
         if (Object.keys(basic_info).length === 0 && Object.keys(attributes).length === 0) {
             setNotification({ type: 'error', message: 'Vui lòng chọn hoặc nhập ít nhất 1 thông tin để cập nhật!' });
             setTimeout(() => setNotification(null), 4000);
@@ -2446,6 +3132,222 @@ const ProductList = () => {
             const parsed = JSON.parse(valObj.value);
             return Array.isArray(parsed) ? parsed.join(', ') : parsed;
         } catch (e) { return valObj.value; }
+    };
+
+    const renderQuickEditCoreFieldInput = (product, fieldId) => {
+        const productKey = String(product.id);
+        const draft = quickEditDrafts[productKey] || {};
+        const isDirty = isQuickEditCoreFieldDirty(product.id, fieldId);
+        const commonClass = `h-10 w-full rounded-sm border px-3 text-[12px] font-semibold outline-none transition-all ${
+            isDirty
+                ? 'border-amber-400 bg-amber-50 text-primary'
+                : 'border-primary/15 bg-white text-primary'
+        }`;
+
+        if (fieldId === 'name') {
+            return (
+                <input
+                    type="text"
+                    value={draft.name || ''}
+                    onChange={(event) => updateQuickEditDraft(product.id, 'name', event.target.value)}
+                    className={commonClass}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field="name"
+                />
+            );
+        }
+
+        if (fieldId === 'sku') {
+            return (
+                <input
+                    type="text"
+                    value={draft.sku || ''}
+                    onChange={(event) => updateQuickEditDraft(product.id, 'sku', event.target.value)}
+                    className={commonClass}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field="sku"
+                />
+            );
+        }
+
+        if (fieldId === 'price' || fieldId === 'expected_cost') {
+            return (
+                <input
+                    type="text"
+                    value={formatWholeMoneyInput(draft[fieldId])}
+                    onChange={(event) => updateQuickEditDraft(product.id, fieldId, normalizeWholeMoneyDraft(event.target.value))}
+                    className={`${commonClass} text-right`}
+                    inputMode="numeric"
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field={fieldId}
+                />
+            );
+        }
+
+        if (fieldId === 'category_id') {
+            return (
+                <select
+                    value={draft.category_id || ''}
+                    onChange={(event) => updateQuickEditDraft(product.id, 'category_id', event.target.value)}
+                    className={commonClass}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field="category_id"
+                >
+                    <option value="">Chưa gắn danh mục</option>
+                    {categories.map((category) => (
+                        <option key={category.id} value={category.id}>{category.name}</option>
+                    ))}
+                </select>
+            );
+        }
+
+        if (fieldId === 'type') {
+            return (
+                <select
+                    value={draft.type || 'simple'}
+                    onChange={(event) => updateQuickEditDraft(product.id, 'type', event.target.value)}
+                    className={commonClass}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field="type"
+                >
+                    {ACTIVE_PRODUCT_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                </select>
+            );
+        }
+
+        if (fieldId === 'status' || fieldId === 'is_featured' || fieldId === 'is_new') {
+            const fieldLabel = fieldId === 'status'
+                ? 'Đang bán'
+                : (fieldId === 'is_featured' ? 'Nổi bật' : 'Mới');
+
+            return (
+                <select
+                    value={draft[fieldId] ? '1' : '0'}
+                    onChange={(event) => updateQuickEditDraft(product.id, fieldId, event.target.value === '1')}
+                    className={commonClass}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-field={fieldId}
+                >
+                    <option value="1">{fieldLabel}: Bật</option>
+                    <option value="0">{fieldLabel}: Tắt</option>
+                </select>
+            );
+        }
+
+        return <span className="text-[12px] text-primary/40">--</span>;
+    };
+
+    const renderQuickEditAttributeInput = (product, attribute) => {
+        const productKey = String(product.id);
+        const attributeKey = String(attribute.id);
+        const frontendType = String(attribute?.frontend_type || '').toLowerCase();
+        const draftValue = quickEditDrafts[productKey]?.custom_attributes?.[attributeKey]
+            ?? (frontendType === 'multiselect' ? [] : '');
+        const isDirty = isQuickEditAttributeFieldDirty(product.id, attribute);
+        const commonClass = `w-full rounded-sm border px-3 text-[12px] font-semibold outline-none transition-all ${
+            isDirty
+                ? 'border-amber-400 bg-amber-50 text-primary'
+                : 'border-primary/15 bg-white text-primary'
+        }`;
+
+        if (frontendType === 'select') {
+            return (
+                <select
+                    value={draftValue || ''}
+                    onChange={(event) => updateQuickEditAttributeDraft(product.id, attribute.id, event.target.value)}
+                    className={`${commonClass} h-10`}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-attribute={attribute.id}
+                >
+                    <option value="">Để trống</option>
+                    {(attribute.options || []).map((option) => (
+                        <option key={option.id} value={option.value}>{option.value}</option>
+                    ))}
+                </select>
+            );
+        }
+
+        if (frontendType === 'multiselect') {
+            const currentValues = Array.isArray(draftValue) ? draftValue : [];
+            return (
+                <div className={`max-h-28 space-y-1 overflow-y-auto rounded-sm border p-2 ${isDirty ? 'border-amber-300 bg-amber-50/80' : 'border-primary/15 bg-white'}`}>
+                    {(attribute.options || []).map((option) => {
+                        const checked = currentValues.includes(option.value);
+                        return (
+                            <label key={option.id} className="flex items-center gap-2 text-[11px] font-medium text-primary/85">
+                                <input
+                                    type="checkbox"
+                                    className="accent-primary"
+                                    checked={checked}
+                                    disabled={quickEditSubmitting}
+                                    data-quick-edit-attribute={attribute.id}
+                                    onChange={(event) => {
+                                        const nextValues = event.target.checked
+                                            ? [...currentValues, option.value]
+                                            : currentValues.filter((value) => value !== option.value);
+                                        updateQuickEditAttributeDraft(product.id, attribute.id, nextValues);
+                                    }}
+                                />
+                                <span>{option.value}</span>
+                            </label>
+                        );
+                    })}
+                </div>
+            );
+        }
+
+        if (frontendType === 'textarea') {
+            return (
+                <textarea
+                    rows="3"
+                    value={draftValue || ''}
+                    onChange={(event) => updateQuickEditAttributeDraft(product.id, attribute.id, event.target.value)}
+                    className={`${commonClass} min-h-[88px] py-2`}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-attribute={attribute.id}
+                />
+            );
+        }
+
+        if (frontendType === 'date') {
+            return (
+                <input
+                    type="date"
+                    value={draftValue || ''}
+                    onChange={(event) => updateQuickEditAttributeDraft(product.id, attribute.id, event.target.value)}
+                    className={`${commonClass} h-10`}
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-attribute={attribute.id}
+                />
+            );
+        }
+
+        if (frontendType === 'price') {
+            return (
+                <input
+                    type="text"
+                    value={formatWholeMoneyInput(draftValue)}
+                    onChange={(event) => updateQuickEditAttributeDraft(product.id, attribute.id, normalizeWholeMoneyDraft(event.target.value))}
+                    className={`${commonClass} h-10 text-right`}
+                    inputMode="numeric"
+                    disabled={quickEditSubmitting}
+                    data-quick-edit-attribute={attribute.id}
+                />
+            );
+        }
+
+        return (
+            <input
+                type="text"
+                value={draftValue || ''}
+                onChange={(event) => updateQuickEditAttributeDraft(product.id, attribute.id, event.target.value)}
+                className={`${commonClass} h-10`}
+                disabled={quickEditSubmitting}
+                data-quick-edit-attribute={attribute.id}
+            />
+        );
     };
 
     const bulkCopyTargetCount = bulkCopySourceProduct
@@ -3368,6 +4270,21 @@ const ProductList = () => {
 
                         {/* Nhóm thao tác hàng loạt */}
                         <div className="flex gap-1 items-center border-primary/10 pr-1">
+                            <button
+                                type="button"
+                                disabled={selectedIds.length === 0 || isTrashView}
+                                onClick={() => openQuickEditModal(selectedIds)}
+                                data-quick-edit-trigger="bulk"
+                                className={`px-3 h-9 rounded-sm transition-all flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider ${
+                                    selectedIds.length > 0 && !isTrashView
+                                        ? 'bg-sky-50 text-sky-700 hover:bg-sky-600 hover:text-white shadow-sm'
+                                        : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
+                                }`}
+                                title="Sửa nhanh các sản phẩm đã chọn"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">flash_on</span>
+                                <span className="hidden md:inline">Sửa nhanh</span>
+                            </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
                                 onClick={requestBulkDuplicate}
@@ -3712,6 +4629,24 @@ const ProductList = () => {
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Đơn vị tính</label>
+                            <select
+                                name="inventory_unit_filter"
+                                value={tempFilters.inventory_unit_filter || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Tất cả đơn vị tính</option>
+                                <option value={INVENTORY_UNIT_FILTER_ASSIGNED}>Đã có ĐVT</option>
+                                <option value={INVENTORY_UNIT_FILTER_UNASSIGNED}>Chưa gán ĐVT</option>
+                                {inventoryUnits.map((unit) => (
+                                    <option key={unit.id} value={String(unit.id)}>
+                                        {unit.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Giá nhập</label>
                             <select
                                 name="missing_purchase_price"
@@ -3846,6 +4781,7 @@ const ProductList = () => {
                 (filters.category_id || []).length > 0
                 || (filters.type || []).length > 0
                 || (filters.supplier_ids || []).length > 0
+                || Boolean(filters.inventory_unit_filter)
                 || Boolean(filters.missing_purchase_price)
                 || Boolean(filters.multiple_suppliers)
                 || filters.has_images === '0'
@@ -3882,6 +4818,14 @@ const ProductList = () => {
                             <button onClick={() => removeFilter('supplier_ids', supplierId)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     ))}
+
+                    {filters.inventory_unit_filter && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">ĐVT:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{getInventoryUnitFilterLabel(inventoryUnits, filters.inventory_unit_filter)}</span>
+                            <button onClick={() => removeFilter('inventory_unit_filter')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
 
                     {filters.missing_purchase_price && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
@@ -4275,6 +5219,22 @@ const ProductList = () => {
                                                         </div>
                                                     </td>
                                                 );
+                                                if (col.id === 'unit') {
+                                                    const unitLabel = resolveProductUnitLabel(p, isSubRow ? product : null);
+                                                    const copyId = `${p.id}-unit`;
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium group/cell">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className="truncate">{unitLabel || '-'}</span>
+                                                                {unitLabel && (
+                                                                    <button onClick={(e) => handleCopy(unitLabel, 'đơn vị tính', e, copyId)} className={`${copiedText === copyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép ĐVT">
+                                                                        <span className="material-symbols-outlined text-[14px]">{copiedText === copyId ? 'check' : 'content_copy'}</span>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
                                                 if (col.id === 'type') {
                                                     const typeLabel = pUsesChildRowStyle
                                                         ? 'Biến thể con'
@@ -4345,6 +5305,7 @@ const ProductList = () => {
                                                             ) : (
                                                                 <React.Fragment>
                                                                     <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
+                                                                    <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                                 </React.Fragment>
@@ -4516,6 +5477,263 @@ const ProductList = () => {
                 </div>
             )}
 
+            {showQuickEditModal && (
+                <div
+                    className="fixed inset-0 z-[105] bg-black/60 flex items-center justify-center p-4"
+                    onClick={closeQuickEditModal}
+                >
+                    <div
+                        data-quick-edit-modal="true"
+                        className="bg-white rounded p-6 w-full max-w-7xl max-h-[92vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex justify-between items-center gap-4 mb-4 border-b border-primary/10 pb-4">
+                            <div>
+                                <h2 className="text-lg font-bold text-primary flex items-center gap-2">
+                                    <span className="material-symbols-outlined text-sky-600">flash_on</span>
+                                    Sửa nhanh sản phẩm
+                                </h2>
+                                <p className="mt-2 text-[13px] text-primary/65">
+                                    Chỉnh trực tiếp ngay tại danh sách. Chỉ những ô thật sự thay đổi trong các cột đang bật mới được gửi lên hệ thống.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeQuickEditModal}
+                                disabled={quickEditSubmitting}
+                                className="text-gray-500 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 space-y-4">
+                            <div className="rounded-sm border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] text-sky-950">
+                                Đang chuẩn bị sửa nhanh cho <strong>{quickEditProducts.length}</strong> sản phẩm.
+                                Hiện có <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật.
+                                Nếu sửa nhiều sản phẩm cùng lúc, hệ thống chỉ lưu những ô bạn đã thay đổi, không ghi đè các trường khác.
+                            </div>
+
+                            <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4">
+                                <section className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Trường thông dụng</h3>
+                                            <p className="mt-2 text-[12px] text-primary/60">
+                                                Bật cột nào thì cột đó mới xuất hiện trong bảng sửa nhanh bên dưới.
+                                            </p>
+                                        </div>
+                                        <div className="rounded-sm bg-white px-3 py-1.5 text-[11px] font-bold text-primary/65 shadow-sm">
+                                            {quickEditSelectedCoreFields.length}/{QUICK_EDIT_CORE_FIELDS.length} cột
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        {QUICK_EDIT_CORE_FIELDS.map((field) => {
+                                            const active = quickEditSelectedCoreFields.includes(field.id);
+                                            return (
+                                                <button
+                                                    key={field.id}
+                                                    type="button"
+                                                    onClick={() => toggleQuickEditCoreField(field.id)}
+                                                    data-quick-edit-core-field={field.id}
+                                                    className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
+                                                        active
+                                                            ? 'border-sky-600 bg-sky-600 text-white shadow-sm'
+                                                            : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                                    }`}
+                                                >
+                                                    {field.label}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </section>
+
+                                <section className="rounded-sm border border-primary/10 bg-white p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Thuộc tính thêm</h3>
+                                            <p className="mt-2 text-[12px] text-primary/60">
+                                                Dùng để sửa nhanh các thuộc tính đang có trong hệ thống như loại men hoặc các thông tin cơ bản khác.
+                                            </p>
+                                        </div>
+                                        <div className="rounded-sm bg-primary/[0.04] px-3 py-1.5 text-[11px] font-bold text-primary/65">
+                                            {quickEditSelectedAttributeIds.length} thuộc tính
+                                        </div>
+                                    </div>
+
+                                    {allAttributes.length > 0 ? (
+                                        <div className="mt-3 max-h-36 overflow-y-auto custom-scrollbar flex flex-wrap gap-2 pr-1">
+                                            {[...allAttributes]
+                                                .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
+                                                .map((attribute) => {
+                                                    const active = quickEditSelectedAttributeIds.includes(String(attribute.id));
+                                                    const isGlaze = normalizeQuickEditSearchText(attribute?.name).includes('loai men');
+
+                                                    return (
+                                                        <button
+                                                            key={attribute.id}
+                                                            type="button"
+                                                            onClick={() => toggleQuickEditAttributeField(attribute.id)}
+                                                            data-quick-edit-attribute-field={attribute.id}
+                                                            className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
+                                                                active
+                                                                    ? 'border-gold bg-gold text-white shadow-sm'
+                                                                    : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                                            }`}
+                                                        >
+                                                            <span>{attribute.name}</span>
+                                                            {isGlaze ? (
+                                                                <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${active ? 'bg-white/20 text-white' : 'bg-gold/10 text-gold'}`}>
+                                                                    Gợi ý
+                                                                </span>
+                                                            ) : null}
+                                                        </button>
+                                                    );
+                                                })}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-3 rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-4 text-[12px] text-primary/55">
+                                            Chưa có thuộc tính tùy chỉnh nào để thêm vào chế độ sửa nhanh.
+                                        </div>
+                                    )}
+                                </section>
+                            </div>
+
+                            <section className="space-y-3">
+                                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <h3 className="text-[14px] font-black uppercase tracking-[0.16em] text-primary">Bảng sửa nhanh</h3>
+                                        <p className="mt-2 text-[12px] text-primary/60">
+                                            Chỉnh trực tiếp từng ô, sau đó bấm <strong>Lưu sửa nhanh</strong>. Nút <strong>Hủy</strong> sẽ đóng cửa sổ mà không ghi thay đổi nào.
+                                        </p>
+                                    </div>
+                                    <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/65">
+                                        <strong>{quickEditProducts.length}</strong> sản phẩm • <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật
+                                    </div>
+                                </div>
+
+                                {quickEditLoading ? (
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                        <div className="flex items-center justify-center gap-2 text-primary">
+                                            <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
+                                            Đang tải dữ liệu sửa nhanh...
+                                        </div>
+                                    </div>
+                                ) : quickEditProducts.length === 0 ? (
+                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                        Không có sản phẩm nào sẵn sàng để sửa nhanh.
+                                    </div>
+                                ) : (
+                                    <div className="rounded-sm border border-primary/10 overflow-hidden">
+                                        <div className="overflow-x-auto">
+                                            <table data-quick-edit-table="true" className="min-w-full border-collapse">
+                                                <thead className="bg-[#F8FAFC]">
+                                                    <tr>
+                                                        <th className="min-w-[240px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                            Sản phẩm
+                                                        </th>
+                                                        {quickEditSelectedCoreFields.map((fieldId) => (
+                                                            <th key={`quick-edit-head-${fieldId}`} className="min-w-[180px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                {QUICK_EDIT_CORE_FIELDS.find((field) => field.id === fieldId)?.label || fieldId}
+                                                            </th>
+                                                        ))}
+                                                        {quickEditSelectedAttributes.map((attribute) => (
+                                                            <th key={`quick-edit-head-attr-${attribute.id}`} className="min-w-[220px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                {attribute.name}
+                                                            </th>
+                                                        ))}
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {quickEditProducts.map((product) => {
+                                                        const rowError = quickEditRowErrors[String(product.id)];
+                                                        const categoryLabel = product?.category?.name
+                                                            || categories.find((category) => String(category.id) === String(product?.category_id))?.name
+                                                            || 'Chưa gắn danh mục';
+
+                                                        return (
+                                                            <tr key={`quick-edit-row-${product.id}`} data-quick-edit-row-id={product.id} className={`align-top ${rowError ? 'bg-red-50/60' : 'bg-white'}`}>
+                                                                <td className="px-3 py-3 border border-primary/10 min-w-[240px]">
+                                                                    <div className="space-y-2">
+                                                                        <div className="flex flex-wrap items-center gap-2">
+                                                                            <p className="text-[13px] font-black text-[#0F172A]">{product.name || `Sản phẩm #${product.id}`}</p>
+                                                                            <span className={`rounded-sm px-2 py-0.5 text-[10px] font-black ${TYPE_LABELS[product.type]?.cls || 'border border-primary/10 bg-primary/[0.04] text-primary/70'}`}>
+                                                                                {TYPE_LABELS[product.type]?.label || product.type || 'Sản phẩm'}
+                                                                            </span>
+                                                                        </div>
+                                                                        <div className="text-[11px] text-primary/55 space-y-1">
+                                                                            <div>SKU hiện tại: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
+                                                                            <div>Danh mục: <span className="font-bold text-primary/75">{categoryLabel}</span></div>
+                                                                        </div>
+                                                                        {rowError ? (
+                                                                            <div className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-700">
+                                                                                {rowError}
+                                                                            </div>
+                                                                        ) : null}
+                                                                    </div>
+                                                                </td>
+                                                                {quickEditSelectedCoreFields.map((fieldId) => (
+                                                                    <td key={`quick-edit-cell-${product.id}-${fieldId}`} className="px-3 py-3 border border-primary/10 min-w-[180px]">
+                                                                        {renderQuickEditCoreFieldInput(product, fieldId)}
+                                                                    </td>
+                                                                ))}
+                                                                {quickEditSelectedAttributes.map((attribute) => (
+                                                                    <td key={`quick-edit-cell-${product.id}-attr-${attribute.id}`} className="px-3 py-3 border border-primary/10 min-w-[220px]">
+                                                                        {renderQuickEditAttributeInput(product, attribute)}
+                                                                    </td>
+                                                                ))}
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+                            </section>
+                        </div>
+
+                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                            <p className="text-[12px] text-primary/60">
+                                Hủy sẽ bỏ toàn bộ thay đổi chưa lưu. Lưu sửa nhanh chỉ cập nhật những ô đã đổi trong các cột đang bật.
+                            </p>
+                            <div className="flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={closeQuickEditModal}
+                                    disabled={quickEditSubmitting}
+                                    data-quick-edit-cancel="true"
+                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleQuickEditSave}
+                                    data-quick-edit-save="true"
+                                    disabled={
+                                        quickEditSubmitting
+                                        || quickEditLoading
+                                        || quickEditProducts.length === 0
+                                        || (quickEditSelectedCoreFields.length === 0 && quickEditSelectedAttributeIds.length === 0)
+                                    }
+                                    className="px-6 py-2 bg-sky-600 text-white rounded-sm font-bold text-[13px] hover:bg-sky-700 flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {quickEditSubmitting ? (
+                                        <span className="material-symbols-outlined animate-spin text-[16px]">sync</span>
+                                    ) : (
+                                        <span className="material-symbols-outlined text-[16px]">save</span>
+                                    )}
+                                    Lưu sửa nhanh
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <ProductImageBulkAppendModal
                 open={showBulkImageAppendModal}
                 selectedIds={selectedIds}
@@ -4642,6 +5860,20 @@ const ProductList = () => {
                                             </div>
                                         </div>
                                     </div>
+                                </div>
+
+                                <div className="mt-4 max-w-sm space-y-1">
+                                    <label className="text-[13px] font-bold text-primary/80">ĐVT</label>
+                                    <select
+                                        className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                        value={bulkUpdateData.inventory_unit_id || ''}
+                                        onChange={e => setBulkUpdateData({ ...bulkUpdateData, inventory_unit_id: e.target.value })}
+                                    >
+                                        <option value="">-- Bỏ qua --</option>
+                                        {inventoryUnits.map((unit) => (
+                                            <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                        ))}
+                                    </select>
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-primary/5 p-3 rounded-sm">

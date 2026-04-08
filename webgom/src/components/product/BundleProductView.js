@@ -22,6 +22,7 @@ import {
   getBundleOptionTitle,
 } from '@/lib/bundlePricing';
 import { resolveImageObjectUrl } from '@/lib/media';
+import { buildBundleComponentDetailHref } from '@/lib/productLinks';
 
 const normalizeConfigMediaKey = (configName = '') =>
   String(configName)
@@ -255,6 +256,7 @@ export default function BundleProductView({
   videoUrl,
   activeIndex,
   setActiveIndex,
+  activeBundleConfig,
   bundleItems,
   updateBundleItemQuantity,
   updateBundleItemProduct,
@@ -277,7 +279,7 @@ export default function BundleProductView({
   const [hoveredBundleConfig, setHoveredBundleConfig] = useState('');
   const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
-  const [activeTab, setActiveTab] = useState(null);
+  const [manualActiveTab, setManualActiveTab] = useState(null);
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
   const bundleListRef = useRef(null);
@@ -331,6 +333,38 @@ export default function BundleProductView({
     return getImageUrl(item?.primary_image || item?.images?.[0] || { path: item?.main_image });
   };
 
+  const renderBundleItemImage = (item) => {
+    const href = buildBundleComponentDetailHref(item);
+    const imageAlt = item?.name || 'Sản phẩm thành phần';
+    const imageNode = (
+      <div className={builderStyles.tableImgWrap}>
+        <Image
+          src={getBundleImageSrc(item)}
+          alt={imageAlt}
+          fill
+          style={{ objectFit: 'cover' }}
+          unoptimized
+        />
+      </div>
+    );
+
+    if (!href) {
+      return imageNode;
+    }
+
+    return (
+      <Link
+        href={href}
+        className={builderStyles.tableImgLink}
+        title={`Xem chi tiết ${imageAlt}`}
+        aria-label={`Xem chi tiết ${imageAlt}`}
+        prefetch={false}
+      >
+        {imageNode}
+      </Link>
+    );
+  };
+
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
     const seenSources = new Set();
@@ -382,12 +416,21 @@ export default function BundleProductView({
     return Array.from(new Set(titles));
   }, [bundleItems]);
 
-  // Initialise activeTab to first config
-  useEffect(() => {
-    if (configurations.length > 0 && !activeTab) {
-      setActiveTab(configurations[0]);
+  const resolvedActiveTab = useMemo(() => {
+    if (configurations.length === 0) {
+      return null;
     }
-  }, [configurations, activeTab]);
+
+    if (activeBundleConfig && configurations.includes(activeBundleConfig)) {
+      return activeBundleConfig;
+    }
+
+    if (manualActiveTab && configurations.includes(manualActiveTab)) {
+      return manualActiveTab;
+    }
+
+    return configurations[0];
+  }, [activeBundleConfig, configurations, manualActiveTab]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -416,7 +459,7 @@ export default function BundleProductView({
   useEffect(() => {
     setIsMobileHeroConfigMenuOpen(false);
     setIsMobileConfigMenuOpen(false);
-  }, [activeTab]);
+  }, [resolvedActiveTab]);
 
   useEffect(() => {
     if ((!isMobileHeroConfigMenuOpen && !isMobileConfigMenuOpen) || typeof document === 'undefined') {
@@ -444,9 +487,9 @@ export default function BundleProductView({
 
   // Items of the active tab (including removed ones for placeholder)
   const tabItems = useMemo(() => {
-    if (!activeTab) return bundleItems.filter((item) => !getBundleOptionTitle(item));
-    return bundleItems.filter((item) => getBundleOptionTitle(item) === activeTab);
-  }, [bundleItems, activeTab]);
+    if (!resolvedActiveTab) return bundleItems.filter((item) => !getBundleOptionTitle(item));
+    return bundleItems.filter((item) => getBundleOptionTitle(item) === resolvedActiveTab);
+  }, [bundleItems, resolvedActiveTab]);
 
   const bundleEvaluationsByConfig = useMemo(() => {
     const evaluationMap = new Map();
@@ -477,7 +520,7 @@ export default function BundleProductView({
     return evaluationMap;
   }, [bundleItems, configurations, sourceBundleItems]);
 
-  const activeEvaluationKey = activeTab || configurations[0] || '';
+  const activeEvaluationKey = resolvedActiveTab || configurations[0] || '';
   const activeBundleEvaluation = bundleEvaluationsByConfig.get(activeEvaluationKey)
     || evaluateBundleSelection([], [], { discountRate: BUNDLE_DISCOUNT_RATE });
   const isFullCombo = Boolean(activeBundleEvaluation.isFullBundle);
@@ -496,7 +539,7 @@ export default function BundleProductView({
   }, [bundleItems, configurations]);
 
   const activeConfigMedia = useMemo(() => {
-    const selectedConfig = activeTab || activeConfig || configurations[0];
+    const selectedConfig = resolvedActiveTab || activeConfig || configurations[0];
 
     if (!selectedConfig) {
       return null;
@@ -587,7 +630,7 @@ export default function BundleProductView({
       title: matchedConfigPost.title || selectedConfig,
       href: matchedConfigPost.href,
     };
-  }, [activeConfig, activeTab, bundleItems, configurations, product.bundle_items, product.grouped_items]);
+  }, [activeConfig, bundleItems, configurations, product.bundle_items, product.grouped_items, resolvedActiveTab]);
 
   const hasActiveConfigMedia = Boolean(activeConfigMedia?.href);
 
@@ -619,7 +662,7 @@ export default function BundleProductView({
 
   // Handle tab change: update bundleItems selection state
   const handleTabChange = (tabName) => {
-    setActiveTab(tabName);
+    setManualActiveTab(tabName);
     if (switchBundleConfiguration) switchBundleConfiguration(tabName);
   };
 
@@ -754,7 +797,7 @@ export default function BundleProductView({
       return null;
     }
 
-    const selectedConfig = activeTab || configurations[0];
+    const selectedConfig = resolvedActiveTab || configurations[0];
     const mobileConfigHint = `${configurations.length} c\u1EA5u h\u00ECnh`;
 
     return (
@@ -822,7 +865,7 @@ export default function BundleProductView({
               onClick={stopDropdownEventPropagation}
             >
               {configurations.map((config, index) => {
-                const isSelected = activeTab === config;
+                const isSelected = resolvedActiveTab === config;
                 const isDiscountReady = isConfigEligibleForDiscount(config);
 
                 return (
@@ -925,7 +968,7 @@ export default function BundleProductView({
       return null;
     }
 
-    const selectedConfig = activeTab || activeConfig || configurations[0];
+    const selectedConfig = resolvedActiveTab || activeConfig || configurations[0];
 
     return (
       <div
@@ -1022,11 +1065,11 @@ export default function BundleProductView({
           {configurations.map(config => (
             <button
               key={config}
-              className={`${builderStyles.tabBtn} ${activeTab === config ? builderStyles.tabBtnActive : ''}`}
+              className={`${builderStyles.tabBtn} ${resolvedActiveTab === config ? builderStyles.tabBtnActive : ''}`}
               onClick={() => handleTabChange(config)}
             >
               <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-                {activeTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
+                {resolvedActiveTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
               </span>
               {config}
               {(() => {
@@ -1325,11 +1368,11 @@ export default function BundleProductView({
                 {configurations.map(config => (
                   <button
                     key={config}
-                    className={`${builderStyles.tabBtn} ${activeTab === config ? builderStyles.tabBtnActive : ''}`}
+                    className={`${builderStyles.tabBtn} ${resolvedActiveTab === config ? builderStyles.tabBtnActive : ''}`}
                     onClick={() => handleTabChange(config)}
                   >
                     <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
-                      {activeTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
+                      {resolvedActiveTab === config ? 'radio_button_checked' : 'radio_button_unchecked'}
                     </span>
                     {config}
                     {/* Green dot if full combo */}
@@ -1510,15 +1553,7 @@ export default function BundleProductView({
                           </div>
 
                           <div className={builderStyles.colImg}>
-                            <div className={builderStyles.tableImgWrap}>
-                              <Image
-                                src={getBundleImageSrc(item)}
-                                alt={item.name}
-                                fill
-                                style={{ objectFit: 'cover' }}
-                                unoptimized
-                              />
-                            </div>
+                            {renderBundleItemImage(item)}
                           </div>
 
                           <div className={builderStyles.mobileItemContent}>
@@ -1589,15 +1624,7 @@ export default function BundleProductView({
 
                         {/* Image */}
                         <div className={builderStyles.colImg}>
-                          <div className={builderStyles.tableImgWrap}>
-                            <Image
-                              src={getBundleImageSrc(item)}
-                              alt={item.name}
-                              fill
-                              style={{ objectFit: 'cover' }}
-                              unoptimized
-                            />
-                          </div>
+                          {renderBundleItemImage(item)}
                         </div>
 
                         {/* Name + change button inline */}
@@ -1674,7 +1701,7 @@ export default function BundleProductView({
                   <div className={builderStyles.footerRight}>
                     <div className={builderStyles.summaryRow}>
                       <span className={builderStyles.summaryLabelSub}>
-                        Tổng {tabItems.filter(i => !i.removed).length} món ({activeTab || 'bộ hiện tại'}):
+                        Tổng {tabItems.filter(i => !i.removed).length} món ({resolvedActiveTab || 'bộ hiện tại'}):
                       </span>
                       {/* Empty span to satisfy space-between row layout */}
                       <span></span>
@@ -1703,7 +1730,7 @@ export default function BundleProductView({
                         style={sentenceCaseButtonStyle}
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: 20 }}>shopping_cart_checkout</span>
-                        Mua bộ {activeTab || 'này'} ngay
+                        Mua bộ {resolvedActiveTab || 'này'} ngay
                       </button>
                     )}
                   </div>

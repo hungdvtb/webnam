@@ -183,7 +183,11 @@ const Placeholder = (props) => {
 const INITIAL_FORM_DATA = {
     id: null,
     name: '',
+    slug: '',
     description: '',
+    meta_title: '',
+    meta_description: '',
+    meta_keywords: '',
     parent_id: '',
     status: 1,
     logo: null,
@@ -349,6 +353,13 @@ const formatCategoryTimestamp = (value) => {
         year: 'numeric',
     }).format(date);
 };
+
+const buildCategorySlugPreview = (value = '') => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
 const formatCategoriesForTree = (categories = [], { promoteOrphansToRoot = false } = {}) => {
     const normalizedCategories = Array.isArray(categories)
@@ -1608,6 +1619,9 @@ const CategoryList = () => {
             }));
             data.append('name', formData.name);
             data.append('description', formData.description || '');
+            data.append('meta_title', formData.meta_title || '');
+            data.append('meta_description', formData.meta_description || '');
+            data.append('meta_keywords', formData.meta_keywords || '');
             data.append('category_items', JSON.stringify(payloadCategoryItems));
             
             // Only append parent_id if it's not root (0 or empty)
@@ -1700,7 +1714,11 @@ const CategoryList = () => {
         setFormData({
             id: cat.id,
             name: cat.name,
+            slug: cat.slug || '',
             description: cat.description || '',
+            meta_title: cat.meta_title || '',
+            meta_description: cat.meta_description || '',
+            meta_keywords: cat.meta_keywords || '',
             parent_id: cat.parent_id || '',
             status: cat.status,
             logo: cat.logo_path,
@@ -2802,9 +2820,21 @@ const CategoryList = () => {
                                                 required
                                                 type="text"
                                                 value={formData.name}
-                                                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                                onChange={e => setFormData({ ...formData, name: e.target.value, slug: buildCategorySlugPreview(e.target.value) })}
                                                 className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm"
                                             />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Slug hiá»ƒn thá»‹</label>
+                                            <input
+                                                type="text"
+                                                value={formData.slug || buildCategorySlugPreview(formData.name) || 'se-duoc-tao-tu-dong'}
+                                                readOnly
+                                                className="w-full bg-stone/5 border border-gold/10 p-3 text-sm text-stone/70 rounded-sm font-mono"
+                                            />
+                                            <p className="text-[10px] leading-relaxed text-stone/45">
+                                                Slug Ä‘Æ°á»£c táº¡o tá»± Ä‘á»™ng tá»« tÃªn danh má»¥c Ä‘á»ƒ dÃ¹ng cho URL frontend.
+                                            </p>
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Danh mục cha</label>
@@ -2838,6 +2868,42 @@ const CategoryList = () => {
                                                 onChange={e => setFormData({ ...formData, description: e.target.value })}
                                                 className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-32 resize-none rounded-sm"
                                             />
+                                        </div>
+                                        <div className="space-y-3 rounded-sm border border-gold/10 bg-white p-4">
+                                            <div>
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">SEO category</label>
+                                                <p className="mt-1 text-[10px] leading-relaxed text-stone/50">
+                                                    Meta title dÃ¹ng cho Google, meta description dÃ¹ng cho hiá»ƒn thá»‹ ngáº¯n gá»n ngoÃ i frontend, keywords dÃ¹ng Ä‘á»ƒ bÃ¡m nhÃ³m tá»« khÃ³a.
+                                                </p>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Meta title</label>
+                                                <input
+                                                    type="text"
+                                                    value={formData.meta_title}
+                                                    onChange={e => setFormData({ ...formData, meta_title: e.target.value })}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm"
+                                                    placeholder="TiÃªu Ä‘á» SEO cho trang danh má»¥c"
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Meta description</label>
+                                                <textarea
+                                                    value={formData.meta_description}
+                                                    onChange={e => setFormData({ ...formData, meta_description: e.target.value })}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-24 resize-none rounded-sm"
+                                                    placeholder="MÃ´ táº£ tá»‘i Æ°u hiá»ƒn thá»‹ banner, hero vÃ  tháº» SEO"
+                                                />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Meta keywords</label>
+                                                <textarea
+                                                    value={formData.meta_keywords}
+                                                    onChange={e => setFormData({ ...formData, meta_keywords: e.target.value })}
+                                                    className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-20 resize-none rounded-sm"
+                                                    placeholder="gá»‘m bÃ¡t trÃ ng, Ä‘á»“ thá», men lam, men ráº¡n..."
+                                                />
+                                            </div>
                                         </div>
 
                                         <div className="space-y-3 rounded-sm border border-gold/10 bg-gold/5 p-4">

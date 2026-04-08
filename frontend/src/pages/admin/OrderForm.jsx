@@ -4240,10 +4240,12 @@ const OrderForm = () => {
 
         setShowSearchHistory(false);
 
-        const needsInventorySnapshot = itemsToAppend.some((item) => !hasInventorySnapshot(item));
-        if (needsInventorySnapshot) {
-            void refreshOrderItemInventorySnapshot(itemsToAppend);
-        } else if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
+        // Always re-sync from the dedicated refresh endpoint after appending.
+        // Search/picker results can come from stale in-memory caches, so trusting
+        // embedded snapshots here is what leaves "Có thể bán" out of sync.
+        void refreshOrderItemInventorySnapshot(itemsToAppend);
+
+        if (entryKind !== SEARCH_ENTRY_BUNDLE_OPTION && !hasProductCostSnapshot(product)) {
             hydrateMissingProductCostSnapshot(product);
         }
     }, [hydrateMissingProductCostSnapshot, pushSearchHistory, refreshOrderItemInventorySnapshot, searchTerm]);

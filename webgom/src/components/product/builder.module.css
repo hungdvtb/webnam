@@ -627,6 +627,13 @@
   flex-shrink: 0;
 }
 
+.tableImgLink {
+  display: block;
+  flex-shrink: 0;
+  line-height: 0;
+  text-decoration: none;
+}
+
 .itemName {
   font-size: 14px;
   font-weight: 800;

@@ -492,6 +492,9 @@ class CategoryController extends Controller
             'code' => 'nullable|string|max:120',
             'parent_id' => 'nullable|integer',
             'description' => 'nullable|string',
+            'meta_title' => 'nullable|string|max:255',
+            'meta_description' => 'nullable|string',
+            'meta_keywords' => 'nullable|string|max:255',
             'banner' => 'nullable|image|max:5120',
             'logo' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
@@ -527,6 +530,9 @@ class CategoryController extends Controller
                 'slug' => Category::buildUniqueSlug($request->name),
                 'parent_id' => $parentId,
                 'description' => $request->description,
+                'meta_title' => $this->normalizeNullableString($request->input('meta_title')),
+                'meta_description' => $this->normalizeNullableString($request->input('meta_description')),
+                'meta_keywords' => $this->normalizeNullableString($request->input('meta_keywords')),
                 'banner_path' => $bannerAsset ? $this->mediaService->buildAssetUrl($bannerAsset, 'large') : null,
                 'banner_media_asset_id' => $bannerAsset?->id,
                 'logo_path' => $logoAsset ? $this->mediaService->buildAssetUrl($logoAsset, 'large') : null,
@@ -580,6 +586,10 @@ class CategoryController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'code' => 'nullable|string|max:120',
             'parent_id' => 'sometimes|nullable|integer',
+            'description' => 'nullable|string',
+            'meta_title' => 'nullable|string|max:255',
+            'meta_description' => 'nullable|string',
+            'meta_keywords' => 'nullable|string|max:255',
             'banner' => 'nullable|image|max:5120',
             'logo' => 'nullable|image|max:5120',
             'filterable_attribute_ids' => 'nullable|array',
@@ -628,6 +638,15 @@ class CategoryController extends Controller
             }
         }
         $category->description = $request->input('description', $category->description);
+        if ($request->has('meta_title')) {
+            $category->meta_title = $this->normalizeNullableString($request->input('meta_title'));
+        }
+        if ($request->has('meta_description')) {
+            $category->meta_description = $this->normalizeNullableString($request->input('meta_description'));
+        }
+        if ($request->has('meta_keywords')) {
+            $category->meta_keywords = $this->normalizeNullableString($request->input('meta_keywords'));
+        }
         $category->status = $request->input('status', $category->status);
         $category->display_layout = 'layout_1';
 
@@ -2929,6 +2948,17 @@ class CategoryController extends Controller
         }
 
         return array_values(array_unique(array_map('intval', array_filter((array) $ids, fn ($id) => $id !== '' && $id !== null))));
+    }
+
+    private function normalizeNullableString($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = trim((string) $value);
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     private function shouldSkipCategoryImportRow(array $row): bool

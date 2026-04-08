@@ -40,6 +40,50 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+const isAuthRouteRequest = (url = '') => {
+    const normalizedUrl = String(url || '');
+
+    return normalizedUrl.endsWith('/login')
+        || normalizedUrl.endsWith('/register')
+        || normalizedUrl.includes('/accounts/resolve/');
+};
+
+const handleUnauthorizedApiResponse = (error) => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    if ((error?.response?.status ?? 0) !== 401) {
+        return;
+    }
+
+    if (isAuthRouteRequest(error?.config?.url)) {
+        return;
+    }
+
+    const existingToken = window.localStorage.getItem('token');
+    if (!existingToken) {
+        return;
+    }
+
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const loginPath = window.location.pathname.startsWith('/admin') ? '/old/login' : '/login';
+
+    window.localStorage.removeItem('token');
+    window.localStorage.removeItem('user');
+    window.sessionStorage.setItem('auth_notice', 'session-expired');
+    window.sessionStorage.setItem('post_login_redirect', currentPath);
+    window.location.assign(loginPath);
+};
+
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        handleUnauthorizedApiResponse(error);
+        return Promise.reject(error);
+    }
+);
+
 const multipartConfig = (data) => (
     data instanceof FormData
         ? { headers: { 'Content-Type': 'multipart/form-data' } }

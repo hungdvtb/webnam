@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryUnit;
 use App\Models\Post;
 use App\Models\Product;
 use App\Models\Supplier;
@@ -298,6 +299,56 @@ class ProductBulkStructuredFieldsTest extends TestCase
         );
     }
 
+    public function test_bulk_update_attributes_can_update_inventory_unit_and_undo_it(): void
+    {
+        $account = $this->authenticate();
+
+        $legacyUnit = $this->createInventoryUnit($account, 'Bộ', 'BO');
+        $newUnit = $this->createInventoryUnit($account, 'Cái', 'CAI');
+
+        $firstProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 1',
+            'inventory_unit_id' => $legacyUnit->id,
+        ]);
+        $secondProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 2',
+            'inventory_unit_id' => null,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-attributes', [
+                'ids' => [$firstProduct->id, $secondProduct->id],
+                'basic_info' => [
+                    'inventory_unit_id' => $newUnit->id,
+                ],
+            ]);
+
+        $response->assertOk();
+
+        $logId = (int) $response->json('log_id');
+
+        $firstProduct->refresh();
+        $secondProduct->refresh();
+
+        $this->assertSame($newUnit->id, (int) $firstProduct->inventory_unit_id);
+        $this->assertSame($newUnit->id, (int) $secondProduct->inventory_unit_id);
+
+        $undoResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-undo', [
+                'log_id' => $logId,
+            ]);
+
+        $undoResponse->assertOk();
+
+        $firstProduct->refresh();
+        $secondProduct->refresh();
+
+        $this->assertSame($legacyUnit->id, (int) $firstProduct->inventory_unit_id);
+        $this->assertNull($secondProduct->inventory_unit_id);
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([
@@ -352,6 +403,17 @@ class ProductBulkStructuredFieldsTest extends TestCase
             'name' => $name,
             'code' => $code,
             'status' => true,
+        ]);
+    }
+
+    private function createInventoryUnit(Account $account, string $name, string $code): InventoryUnit
+    {
+        return InventoryUnit::query()->create([
+            'account_id' => $account->id,
+            'name' => $name,
+            'normalized_name' => Str::lower(Str::ascii($name)),
+            'code' => $code,
+            'sort_order' => ((int) InventoryUnit::query()->max('sort_order')) + 1,
         ]);
     }
 

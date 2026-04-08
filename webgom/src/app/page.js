@@ -68,6 +68,7 @@ function normalizeCategory(category, index) {
     slug,
     href: `/category/${slug}`,
     description: String(category?.description || "").trim(),
+    metaDescription: String(category?.meta_description || "").trim(),
     productsCount: Number(category?.products_count || 0),
     bannerSrc:
       resolveImageObjectUrl(
@@ -90,6 +91,9 @@ function normalizeProduct(product) {
     imageSrc: resolveMediaUrl(product?.main_image) || FALLBACK_PRODUCT_IMAGE,
     isFeatured: Boolean(product?.is_featured),
     isNew: Boolean(product?.is_new),
+    itemType: String(product?.item_type || "").trim().toLowerCase() || "product",
+    bundleOptionKey: String(product?.bundle_option_key || "").trim(),
+    bundleOptionTitle: String(product?.bundle_option_title || "").trim(),
   };
 }
 
@@ -115,12 +119,12 @@ function getCategoryEyebrow(category, totalProducts) {
     return `${productsCount} sản phẩm`;
   }
 
-  const description = String(category?.description || "").trim();
+  const description = String(category?.metaDescription || category?.description || "").trim();
   return description || FALLBACK_CATEGORY_TEXT;
 }
 
 function getCategoryHeroDescription(category, totalProducts) {
-  const description = String(category?.description || "").trim();
+  const description = String(category?.metaDescription || category?.description || "").trim();
   if (description) {
     return description;
   }

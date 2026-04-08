@@ -221,7 +221,7 @@ export default async function ProductsPage({ searchParams }) {
 
   const categoryDesc = searchQuery
     ? `Tìm thấy ${productsData.total || 0} sản phẩm phù hợp với từ khóa của bạn.`
-    : (categoryInfo?.description || `Khám phá bộ sưu tập ${productsData.total || 0} sản phẩm gốm sứ tinh xảo, chất lượng cao từ làng nghề Bát Tràng.`);
+    : (categoryInfo?.meta_description || categoryInfo?.description || `Khám phá bộ sưu tập ${productsData.total || 0} sản phẩm gốm sứ tinh xảo, chất lượng cao từ làng nghề Bát Tràng.`);
 
   let collectionUrl = '/products';
   if (currentCategorySlug) {

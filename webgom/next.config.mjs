@@ -37,6 +37,7 @@ const nextConfig = {
     ];
   },
   images: {
+    dangerouslyAllowSVG: true,
     remotePatterns: [
       {
         protocol: 'http',

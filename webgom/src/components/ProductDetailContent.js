@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import {
   BUNDLE_METADATA_VERSION,
@@ -73,7 +73,37 @@ const resolveRequestedBundleConfig = (items = [], requestedKey = '', requestedTi
   return '';
 };
 
-export default function ProductDetailContent({ product }) {
+const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle = '') => {
+  let firstConfigTitle = '';
+  const mappedItems = (Array.isArray(items) ? items : []).map((item, index) => {
+    const groupName = getBundleOptionTitle(item);
+    if (!firstConfigTitle && groupName) {
+      firstConfigTitle = groupName;
+    }
+
+    return normalizeBundleItemState({
+      ...item,
+      option_title: groupName,
+    }, index);
+  });
+  const requestedConfigTitle = resolveRequestedBundleConfig(
+    mappedItems,
+    requestedKey,
+    requestedTitle,
+  );
+
+  return {
+    mappedItems,
+    initialConfigTitle: requestedConfigTitle || firstConfigTitle,
+  };
+};
+
+export default function ProductDetailContent({
+  product,
+  requestedBundleOptionKey = '',
+  requestedBundleOptionTitle = '',
+  requestedVariantId = 0,
+}) {
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
@@ -84,23 +114,28 @@ export default function ProductDetailContent({ product }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const { addToCart } = useCart();
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedBundleOptionKey = String(searchParams?.get('bundle_option_key') || '').trim();
-  const requestedBundleOptionTitle = String(searchParams?.get('bundle_option') || '').trim();
   const hasStructuredVariantAttributes = product?.super_attributes?.length > 0;
   const hasVariants = product?.type === 'configurable' && product?.variations?.length > 0;
 
   // Initialize selected options
   useEffect(() => {
+    const resolvedRequestedVariantId = Number.parseInt(String(requestedVariantId || '').trim(), 10) || 0;
+    const requestedVariant = hasVariants && resolvedRequestedVariantId > 0
+      ? (
+        product.variations?.find((variant) => Number(variant.id) === resolvedRequestedVariantId)
+        || null
+      )
+      : null;
+
     if (hasStructuredVariantAttributes) {
       const initialOptions = {};
-      // Preferred: pick values from the first available variation to ensure a valid combo
-      const firstVariant = product.variations?.[0];
+      // Preferred: honor a requested variant before falling back to the first valid choice.
+      const preferredVariant = requestedVariant || product.variations?.[0];
       
       product.super_attributes.forEach(attr => {
-        // Try to get value from first variant
-        if (firstVariant) {
-          const varVal = firstVariant.attribute_values?.find(av => 
+        // Try to get value from the requested or first valid variant.
+        if (preferredVariant) {
+          const varVal = preferredVariant.attribute_values?.find(av =>
             (av.attribute?.code === attr.code || av.attribute_id === attr.id)
           )?.value;
           if (varVal) {
@@ -124,6 +159,10 @@ export default function ProductDetailContent({ product }) {
 
     if (hasVariants) {
       setSelectedVariantId((prev) => {
+        if (requestedVariant?.id) {
+          return requestedVariant.id;
+        }
+
         if (prev && product.variations?.some((variant) => variant.id === prev)) {
           return prev;
         }
@@ -134,7 +173,7 @@ export default function ProductDetailContent({ product }) {
       setSelectedVariantId(null);
     }
 
-    setHasExplicitVariantSelection(false);
+    setHasExplicitVariantSelection(Boolean(requestedVariant?.id));
 
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
@@ -143,22 +182,11 @@ export default function ProductDetailContent({ product }) {
     if (product?.type === 'bundle') {
       const items = product.bundle_items || product.grouped_items || [];
       if (items.length > 0) {
-        let firstConfigTitle = '';
-        const mappedItems = items.map((item, index) => {
-          const groupName = getBundleOptionTitle(item);
-          if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
-
-          return normalizeBundleItemState({
-            ...item,
-            option_title: groupName
-          }, index);
-        });
-        const requestedConfigTitle = resolveRequestedBundleConfig(
-          mappedItems,
+        const { mappedItems, initialConfigTitle } = mapBundleItemsForConfig(
+          items,
           requestedBundleOptionKey,
           requestedBundleOptionTitle,
         );
-        const initialConfigTitle = requestedConfigTitle || firstConfigTitle;
 
         setBundleItems(mappedItems.map(item => ({
           ...item,
@@ -179,6 +207,7 @@ export default function ProductDetailContent({ product }) {
     product,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
+    requestedVariantId,
   ]);
 
   // Find the matching variant
@@ -326,20 +355,16 @@ export default function ProductDetailContent({ product }) {
   const resetBundleItems = () => {
     const items = product.bundle_items || product.grouped_items || [];
     if (items.length === 0) return;
-    let firstConfigTitle = '';
-    const mappedItems = items.map((item, index) => {
-      const groupName = getBundleOptionTitle(item);
-      if (!firstConfigTitle && groupName) firstConfigTitle = groupName;
-      return normalizeBundleItemState({
-        ...item,
-        option_title: groupName
-      }, index);
-    });
+    const { mappedItems, initialConfigTitle } = mapBundleItemsForConfig(
+      items,
+      requestedBundleOptionKey,
+      requestedBundleOptionTitle,
+    );
     setBundleItems(mappedItems.map(item => ({
       ...item,
-      selected: !item.option_title || item.option_title === firstConfigTitle
+      selected: !item.option_title || item.option_title === initialConfigTitle
     })));
-    setActiveBundleConfig(firstConfigTitle);
+    setActiveBundleConfig(initialConfigTitle);
   };
 
   const toggleBundleItem = (bundleItemUid) => {
@@ -772,6 +797,7 @@ export default function ProductDetailContent({ product }) {
     return (
       <BundleProductView 
         {...commonProps}
+        activeBundleConfig={resolvedActiveBundleConfig}
         bundleItems={bundleItems}
         updateBundleItemQuantity={updateBundleItemQuantity}
         updateBundleItemProduct={updateBundleItemProduct}

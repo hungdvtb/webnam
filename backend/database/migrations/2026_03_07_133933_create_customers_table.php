@@ -20,7 +20,6 @@ return new class extends Migration
             $table->integer('total_orders')->default(0);
             $table->timestamps();
 
-            $table->unique(['account_id', 'email']);
             $table->unique(['account_id', 'phone']);
         });
 

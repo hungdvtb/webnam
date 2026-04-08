@@ -35,6 +35,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -219,7 +220,7 @@ class OrderController extends Controller
 
     private function orderDetailRelations(): array
     {
-        return [
+        $relations = [
             'user:id,name',
             'items' => fn ($query) => $query
                 ->select([
@@ -254,7 +255,13 @@ class OrderController extends Controller
                 ->with([
                     'attribute:id,code,name',
                 ]),
-            'supplementItems' => fn ($query) => $query
+        ];
+
+        if (!$this->orderSupplementItemsTableExists()) {
+            return $relations;
+        }
+
+        $relations['supplementItems'] = fn ($query) => $query
                 ->select([
                     'id',
                     'order_id',
@@ -278,8 +285,9 @@ class OrderController extends Controller
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
                                 ->with(['unit:id,name']),
                         ]),
-                ]),
-        ];
+                ]);
+
+        return $relations;
     }
 
     private function orderPrintRelations(): array
@@ -406,6 +414,88 @@ class OrderController extends Controller
         return in_array($normalized, self::RETURN_STATUSES, true)
             ? $normalized
             : self::RETURN_STATUS_NOT_RETURNED;
+    }
+
+    private function orderTableHasColumn(string $column): bool
+    {
+        static $columnCache = [];
+
+        if (!array_key_exists($column, $columnCache)) {
+            $columnCache[$column] = Schema::hasColumn('orders', $column);
+        }
+
+        return $columnCache[$column];
+    }
+
+    private function orderSupplementItemsTableExists(): bool
+    {
+        static $tableExists = null;
+
+        if ($tableExists === null) {
+            $tableExists = Schema::hasTable('order_supplement_items');
+        }
+
+        return $tableExists;
+    }
+
+    private function filterPersistableOrderData(array $data): array
+    {
+        return collect($data)
+            ->filter(fn ($value, $column) => $this->orderTableHasColumn((string) $column))
+            ->all();
+    }
+
+    private function selectExistingOrderColumns(array $columns): array
+    {
+        return array_values(array_filter(
+            $columns,
+            fn ($column) => $this->orderTableHasColumn((string) $column)
+        ));
+    }
+
+    private function ensureRequestedOrderSchemaSupport(
+        string $orderKind,
+        string $orderType,
+        bool $hasSupplementItems = false
+    ): void {
+        if ($orderKind !== self::ORDER_KIND_OFFICIAL && !$this->orderTableHasColumn('order_kind')) {
+            throw ValidationException::withMessages([
+                'order_kind' => 'Môi trường hiện tại chưa hỗ trợ đơn nháp hoặc đơn mẫu. Cần chạy migration đồng bộ trước khi lưu.',
+            ]);
+        }
+
+        if ($orderType === self::ORDER_TYPE_STANDARD) {
+            return;
+        }
+
+        $requiredColumns = [
+            'order_type',
+            'settlement_delta',
+            'return_tracking_code',
+            'return_status',
+            'supplement_items_total_price',
+            'supplement_items_cost_total',
+            'report_revenue_total',
+            'report_cost_total',
+            'report_profit_total',
+        ];
+
+        $missingColumns = array_filter(
+            $requiredColumns,
+            fn (string $column) => !$this->orderTableHasColumn($column)
+        );
+
+        if (!empty($missingColumns)) {
+            throw ValidationException::withMessages([
+                'order_type' => 'Môi trường hiện tại chưa hỗ trợ đơn đổi trả hoặc giao một phần. Cần chạy migration đồng bộ trước khi lưu.',
+            ]);
+        }
+
+        if ($hasSupplementItems && !$this->orderSupplementItemsTableExists()) {
+            throw ValidationException::withMessages([
+                'supplement_items' => 'Môi trường hiện tại chưa hỗ trợ lưu sản phẩm bổ sung. Cần chạy migration đồng bộ trước khi lưu.',
+            ]);
+        }
     }
 
     private function supplementReturnTrackingPayload(
@@ -579,6 +669,10 @@ class OrderController extends Controller
             if (array_key_exists($field, $payload)) {
                 $payload[$field] = trim((string) ($payload[$field] ?? ''));
             }
+        }
+
+        if (array_key_exists('customer_email', $payload) && $payload['customer_email'] === '') {
+            $payload['customer_email'] = null;
         }
 
         return $payload;
@@ -800,6 +894,20 @@ class OrderController extends Controller
             ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
             ->values();
 
+        if (!$this->orderSupplementItemsTableExists()) {
+            if ($normalizedItems->isNotEmpty()) {
+                throw ValidationException::withMessages([
+                    'supplement_items' => 'Môi trường hiện tại chưa hỗ trợ lưu sản phẩm bổ sung. Cần chạy migration đồng bộ trước khi lưu.',
+                ]);
+            }
+
+            return [
+                'items' => [],
+                'total_price' => 0,
+                'cost_total' => 0,
+            ];
+        }
+
         $order->supplementItems()->delete();
 
         if ($normalizedItems->isEmpty()) {
@@ -894,7 +1002,7 @@ class OrderController extends Controller
             : round($baseCostTotal - $effectiveSupplementCostTotal, 2);
         $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
 
-        $order->forceFill([
+        $order->forceFill($this->filterPersistableOrderData([
             'order_type' => $normalizedOrderType,
             'total_price' => $finalTotal,
             'settlement_delta' => $effectiveSettlementDelta,
@@ -905,7 +1013,7 @@ class OrderController extends Controller
             'report_revenue_total' => $reportRevenueTotal,
             'report_cost_total' => $reportCostTotal,
             'report_profit_total' => $reportProfitTotal,
-        ])->save();
+        ]))->save();
     }
 
     private function syncOfficialCustomerAndInvoice(Order $order, bool $syncCustomerStats = true): void
@@ -1025,10 +1133,10 @@ class OrderController extends Controller
                 $newOrder->customer_id = null;
                 $newOrder->status = $this->defaultStatusForKind($original->account_id, $targetKind, 'new');
                 $newOrder->shipment_status = 'Chưa giao';
-                $newOrder->forceFill(array_merge(
+                $newOrder->forceFill($this->filterPersistableOrderData(array_merge(
                     $this->freshShippingState(),
                     $this->supplementReturnTrackingPayload((string) $newOrder->order_type)
-                ));
+                )));
                 $newOrder->save();
 
                 $rawItems = $original->items->map(function (OrderItem $item) {
@@ -1045,17 +1153,19 @@ class OrderController extends Controller
                 })->all();
 
                 $summary = $this->syncOrderItems($newOrder, $rawItems, $targetKind);
-                $rawSupplementItems = $original->supplementItems->map(function ($item) {
-                    return [
-                        'product_id' => $item->product_id,
-                        'name' => $item->product_name_snapshot,
-                        'sku' => $item->product_sku_snapshot,
-                        'quantity' => $item->quantity,
-                        'price' => $item->price,
-                        'cost_price' => $item->cost_price,
-                        'notes' => $item->notes,
-                    ];
-                })->all();
+                $rawSupplementItems = $this->orderSupplementItemsTableExists()
+                    ? $original->supplementItems->map(function ($item) {
+                        return [
+                            'product_id' => $item->product_id,
+                            'name' => $item->product_name_snapshot,
+                            'sku' => $item->product_sku_snapshot,
+                            'quantity' => $item->quantity,
+                            'price' => $item->price,
+                            'cost_price' => $item->cost_price,
+                            'notes' => $item->notes,
+                        ];
+                    })->all()
+                    : [];
 
                 $supplementSummary = $this->normalizeOrderType((string) $newOrder->order_type) === self::ORDER_TYPE_STANDARD
                     ? $this->syncSupplementItems($newOrder, [])
@@ -2120,6 +2230,10 @@ class OrderController extends Controller
         $orderKind = $this->normalizeOrderKind($validated['order_kind'] ?? null);
         $orderType = $this->normalizeOrderType($validated['order_type'] ?? null);
         $regionType = (string) ($validated['region_type'] ?? 'new');
+        $hasSupplementItems = collect((array) $request->input('supplement_items', []))
+            ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
+
+        $this->ensureRequestedOrderSchemaSupport($orderKind, $orderType, $hasSupplementItems);
 
         if ($this->requiresOfficialValidation($orderKind)) {
             $this->validateOfficialOrderPayload($request->all(), $regionType);
@@ -2151,7 +2265,7 @@ class OrderController extends Controller
                 'shipping_address' => $request->input('shipping_address'),
             ]);
 
-            $order = Order::create(array_merge([
+            $order = Order::create($this->filterPersistableOrderData(array_merge([
                 'user_id' => Auth::id(),
                 'account_id' => $accountId,
                 'lead_id' => $lead?->id,
@@ -2181,7 +2295,7 @@ class OrderController extends Controller
                 'report_revenue_total' => 0,
                 'report_cost_total' => 0,
                 'report_profit_total' => 0,
-            ], $this->freshShippingState(), $returnTrackingData));
+            ], $this->freshShippingState(), $returnTrackingData)));
 
             $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
             $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
@@ -2242,7 +2356,7 @@ class OrderController extends Controller
     public function show(Request $request, $id)
     {
         $order = $this->scopedOrderQuery($request)
-            ->select([
+            ->select($this->selectExistingOrderColumns([
                 'id',
                 'user_id',
                 'account_id',
@@ -2279,7 +2393,7 @@ class OrderController extends Controller
                 'report_profit_total',
                 'created_at',
                 'updated_at',
-            ])
+            ]))
             ->with($this->orderDetailRelations())
             ->findOrFail((int) $id);
 
@@ -2389,6 +2503,10 @@ class OrderController extends Controller
             $requestedKind = $this->normalizeOrderKind($request->input('order_kind', $order->order_kind));
             $requestedOrderType = $this->normalizeOrderType($request->input('order_type', $order->order_type));
             $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+            $hasSupplementItems = collect((array) $request->input('supplement_items', []))
+                ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
+
+            $this->ensureRequestedOrderSchemaSupport($requestedKind, $requestedOrderType, $hasSupplementItems);
 
             if ($this->requiresOfficialValidation($requestedKind)) {
                 $this->validateOfficialOrderPayload([
@@ -2427,7 +2545,9 @@ class OrderController extends Controller
             } elseif (!$order->hasActiveShipment() && blank($order->shipping_status_source)) {
                 $data['shipping_status_source'] = self::SHIPPING_STATUS_SOURCE_MANUAL;
             }
-            
+
+            $data = $this->filterPersistableOrderData($data);
+
             $order->update($data);
 
             // Sync items if provided
@@ -2610,7 +2730,9 @@ class OrderController extends Controller
     public function duplicate(Request $request, $id)
     {
         $original = $this->scopedOrderQuery($request, true)
-            ->with(['items', 'attributeValues', 'supplementItems'])
+            ->with($this->orderSupplementItemsTableExists()
+                ? ['items', 'attributeValues', 'supplementItems']
+                : ['items', 'attributeValues'])
             ->findOrFail($id);
         $targetKind = $this->normalizeOrderKind($request->input('target_kind', self::ORDER_KIND_DRAFT));
 
@@ -2842,7 +2964,9 @@ class OrderController extends Controller
         DB::transaction(function () use ($request, $ids, &$duplicatedCount) {
             foreach ($ids as $id) {
                 $original = $this->scopedOrderQuery($request, true)
-                    ->with(['items', 'attributeValues', 'supplementItems'])
+                    ->with($this->orderSupplementItemsTableExists()
+                        ? ['items', 'attributeValues', 'supplementItems']
+                        : ['items', 'attributeValues'])
                     ->find($id);
 
                 if (!$original) {

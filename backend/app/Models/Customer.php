@@ -25,6 +25,18 @@ class Customer extends Model
         return $this->belongsTo(Account::class);
     }
 
+    protected function setEmailAttribute($value): void
+    {
+        $normalized = trim((string) ($value ?? ''));
+        $this->attributes['email'] = $normalized === '' ? null : $normalized;
+    }
+
+    protected function setPhoneAttribute($value): void
+    {
+        $normalized = trim((string) ($value ?? ''));
+        $this->attributes['phone'] = $normalized === '' ? null : $normalized;
+    }
+
     public function orders()
     {
         return $this->hasMany(Order::class);

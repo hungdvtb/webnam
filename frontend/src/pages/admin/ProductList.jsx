@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-import { Link, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, STORAGE_BASE_URL } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -22,6 +22,114 @@ import {
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
 const PRODUCT_DETAIL_PATH = '/san-pham';
+const PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY = 'product_management_persistent_state';
+const PRODUCT_MANAGEMENT_WORKING_STATE_KEY = 'product_management_working_state';
+
+function readStorageJson(storage, key) {
+    if (!storage) {
+        return null;
+    }
+
+    const rawValue = storage.getItem(key);
+    if (!rawValue) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(rawValue);
+    } catch (error) {
+        console.error(`Error parsing ${key}`, error);
+        return null;
+    }
+}
+
+function writeStorageJson(storage, key, value) {
+    if (!storage) {
+        return;
+    }
+
+    try {
+        storage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+        console.error(`Error saving ${key}`, error);
+    }
+}
+
+function getSavedProductListState() {
+    if (typeof window === 'undefined') {
+        return { persistent: null, working: null, combined: null };
+    }
+
+    const persistent = readStorageJson(window.localStorage, PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY);
+    const working = readStorageJson(window.sessionStorage, PRODUCT_MANAGEMENT_WORKING_STATE_KEY);
+
+    return {
+        persistent,
+        working,
+        combined: persistent || working
+            ? {
+                ...(persistent || {}),
+                ...(working || {}),
+            }
+            : null,
+    };
+}
+
+function normalizeStoredId(value) {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    const rawValue = String(value).trim();
+    if (!rawValue) {
+        return null;
+    }
+
+    const numericValue = Number(rawValue);
+    if (Number.isFinite(numericValue) && String(numericValue) === rawValue) {
+        return numericValue;
+    }
+
+    return rawValue;
+}
+
+function sanitizeStoredIdList(values) {
+    const normalizedValues = Array.isArray(values)
+        ? values
+            .map((value) => normalizeStoredId(value))
+            .filter((value) => value !== null)
+        : [];
+
+    return Array.from(
+        new Map(normalizedValues.map((value) => [String(value), value])).values(),
+    );
+}
+
+function normalizeStoredScrollTop(value) {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : null;
+}
+
+function findScrollableAncestor(node) {
+    if (typeof window === 'undefined' || !node) {
+        return null;
+    }
+
+    let currentNode = node.parentElement;
+
+    while (currentNode && currentNode !== document.body) {
+        const style = window.getComputedStyle(currentNode);
+        const overflowY = style.overflowY || style.overflow;
+
+        if (/(auto|scroll|overlay)/i.test(overflowY)) {
+            return currentNode;
+        }
+
+        currentNode = currentNode.parentElement;
+    }
+
+    return window;
+}
 
 function normalizeDomainValue(value) {
     return String(value || '')
@@ -207,7 +315,7 @@ function getVariantParentProduct(product) {
         return product.parent_configurable[0] || null;
     }
 
-    if (product.parent_configurable && typeof product.parent_configurable === 'object') {
+    if (product.parent_configurable && !Array.isArray(product.parent_configurable) && typeof product.parent_configurable === 'object') {
         return product.parent_configurable;
     }
 
@@ -216,6 +324,41 @@ function getVariantParentProduct(product) {
 
 function isVariantChildProduct(product) {
     return Boolean(getVariantParentProduct(product));
+}
+
+function getConfigurableParentProduct(product) {
+    if (!product || typeof product !== 'object') {
+        return null;
+    }
+
+    if (Array.isArray(product.parent_configurable) && product.parent_configurable.length > 0) {
+        return product.parent_configurable[0] || null;
+    }
+
+    if (product.parent_configurable && !Array.isArray(product.parent_configurable) && typeof product.parent_configurable === 'object') {
+        return product.parent_configurable;
+    }
+
+    if (Array.isArray(product.parentConfigurable) && product.parentConfigurable.length > 0) {
+        return product.parentConfigurable[0] || null;
+    }
+
+    if (product.parentConfigurable && !Array.isArray(product.parentConfigurable) && typeof product.parentConfigurable === 'object') {
+        return product.parentConfigurable;
+    }
+
+    const parentProducts = Array.isArray(product.parent_products)
+        ? product.parent_products
+        : (Array.isArray(product.parentProducts) ? product.parentProducts : []);
+
+    return parentProducts.find((item) => {
+        const linkType = String(item?.pivot?.link_type || item?.link_type || '').trim().toLowerCase();
+        return linkType === 'super_link';
+    }) || null;
+}
+
+function isConfigurableVariantChildProduct(product) {
+    return Boolean(getConfigurableParentProduct(product));
 }
 
 function getProductEditTargetId(product) {
@@ -245,6 +388,7 @@ function getDefaultProductFilters() {
         category_id: [],
         type: [],
         supplier_ids: [],
+        has_images: '',
         missing_purchase_price: '',
         multiple_suppliers: '',
         is_featured: '',
@@ -260,8 +404,19 @@ function getDefaultProductFilters() {
 }
 
 function sanitizeProductFilters(rawFilters) {
+    const normalizedHasImages = rawFilters?.has_images === true
+        || rawFilters?.has_images === 1
+        || rawFilters?.has_images === '1'
+        ? '1'
+        : (rawFilters?.has_images === false
+            || rawFilters?.has_images === 0
+            || rawFilters?.has_images === '0'
+            ? '0'
+            : '');
+
     return {
         ...rawFilters,
+        has_images: normalizedHasImages,
         type: sanitizeActiveProductTypeValues(rawFilters?.type),
     };
 }
@@ -422,6 +577,19 @@ function buildBundleOptionGroups(bundleItems) {
 const ProductList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
+    const initialSavedStateRef = useRef(null);
+    if (!initialSavedStateRef.current) {
+        initialSavedStateRef.current = getSavedProductListState();
+    }
+    const savedState = initialSavedStateRef.current.combined;
+    const savedWorkingState = initialSavedStateRef.current.working;
+    const pageRootRef = useRef(null);
+    const tableScrollRef = useRef(null);
+    const scrollContainerRef = useRef(null);
+    const pendingScrollRestoreRef = useRef(normalizeStoredScrollTop(savedWorkingState?.scrollTop));
+    const pendingScrollRestoreLeftRef = useRef(normalizeStoredScrollTop(savedWorkingState?.scrollLeft));
+    const workingStateSnapshotRef = useRef(null);
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
     const importInputRef = useRef(null);
@@ -431,14 +599,14 @@ const ProductList = () => {
     const [domains, setDomains] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedIds, setSelectedIds] = useState([]);
+    const [selectedIds, setSelectedIds] = useState(() => sanitizeStoredIdList(savedWorkingState?.selectedIds));
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
     const [showImportConfigModal, setShowImportConfigModal] = useState(false);
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
-    const [expandedRows, setExpandedRows] = useState([]);
+    const [expandedRows, setExpandedRows] = useState(() => sanitizeStoredIdList(savedWorkingState?.expandedRows));
     const [exportColumnIds, setExportColumnIds] = useState(DEFAULT_EXPORT_COLUMN_IDS);
     const [exportOnlySelected, setExportOnlySelected] = useState(false);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
@@ -565,21 +733,6 @@ const ProductList = () => {
         setDuplicateConfirm(null);
     };
 
-    // PERSISTENCE LOGIC: Load state from localStorage on init
-    const getSavedState = () => {
-        const saved = localStorage.getItem('product_management_persistent_state');
-        if (saved) {
-            try {
-                return JSON.parse(saved);
-            } catch (e) {
-                console.error("Error parsing saved product list state", e);
-            }
-        }
-        return null;
-    };
-
-    const savedState = getSavedState();
-
     const [pagination, setPagination] = useState({ 
         current_page: savedState?.page || 1, 
         last_page: 1, 
@@ -638,11 +791,114 @@ const ProductList = () => {
         return sanitizeProductFilters(baseFilters);
     };
 
-    const [filters, setFilters] = useState(getInitialFilters());
+    const [filters, setFilters] = useState(() => getInitialFilters());
 
     const [sortConfig, setSortConfig] = useState(
-        normalizeProductSortConfig(savedState?.sortConfig)
+        () => normalizeProductSortConfig(savedState?.sortConfig)
     );
+
+    if (!workingStateSnapshotRef.current) {
+        workingStateSnapshotRef.current = {
+            filters: getInitialFilters(),
+            sortConfig: normalizeProductSortConfig(savedState?.sortConfig),
+            page: savedState?.page || 1,
+            perPage: savedState?.perPage || 20,
+            isTrashView: savedState?.isTrashView || false,
+            selectedIds: sanitizeStoredIdList(savedWorkingState?.selectedIds),
+            expandedRows: sanitizeStoredIdList(savedWorkingState?.expandedRows),
+            scrollTop: normalizeStoredScrollTop(savedWorkingState?.scrollTop),
+            scrollLeft: normalizeStoredScrollTop(savedWorkingState?.scrollLeft),
+            target: `${location.pathname}${location.search}`,
+        };
+    }
+
+    const getCurrentScrollTop = useCallback(() => {
+        if (typeof window === 'undefined') {
+            return 0;
+        }
+
+        const scrollContainer = scrollContainerRef.current || tableScrollRef.current;
+        if (scrollContainer && scrollContainer !== window) {
+            return scrollContainer.scrollTop;
+        }
+
+        return window.scrollY || document.documentElement.scrollTop || 0;
+    }, []);
+
+    const getCurrentScrollLeft = useCallback(() => {
+        if (typeof window === 'undefined') {
+            return 0;
+        }
+
+        const scrollContainer = scrollContainerRef.current || tableScrollRef.current;
+        if (scrollContainer && scrollContainer !== window) {
+            return scrollContainer.scrollLeft;
+        }
+
+        return window.scrollX || document.documentElement.scrollLeft || 0;
+    }, []);
+
+    const writeWorkingStateSnapshot = useCallback((overrides = {}) => {
+        const nextSnapshot = {
+            ...(workingStateSnapshotRef.current || {}),
+            ...overrides,
+        };
+
+        workingStateSnapshotRef.current = nextSnapshot;
+
+        if (typeof window !== 'undefined') {
+            writeStorageJson(window.sessionStorage, PRODUCT_MANAGEMENT_WORKING_STATE_KEY, nextSnapshot);
+        }
+
+        return nextSnapshot;
+    }, []);
+
+    const persistWorkingState = useCallback((overrides = {}) => (
+        writeWorkingStateSnapshot({
+            scrollTop: overrides.scrollTop ?? getCurrentScrollTop(),
+            scrollLeft: overrides.scrollLeft ?? getCurrentScrollLeft(),
+            ...overrides,
+        })
+    ), [getCurrentScrollLeft, getCurrentScrollTop, writeWorkingStateSnapshot]);
+
+    const buildProductFormLocationState = useCallback(() => ({
+        returnContext: {
+            target: `${location.pathname}${location.search}`,
+        },
+    }), [location.pathname, location.search]);
+
+    const navigateToProductForm = useCallback((target) => {
+        persistWorkingState({
+            filters,
+            sortConfig,
+            page: pagination.current_page,
+            perPage: pagination.per_page,
+            isTrashView,
+            selectedIds,
+            expandedRows,
+            scrollTop: getCurrentScrollTop(),
+            scrollLeft: getCurrentScrollLeft(),
+            target: `${location.pathname}${location.search}`,
+        });
+        navigate(target, {
+            state: buildProductFormLocationState(),
+        });
+    }, [
+        buildProductFormLocationState,
+        expandedRows,
+        filters,
+        getCurrentScrollLeft,
+        getCurrentScrollTop,
+        isTrashView,
+        location.pathname,
+        location.search,
+        navigate,
+        pagination.current_page,
+        pagination.per_page,
+        persistWorkingState,
+        selectedIds,
+        sortConfig,
+    ]);
 
     // PERSISTENCE LOGIC: Save state whenever it changes
     useEffect(() => {
@@ -653,8 +909,38 @@ const ProductList = () => {
             perPage: pagination.per_page,
             isTrashView
         };
-        localStorage.setItem('product_management_persistent_state', JSON.stringify(stateToSave));
+        if (typeof window !== 'undefined') {
+            writeStorageJson(window.localStorage, PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY, stateToSave);
+        }
     }, [filters, sortConfig, pagination.current_page, pagination.per_page, isTrashView]);
+
+    useEffect(() => {
+        writeWorkingStateSnapshot({
+            filters,
+            sortConfig,
+            page: pagination.current_page,
+            perPage: pagination.per_page,
+            isTrashView,
+            selectedIds,
+            expandedRows,
+            scrollTop: getCurrentScrollTop(),
+            scrollLeft: getCurrentScrollLeft(),
+            target: `${location.pathname}${location.search}`,
+        });
+    }, [
+        expandedRows,
+        filters,
+        getCurrentScrollLeft,
+        getCurrentScrollTop,
+        isTrashView,
+        location.pathname,
+        location.search,
+        pagination.current_page,
+        pagination.per_page,
+        selectedIds,
+        sortConfig,
+        writeWorkingStateSnapshot,
+    ]);
 
     const [trashCount, setTrashCount] = useState(0);
 
@@ -754,6 +1040,78 @@ const ProductList = () => {
     }, [allAttributes]);
 
     useEffect(() => {
+        const scrollContainer = tableScrollRef.current || findScrollableAncestor(pageRootRef.current);
+        scrollContainerRef.current = scrollContainer;
+
+        if (!scrollContainer) {
+            return undefined;
+        }
+
+        const scrollTarget = scrollContainer === window ? window : scrollContainer;
+        const handleScroll = () => {
+            const scrollTop = scrollContainer === window
+                ? (window.scrollY || document.documentElement.scrollTop || 0)
+                : scrollContainer.scrollTop;
+            const scrollLeft = scrollContainer === window
+                ? (window.scrollX || document.documentElement.scrollLeft || 0)
+                : scrollContainer.scrollLeft;
+
+            writeWorkingStateSnapshot({ scrollTop, scrollLeft });
+        };
+
+        scrollTarget.addEventListener('scroll', handleScroll, { passive: true });
+
+        return () => {
+            handleScroll();
+            scrollTarget.removeEventListener('scroll', handleScroll);
+        };
+    }, [writeWorkingStateSnapshot]);
+
+    useEffect(() => {
+        if (loading) {
+            return undefined;
+        }
+
+        const scrollTop = pendingScrollRestoreRef.current;
+        const scrollLeft = pendingScrollRestoreLeftRef.current;
+        if ((scrollTop === null || scrollTop === undefined) && (scrollLeft === null || scrollLeft === undefined)) {
+            return undefined;
+        }
+
+        let firstFrameId = 0;
+        let secondFrameId = 0;
+
+        firstFrameId = window.requestAnimationFrame(() => {
+            secondFrameId = window.requestAnimationFrame(() => {
+                const scrollContainer = scrollContainerRef.current;
+
+                if (scrollContainer && scrollContainer !== window) {
+                    if (scrollTop !== null && scrollTop !== undefined) {
+                        scrollContainer.scrollTop = scrollTop;
+                    }
+                    if (scrollLeft !== null && scrollLeft !== undefined) {
+                        scrollContainer.scrollLeft = scrollLeft;
+                    }
+                } else {
+                    window.scrollTo(scrollLeft || 0, scrollTop || 0);
+                }
+
+                pendingScrollRestoreRef.current = null;
+                pendingScrollRestoreLeftRef.current = null;
+                writeWorkingStateSnapshot({
+                    scrollTop: scrollTop ?? 0,
+                    scrollLeft: scrollLeft ?? 0,
+                });
+            });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(firstFrameId);
+            window.cancelAnimationFrame(secondFrameId);
+        };
+    }, [loading, pagination.current_page, products.length, writeWorkingStateSnapshot]);
+
+    useEffect(() => {
         fetchInitialData();
         // Load with persisted page/filters
         fetchProducts(pagination.current_page);
@@ -770,8 +1128,21 @@ const ProductList = () => {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
+    const hasInitializedSearchEffectRef = useRef(false);
     useEffect(() => {
         const timer = setTimeout(() => {
+            if (!hasInitializedSearchEffectRef.current) {
+                hasInitializedSearchEffectRef.current = true;
+
+                if (filters.search && filters.search.trim() !== '') {
+                    localStorage.setItem('product_list_search_current_term', filters.search);
+                } else {
+                    localStorage.removeItem('product_list_search_current_term');
+                }
+
+                return;
+            }
+
             const lastSearchStored = localStorage.getItem('product_list_search_current_term');
             if (filters.search !== lastSearchStored) {
                 if (filters.search && filters.search.trim() !== '') {
@@ -901,7 +1272,7 @@ const ProductList = () => {
             params.multiple_suppliers = 1;
         }
 
-        ['is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
+        ['has_images', 'is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
             if (normalizedFilters[key] !== '' && normalizedFilters[key] !== null && normalizedFilters[key] !== undefined) {
                 params[key] = normalizedFilters[key];
             }
@@ -1164,12 +1535,17 @@ const ProductList = () => {
         const resetFilters = getDefaultProductFilters();
         const defaultSort = DEFAULT_SORT_CONFIG;
         
-        localStorage.removeItem('product_management_persistent_state');
+        localStorage.removeItem(PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY);
         localStorage.removeItem('product_list_search_current_term');
+        if (typeof window !== 'undefined') {
+            window.sessionStorage.removeItem(PRODUCT_MANAGEMENT_WORKING_STATE_KEY);
+        }
         
         setFilters(resetFilters);
         setTempFilters(resetFilters);
         setSortConfig(defaultSort);
+        setSelectedIds([]);
+        setExpandedRows([]);
         setPagination(prev => ({ ...prev, current_page: 1 }));
         setIsTrashView(false);
         
@@ -1411,9 +1787,23 @@ const ProductList = () => {
         }
     };
 
+    const areAllVisibleProductsSelected = products.length > 0
+        && products.every((product) => selectedIds.includes(product.id));
+
     const toggleSelectAll = () => {
-        if (selectedIds.length === products.length) setSelectedIds([]);
-        else setSelectedIds(products.map(p => p.id));
+        const visibleProductIdMap = new Map(products.map((product) => [String(product.id), product.id]));
+
+        if (areAllVisibleProductsSelected) {
+            setSelectedIds((prev) => prev.filter((id) => !visibleProductIdMap.has(String(id))));
+            return;
+        }
+
+        setSelectedIds((prev) => Array.from(
+            new Map([
+                ...prev.map((id) => [String(id), id]),
+                ...products.map((product) => [String(product.id), product.id]),
+            ]).values(),
+        ));
     };
 
     const toggleSelectProduct = (id) => {
@@ -1441,20 +1831,14 @@ const ProductList = () => {
         });
     };
 
-    const handleInitialFetch = useRef(false);
+    const hasInitializedTrashViewRef = useRef(false);
     useEffect(() => {
-        if (!handleInitialFetch.current) {
-            fetchInitialData();
-            handleInitialFetch.current = true;
+        if (!hasInitializedTrashViewRef.current) {
+            hasInitializedTrashViewRef.current = true;
+            return;
         }
-    }, []);
 
-    useEffect(() => {
-        // Initial load skip is handled by the main useEffect(fetchInitialData)
-        // But if isTrashView changes manually, we refresh
-        if (handleInitialFetch.current) {
-            fetchProducts(1);
-        }
+        fetchProducts(1);
     }, [isTrashView]);
 
     const handleDelete = async (id) => {
@@ -1516,7 +1900,7 @@ const ProductList = () => {
         try {
             const response = await productApi.duplicate(id);
             const newProduct = response.data?.data || response.data;
-            navigate(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
+            navigateToProductForm(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
         } catch (error) {
             console.error("Duplicate error:", error);
             const msg = error.response?.data?.message || "Lỗi khi nhân bản sản phẩm!";
@@ -1545,7 +1929,7 @@ const ProductList = () => {
     };
 
     const requestDuplicate = (id) => {
-        navigate(`/admin/products/edit/${id}?mode=duplicate`);
+        navigateToProductForm(`/admin/products/edit/${id}?mode=duplicate`);
     };
 
     const requestBulkDuplicate = () => {
@@ -1554,7 +1938,7 @@ const ProductList = () => {
         }
 
         if (selectedIds.length === 1) {
-            navigate(`/admin/products/edit/${selectedIds[0]}?mode=duplicate`);
+            navigateToProductForm(`/admin/products/edit/${selectedIds[0]}?mode=duplicate`);
             return;
         }
 
@@ -1576,7 +1960,7 @@ const ProductList = () => {
                 const newProduct = response.data?.data || response.data;
 
                 setDuplicateConfirm(null);
-                navigate(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
+                navigateToProductForm(`/admin/products/edit/${newProduct.id}?mode=duplicate`);
             } else {
                 const results = await Promise.all(duplicateIds.map((id) => productApi.duplicate(id)));
                 const count = results.length;
@@ -2163,7 +2547,7 @@ const ProductList = () => {
     };
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
+        <div ref={pageRootRef} className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
@@ -2179,6 +2563,20 @@ const ProductList = () => {
                 .table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
                   /* Parent & Child Product Styles - Simplified */
+                .row-root {
+                    background-color: #FFFFFF !important;
+                    position: relative;
+                }
+                .row-root:hover {
+                    background-color: #FFFBF0 !important;
+                }
+                .row-root .sticky-col-0, .row-root .sticky-col-1, .row-root .sticky-col-2 {
+                    background-color: white !important;
+                }
+                .row-root:hover .sticky-col-0, .row-root:hover .sticky-col-1, .row-root:hover .sticky-col-2 {
+                    background-color: #FFFBF0 !important;
+                }
+
                 .row-parent { 
                     background-color: #FFFFFF !important;
                     position: relative;
@@ -2194,14 +2592,14 @@ const ProductList = () => {
                 }
                 
                 .row-child { 
-                    background-color: #f1f5f9 !important;
+                    background-color: #eef2f7 !important;
                     position: relative;
                 }
                 .row-child:hover {
                     background-color: #e2e8f0 !important;
                 }
                 .row-child .sticky-col-0, .row-child .sticky-col-1, .row-child .sticky-col-2 { 
-                    background-color: #f1f5f9 !important; 
+                    background-color: #eef2f7 !important;
                 }
                 .row-child:hover .sticky-col-0, .row-child:hover .sticky-col-1, .row-child:hover .sticky-col-2 { 
                     background-color: #e2e8f0 !important; 
@@ -2216,7 +2614,7 @@ const ProductList = () => {
                 }
                 
                 .row-child .child-indent { 
-                    padding-left: 32px !important; 
+                    padding-left: 48px !important;
                 }
                 
                 .expand-btn {
@@ -2919,7 +3317,7 @@ const ProductList = () => {
                     <div className="flex gap-1 items-center">
                         {!isTrashView && (
                             <button 
-                                onClick={() => navigate('/admin/products/new')} 
+                                onClick={() => navigateToProductForm('/admin/products/new')}
                                 className="bg-brick text-white px-3 h-9 flex items-center gap-2 hover:bg-umber transition-all rounded-sm shadow-sm font-bold text-[11px] uppercase tracking-wider shrink-0"
                                 title="Thêm sản phẩm mới"
                             >
@@ -3338,6 +3736,19 @@ const ProductList = () => {
                             </select>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Anh san pham</label>
+                            <select
+                                name="has_images"
+                                value={tempFilters.has_images || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Tat ca trang thai anh</option>
+                                <option value="1">Da co anh</option>
+                                <option value="0">Chua co anh</option>
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Tồn kho</label>
                             <div className="flex items-center gap-2 h-10">
                                 <input type="number" name="min_stock" placeholder="Từ" className="w-1/2 h-full bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.min_stock} onChange={handleTempFilterChange} />
@@ -3437,6 +3848,8 @@ const ProductList = () => {
                 || (filters.supplier_ids || []).length > 0
                 || Boolean(filters.missing_purchase_price)
                 || Boolean(filters.multiple_suppliers)
+                || filters.has_images === '0'
+                || filters.has_images === '1'
                 || Boolean(filters.min_stock)
                 || Boolean(filters.max_stock)
                 || Boolean(filters.start_date)
@@ -3483,6 +3896,14 @@ const ProductList = () => {
                             <span className="text-[11px] text-primary/40">Nguồn nhập:</span>
                             <span className="text-[13px] font-bold text-[#0F172A]">Có nhiều nhà cung cấp</span>
                             <button onClick={() => removeFilter('multiple_suppliers')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+
+                    {(filters.has_images === '0' || filters.has_images === '1') && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Anh:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.has_images === '1' ? 'Da co anh' : 'Chua co anh'}</span>
+                            <button onClick={() => removeFilter('has_images')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
 
@@ -3536,13 +3957,14 @@ const ProductList = () => {
                 onRefresh={handleRefreshProductSort}
                 onReset={handleResetProductSort}
                 onSave={handleSaveProductSort}
+                editLinkState={buildProductFormLocationState()}
             />
 
-            <div className="flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-md">
+            <div ref={tableScrollRef} className="flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-md">
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
-                            <th className="p-3 w-10 admin-table-header border border-primary/20 sticky-col-0"><input type="checkbox" checked={products.length > 0 && selectedIds.length === products.length} onChange={toggleSelectAll} className="size-4 accent-primary" /></th>
+                            <th className="p-3 w-10 admin-table-header border border-primary/20 sticky-col-0"><input type="checkbox" checked={areAllVisibleProductsSelected} onChange={toggleSelectAll} className="size-4 accent-primary" /></th>
                             {renderedColumns.map((col, idx) => (
                                 <th
                                     key={col.id}
@@ -3592,6 +4014,9 @@ const ProductList = () => {
                                 const renderRow = (p, isSubRow = false) => {
                                     const pIsParent = p.type === 'configurable' || p.type === 'grouped' || p.type === 'bundle';
                                     const pIsChild = isSubRow || isVariantChildProduct(p);
+                                    const pUsesChildRowStyle = isSubRow
+                                        ? product.type === 'configurable'
+                                        : isConfigurableVariantChildProduct(p);
                                     const editTargetId = getProductEditTargetId(p);
                                     
                                     // Custom aggregate price display for parent products
@@ -3632,11 +4057,11 @@ const ProductList = () => {
                                             animate={{ opacity: 1, y: 0 }}
                                             exit={{ opacity: 0, y: -10 }}
                                             onClick={(event) => handleRowSelectionClick(p.id, event)}
-                                            onDoubleClick={() => navigate(`/admin/products/edit/${editTargetId}`)}
+                                            onDoubleClick={() => navigateToProductForm(`/admin/products/edit/${editTargetId}`)}
                                             className={`transition-all group cursor-pointer ${
                                                 selectedIds.includes(p.id) ? 'bg-gold/10' : 
                                                 pIsParent ? 'row-parent' : 
-                                                pIsChild ? 'row-child' : 'hover:bg-gold/5'
+                                                pUsesChildRowStyle ? 'row-child' : 'row-root'
                                             }`}
                                         >
                                             <td className="p-3 border border-primary/20 sticky-col-0" onDoubleClick={(e) => e.stopPropagation()}>
@@ -3664,10 +4089,10 @@ const ProductList = () => {
                                             {renderedColumns.map(col => {
                                                 const cellStyle = { width: columnWidths[col.id] || col.minWidth };
                                                 
-                                                if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pIsChild ? 'bg-primary/[0.01]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || null} className="w-full h-full object-cover" alt="" /></div></td>;
+                                                if (col.id === 'images') return <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 ${pUsesChildRowStyle ? 'bg-primary/[0.01]' : ''}`}><div className="size-10 bg-primary/5 border rounded overflow-hidden" onClick={(e) => { e.stopPropagation(); const url = getPrimaryImage(p); if (url) setPreviewImage({ url, name: p.name }); }}><img src={getPrimaryImage(p) || null} className="w-full h-full object-cover" alt="" /></div></td>;
                                                 
                                                 if (col.id === 'sku') return (
-                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group/cell ${pIsChild ? 'text-primary/60' : ''}`}>
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-1 font-mono font-bold text-primary group/cell ${pUsesChildRowStyle ? 'text-primary/60' : ''}`}>
                                                         <div className="flex items-center justify-between">
                                                             <span className="truncate">{p.sku}</span>
                                                             <button onClick={(e) => handleCopy(p.sku, 'mã sản phẩm', e, `${p.id}-sku`)} className={`${copiedText === `${p.id}-sku` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép mã SP">
@@ -3678,10 +4103,15 @@ const ProductList = () => {
                                                 );
                                                 
                                                 if (col.id === 'name') return (
-                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group/cell ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pIsChild ? 'child-indent' : ''}`}>
+                                                    <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group/cell ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pUsesChildRowStyle ? 'child-indent' : ''}`}>
                                                         <div className="flex items-center gap-2 overflow-hidden">
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
                                                                  <div className="flex items-center gap-2">
+                                                                    {pUsesChildRowStyle && (
+                                                                        <span className="material-symbols-outlined shrink-0 text-[16px] text-slate-400">
+                                                                            subdirectory_arrow_right
+                                                                        </span>
+                                                                    )}
                                                                     <span className={`truncate ${pIsParent ? 'text-[14px] font-black tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
                                                                     {isSubRow && product.type === 'grouped' && p.pivot && (
                                                                         <div className="flex items-center gap-1 shrink-0">
@@ -3846,11 +4276,16 @@ const ProductList = () => {
                                                     </td>
                                                 );
                                                 if (col.id === 'type') {
-                                                    const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
+                                                    const typeLabel = pUsesChildRowStyle
+                                                        ? 'Biến thể con'
+                                                        : (TYPE_LABELS[p.type]?.label || p.type);
+                                                    const typeClass = pUsesChildRowStyle
+                                                        ? 'border border-slate-300 bg-slate-100 text-slate-700'
+                                                        : `border ${TYPE_LABELS[p.type]?.cls || ''}`;
                                                     return (
                                                         <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 group/cell">
                                                             <div className="flex items-center justify-between">
-                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold border ${TYPE_LABELS[p.type]?.cls || ''}`}>{typeLabel}</span>
+                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${typeClass}`}>{typeLabel}</span>
                                                                 <button onClick={(e) => handleCopy(typeLabel, 'loại sản phẩm', e, `${p.id}-type`)} className={`${copiedText === `${p.id}-type` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép loại sản phẩm">
                                                                     <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-type` ? 'check' : 'content_copy'}</span>
                                                                 </button>
@@ -3910,7 +4345,7 @@ const ProductList = () => {
                                                             ) : (
                                                                 <React.Fragment>
                                                                     <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); navigate(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+                                                                    <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                                                                 </React.Fragment>
                                                             )}

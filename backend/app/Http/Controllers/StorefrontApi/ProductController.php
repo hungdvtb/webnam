@@ -10,9 +10,26 @@ use App\Models\ProductAttributeValue;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ProductController extends Controller
 {
+    private function normalizeBundleOptionKey($optionPostId, ?string $optionTitle): string
+    {
+        if (filled($optionPostId) && is_numeric($optionPostId)) {
+            return 'post:' . (int) $optionPostId;
+        }
+
+        $normalizedTitle = Str::of((string) $optionTitle)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish()
+            ->value();
+
+        return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
     /**
      * Resolve account by X-Site-Code header
      */
@@ -79,6 +96,49 @@ class ProductController extends Controller
             ->select('products.*');
     }
 
+    private function joinCategoryAssignments(Builder $query, array $categoryIds, string $alias = 'category_assignments'): void
+    {
+        $normalizedCategoryIds = collect($categoryIds)
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedCategoryIds)) {
+            return;
+        }
+
+        $caseSql = collect($normalizedCategoryIds)
+            ->values()
+            ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
+            ->implode(' ');
+
+        $subquery = DB::table('category_product')
+            ->selectRaw('product_id')
+            ->selectRaw("CASE WHEN item_type = 'bundle_option' THEN 'bundle_option' ELSE 'product' END as item_type")
+            ->selectRaw("COALESCE(bundle_option_key, '') as bundle_option_key")
+            ->selectRaw('bundle_option_post_id')
+            ->selectRaw('bundle_option_title')
+            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
+            ->whereIn('category_id', $normalizedCategoryIds)
+            ->whereIn('item_type', ['product', 'bundle_option'])
+            ->groupBy('product_id', 'item_type', 'bundle_option_key', 'bundle_option_post_id', 'bundle_option_title');
+
+        $query
+            ->joinSub($subquery, $alias, function ($join) use ($alias) {
+                $join->on("{$alias}.product_id", '=', 'products.id');
+            })
+            ->select('products.*')
+            ->addSelect([
+                "{$alias}.item_type as item_type",
+                "{$alias}.bundle_option_key as bundle_option_key",
+                "{$alias}.bundle_option_post_id as bundle_option_post_id",
+                "{$alias}.bundle_option_title as bundle_option_title",
+                "{$alias}.category_order_key as category_order_key",
+            ]);
+    }
+
     public function index(Request $request)
     {
         $accountId = $this->getAccountId($request);
@@ -100,10 +160,21 @@ class ProductController extends Controller
                 ->first();
             if ($cat) {
                 $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
-                $query->whereHas('categories', function ($categoryQuery) use ($selectedCategoryIds) {
-                    $categoryQuery->whereIn('categories.id', $selectedCategoryIds);
-                });
             }
+        }
+
+        if ($request->filled('category_id')) {
+            $cat = Category::query()
+                ->when($accountId, fn ($categoryQuery) => $categoryQuery->where('account_id', $accountId))
+                ->find($request->category_id);
+
+            if ($cat) {
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+            }
+        }
+
+        if (!empty($selectedCategoryIds)) {
+            $this->joinCategoryAssignments($query, $selectedCategoryIds);
         }
 
         // Search
@@ -148,14 +219,10 @@ class ProductController extends Controller
         $sortKey = $request->get('sort', 'popular');
         $finalQuery = clone $query;
 
-        if (!empty($selectedCategoryIds)) {
-            $this->joinCategoryOrdering($finalQuery, $selectedCategoryIds);
-        }
-
         $prioritizeCategoryOrder = !empty($selectedCategoryIds) && in_array($sortKey, ['popular', 'newest'], true);
 
         if ($prioritizeCategoryOrder) {
-            $finalQuery->orderBy('category_sorting.category_order_key');
+            $finalQuery->orderBy('category_order_key');
         }
 
         if (in_array($sortKey, ['popular', 'newest'], true)) {
@@ -179,7 +246,7 @@ class ProductController extends Controller
         }
 
         if (!$prioritizeCategoryOrder && !empty($selectedCategoryIds)) {
-            $finalQuery->orderBy('category_sorting.category_order_key');
+            $finalQuery->orderBy('category_order_key');
         }
 
         $finalQuery->orderBy('id', 'desc');
@@ -189,6 +256,24 @@ class ProductController extends Controller
                 $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug'])
             ->paginate($perPage);
+
+        $products->getCollection()->transform(function ($product) {
+            $product->setAttribute('item_type', ($product->item_type ?? '') === 'bundle_option' ? 'bundle_option' : 'product');
+            $bundleOptionKey = trim((string) ($product->bundle_option_key ?? ''));
+            $product->setAttribute('bundle_option_key', $bundleOptionKey !== '' ? $bundleOptionKey : null);
+            $product->setAttribute(
+                'bundle_option_post_id',
+                filled($product->bundle_option_post_id ?? null) ? (int) $product->bundle_option_post_id : null
+            );
+            $product->setAttribute(
+                'bundle_option_title',
+                ($product->item_type ?? '') === 'bundle_option'
+                    ? (Str::squish((string) ($product->bundle_option_title ?? '')) ?: null)
+                    : null
+            );
+
+            return $product;
+        });
 
         // Calculate available filters
         $availableFilters = [];
@@ -218,7 +303,7 @@ class ProductController extends Controller
         foreach ($filterableAttributes as $attr) {
             // Count products for each value of this attribute within the current search result
             $rawCounts = ProductAttributeValue::where('attribute_id', $attr->id)
-                ->whereIn('product_id', (clone $filterQuery)->select('id'))
+                ->whereIn('product_id', (clone $filterQuery)->select('products.id'))
                 ->selectRaw('value, count(*) as count')
                 ->groupBy('value')
                 ->get();
@@ -410,6 +495,18 @@ class ProductController extends Controller
                 ->get(['id', 'name', 'code', 'frontend_type']);
             
             $responseData = $product->toArray();
+            if (is_array($responseData['bundle_items'] ?? null)) {
+                $responseData['bundle_items'] = collect($responseData['bundle_items'])
+                    ->map(function (array $item) {
+                        $optionPostId = data_get($item, 'pivot.option_post_id');
+                        $optionTitle = data_get($item, 'pivot.option_title');
+                        $item['option_key'] = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+
+                        return $item;
+                    })
+                    ->values()
+                    ->all();
+            }
             $responseData['all_attributes'] = $allProductAttributes;
 
             return response()->json($responseData);

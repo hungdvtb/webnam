@@ -217,11 +217,36 @@ const readAttributeParams = (params) => {
     return result;
 };
 
+const buildProductDetailPath = (product) => {
+    const identifier = product?.slug || product?.id;
+
+    if (!identifier) {
+        return '/san-pham';
+    }
+
+    const params = new URLSearchParams();
+    const bundleOptionKey = String(product?.bundle_option_key || '').trim();
+    const bundleOptionTitle = String(product?.bundle_option_title || '').trim();
+
+    if (bundleOptionKey) {
+        params.set('bundle_option_key', bundleOptionKey);
+    }
+
+    if (bundleOptionTitle) {
+        params.set('bundle_option', bundleOptionTitle);
+    }
+
+    const query = params.toString();
+    return query ? `/san-pham/${identifier}?${query}` : `/san-pham/${identifier}`;
+};
+
 const ProductCard = ({ product, onConsult }) => {
     const [imgLoaded, setImgLoaded] = useState(false);
     const hasDiscount = Number(product?.current_price || 0) < Number(product?.price || 0);
     const primaryPrice = formatCurrency(product?.current_price || product?.price);
     const secondaryPrice = hasDiscount ? formatCurrency(product?.price) : null;
+    const detailPath = buildProductDetailPath(product);
+    const bundleOptionTitle = String(product?.bundle_option_title || '').trim();
     const badge = product?.is_featured
         ? {
             label: 'Bán chạy',
@@ -237,7 +262,7 @@ const ProductCard = ({ product, onConsult }) => {
     return (
         <article className="group flex h-full flex-col overflow-hidden rounded-[24px] border border-[#eee2d1] bg-white shadow-[0_18px_38px_-28px_rgba(27,54,93,0.42)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_26px_42px_-22px_rgba(27,54,93,0.34)]">
             <Link
-                to={`/san-pham/${product.slug || product.id}`}
+                to={detailPath}
                 className="relative block aspect-square overflow-hidden bg-[linear-gradient(180deg,#f7f0e6_0%,#efe3d3_100%)] md:aspect-[4/5.42]"
             >
                 {!imgLoaded ? <div className="absolute inset-0 animate-pulse bg-stone-200/80" /> : null}
@@ -259,16 +284,26 @@ const ProductCard = ({ product, onConsult }) => {
                         {badge.label}
                     </span>
                 ) : null}
+                {bundleOptionTitle ? (
+                    <span className="absolute left-3 top-3 max-w-[70%] truncate rounded-full bg-white/92 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-primary shadow-lg backdrop-blur">
+                        {bundleOptionTitle}
+                    </span>
+                ) : null}
             </Link>
 
             <div className="flex flex-1 flex-col gap-2 px-3.5 pb-3.5 pt-2.5 md:px-4 md:pb-4 md:pt-3">
-                <Link to={`/san-pham/${product.slug || product.id}`}>
+                <Link to={detailPath}>
                     <h3 className="m-title line-clamp-2 min-h-[2.5rem] text-[15px] font-black leading-[1.34] text-primary transition-colors group-hover:text-[#284f86] md:min-h-[3rem] md:text-[18px]">
                         {product.name}
                     </h3>
                 </Link>
 
                 <div className="mt-auto space-y-0.5">
+                    {bundleOptionTitle ? (
+                        <p className="m-meta text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9b6f2c]">
+                            Lua chon: {bundleOptionTitle}
+                        </p>
+                    ) : null}
                     <p className="m-price text-[18px] font-black leading-none text-red-600 md:text-[22px]">
                         {primaryPrice}
                     </p>
@@ -285,7 +320,7 @@ const ProductCard = ({ product, onConsult }) => {
 
                 <div className="mt-1.5 flex items-center gap-2">
                     <Link
-                        to={`/san-pham/${product.slug || product.id}`}
+                        to={detailPath}
                         className="m-btn-sm flex-1 rounded-[16px] bg-primary px-3 py-2.5 text-center font-black uppercase tracking-[0.12em] text-white transition-all hover:brightness-95"
                     >
                         Xem chi tiết

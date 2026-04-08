@@ -1731,10 +1731,10 @@ const productColumns = [
     { id: 'computed_stock', label: 'Tồn kho', minWidth: 76, align: 'right', headerTooltip: 'Tổng nhập - Tổng xuất + Tổng hoàn - Tổng hỏng + Điều chỉnh tồn', headerRender: () => renderTwoLineHeader('Tồn', 'kho') },
     { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Cộng SL đã bán nhưng chưa có phiếu xuất.', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
     { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Cộng SL đơn hoàn chưa nhập lại kho.', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
-    { id: 'actual_stock', label: 'Tồn thực tế', minWidth: 84, align: 'right', headerTooltip: 'Tồn kho - SL chờ xuất + SL hoàn chờ về', headerRender: () => renderTwoLineHeader('Tồn', 'thực tế') },
+    { id: 'actual_stock', label: 'Có thể bán', minWidth: 84, align: 'right', headerTooltip: 'Có thể bán = Tồn kho - SL chờ xuất', headerRender: () => renderTwoLineHeader('Có thể', 'bán') },
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
-    { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Tồn thực tế x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
+    { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Có thể bán x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
     { id: 'actions', label: 'Thao tác', minWidth: 88, align: 'center' },
 ];
 
@@ -6477,7 +6477,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
         { label: 'SL chờ xuất', value: formatNumber(productSummary.total_pending_export || 0) },
         { label: 'SL hoàn chờ về', value: formatNumber(productSummary.total_pending_return || 0) },
-        { label: 'Tồn thực tế', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
+                                    { label: 'Có thể bán', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
         { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
         { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
         { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },

@@ -2992,7 +2992,7 @@ class InventoryController extends Controller
             . ' + '
             . $adjustmentQtySql
             . ')';
-        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
+        $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
         $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
 
         if ($compact) {
@@ -4148,7 +4148,7 @@ class InventoryController extends Controller
         $pendingReturnQuantity = (int) round((float) ($product->pending_return_quantity ?? 0));
         $actualStock = $product->actual_stock !== null
             ? (int) round((float) $product->actual_stock)
-            : ($computedStock - $pendingExportQuantity + $pendingReturnQuantity);
+            : ($computedStock - $pendingExportQuantity);
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
         $inventoryValue = $product->inventory_value !== null
             ? round((float) $product->inventory_value, 2)

@@ -21,6 +21,7 @@ const ProductSortRow = ({
     total,
     draftPosition,
     disabled,
+    editLinkState,
     onDraftPositionChange,
     onPositionCommit,
     onMoveUp,
@@ -52,6 +53,7 @@ const ProductSortRow = ({
                         <div className="flex flex-wrap items-center gap-2">
                             <Link
                                 to={`/admin/products/edit/${product.id}`}
+                                state={editLinkState}
                                 className="truncate text-[13px] font-bold text-primary transition-colors hover:text-umber"
                             >
                                 {product.name}
@@ -133,6 +135,7 @@ const ProductSortModal = ({
     onRefresh,
     onReset,
     onSave,
+    editLinkState,
 }) => {
     const [positionDrafts, setPositionDrafts] = useState({});
     const [searchQuery, setSearchQuery] = useState('');
@@ -407,6 +410,7 @@ const ProductSortModal = ({
                                                 total={totalProducts}
                                                 draftPosition={positionDrafts[product.id]}
                                                 disabled={isBusy}
+                                                editLinkState={editLinkState}
                                                 onDraftPositionChange={(productId, value) => {
                                                     setPositionDrafts((previous) => ({
                                                         ...previous,

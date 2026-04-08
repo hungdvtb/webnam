@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 import api from '../../services/api';
 import { LeadFormModal } from '../../layouts/StorefrontLayout';
@@ -787,6 +787,7 @@ const RelatedProductsCarousel = ({ items }) => {
 
 const StorefrontProductDetail = () => {
     const { slugOrId } = useParams();
+    const [searchParams] = useSearchParams();
     const [product, setProduct] = useState(null);
     const [related, setRelated] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -835,7 +836,10 @@ const StorefrontProductDetail = () => {
     const bundleItems = Array.isArray(product?.bundle_items) ? product.bundle_items : [];
     const hasVariants = product?.type === 'configurable' && variants.length > 0;
     const hasSuperAttributes = hasVariants && superAttributes.length > 0;
-    const bundleOptionMap = new Map();
+    const requestedBundleOptionKey = String(searchParams.get('bundle_option_key') || '').trim();
+    const requestedBundleOptionTitle = String(searchParams.get('bundle_option') || '').trim();
+    const bundleOptionGroups = useMemo(() => {
+        const bundleOptionMap = new Map();
 
     bundleItems.forEach((item, index) => {
         const optionTitle = String(item?.option_title || 'Tùy chọn mặc định').trim();
@@ -843,6 +847,10 @@ const StorefrontProductDetail = () => {
 
         if (!bundleOptionMap.has(optionTitle)) {
             bundleOptionMap.set(optionTitle, {
+                key: String(
+                    item?.option_key
+                    || (item?.option_post_id ? `post:${item.option_post_id}` : optionTitle)
+                ).trim() || optionTitle,
                 title: optionTitle,
                 items: [],
                 position: Number.isFinite(position) ? position : index,
@@ -856,7 +864,8 @@ const StorefrontProductDetail = () => {
         group.isDefault = group.isDefault || Boolean(item?.is_default);
     });
 
-    const bundleOptionGroups = Array.from(bundleOptionMap.values()).sort((left, right) => left.position - right.position);
+        return Array.from(bundleOptionMap.values()).sort((left, right) => left.position - right.position);
+    }, [bundleItems]);
     const defaultBundleOption = bundleOptionGroups.find((group) => group.isDefault)?.title || bundleOptionGroups[0]?.title || '';
     const activeBundleOption = selectedBundleOption || defaultBundleOption;
     const activeBundleGroup = bundleOptionGroups.find((group) => group.title === activeBundleOption) || bundleOptionGroups[0] || null;
@@ -895,14 +904,30 @@ const StorefrontProductDetail = () => {
             return;
         }
 
+        const requestedGroup = bundleOptionGroups.find((group) => (
+            (requestedBundleOptionKey && group.key === requestedBundleOptionKey)
+            || (requestedBundleOptionTitle && group.title === requestedBundleOptionTitle)
+        ));
+
         setSelectedBundleOption((prev) => {
+            if (requestedGroup) {
+                return requestedGroup.title;
+            }
+
             if (prev && bundleOptionGroups.some((group) => group.title === prev)) {
                 return prev;
             }
 
             return defaultBundleOption;
         });
-    }, [defaultBundleOption, product?.id, product?.type, bundleItems.length]);
+    }, [
+        bundleOptionGroups,
+        defaultBundleOption,
+        product?.id,
+        product?.type,
+        requestedBundleOptionKey,
+        requestedBundleOptionTitle,
+    ]);
 
     useEffect(() => {
         if (product?.type !== 'bundle') {
@@ -1102,6 +1127,9 @@ const StorefrontProductDetail = () => {
 
         if (product.type === 'bundle' && activeBundleOption) {
             search.set('bundle_option', activeBundleOption);
+            if (activeBundleGroup?.key) {
+                search.set('bundle_option_key', activeBundleGroup.key);
+            }
         }
 
         return `/dat-hang?${search.toString()}`;
@@ -1116,6 +1144,7 @@ const StorefrontProductDetail = () => {
             checkoutProductId: buyProductId,
             quantity,
             bundleOption: product.type === 'bundle' ? activeBundleOption : '',
+            bundleOptionKey: product.type === 'bundle' ? (activeBundleGroup?.key || '') : '',
             bundleTotal: product.type === 'bundle' ? rawCurrentPrice : null,
             bundleItems: product.type === 'bundle'
                 ? activeBundleSelectionRows.map((item) => ({

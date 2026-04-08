@@ -34,7 +34,6 @@ use Throwable;
 
 class ProductController extends Controller
 {
-    private const OVERSOLD_RESERVE_SOURCE = 'oversold_reserve';
     private const PRODUCT_DETAIL_PATH = '/san-pham';
 
     public function __construct(
@@ -3480,44 +3479,8 @@ class ProductController extends Controller
 
     protected function attachActualStockSubqueries(Builder $query, Request $request): array
     {
-        $accountId = (int) $request->header('X-Account-Id');
-
-        $liveBatchStockSub = DB::table('inventory_batches')
-            ->selectRaw('inventory_batches.product_id')
-            ->selectRaw('COALESCE(SUM(inventory_batches.remaining_quantity), 0) AS available_stock')
-            ->where('inventory_batches.remaining_quantity', '>', 0)
-            ->where(function ($builder) {
-                $builder
-                    ->whereNull('inventory_batches.source_type')
-                    ->orWhere('inventory_batches.source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
-            })
-            ->groupBy('inventory_batches.product_id');
-
-        if ($accountId > 0) {
-            $liveBatchStockSub->where('inventory_batches.account_id', $accountId);
-        }
-
-        $oversoldReservedSub = DB::table('inventory_batch_allocations')
-            ->join('inventory_batches', 'inventory_batches.id', '=', 'inventory_batch_allocations.inventory_batch_id')
-            ->selectRaw('inventory_batch_allocations.product_id')
-            ->selectRaw('COALESCE(SUM(inventory_batch_allocations.quantity), 0) AS total_reserved')
-            ->where('inventory_batches.source_type', self::OVERSOLD_RESERVE_SOURCE)
-            ->groupBy('inventory_batch_allocations.product_id');
-
-        if ($accountId > 0) {
-            $oversoldReservedSub->where('inventory_batches.account_id', $accountId);
-        }
-
         $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
         $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
-
-        $query->leftJoinSub($liveBatchStockSub, 'live_batch_stock', function ($join) {
-            $join->on('live_batch_stock.product_id', '=', 'products.id');
-        });
-
-        $query->leftJoinSub($oversoldReservedSub, 'oversold_reserved', function ($join) {
-            $join->on('oversold_reserved.product_id', '=', 'products.id');
-        });
 
         $query->leftJoinSub($pendingOutboundQtySub, 'pending_outbound', function ($join) {
             $join->on('pending_outbound.product_id', '=', 'products.id');
@@ -3527,22 +3490,17 @@ class ProductController extends Controller
             $join->on('pending_returns.product_id', '=', 'products.id');
         });
 
-        $baseStockSql = "
-            CASE
-                WHEN live_batch_stock.product_id IS NOT NULL OR oversold_reserved.product_id IS NOT NULL
-                    THEN COALESCE(live_batch_stock.available_stock, 0) - COALESCE(oversold_reserved.total_reserved, 0)
-                ELSE COALESCE(products.stock_quantity, 0)
-            END
-        ";
+        $baseStockSql = 'COALESCE(products.stock_quantity, 0)';
         $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
         $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
-        $actualStockSql = '(' . $baseStockSql . ' - ' . $pendingExportQtySql . ' + ' . $pendingReturnQtySql . ')';
+        $availableToSellSql = '(' . $baseStockSql . ' - ' . $pendingExportQtySql . ')';
 
         return [
             'base_stock_sql' => $baseStockSql,
             'pending_export_sql' => $pendingExportQtySql,
             'pending_return_sql' => $pendingReturnQtySql,
-            'actual_stock_sql' => $actualStockSql,
+            'available_to_sell_sql' => $availableToSellSql,
+            'actual_stock_sql' => $availableToSellSql,
         ];
     }
 
@@ -3564,7 +3522,7 @@ class ProductController extends Controller
             ->selectRaw('inventory_document_items.product_id')
             ->selectRaw('COALESCE(SUM(inventory_document_items.quantity), 0) AS exported_quantity')
             ->where('inventory_documents.type', 'export')
-            ->where('inventory_documents.status', 'completed')
+            ->whereIn('inventory_documents.status', ['draft', 'completed'])
             ->groupByRaw($manualExportScopeSql . ', inventory_document_items.product_id');
 
         if ($accountId > 0) {
@@ -4464,15 +4422,25 @@ class ProductController extends Controller
 
     protected function applyAttributeValueConstraint(Builder $query, int $attributeId, array $valueArray): void
     {
+        $this->applyAttributeValueColumnsConstraint($query, 'attribute_id', 'value', $attributeId, $valueArray);
+    }
+
+    protected function applyAttributeValueColumnsConstraint(
+        $query,
+        string $attributeIdColumn,
+        string $valueColumn,
+        int $attributeId,
+        array $valueArray
+    ): void {
         $query
-            ->where('attribute_id', $attributeId)
-            ->where(function (Builder $valueQuery) use ($valueArray) {
+            ->where($attributeIdColumn, $attributeId)
+            ->where(function (Builder $valueQuery) use ($valueArray, $valueColumn) {
                 foreach ($valueArray as $value) {
                     $escapedValue = $this->escapeLike($value);
 
                     $valueQuery
-                        ->orWhere('value', $value)
-                        ->orWhereRaw("value LIKE ? ESCAPE '\\'", ['%"' . $escapedValue . '"%']);
+                        ->orWhere($valueColumn, $value)
+                        ->orWhereRaw("{$valueColumn} LIKE ? ESCAPE '\\'", ['%"' . $escapedValue . '"%']);
                 }
             });
     }
@@ -4514,6 +4482,17 @@ class ProductController extends Controller
                     })
                     ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
                         $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                    })
+                    ->orWhereHas('bundleItems', function (Builder $bundleItemQuery) use ($attributeId, $valueArray) {
+                        $bundleItemQuery->where(function (Builder $resolvedBundleItemQuery) use ($attributeId, $valueArray) {
+                            $resolvedBundleItemQuery
+                                ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                                })
+                                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                                });
+                        });
                     });
             });
         }
@@ -5275,8 +5254,16 @@ class ProductController extends Controller
                             ->select('product_id')
                             ->groupBy('product_id')
                             ->havingRaw('COUNT(DISTINCT supplier_id) > 1');
-                    });
+                });
             });
+        }
+
+        if ($request->filled('has_images')) {
+            if ($request->boolean('has_images')) {
+                $query->whereHas('images');
+            } else {
+                $query->whereDoesntHave('images');
+            }
         }
 
         $searchRankingSql = null;

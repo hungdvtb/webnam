@@ -494,9 +494,32 @@ const getProductAttributeDisplayValues = (product, attributeId) => {
                 : (Array.isArray(variation?.attributeValues) ? variation.attributeValues : [])
         ))
         : [];
+    const bundleItemAttributeValues = Array.isArray(product?.bundle_items)
+        ? product.bundle_items.flatMap((bundleItem) => (
+            Array.isArray(bundleItem?.attribute_values)
+                ? bundleItem.attribute_values
+                : (Array.isArray(bundleItem?.attributeValues) ? bundleItem.attributeValues : [])
+        ))
+        : [];
+    const bundleOptionAttributeValues = Array.isArray(product?.bundle_options)
+        ? product.bundle_options.flatMap((bundleOption) => (
+            Array.isArray(bundleOption?.items)
+                ? bundleOption.items.flatMap((bundleItem) => (
+                    Array.isArray(bundleItem?.attribute_values)
+                        ? bundleItem.attribute_values
+                        : (Array.isArray(bundleItem?.attributeValues) ? bundleItem.attributeValues : [])
+                ))
+                : []
+        ))
+        : [];
 
     return Array.from(new Set(
-        [...productAttributeValues, ...variationAttributeValues]
+        [
+            ...productAttributeValues,
+            ...variationAttributeValues,
+            ...bundleItemAttributeValues,
+            ...bundleOptionAttributeValues,
+        ]
             .filter((attributeValue) => String(attributeValue?.attribute_id ?? attributeValue?.attribute?.id ?? '') === String(attributeId))
             .flatMap((attributeValue) => parseProductAttributeValueList(attributeValue?.value))
             .filter(Boolean)

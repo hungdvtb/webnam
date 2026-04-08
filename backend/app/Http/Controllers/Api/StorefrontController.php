@@ -16,6 +16,22 @@ use Illuminate\Support\Str;
 
 class StorefrontController extends Controller
 {
+    protected function normalizeStorefrontBundleOptionKey($optionPostId, ?string $optionTitle): string
+    {
+        if (filled($optionPostId) && is_numeric($optionPostId)) {
+            return 'post:' . (int) $optionPostId;
+        }
+
+        $normalizedTitle = Str::of((string) $optionTitle)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish()
+            ->value();
+
+        return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
     protected function getOrderedCategoryIds(Category $category, $accountId = null): array
     {
         $ids = [(int) $category->id];
@@ -64,6 +80,85 @@ class StorefrontController extends Controller
                 $join->on("{$alias}.product_id", '=', 'products.id');
             })
             ->select('products.*');
+    }
+
+    protected function joinCategoryAssignments(Builder $query, array $categoryIds, string $alias = 'category_assignments'): void
+    {
+        $normalizedCategoryIds = collect($categoryIds)
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedCategoryIds)) {
+            return;
+        }
+
+        $caseSql = collect($normalizedCategoryIds)
+            ->values()
+            ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
+            ->implode(' ');
+
+        $subquery = DB::table('category_product')
+            ->selectRaw('product_id')
+            ->selectRaw("CASE WHEN item_type = 'bundle_option' THEN 'bundle_option' ELSE 'product' END as item_type")
+            ->selectRaw("COALESCE(bundle_option_key, '') as bundle_option_key")
+            ->selectRaw('bundle_option_post_id')
+            ->selectRaw('bundle_option_title')
+            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
+            ->whereIn('category_id', $normalizedCategoryIds)
+            ->whereIn('item_type', ['product', 'bundle_option'])
+            ->groupBy('product_id', 'item_type', 'bundle_option_key', 'bundle_option_post_id', 'bundle_option_title');
+
+        $query
+            ->joinSub($subquery, $alias, function ($join) use ($alias) {
+                $join->on("{$alias}.product_id", '=', 'products.id');
+            })
+            ->select('products.*')
+            ->addSelect([
+                "{$alias}.item_type as item_type",
+                "{$alias}.bundle_option_key as bundle_option_key",
+                "{$alias}.bundle_option_post_id as bundle_option_post_id",
+                "{$alias}.bundle_option_title as bundle_option_title",
+                "{$alias}.category_order_key as category_order_key",
+            ]);
+    }
+
+    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null): void
+    {
+        $normalizedCategories = collect($categories)->filter();
+        $categoryIds = $normalizedCategories
+            ->pluck('id')
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($categoryIds->isEmpty()) {
+            return;
+        }
+
+        $countMap = DB::table('category_product')
+            ->join('products', 'products.id', '=', 'category_product.product_id')
+            ->leftJoin('product_links as parent_links', function ($join) {
+                $join->on('parent_links.linked_product_id', '=', 'products.id')
+                    ->where('parent_links.link_type', '=', 'super_link');
+            })
+            ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
+            ->whereIn('category_product.category_id', $categoryIds->all())
+            ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+            ->where('products.status', true)
+            ->whereNull('products.deleted_at')
+            ->whereNull('parent_links.product_id')
+            ->selectRaw('category_product.category_id, COUNT(*) as storefront_items_count')
+            ->groupBy('category_product.category_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => [(int) $row->category_id => (int) $row->storefront_items_count]);
+
+        $normalizedCategories->each(function ($category) use ($countMap) {
+            $category->setAttribute('products_count', (int) ($countMap->get((int) $category->id) ?? 0));
+        });
     }
 
     protected function normalizeStorefrontAdditionalInfoPayload($rawValue): array
@@ -222,11 +317,10 @@ class StorefrontController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->withCount(['products' => function ($q) {
-                $q->where('status', true)->whereDoesntHave('parentConfigurable');
-            }])
             ->orderBy('order')
             ->get(['id', 'name', 'slug', 'parent_id', 'description', 'order', 'logo_path']);
+
+        $this->applyStorefrontCategoryItemCounts($categories, $accountId);
 
         // Build tree structure
         $tree = $this->buildCategoryTree($categories);
@@ -260,9 +354,6 @@ class StorefrontController extends Controller
                 ->first();
             if ($cat) {
                 $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
-                $query->whereHas('categories', function ($categoryQuery) use ($selectedCategoryIds) {
-                    $categoryQuery->whereIn('categories.id', $selectedCategoryIds);
-                });
             }
         }
 
@@ -274,10 +365,11 @@ class StorefrontController extends Controller
 
             if ($cat) {
                 $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
-                $query->whereHas('categories', function ($categoryQuery) use ($selectedCategoryIds) {
-                    $categoryQuery->whereIn('categories.id', $selectedCategoryIds);
-                });
             }
+        }
+
+        if (!empty($selectedCategoryIds)) {
+            $this->joinCategoryAssignments($query, $selectedCategoryIds);
         }
 
         // Search
@@ -319,15 +411,11 @@ class StorefrontController extends Controller
         ];
         $sort = $sortMap[$request->get('sort', 'newest')] ?? ['created_at', 'desc'];
 
-        if (!empty($selectedCategoryIds)) {
-            $this->joinCategoryOrdering($query, $selectedCategoryIds);
-        }
-
         $sortKey = $request->get('sort', 'newest');
         $prioritizeCategoryOrder = !empty($selectedCategoryIds) && in_array($sortKey, ['newest', 'popular'], true);
 
         if ($prioritizeCategoryOrder) {
-            $query->orderBy('category_sorting.category_order_key');
+            $query->orderBy('category_order_key');
         }
 
         if (in_array($sortKey, ['newest', 'popular'], true)) {
@@ -337,7 +425,7 @@ class StorefrontController extends Controller
         $query->orderBy($sort[0], $sort[1]);
 
         if (!$prioritizeCategoryOrder && !empty($selectedCategoryIds)) {
-            $query->orderBy('category_sorting.category_order_key');
+            $query->orderBy('category_order_key');
         }
 
         $query->orderByDesc('products.id');
@@ -347,6 +435,10 @@ class StorefrontController extends Controller
 
         // Slim response: only essential fields
         $products->getCollection()->transform(function ($p) {
+            $itemType = ($p->item_type ?? '') === 'bundle_option' ? 'bundle_option' : 'product';
+            $bundleOptionKey = trim((string) ($p->bundle_option_key ?? ''));
+            $bundleOptionTitle = Str::squish((string) ($p->bundle_option_title ?? ''));
+
             return [
                 'id' => $p->id,
                 'name' => $p->name,
@@ -363,6 +455,10 @@ class StorefrontController extends Controller
                 'average_rating' => round($p->average_rating, 1),
                 'primary_image' => $p->primary_image,
                 'specifications' => $p->specifications,
+                'item_type' => $itemType,
+                'bundle_option_key' => $bundleOptionKey !== '' ? $bundleOptionKey : null,
+                'bundle_option_post_id' => filled($p->bundle_option_post_id ?? null) ? (int) $p->bundle_option_post_id : null,
+                'bundle_option_title' => $itemType === 'bundle_option' ? $bundleOptionTitle : null,
             ];
         });
 
@@ -529,6 +625,10 @@ class StorefrontController extends Controller
                         'stock_quantity' => $bundleItem->stock_quantity,
                         'quantity' => $bundleItem->pivot->quantity ?? 1,
                         'is_required' => $bundleItem->pivot->is_required ?? false,
+                        'option_key' => $this->normalizeStorefrontBundleOptionKey(
+                            $optionPostId,
+                            $bundleItem->pivot->option_title
+                        ),
                         'option_title' => $bundleItem->pivot->option_title,
                         'option_post_id' => $optionPostId,
                         'option_post_title' => $optionPost?->title,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\StorefrontApi;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class CategoryController extends Controller
 {
@@ -17,6 +18,42 @@ class CategoryController extends Controller
         return $account ? $account->id : null;
     }
 
+    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null): void
+    {
+        $normalizedCategories = collect($categories)->filter();
+        $categoryIds = $normalizedCategories
+            ->pluck('id')
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($categoryIds->isEmpty()) {
+            return;
+        }
+
+        $countMap = DB::table('category_product')
+            ->join('products', 'products.id', '=', 'category_product.product_id')
+            ->leftJoin('product_links as parent_links', function ($join) {
+                $join->on('parent_links.linked_product_id', '=', 'products.id')
+                    ->where('parent_links.link_type', '=', 'super_link');
+            })
+            ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
+            ->whereIn('category_product.category_id', $categoryIds->all())
+            ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+            ->where('products.status', true)
+            ->whereNull('products.deleted_at')
+            ->whereNull('parent_links.product_id')
+            ->selectRaw('category_product.category_id, COUNT(*) as storefront_items_count')
+            ->groupBy('category_product.category_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => [(int) $row->category_id => (int) $row->storefront_items_count]);
+
+        $normalizedCategories->each(function ($category) use ($countMap) {
+            $category->setAttribute('products_count', (int) ($countMap->get((int) $category->id) ?? 0));
+        });
+    }
+
     public function index(Request $request)
     {
         $accountId = $this->getAccountId($request);
@@ -24,12 +61,11 @@ class CategoryController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->withCount(['products' => function ($q) {
-                $q->where('status', true)->whereDoesntHave('parentConfigurable');
-            }])
             ->orderBy('order', 'asc')
             ->orderBy('id', 'asc') // Stable sorting
             ->get();
+
+        $this->applyStorefrontCategoryItemCounts($categories, $accountId);
 
         return response()->json($categories);
     }
@@ -42,11 +78,14 @@ class CategoryController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('slug', $slug)
             ->with(['children' => function($q) {
-                $q->where('status', true)->orderBy('order')->withCount(['products' => function($pq) {
-                    $pq->where('status', true)->whereDoesntHave('parentConfigurable');
-                }]);
+                $q->where('status', true)->orderBy('order');
             }])
             ->firstOrFail();
+
+        $this->applyStorefrontCategoryItemCounts(
+            collect([$category])->merge($category->children),
+            $accountId
+        );
 
         return response()->json($category);
     }

@@ -165,6 +165,202 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(7, (int) ($item['available_to_sell'] ?? 0));
     }
 
+    public function test_refresh_order_items_uses_product_stock_quantity_as_available_to_sell_baseline(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham lech ton snapshot',
+            'sku' => 'ORDER-FORM-DRIFT-001',
+        ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 10,
+                'received_quantity' => 10,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $product->forceFill(['stock_quantity' => 0])->save();
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [[
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                ]],
+            ]);
+
+        $response->assertOk();
+
+        $item = collect($response->json('items'))->firstWhere('product_id', $product->id);
+
+        $this->assertNotNull($item);
+        $this->assertSame(0, (int) ($item['computed_stock'] ?? 0));
+        $this->assertSame(0, (int) ($item['pending_export_quantity'] ?? 0));
+        $this->assertSame(0, (int) ($item['available_to_sell'] ?? 0));
+    }
+
+    public function test_refresh_order_items_excludes_quantities_already_on_draft_export_slips(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham da lap phieu xuat nhap',
+            'sku' => 'ORDER-FORM-DRAFT-EXPORT-001',
+        ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 10,
+                'received_quantity' => 10,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-DRAFT-EXPORT-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 4);
+
+        $document = InventoryDocument::query()->create([
+            'account_id' => $account->id,
+            'document_number' => 'PX-DRAFT-001',
+            'type' => 'export',
+            'document_date' => now()->toDateString(),
+            'status' => 'draft',
+            'reference_type' => 'order',
+            'reference_id' => $order->id,
+            'total_quantity' => 1,
+            'total_amount' => 0,
+            'created_by' => $user->id,
+        ]);
+
+        $document->items()->create([
+            'account_id' => $account->id,
+            'product_id' => $product->id,
+            'product_name_snapshot' => $product->name,
+            'product_sku_snapshot' => $product->sku,
+            'quantity' => 1,
+            'stock_bucket' => 'sellable',
+            'direction' => 'out',
+            'unit_cost' => 100000,
+            'total_cost' => 100000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [[
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                ]],
+            ]);
+
+        $response->assertOk();
+
+        $item = collect($response->json('items'))->firstWhere('product_id', $product->id);
+
+        $this->assertNotNull($item);
+        $this->assertSame(10, (int) ($item['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($item['pending_export_quantity'] ?? 0));
+        $this->assertSame(7, (int) ($item['available_to_sell'] ?? 0));
+    }
+
+    public function test_refresh_order_items_can_return_negative_available_to_sell(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham am co the ban',
+            'sku' => 'ORDER-FORM-NEGATIVE-001',
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-NEGATIVE-AVAILABLE-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 3);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [[
+                    'product_id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                ]],
+            ]);
+
+        $response->assertOk();
+
+        $item = collect($response->json('items'))->firstWhere('product_id', $product->id);
+
+        $this->assertNotNull($item);
+        $this->assertSame(0, (int) ($item['computed_stock'] ?? 0));
+        $this->assertSame(3, (int) ($item['pending_export_quantity'] ?? 0));
+        $this->assertSame(-3, (int) ($item['available_to_sell'] ?? 0));
+    }
+
+    public function test_inventory_products_do_not_add_pending_returns_into_actual_stock(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham dang cho hang hoan ve',
+            'sku' => 'PENDING-RETURN-001',
+        ]);
+
+        $service = app(InventoryService::class);
+        $service->createImport([
+            'supplier_id' => $supplier->id,
+            'import_date' => now()->subDay()->toDateString(),
+            'items' => [[
+                'product_id' => $product->id,
+                'quantity' => 5,
+                'received_quantity' => 5,
+                'unit_cost' => 100000,
+            ]],
+        ], $account->id, $user->id);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-PENDING-RETURN-001',
+            'status' => 'pending_return',
+        ]);
+        $this->createOrderItem($account, $order, $product, 4);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/inventory/products?per_page=20');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+        $summary = $response->json('summary');
+
+        $this->assertNotNull($row);
+        $this->assertSame(5, (int) ($row['computed_stock'] ?? 0));
+        $this->assertSame(0, (int) ($row['pending_export_quantity'] ?? 0));
+        $this->assertSame(4, (int) ($row['pending_return_quantity'] ?? 0));
+        $this->assertSame(5, (int) ($row['actual_stock'] ?? 0));
+        $this->assertSame(4, (int) ($summary['total_pending_return'] ?? 0));
+        $this->assertSame(5, (int) ($summary['total_actual_stock'] ?? 0));
+        $this->assertSame(5, (int) ($summary['total_sellable_stock'] ?? 0));
+    }
+
     public function test_inventory_products_can_filter_low_stock_using_current_inventory_state(): void
     {
         [$account, $user] = $this->authenticate();

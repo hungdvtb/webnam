@@ -463,6 +463,62 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-RAN');
     }
 
+    public function test_picker_attribute_filter_can_match_bundle_by_child_item_attributes(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+        ]);
+
+        $matchingChild = $this->createProduct($account, [
+            'name' => 'Chan nen men lam',
+            'sku' => 'CHAN-NEN-MEN-LAM',
+        ]);
+        $this->attachProductAttributeValue($matchingChild, $glazeAttribute, 'Men lam');
+
+        $matchingBundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam demo bundle',
+            'sku' => 'BUNDLE-CHILD-MEN-LAM',
+            'type' => 'bundle',
+        ]);
+        $this->attachBundleItem($matchingBundle, $matchingChild, [
+            'option_title' => 'Ban 1m',
+        ]);
+
+        $otherChild = $this->createProduct($account, [
+            'name' => 'Chan nen men ran',
+            'sku' => 'CHAN-NEN-MEN-RAN',
+        ]);
+        $this->attachProductAttributeValue($otherChild, $glazeAttribute, 'Men ran');
+
+        $otherBundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men ran demo bundle',
+            'sku' => 'BUNDLE-CHILD-MEN-RAN',
+            'type' => 'bundle',
+        ]);
+        $this->attachBundleItem($otherBundle, $otherChild, [
+            'option_title' => 'Ban 1m',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'search' => 'Bo do tho men lam demo bundle',
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $matchingBundle->id)
+            ->assertJsonPath('data.0.sku', 'BUNDLE-CHILD-MEN-LAM');
+    }
+
     public function test_admin_search_returns_matching_variant_row_instead_of_parent(): void
     {
         $account = $this->authenticate();

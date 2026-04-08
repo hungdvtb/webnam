@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\Supplier;
 use App\Models\User;
 use App\Services\Inventory\InventoryService;
@@ -109,6 +110,78 @@ class ProductListInventorySyncTest extends TestCase
 
         $this->assertFalse($rows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $pendingProduct->id));
         $this->assertTrue($rows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $healthyProduct->id));
+    }
+
+    public function test_product_list_can_return_negative_actual_stock(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham am ton co the ban',
+            'sku' => 'SYNC-NEGATIVE-STOCK-001',
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'ORD-NEGATIVE-STOCK-001',
+            'status' => 'new',
+        ]);
+        $this->createOrderItem($account, $order, $product, 2);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+
+        $this->assertNotNull($row);
+        $this->assertSame(-2, (int) ($row['actual_stock'] ?? 0));
+        $this->assertSame(-2, (int) ($row['stock_quantity'] ?? 0));
+    }
+
+    public function test_product_list_can_filter_products_by_image_presence(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $productWithImage = $this->createProduct($account, $supplier, [
+            'name' => 'San pham co anh',
+            'sku' => 'SYNC-IMAGE-YES',
+        ]);
+        $productWithoutImage = $this->createProduct($account, $supplier, [
+            'name' => 'San pham chua co anh',
+            'sku' => 'SYNC-IMAGE-NO',
+        ]);
+
+        ProductImage::query()->create([
+            'product_id' => $productWithImage->id,
+            'image_url' => 'https://example.test/images/sync-image-yes.png',
+            'is_primary' => true,
+            'sort_order' => 1,
+            'file_name' => 'sync-image-yes.png',
+        ]);
+
+        $withImagesResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&has_images=1');
+
+        $withImagesResponse->assertOk();
+
+        $withImageRows = collect($withImagesResponse->json('data'));
+
+        $this->assertTrue($withImageRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithImage->id));
+        $this->assertFalse($withImageRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutImage->id));
+
+        $withoutImagesResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&has_images=0');
+
+        $withoutImagesResponse->assertOk();
+
+        $withoutImageRows = collect($withoutImagesResponse->json('data'));
+
+        $this->assertFalse($withoutImageRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithImage->id));
+        $this->assertTrue($withoutImageRows->contains(fn (array $row) => (int) ($row['id'] ?? 0) === (int) $productWithoutImage->id));
     }
 
     private function authenticate(): array

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import {
   BUNDLE_METADATA_VERSION,
@@ -49,6 +49,30 @@ const normalizeBundleItemState = (item, fallbackIndex = 0) => {
   };
 };
 
+const resolveRequestedBundleConfig = (items = [], requestedKey = '', requestedTitle = '') => {
+  const normalizedKey = String(requestedKey || '').trim();
+  const normalizedTitle = String(requestedTitle || '').trim();
+
+  if (!normalizedKey && !normalizedTitle) {
+    return '';
+  }
+
+  for (const item of Array.isArray(items) ? items : []) {
+    const optionTitle = getBundleOptionTitle(item);
+    const optionKey = String(
+      item?.option_key
+      || item?.pivot?.option_key
+      || (item?.option_post_id ? `post:${item.option_post_id}` : optionTitle)
+    ).trim();
+
+    if ((normalizedKey && optionKey === normalizedKey) || (normalizedTitle && optionTitle === normalizedTitle)) {
+      return optionTitle;
+    }
+  }
+
+  return '';
+};
+
 export default function ProductDetailContent({ product }) {
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
@@ -60,6 +84,9 @@ export default function ProductDetailContent({ product }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const { addToCart } = useCart();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedBundleOptionKey = String(searchParams?.get('bundle_option_key') || '').trim();
+  const requestedBundleOptionTitle = String(searchParams?.get('bundle_option') || '').trim();
   const hasStructuredVariantAttributes = product?.super_attributes?.length > 0;
   const hasVariants = product?.type === 'configurable' && product?.variations?.length > 0;
 
@@ -126,12 +153,18 @@ export default function ProductDetailContent({ product }) {
             option_title: groupName
           }, index);
         });
+        const requestedConfigTitle = resolveRequestedBundleConfig(
+          mappedItems,
+          requestedBundleOptionKey,
+          requestedBundleOptionTitle,
+        );
+        const initialConfigTitle = requestedConfigTitle || firstConfigTitle;
 
         setBundleItems(mappedItems.map(item => ({
           ...item,
-          selected: !item.option_title || item.option_title === firstConfigTitle
+          selected: !item.option_title || item.option_title === initialConfigTitle
         })));
-        setActiveBundleConfig(firstConfigTitle);
+        setActiveBundleConfig(initialConfigTitle);
       } else {
         setBundleItems([]);
         setActiveBundleConfig('');
@@ -140,7 +173,13 @@ export default function ProductDetailContent({ product }) {
       setBundleItems([]);
       setActiveBundleConfig('');
     }
-  }, [hasStructuredVariantAttributes, hasVariants, product]);
+  }, [
+    hasStructuredVariantAttributes,
+    hasVariants,
+    product,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+  ]);
 
   // Find the matching variant
   const matchingVariant = useMemo(() => {

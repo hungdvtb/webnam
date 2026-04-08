@@ -1539,6 +1539,13 @@ const ProductForm = () => {
     const [isSortingBundle, setIsSortingBundle] = useState({}); // { optionId: boolean }
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
     const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+    const [expandedBundleOptions, setExpandedBundleOptions] = useState({});
+    const toggleBundleOptionExpanded = useCallback((optionId) => {
+        setExpandedBundleOptions((prev) => ({
+            ...prev,
+            [optionId]: !prev[optionId],
+        }));
+    }, []);
     const [showBundleOptionSorter, setShowBundleOptionSorter] = useState(false);
     const [bundleItemQuickSorter, setBundleItemQuickSorter] = useState({
         optionId: null,
@@ -4177,6 +4184,27 @@ const ProductForm = () => {
         });
     }, [bundleOptions]);
 
+    const handleUploadBundleOptionImage = useCallback((optionId, event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const uploadData = new FormData();
+        uploadData.append('image', file);
+
+        mediaApi.upload(uploadData).then(res => {
+            const url = res.data.url;
+            setBundleOptions(prev => prev.map(opt => opt.id === optionId ? { ...opt, image_url: url } : opt));
+            showToast('Tải ảnh thành công', 'success');
+        }).catch(err => {
+            showToast('Lỗi khi tải ảnh', 'error');
+        });
+    }, [showToast]);
+
+    const handleRemoveBundleOptionImage = useCallback((optionId) => {
+        setBundleOptions(prev => prev.map(opt => opt.id === optionId ? { ...opt, image_url: '' } : opt));
+    }, []);
+
+
     const handleRemoveBundleOption = (optionId) => {
         setBundleOptions(prev => prev.filter(o => o.id !== optionId));
         setShowBundleSearch((prev) => (prev === optionId ? null : prev));
@@ -6404,9 +6432,14 @@ const ProductForm = () => {
                                                 className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${showBundleSearch === option.id ? 'relative z-[80]' : 'relative z-10'}`}
                                             >
                                                 <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
-                                                     <div className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0">
+                                                     <div 
+                                                         className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0 cursor-pointer hover:bg-gold/20 hover:scale-105 transition-all text-gold flex-col"
+                                                         onClick={() => toggleBundleOptionExpanded(option.id)}
+                                                         title={expandedBundleOptions[option.id] ? "Thu gọn danh sách" : "Mở rộng danh sách"}
+                                                     >
                                                         <span className="text-[13px] font-black text-gold">{optIdx + 1}</span>
                                                      </div>
+
                                                      <div className="flex min-w-0 flex-1 items-center gap-4">
                                                         <div className="min-w-0 flex-1">
                                                             <input
@@ -6546,6 +6579,7 @@ const ProductForm = () => {
                                                     </div>
                                                 )}
 
+                                                {expandedBundleOptions[option.id] && (
                                                  <div className="bg-white">
                                                     {option.items.length > 0 && (
                                                         <table className="w-full text-left text-[12px]">
@@ -6592,6 +6626,7 @@ const ProductForm = () => {
                                                         </table>
                                                     )}
                                                 </div>
+                                                )}
                                             </div>
                                         ))
                                     )}

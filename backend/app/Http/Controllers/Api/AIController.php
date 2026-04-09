@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\Product;
 use App\Services\AI\GeminiService;
+use App\Services\AI\ProductSeoAiService;
 use App\Services\Inventory\InvoiceAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +18,7 @@ class AIController extends Controller
 {
     public function __construct(
         private readonly GeminiService $geminiService,
+        private readonly ProductSeoAiService $productSeoAiService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
     ) {
     }
@@ -206,6 +209,68 @@ class AIController extends Controller
                 'description' => $rewrittenContent,
                 'text' => $rewrittenContent,
                 'model' => $result['model'],
+                'status' => 'success',
+            ]);
+        } catch (\Throwable $exception) {
+            return $this->handleAiException($exception);
+        }
+    }
+
+    public function generateProductSeo(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'product_id' => 'nullable|integer|exists:products,id',
+            'persist' => 'nullable|boolean',
+            'model' => 'nullable|string|max:120',
+            'custom_instruction' => 'nullable|string|max:4000',
+            'name' => 'nullable|string|max:255',
+            'sku' => 'nullable|string|max:255',
+            'type' => 'nullable|string|max:120',
+            'category' => 'nullable|string|max:255',
+            'categories' => 'nullable|array',
+            'categories.*' => 'nullable',
+            'price' => 'nullable',
+            'weight' => 'nullable',
+            'unit' => 'nullable|string|max:120',
+            'attributes' => 'nullable|array',
+            'images' => 'nullable|array',
+            'variations' => 'nullable|array',
+            'grouped_items' => 'nullable|array',
+        ]);
+
+        $persist = filter_var($request->input('persist', false), FILTER_VALIDATE_BOOLEAN);
+
+        if (!$persist && empty($validated['product_id']) && trim((string) ($validated['name'] ?? '')) === '') {
+            throw ValidationException::withMessages([
+                'name' => 'Can it nhat ten san pham hoac product_id de tao SEO bang AI.',
+            ]);
+        }
+
+        if ($persist && empty($validated['product_id'])) {
+            throw ValidationException::withMessages([
+                'product_id' => 'Can product_id khi muon luu truc tiep noi dung SEO vao san pham.',
+            ]);
+        }
+
+        try {
+            $result = $this->productSeoAiService->generate(
+                $validated,
+                $this->resolveAccountId($request),
+                $validated['model'] ?? null
+            );
+
+            if ($persist && !empty($validated['product_id'])) {
+                $product = Product::query()->findOrFail((int) $validated['product_id']);
+                $this->productSeoAiService->persist($product, $result);
+                $result['persisted'] = true;
+                $result['product_id'] = $product->id;
+            } else {
+                $result['persisted'] = false;
+                $result['product_id'] = !empty($validated['product_id']) ? (int) $validated['product_id'] : null;
+            }
+
+            return response()->json([
+                ...$result,
                 'status' => 'success',
             ]);
         } catch (\Throwable $exception) {

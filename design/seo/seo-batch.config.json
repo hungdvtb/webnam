@@ -1,0 +1,24 @@
+{
+  "inputDir": ".",
+  "preferredInputFile": "",
+  "processLatestFile": true,
+  "inputPattern": "*.xlsx",
+  "sheetName": "",
+  "outputMode": "new",
+  "outputDir": "./output",
+  "outputFileName": "",
+  "logDir": "./logs",
+  "overwriteExistingSeo": true,
+  "content": {
+    "includeImageInDescription": true,
+    "defaultBrandContext": "gốm sứ Bát Tràng",
+    "defaultUseContext": "bàn thờ"
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "openai-compatible",
+    "endpoint": "",
+    "model": "",
+    "apiKeyEnv": "OPENAI_API_KEY"
+  }
+}

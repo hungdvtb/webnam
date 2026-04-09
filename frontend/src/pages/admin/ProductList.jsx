@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, STORAGE_BASE_URL } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, STORAGE_BASE_URL, aiApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
+import useAiAvailability from '../../hooks/useAiAvailability';
 import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
@@ -810,6 +811,7 @@ function findQuickEditGlazeAttribute(attributes = []) {
 
 const ProductList = () => {
     const { user } = useAuth();
+    const { available: aiAvailable, disabledReason } = useAiAvailability();
     const navigate = useNavigate();
     const location = useLocation();
     const initialSavedStateRef = useRef(null);
@@ -903,6 +905,8 @@ const ProductList = () => {
     const quickEditTopScrollbarRef = useRef(null);
     const quickEditHorizontalSyncSourceRef = useRef(null);
     const [quickEditTableMetrics, setQuickEditTableMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
+    const [bulkSeoGenerating, setBulkSeoGenerating] = useState(false);
+    const [bulkSeoProgress, setBulkSeoProgress] = useState({ current: 0, total: 0, failed: 0 });
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -1484,6 +1488,85 @@ const ProductList = () => {
     };
 
     const [notification, setNotification] = useState(null);
+
+    const handleBulkGenerateSeo = async () => {
+        const normalizedIds = Array.from(
+            new Map(
+                (Array.isArray(selectedIds) ? selectedIds : [])
+                    .map((value) => normalizeStoredId(value))
+                    .filter((value) => value !== null)
+                    .map((value) => [String(value), value]),
+            ).values(),
+        );
+
+        if (normalizedIds.length === 0) {
+            setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 sản phẩm để tạo SEO AI.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        if (!aiAvailable) {
+            setNotification({ type: 'error', message: disabledReason || 'AI chưa sẵn sàng.' });
+            setTimeout(() => setNotification(null), 5000);
+            return;
+        }
+
+        setBulkSeoGenerating(true);
+        setBulkSeoProgress({ current: 0, total: normalizedIds.length, failed: 0 });
+
+        let successCount = 0;
+        const failedIds = [];
+
+        try {
+            for (let index = 0; index < normalizedIds.length; index += 1) {
+                const targetId = normalizedIds[index];
+                setBulkSeoProgress({
+                    current: index,
+                    total: normalizedIds.length,
+                    failed: failedIds.length,
+                });
+
+                try {
+                    await aiApi.generateProductSeo({
+                        product_id: targetId,
+                        persist: true,
+                    });
+                    successCount += 1;
+                } catch (error) {
+                    console.error('Bulk SEO AI error:', targetId, error);
+                    failedIds.push(targetId);
+                }
+
+                setBulkSeoProgress({
+                    current: index + 1,
+                    total: normalizedIds.length,
+                    failed: failedIds.length,
+                });
+            }
+
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+
+            if (failedIds.length > 0) {
+                setNotification({
+                    type: 'error',
+                    message: successCount > 0
+                        ? `Đã tạo SEO AI cho ${successCount} sản phẩm. Còn ${failedIds.length} sản phẩm bị lỗi.`
+                        : 'Không thể tạo SEO AI cho các sản phẩm đã chọn.',
+                });
+                setTimeout(() => setNotification(null), 5000);
+                return;
+            }
+
+            setNotification({
+                type: 'success',
+                message: `Đã tạo SEO AI và lưu thành công cho ${successCount} sản phẩm.`,
+            });
+            setTimeout(() => setNotification(null), 5000);
+        } finally {
+            setBulkSeoGenerating(false);
+            setBulkSeoProgress({ current: 0, total: 0, failed: 0 });
+        }
+    };
 
     const openDuplicateConfirm = (ids) => {
         const normalizedIds = (Array.isArray(ids) ? ids : [ids])
@@ -4394,6 +4477,20 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">flash_on</span>
                             </button>
+                            <button
+                                type="button"
+                                disabled={selectedIds.length === 0 || isTrashView || bulkSeoGenerating || !aiAvailable}
+                                onClick={handleBulkGenerateSeo}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
+                                    selectedIds.length > 0 && !isTrashView && aiAvailable && !bulkSeoGenerating
+                                        ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white shadow-sm'
+                                        : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
+                                }`}
+                                title={!aiAvailable ? disabledReason : (bulkSeoGenerating ? 'AI đang tạo SEO hàng loạt' : 'Tạo SEO AI cho các sản phẩm đã chọn')}
+                                aria-label="Tạo SEO AI cho các sản phẩm đã chọn"
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${bulkSeoGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
+                            </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
                                 onClick={requestBulkDuplicate}
@@ -4459,6 +4556,11 @@ const ProductList = () => {
                             {selectedIds.length > 0 && (
                                 <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
                                     <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} chọn</span>
+                                    {bulkSeoGenerating && (
+                                        <span className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">
+                                            AI {bulkSeoProgress.current}/{bulkSeoProgress.total}
+                                        </span>
+                                    )}
                                     <button onClick={() => setSelectedIds([])} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
                                 </div>
                             )}

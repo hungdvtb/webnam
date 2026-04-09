@@ -1867,121 +1867,6 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
     );
 };
 
-const OrderFormItemNameCell = ({
-    item,
-    index,
-    copiedText,
-    onCopy,
-    isOrderAi,
-    isPendingOrderAi,
-}) => {
-    const nameRef = useRef(null);
-    const [hasTruncation, setHasTruncation] = useState(false);
-    const copyKey = `${item.line_id || item.product_id}-name-${index}`;
-
-    const checkTruncation = useCallback(() => {
-        const element = nameRef.current;
-        if (!element) return false;
-        return element.scrollWidth > element.clientWidth + 1;
-    }, []);
-
-    useLayoutEffect(() => {
-        const element = nameRef.current;
-        if (!element) return undefined;
-
-        const updateTruncation = () => {
-            const nextValue = checkTruncation();
-            setHasTruncation((currentValue) => (currentValue === nextValue ? currentValue : nextValue));
-        };
-
-        const frameId = window.requestAnimationFrame(updateTruncation);
-        let resizeObserver = null;
-
-        if (typeof window.ResizeObserver === 'function') {
-            resizeObserver = new window.ResizeObserver(updateTruncation);
-            resizeObserver.observe(element);
-            if (element.parentElement) {
-                resizeObserver.observe(element.parentElement);
-            }
-        } else {
-            window.addEventListener('resize', updateTruncation);
-        }
-
-        return () => {
-            window.cancelAnimationFrame(frameId);
-            if (resizeObserver) {
-                resizeObserver.disconnect();
-            } else {
-                window.removeEventListener('resize', updateTruncation);
-            }
-        };
-    }, [checkTruncation, item.name]);
-
-    return (
-        <>
-            <div className="flex items-center gap-2 overflow-hidden">
-                <div className="flex-1 min-w-0">
-                    <p ref={nameRef} className="text-primary font-bold text-[13px] leading-tight truncate">{item.name}</p>
-                    {isOrderAi && (
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAi ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
-                                {isPendingOrderAi ? 'AI chờ duyệt' : 'AI'}
-                            </span>
-                            <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/60">
-                                {item.ai_meta?.confidence_label || 'AI'} {Number(item.ai_meta?.confidence || 0) > 0 ? `${item.ai_meta.confidence}%` : ''}
-                            </span>
-                            {item.ai_meta?.matched_rule_label && (
-                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
-                                    Bản {item.ai_meta.matched_rule_label}
-                                </span>
-                            )}
-                            {item.ai_meta?.matched_rule_context && (
-                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
-                                    {item.ai_meta.matched_rule_context}
-                                </span>
-                            )}
-                        </div>
-                    )}
-                    {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                        <div className="mt-1 truncate text-[11px] font-semibold text-primary/55">
-                            {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
-                            {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
-                        </div>
-                    ) : null}
-                </div>
-                {item.name && (
-                    <button
-                        type="button"
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => onCopy(item.name, 'tên sản phẩm', e, copyKey)}
-                        className={`${copiedText === copyKey ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
-                        title="Sao chép tên SP"
-                    >
-                        <span className="material-symbols-outlined text-[14px]">{copiedText === copyKey ? 'check' : 'content_copy'}</span>
-                    </button>
-                )}
-            </div>
-            {item.name && hasTruncation && (
-                <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
-                    <div>{item.name}</div>
-                    {isOrderAi && (
-                        <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
-                            {`AI: ${item.ai_meta?.source_phrase || 'Tự động ghép'}${item.ai_meta?.match_reasons?.length ? ` - ${item.ai_meta.match_reasons.join(', ')}` : ''}`}
-                        </div>
-                    )}
-                    {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                        <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
-                            {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
-                            {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
-                        </div>
-                    ) : null}
-                    <div className={`absolute left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent ${index === 0 ? 'bottom-full border-b-[5px] border-b-slate-900' : 'top-full border-t-[5px] border-t-slate-900'}`}></div>
-                </div>
-            )}
-        </>
-    );
-};
-
 const getOrderFormHeaderJustifyClass = (align = 'left') => {
     if (align === 'right') return 'justify-end';
     if (align === 'center') return 'justify-center';
@@ -2270,6 +2155,7 @@ const OrderForm = () => {
     const [leadConversionSummary, setLeadConversionSummary] = useState(null);
     const [notification, setNotification] = useState(null);
     const [copiedText, setCopiedText] = useState(null);
+    const [activeTruncatedNameCellKey, setActiveTruncatedNameCellKey] = useState('');
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
     const lastAutoOpenedSupplementOrderTypeRef = useRef('');
@@ -2287,6 +2173,7 @@ const OrderForm = () => {
     const orderAiFileInputRef = useRef(null);
     const orderAiLastInputPreviewUrlRef = useRef('');
     const orderAiReplaceAnchorRef = useRef(null);
+    const orderItemNameRefs = useRef(new Map());
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -4899,6 +4786,27 @@ const OrderForm = () => {
         }
     };
 
+    const setOrderItemNameRef = useCallback((cellKey, node) => {
+        if (!cellKey) return;
+
+        if (node) {
+            orderItemNameRefs.current.set(cellKey, node);
+        } else {
+            orderItemNameRefs.current.delete(cellKey);
+        }
+    }, []);
+
+    const updateActiveTruncatedNameCell = useCallback((cellKey) => {
+        const element = orderItemNameRefs.current.get(cellKey);
+        const isTruncated = Boolean(element && element.scrollWidth > element.clientWidth + 1);
+        setActiveTruncatedNameCellKey(isTruncated ? cellKey : '');
+        return isTruncated;
+    }, []);
+
+    const clearActiveTruncatedNameCell = useCallback((cellKey) => {
+        setActiveTruncatedNameCellKey((currentValue) => (currentValue === cellKey ? '' : currentValue));
+    }, []);
+
     const handleRefreshOrderItems = async (event) => {
         event?.preventDefault?.();
         event?.stopPropagation?.();
@@ -5913,22 +5821,26 @@ const OrderForm = () => {
                                                                     </div>
                                                                 </td>
                                                             );
-                                                        case 'name':
+                                                        case 'name': {
+                                                            const itemNameCellKey = `${item.line_id || item.product_id || index}-name-cell`;
+                                                            const nameCopyId = `${item.line_id || item.product_id}-name-${index}`;
+                                                            const isNameTooltipVisible = activeTruncatedNameCellKey === itemNameCellKey;
+
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
-                                                                    <OrderFormItemNameCell
-                                                                        item={item}
-                                                                        index={index}
-                                                                        copiedText={copiedText}
-                                                                        onCopy={handleCopyCellValue}
-                                                                        isOrderAi={isOrderAiItem(item)}
-                                                                        isPendingOrderAi={isPendingOrderAiItem(item)}
-                                                                    />
-                                                                    {false && (
-                                                                        <>
+                                                                <td
+                                                                    key={colId}
+                                                                    className="py-2.5 px-4 border border-primary/10 relative group/cell"
+                                                                    onMouseEnter={() => updateActiveTruncatedNameCell(itemNameCellKey)}
+                                                                    onMouseLeave={() => clearActiveTruncatedNameCell(itemNameCellKey)}
+                                                                >
                                                                     <div className="flex items-center gap-2 overflow-hidden">
                                                                         <div className="flex-1 min-w-0">
-                                                                            <p className="text-primary font-bold text-[13px] leading-tight truncate">{item.name}</p>
+                                                                            <p
+                                                                                ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
+                                                                                className="text-primary font-bold text-[13px] leading-tight truncate"
+                                                                            >
+                                                                                {item.name}
+                                                                            </p>
                                                                             {isOrderAiItem(item) && (
                                                                                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                                                                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
@@ -5939,7 +5851,7 @@ const OrderForm = () => {
                                                                                     </span>
                                                                                     {item.ai_meta?.matched_rule_label && (
                                                                                         <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
-                                                                                            Bàn {item.ai_meta.matched_rule_label}
+                                                                                            Bản {item.ai_meta.matched_rule_label}
                                                                                         </span>
                                                                                     )}
                                                                                     {item.ai_meta?.matched_rule_context && (
@@ -5960,33 +5872,34 @@ const OrderForm = () => {
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(e) => e.stopPropagation()}
-                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, `${item.line_id || item.product_id}-name-${index}`)}
-                                                                                className={`${copiedText === `${item.line_id || item.product_id}-name-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
+                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, nameCopyId)}
+                                                                                className={`${copiedText === nameCopyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép tên SP"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.line_id || item.product_id}-name-${index}` ? 'check' : 'content_copy'}</span>
+                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
-                                                                    <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl opacity-0 group-hover/cell:opacity-100 pointer-events-none transition-all z-50 w-80 text-[12px] font-bold border border-white/10 scale-95 group-hover/cell:scale-100 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
-                                                                        <div>{item.name}</div>
-                                                                        {isOrderAiItem(item) && (
-                                                                            <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
-                                                                                {`AI: ${item.ai_meta?.source_phrase || 'Tự động ghép'}${item.ai_meta?.match_reasons?.length ? ` - ${item.ai_meta.match_reasons.join(', ')}` : ''}`}
-                                                                            </div>
-                                                                        )}
-                                                                        {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                                                                            <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
-                                                                                {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
-                                                                                {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
-                                                                            </div>
-                                                                        ) : null}
-                                                                        <div className={`absolute left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent ${index === 0 ? 'bottom-full border-b-[5px] border-b-slate-900' : 'top-full border-t-[5px] border-t-slate-900'}`}></div>
-                                                                    </div>
-                                                                        </>
+                                                                    {isNameTooltipVisible && (
+                                                                        <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl pointer-events-none z-50 w-80 text-[12px] font-bold border border-white/10 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
+                                                                            <div>{item.name}</div>
+                                                                            {isOrderAiItem(item) && (
+                                                                                <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
+                                                                                    {`AI: ${item.ai_meta?.source_phrase || 'Tự động ghép'}${item.ai_meta?.match_reasons?.length ? ` - ${item.ai_meta.match_reasons.join(', ')}` : ''}`}
+                                                                                </div>
+                                                                            )}
+                                                                            {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
+                                                                                <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
+                                                                                    {item.options?.bundle_parent_name ? `Bundle gốc: ${item.options.bundle_parent_name}` : 'Bundle gốc'}
+                                                                                    {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
+                                                                                </div>
+                                                                            ) : null}
+                                                                            <div className={`absolute left-4 w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent ${index === 0 ? 'bottom-full border-b-[5px] border-b-slate-900' : 'top-full border-t-[5px] border-t-slate-900'}`}></div>
+                                                                        </div>
                                                                     )}
                                                                 </td>
                                                             );
+                                                        }
                                                         case 'quantity':
                                                             return (
                                                                 <td key={colId} className="py-2.5 px-3 border border-primary/10 text-center">
@@ -6738,5 +6651,4 @@ const OrderForm = () => {
         </div>
     );
 };
-
 export default OrderForm;

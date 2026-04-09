@@ -666,6 +666,7 @@ export const aiApi = {
     generateContent: (data) => api.post('/ai/generate-content', data),
     readInvoice: (data) => api.post('/ai/read-invoice', data, multipartConfig(data)),
     generateProductDescription: (data) => api.post('/ai/generate-product-description', data),
+    generateProductSeo: (data) => api.post('/ai/generate-product-seo', data),
     rewriteProductDescription: (data) => api.post('/ai/rewrite-product-description', data),
     getHistory: (chatId) => api.get(`/ai/history/${chatId}`),
 };

@@ -468,6 +468,7 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::post('/ai/generate-content', [AIController::class , 'generateContent']);
         Route::post('/ai/read-invoice', [AIController::class , 'readInvoice']);
         Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);
+        Route::post('/ai/generate-product-seo', [AIController::class , 'generateProductSeo']);
         Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);
         
         // Media Upload for Editor

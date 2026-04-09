@@ -1440,6 +1440,7 @@ const ProductForm = () => {
     const { available: aiAvailable, disabledReason } = useAiAvailability();
     const [isSaving, setIsSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
+    const [aiGeneratingSeo, setAiGeneratingSeo] = useState(false);
     const [aiRewriting, setAiRewriting] = useState(false);
     const [typeConfirmed, setTypeConfirmed] = useState(true);
     const [categories, setCategories] = useState([]);
@@ -3707,6 +3708,120 @@ const ProductForm = () => {
             showModal({ title: 'Lỗi AI', content: 'Không thể kết nối AI lúc này. Vui lòng thử lại sau.', type: 'error' });
         } finally {
             setAiGenerating(false);
+        }
+    };
+
+    const buildAiSeoPayload = () => {
+        const categoryName = categories.find((category) => String(category.id) === String(formData.category_id))?.name || 'Gốm sứ';
+        const attrData = {};
+
+        Object.entries(formData.custom_attributes || {}).forEach(([attributeId, value]) => {
+            const attribute = allAttributes.find((item) => String(item.id) === String(attributeId));
+            if (!attribute) {
+                return;
+            }
+
+            if (Array.isArray(value)) {
+                const normalizedValues = value.map((item) => String(item || '').trim()).filter(Boolean);
+                if (normalizedValues.length > 0) {
+                    attrData[attribute.name] = normalizedValues;
+                }
+                return;
+            }
+
+            if (value !== null && value !== undefined && String(value).trim() !== '') {
+                attrData[attribute.name] = value;
+            }
+        });
+
+        const stableImages = (Array.isArray(images) ? images : [])
+            .map((image, index) => ({
+                id: image?.id ?? null,
+                media_asset_id: image?.media_asset_id ?? null,
+                image_url: image?.large_url || image?.medium_url || image?.image_url || '',
+                large_url: image?.large_url || '',
+                medium_url: image?.medium_url || '',
+                is_primary: !!image?.is_primary,
+                sort_order: Number.isFinite(Number(image?.sort_order)) ? Number(image.sort_order) : index,
+                file_name: image?.file_name || '',
+            }))
+            .filter((image) => {
+                const url = String(image.image_url || '').trim();
+                return url !== '' && !url.startsWith('blob:') && !url.startsWith('data:');
+            });
+
+        const variationPayload = (Array.isArray(variants) ? variants : [])
+            .map((variant) => ({
+                id: variant?.id ?? null,
+                name: variant?.name || variant?.label || '',
+                label: variant?.label || variant?.name || '',
+                sku: variant?.sku || '',
+                price: variant?.price || '',
+                weight: variant?.weight || '',
+                attributes: variant?.attributes || {},
+            }))
+            .filter((variant) => variant.name || variant.sku);
+
+        const groupedItemsPayload = formData.type === 'bundle'
+            ? (Array.isArray(bundleOptions)
+                ? bundleOptions.flatMap((option) => option?.items || [])
+                : [])
+            : (Array.isArray(formData.grouped_items) ? formData.grouped_items : []);
+
+        return {
+            product_id: isEdit && !isDuplicate ? Number(id) : undefined,
+            name: formData.name,
+            sku: formData.sku,
+            type: formData.type,
+            category: categoryName,
+            categories: categoryName ? [categoryName] : [],
+            price: formData.special_price || formData.price || '',
+            weight: formData.weight || '',
+            attributes: attrData,
+            images: stableImages,
+            variations: variationPayload,
+            grouped_items: groupedItemsPayload,
+            custom_instruction: aiInstruction.trim() || undefined,
+        };
+    };
+
+    const handleAIGenerateSeo = async () => {
+        if (!aiAvailable) {
+            showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
+            return;
+        }
+
+        if (!formData.name || String(formData.name).trim() === '') {
+            showModal({ title: 'Lưu ý', content: 'Vui lòng nhập Tên Sản Phẩm để AI có cơ sở tạo SEO.', type: 'warning' });
+            return;
+        }
+
+        setAiGeneratingSeo(true);
+        try {
+            const response = await aiApi.generateProductSeo(buildAiSeoPayload());
+            const generated = response?.data || {};
+
+            setFormData((prev) => ({
+                ...prev,
+                description: generated.description || prev.description,
+                specifications: normalizeSpecificationRows(generated.specifications || prev.specifications),
+                meta_title: generated.meta_title || prev.meta_title,
+                meta_description: generated.meta_description || prev.meta_description,
+                meta_keywords: generated.meta_keywords || prev.meta_keywords,
+            }));
+
+            const insertedCount = Number(generated?.image_summary?.inserted_count || 0);
+            showToast({
+                message: insertedCount > 0
+                    ? `Đã tạo SEO AI và chèn ${insertedCount} ảnh vào mô tả.`
+                    : 'Đã tạo SEO AI. Hiện chưa chèn được ảnh công khai vào mô tả.',
+                type: 'success',
+            });
+        } catch (error) {
+            const message = error?.response?.data?.message || 'Không thể tạo SEO bằng AI lúc này. Vui lòng thử lại sau.';
+            showModal({ title: 'Lỗi AI', content: message, type: 'error' });
+        } finally {
+            setAiGeneratingSeo(false);
         }
     };
 
@@ -7277,11 +7392,34 @@ const ProductForm = () => {
                         <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
                             <SectionTitle icon="search" title="Tối ưu tìm kiếm (SEO)" />
                             <div className="grid grid-cols-1 gap-y-10">
+                                <div className="rounded-sm border border-gold/15 bg-stone/[0.03] px-4 py-4">
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                        <div>
+                                            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/45">AI SEO tổng thể</p>
+                                            <p className="mt-2 text-[13px] text-primary/65">
+                                                Tự điền mô tả HTML sạch, bảng thông số kỹ thuật và toàn bộ meta SEO. Nếu thư viện ảnh sản phẩm có URL công khai, AI sẽ chèn cả ảnh sản phẩm và ảnh tập thể nhân sự vào mô tả.
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleAIGenerateSeo}
+                                            disabled={aiGeneratingSeo || !aiAvailable}
+                                            className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-sm border border-gold/30 text-gold font-bold text-[11px] uppercase tracking-widest transition-all shadow-sm ${aiGeneratingSeo ? 'opacity-60 cursor-wait' : 'hover:bg-primary hover:text-white hover:border-primary active:scale-95'}`}
+                                            title={!aiAvailable ? disabledReason : 'Tạo bộ SEO hoàn chỉnh bằng AI'}
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${aiGeneratingSeo ? 'animate-spin' : ''}`}>auto_awesome</span>
+                                            {aiGeneratingSeo ? 'AI đang tạo SEO...' : 'AI Tạo SEO'}
+                                        </button>
+                                    </div>
+                                </div>
                                 <Field label="Meta Title">
                                     <input name="meta_title" value={formData.meta_title} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px]" placeholder="Tiêu đề hiển thị trên Google..." />
                                 </Field>
                                 <Field label="Meta Description" className="min-h-[80px] items-start pt-3">
                                     <textarea name="meta_description" value={formData.meta_description} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[13px] resize-none h-[80px]" placeholder="Mô tả tóm tắt nội dung..." />
+                                </Field>
+                                <Field label="Meta Keywords" className="min-h-[80px] items-start pt-3">
+                                    <textarea name="meta_keywords" value={formData.meta_keywords} onChange={handleChange} className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary text-[13px] resize-none h-[80px]" placeholder="Từ khóa liên quan, ngăn cách bằng dấu phẩy..." />
                                 </Field>
                             </div>
                         </div>

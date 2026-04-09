@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { blogApi, cmsApi } from '../../services/api';
+import BlogAiBulkModal from '../../components/admin/BlogAiBulkModal';
 import { useUI } from '../../context/UIContext';
 import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
 import { resolveMediaUrl } from '../../utils/mediaUrl';
@@ -151,6 +152,7 @@ const BlogList = () => {
     const [importingBundle, setImportingBundle] = useState(false);
     const [exportingBundle, setExportingBundle] = useState(false);
     const [importResult, setImportResult] = useState(null);
+    const [showAiBulkModal, setShowAiBulkModal] = useState(false);
 
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -1138,6 +1140,13 @@ const BlogList = () => {
         setIsTrashView((prev) => !prev);
     };
 
+    const handleAiBulkCompleted = async () => {
+        await fetchPosts();
+        await fetchTrashCount();
+        await loadCategories();
+        await loadKeywords();
+    };
+
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] p-6 gap-3 overflow-hidden">
             <input
@@ -1169,6 +1178,14 @@ const BlogList = () => {
                         className="h-9 px-4 bg-white border border-gold/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
                     >
                         {importingBundle ? 'Đang import...' : 'Nhập Excel'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setShowAiBulkModal(true)}
+                        disabled={importingBundle || exportingBundle}
+                        className="h-9 px-4 bg-white border border-primary/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
+                    >
+                        Tao bai AI tu Excel
                     </button>
                     <Link to="/admin/blog/new" className="h-9 px-4 bg-brick text-white hover:bg-umber rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Tạo bài mới</Link>
                 </div>
@@ -1667,6 +1684,12 @@ const BlogList = () => {
                     </div>
                 </div>
             )}
+
+            <BlogAiBulkModal
+                open={showAiBulkModal}
+                onClose={() => setShowAiBulkModal(false)}
+                onCompleted={handleAiBulkCompleted}
+            />
         </div>
     );
 };

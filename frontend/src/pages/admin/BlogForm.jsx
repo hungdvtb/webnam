@@ -65,6 +65,9 @@ const BlogForm = () => {
         blog_category_id: '',
         seo_keyword: '',
         excerpt: '',
+        meta_title: '',
+        meta_description: '',
+        meta_keywords: '',
         content: '',
         featured_image: '',
         is_published: true,
@@ -141,6 +144,9 @@ const BlogForm = () => {
                 blog_category_id: data.blog_category_id ? String(data.blog_category_id) : '',
                 seo_keyword: data.seo_keyword || '',
                 excerpt: data.excerpt || '',
+                meta_title: data.meta_title || '',
+                meta_description: data.meta_description || '',
+                meta_keywords: data.meta_keywords || '',
                 content: data.content || '',
                 featured_image: data.featured_image || '',
                 is_published: data.is_published ?? true,
@@ -557,6 +563,9 @@ const BlogForm = () => {
                 blog_category_id: formData.blog_category_id ? Number(formData.blog_category_id) : null,
                 seo_keyword: formData.seo_keyword,
                 excerpt: formData.excerpt,
+                meta_title: formData.meta_title,
+                meta_description: formData.meta_description,
+                meta_keywords: formData.meta_keywords,
                 content: serializeEditorContent(getQuillEditor()) || formData.content,
                 featured_image: formData.featured_image,
                 is_published: formData.is_published,
@@ -765,6 +774,44 @@ const BlogForm = () => {
                                 className="w-full resize-none border border-gold/20 bg-white p-4 font-body text-sm italic text-umber shadow-sm focus:border-primary focus:outline-none"
                                 placeholder="Đoạn mô tả ngắn để thu hút độc giả..."
                             />
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                            <div className="space-y-2 md:col-span-3">
+                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">SEO Title</label>
+                                <input
+                                    type="text"
+                                    name="meta_title"
+                                    value={formData.meta_title}
+                                    onChange={handleChange}
+                                    className="w-full border border-gold/20 bg-white p-4 font-body text-sm text-primary shadow-sm focus:border-primary focus:outline-none"
+                                    placeholder="Tieu de SEO hien thi tren Google"
+                                />
+                            </div>
+
+                            <div className="space-y-2 md:col-span-2">
+                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">SEO Description</label>
+                                <textarea
+                                    name="meta_description"
+                                    value={formData.meta_description}
+                                    onChange={handleChange}
+                                    rows="3"
+                                    className="w-full resize-none border border-gold/20 bg-white p-4 font-body text-sm text-primary shadow-sm focus:border-primary focus:outline-none"
+                                    placeholder="Mo ta SEO ngan gon, ro y va hap dan"
+                                />
+                            </div>
+
+                            <div className="space-y-2">
+                                <label className="font-ui text-[10px] font-bold uppercase tracking-widest text-stone">SEO Keywords</label>
+                                <textarea
+                                    name="meta_keywords"
+                                    value={formData.meta_keywords}
+                                    onChange={handleChange}
+                                    rows="3"
+                                    className="w-full resize-none border border-gold/20 bg-white p-4 font-body text-sm text-primary shadow-sm focus:border-primary focus:outline-none"
+                                    placeholder="keyword 1, keyword 2, keyword 3"
+                                />
+                            </div>
                         </div>
 
                         <div className="space-y-2">

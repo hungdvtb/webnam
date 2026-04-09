@@ -95,6 +95,23 @@ class MediaService
         );
     }
 
+    public function storeGeneratedAsset(
+        string $contents,
+        string $originalName,
+        ?string $mimeType = null,
+        array $options = []
+    ): MediaAsset {
+        $extension = pathinfo($originalName, PATHINFO_EXTENSION);
+
+        return $this->storeBinaryAsset(
+            $contents,
+            $originalName,
+            $extension,
+            $mimeType,
+            $options
+        );
+    }
+
     public function buildAssetPayload(?MediaAsset $asset, ?string $legacyUrl = null): ?array
     {
         if (!$asset) {

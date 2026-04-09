@@ -19,6 +19,9 @@ class Post extends Model
         'seo_keyword',
         'content',
         'excerpt',
+        'meta_title',
+        'meta_description',
+        'meta_keywords',
         'featured_image',
         'featured_media_asset_id',
         'is_system',
@@ -61,6 +64,9 @@ class Post extends Model
                 $post->title,
                 $post->slug,
                 $post->excerpt,
+                $post->meta_title,
+                $post->meta_description,
+                $post->meta_keywords,
                 $post->content
             );
         });
@@ -114,6 +120,9 @@ class Post extends Model
         ?string $title,
         ?string $slug,
         ?string $excerpt,
+        ?string $metaTitle,
+        ?string $metaDescription,
+        ?string $metaKeywords,
         ?string $content
     ): string {
         $plainContent = html_entity_decode(strip_tags((string) $content), ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -122,6 +131,9 @@ class Post extends Model
             $title,
             $slug,
             $excerpt,
+            $metaTitle,
+            $metaDescription,
+            $metaKeywords,
             $plainContent,
         ])
             ->map(fn ($segment) => trim((string) $segment))

@@ -406,6 +406,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/blog/seo-keywords/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroySeoKeyword']);
         Route::post('/blog/bulk-seo-keyword', [\App\Http\Controllers\Api\BlogController::class , 'bulkSeoKeyword']);
         Route::post('/blog/bulk-category', [\App\Http\Controllers\Api\BlogController::class , 'bulkCategory']);
+        Route::get('/blog/ai-bulk/jobs', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'index']);
+        Route::post('/blog/ai-bulk/jobs', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'store']);
+        Route::get('/blog/ai-bulk/jobs/{jobId}', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'show'])->whereNumber('jobId');
+        Route::post('/blog/ai-bulk/jobs/{jobId}/run', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'run'])->whereNumber('jobId');
         Route::post('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'storeCategory']);
         Route::put('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'updateCategory']);
         Route::delete('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroyCategory']);

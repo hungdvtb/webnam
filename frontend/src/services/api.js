@@ -610,6 +610,10 @@ export const blogApi = {
         responseType: 'blob',
     }),
     importExcel: (formData) => api.post('/blog/import-excel', formData, multipartConfig(formData)),
+    listAiBulkJobs: (params) => api.get('/blog/ai-bulk/jobs', { params }),
+    createAiBulkJob: (formData) => api.post('/blog/ai-bulk/jobs', formData, multipartConfig(formData)),
+    getAiBulkJob: (jobId) => api.get(`/blog/ai-bulk/jobs/${jobId}`),
+    runAiBulkJob: (jobId) => api.post(`/blog/ai-bulk/jobs/${jobId}/run`),
 };
 
 export const invoiceApi = {

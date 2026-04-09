@@ -98,6 +98,33 @@ class OrderController extends Controller
         return "LOWER({$column})";
     }
 
+    private function compactSearchExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$column}), '[^a-zA-Z0-9]', '', 'g'))";
+        }
+
+        $expression = $column;
+        foreach (['-', '_', ' ', '/', '.', '#', ',', ';', ':', '(', ')'] as $character) {
+            $expression = "REPLACE({$expression}, '{$character}', '')";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    private function normalizedWordsExpression(string $column): string
+    {
+        $column = "COALESCE({$column}, '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$column}), '[^a-zA-Z0-9]+', ' ', 'g'))";
+        }
+
+        return "LOWER({$column})";
+    }
+
     private function escapeLike(string $value): string
     {
         return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
@@ -105,9 +132,24 @@ class OrderController extends Controller
 
     private function normalizeSearchText(string $value): string
     {
-        return (string) Str::of($value)
+        return (string) Str::of(Str::ascii($value))
             ->lower()
+            ->replaceMatches('/\s+/u', ' ')
             ->trim();
+    }
+
+    private function compactSearchText(string $value): string
+    {
+        return (string) preg_replace('/[^a-z0-9]+/', '', $this->normalizeSearchText($value));
+    }
+
+    private function extractWordSearchTokens(string $value): array
+    {
+        return collect(preg_split('/\s+/u', $this->normalizeSearchText($value)) ?: [])
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function containsLike(string $value): ?string
@@ -137,6 +179,160 @@ class OrderController extends Controller
         $expression = $this->loweredSearchExpression($column);
         $method = $or ? 'orWhereRaw' : 'whereRaw';
         $query->{$method}("{$expression} LIKE ? ESCAPE '\\'", [$like]);
+    }
+
+    private function orderNameSimilarityThreshold(string $normalizedTerm, int $tokenCount): float
+    {
+        $termLength = strlen($normalizedTerm);
+
+        if ($termLength >= 18 || $tokenCount >= 3) {
+            return 0.28;
+        }
+
+        if ($termLength >= 10 || $tokenCount === 2) {
+            return 0.34;
+        }
+
+        if ($termLength >= 6) {
+            return 0.42;
+        }
+
+        return 0.55;
+    }
+
+    private function candidateOrderNameAttributeIds(int $accountId): array
+    {
+        static $cache = [];
+
+        if ($accountId <= 0) {
+            return [];
+        }
+
+        if (array_key_exists($accountId, $cache)) {
+            return $cache[$accountId];
+        }
+
+        $needleList = [
+            'customer',
+            'customer_name',
+            'contact_name',
+            'full name',
+            'full_name',
+            'fullname',
+            'nguoi nhan',
+            'nguoi_nhan',
+            'nguoi nhan hang',
+            'nguoi_nhan_hang',
+            'receiver',
+            'receiver_name',
+            'recipient',
+            'recipient_name',
+            'shipping_name',
+            'ten khach',
+            'ten khach hang',
+            'ten nguoi nhan',
+        ];
+
+        $cache[$accountId] = Attribute::query()
+            ->where('account_id', $accountId)
+            ->where('entity_type', 'order')
+            ->get(['id', 'code', 'name'])
+            ->filter(function (Attribute $attribute) use ($needleList) {
+                $haystack = $this->normalizeSearchText(
+                    trim((string) ($attribute->code ?? '') . ' ' . (string) ($attribute->name ?? ''))
+                );
+
+                return $haystack !== '' && Str::contains($haystack, $needleList);
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        return $cache[$accountId];
+    }
+
+    private function applyOrderNameFieldConstraint($query, string $column, string $term): void
+    {
+        $normalizedTerm = $this->normalizeSearchText($term);
+        if ($normalizedTerm === '') {
+            return;
+        }
+
+        $wordExpr = $this->normalizedWordsExpression($column);
+        $compactExpr = $this->compactSearchExpression($column);
+        $phraseLike = '%' . $this->escapeLike($normalizedTerm) . '%';
+        $compactTerm = $this->compactSearchText($term);
+        $compactLike = $compactTerm !== '' ? '%' . $this->escapeLike($compactTerm) . '%' : null;
+        $tokenLikes = collect($this->extractWordSearchTokens($term))
+            ->map(fn (string $token) => '%' . $this->escapeLike($token) . '%')
+            ->values()
+            ->all();
+        $similarityThreshold = $this->orderNameSimilarityThreshold($normalizedTerm, count($tokenLikes));
+
+        $query->where(function ($fieldQuery) use (
+            $wordExpr,
+            $compactExpr,
+            $normalizedTerm,
+            $phraseLike,
+            $compactTerm,
+            $compactLike,
+            $tokenLikes,
+            $similarityThreshold
+        ) {
+            $fieldQuery->whereRaw("{$wordExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
+
+            if ($compactLike !== null) {
+                $fieldQuery->orWhereRaw("{$compactExpr} LIKE ? ESCAPE '\\'", [$compactLike]);
+            }
+
+            if (!empty($tokenLikes)) {
+                $fieldQuery->orWhere(function ($tokenQuery) use ($wordExpr, $tokenLikes) {
+                    foreach ($tokenLikes as $tokenLike) {
+                        $tokenQuery->whereRaw("{$wordExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                    }
+                });
+            }
+
+            if ($this->usesPostgresSearchDriver() && strlen($normalizedTerm) >= 4) {
+                $fieldQuery->orWhereRaw(
+                    "GREATEST(similarity({$wordExpr}, ?), word_similarity({$wordExpr}, ?)) >= ?",
+                    [$normalizedTerm, $normalizedTerm, $similarityThreshold]
+                );
+
+                if ($compactTerm !== '' && strlen($compactTerm) >= 4) {
+                    $fieldQuery->orWhereRaw(
+                        "similarity({$compactExpr}, ?) >= ?",
+                        [$compactTerm, min(0.72, $similarityThreshold + 0.08)]
+                    );
+                }
+            }
+        });
+    }
+
+    private function applyOrderNameSearch($query, string $term, int $accountId, bool $or = false): void
+    {
+        if ($this->normalizeSearchText($term) === '') {
+            return;
+        }
+
+        $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
+        $method = $or ? 'orWhere' : 'where';
+
+        $query->{$method}(function ($nameQuery) use ($term, $nameAttributeIds) {
+            $this->applyOrderNameFieldConstraint($nameQuery, 'customer_name', $term);
+
+            $nameQuery->orWhereHas('shipments', function ($shipmentQuery) use ($term) {
+                $this->applyOrderNameFieldConstraint($shipmentQuery, 'customer_name', $term);
+            });
+
+            if (!empty($nameAttributeIds)) {
+                $nameQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($term, $nameAttributeIds) {
+                    $attributeValueQuery->whereIn('attribute_id', $nameAttributeIds);
+                    $this->applyOrderNameFieldConstraint($attributeValueQuery, 'value', $term);
+                });
+            }
+        });
     }
 
     private function extractSearchTerms(Request $request): array
@@ -169,7 +365,7 @@ class OrderController extends Controller
             ->all();
     }
 
-    private function applyOrderSearchTerm($query, string $term): void
+    private function applyOrderSearchTerm($query, string $term, int $accountId): void
     {
         $containsLike = $this->containsLike($term);
 
@@ -178,7 +374,7 @@ class OrderController extends Controller
         }
 
         $this->applyInsensitiveLike($query, 'order_number', $containsLike);
-        $this->applyInsensitiveLike($query, 'customer_name', $containsLike, true);
+        $this->applyOrderNameSearch($query, $term, $accountId, true);
         $this->applyInsensitiveLike($query, 'customer_phone', $containsLike, true);
         $this->applyInsensitiveLike($query, 'shipping_address', $containsLike, true);
         $this->applyInsensitiveLike($query, 'notes', $containsLike, true);
@@ -195,11 +391,38 @@ class OrderController extends Controller
                 $this->applyInsensitiveLike($productQuery, 'name', $containsLike, true);
             })
             ->orWhereHas('shipments', function ($shipmentQuery) use ($containsLike) {
+                $this->applyInsensitiveLike($shipmentQuery, 'customer_name', $containsLike);
                 $this->applyInsensitiveLike($shipmentQuery, 'shipment_number', $containsLike);
                 $this->applyInsensitiveLike($shipmentQuery, 'tracking_number', $containsLike, true);
                 $this->applyInsensitiveLike($shipmentQuery, 'carrier_tracking_code', $containsLike, true);
                 $this->applyInsensitiveLike($shipmentQuery, 'external_order_number', $containsLike, true);
             });
+    }
+
+    private function resolveOrderDisplayCustomerName(Order $order, array $nameAttributeIds = []): string
+    {
+        $customerName = trim((string) ($order->customer_name ?? ''));
+        if ($customerName !== '') {
+            return $customerName;
+        }
+
+        $shipmentCustomerName = trim((string) ($order->activeShipment?->customer_name ?? ''));
+        if ($shipmentCustomerName !== '') {
+            return $shipmentCustomerName;
+        }
+
+        if (!empty($nameAttributeIds) && $order->relationLoaded('attributeValues')) {
+            foreach ($order->attributeValues as $attributeValue) {
+                if (
+                    in_array((int) ($attributeValue->attribute_id ?? 0), $nameAttributeIds, true)
+                    && trim((string) ($attributeValue->value ?? '')) !== ''
+                ) {
+                    return trim((string) $attributeValue->value);
+                }
+            }
+        }
+
+        return '';
     }
 
     private function freshShippingState(): array
@@ -1386,6 +1609,7 @@ class OrderController extends Controller
 
     private function applyOrderListFilters($query, Request $request): void
     {
+        $accountId = $this->resolveAccountId($request);
         $searchTerms = $this->extractSearchTerms($request);
 
         if ($request->input('trashed') == '1') {
@@ -1433,18 +1657,18 @@ class OrderController extends Controller
         }
 
         $query
-            ->when(!empty($searchTerms), function ($q) use ($searchTerms) {
-                $q->where(function ($searchQuery) use ($searchTerms) {
+            ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId) {
+                $q->where(function ($searchQuery) use ($searchTerms, $accountId) {
                     foreach ($searchTerms as $index => $term) {
                         $method = $index === 0 ? 'where' : 'orWhere';
-                        $searchQuery->{$method}(function ($termQuery) use ($term) {
-                            $this->applyOrderSearchTerm($termQuery, $term);
+                        $searchQuery->{$method}(function ($termQuery) use ($term, $accountId) {
+                            $this->applyOrderSearchTerm($termQuery, $term, $accountId);
                         });
                     }
                 });
             })
-            ->when($request->filled('customer_name'), function ($q) use ($request) {
-                $this->applyInsensitiveLike($q, 'customer_name', $this->containsLike((string) $request->input('customer_name')));
+            ->when($request->filled('customer_name'), function ($q) use ($request, $accountId) {
+                $this->applyOrderNameSearch($q, (string) $request->input('customer_name'), $accountId);
             })
             ->when($request->filled('order_number'), function ($q) use ($request) {
                 $this->applyInsensitiveLike($q, 'order_number', $this->containsLike((string) $request->input('order_number')));
@@ -1527,10 +1751,14 @@ class OrderController extends Controller
     {
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildOrderMeta($orders, $accountId);
         $inventorySlipSummaryMap = $this->orderInventorySlipService->buildListSummaryMap($orders);
+        $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
 
-        return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap) {
+        return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds) {
+            $payload = $order->toArray();
+            $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
+
             return array_merge(
-                $order->toArray(),
+                $payload,
                 $this->repeatPhoneMetaForOrder($repeatMetaMap, (int) $order->id),
                 [
                     'inventory_slip_summary' => $inventorySlipSummaryMap[(int) $order->id] ?? null,

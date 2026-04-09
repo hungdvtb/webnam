@@ -9,6 +9,7 @@ import config from '@/lib/config';
 import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api';
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import { resolveCartItemImageUrl } from '@/lib/media';
+import { buildBundleComponentDetailHref } from '@/lib/productLinks';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import styles from './cart.module.css';
 import ThankYouView from '@/components/common/ThankYouView';
@@ -97,6 +98,8 @@ const CHECKOUT_PHONE_REGEX = /^(0)[0-9]{9}$/;
 const CHECKOUT_DRAFT_DELAY_MS = 10 * 60 * 1000;
 const CHECKOUT_DRAFT_UPDATE_DELAY_MS = 2000;
 const CHECKOUT_DRAFT_STORAGE_KEY = `webgom_checkout_draft_${config.siteCode}`;
+const CART_BUNDLE_RETURN_STATE_KEY = '__webgom_bundle_component_return_state';
+const CART_BUNDLE_RETURN_STATE_TTL_MS = 30 * 60 * 1000;
 const THANK_YOU_SELFTEST_DATA = {
   orderNumber: 'SELFTEST123',
   createdAt: '2026-04-07T10:15:00.000Z',
@@ -192,6 +195,90 @@ const clearStoredCheckoutDraft = () => {
   }
 
   window.sessionStorage.removeItem(CHECKOUT_DRAFT_STORAGE_KEY);
+};
+
+const normalizeCartScrollPosition = (value) => {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : 0;
+};
+
+const normalizeCartViewportOffset = (value) => {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+};
+
+const readCartBundleReturnState = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const historyState = window.history.state;
+  const savedState = historyState?.[CART_BUNDLE_RETURN_STATE_KEY];
+
+  if (!savedState || typeof savedState !== 'object') {
+    return null;
+  }
+
+  const updatedAt = Number(savedState.updatedAt || 0);
+
+  if (updatedAt > 0 && (Date.now() - updatedAt) > CART_BUNDLE_RETURN_STATE_TTL_MS) {
+    return null;
+  }
+
+  return {
+    scrollY: normalizeCartScrollPosition(savedState.scrollY),
+    anchorKey: String(savedState.anchorKey || '').trim(),
+    anchorViewportTop: normalizeCartViewportOffset(savedState.anchorViewportTop),
+  };
+};
+
+const writeCartBundleReturnState = (nextState = {}) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const currentState = window.history.state && typeof window.history.state === 'object'
+    ? window.history.state
+    : {};
+
+  window.history.replaceState(
+    {
+      ...currentState,
+      [CART_BUNDLE_RETURN_STATE_KEY]: {
+        scrollY: normalizeCartScrollPosition(nextState.scrollY),
+        anchorKey: String(nextState.anchorKey || '').trim(),
+        anchorViewportTop: normalizeCartViewportOffset(nextState.anchorViewportTop),
+        updatedAt: Number(nextState.updatedAt || Date.now()),
+      },
+    },
+    '',
+    window.location.href,
+  );
+};
+
+const clearCartBundleReturnState = () => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const currentState = window.history.state;
+
+  if (!currentState || typeof currentState !== 'object' || !(CART_BUNDLE_RETURN_STATE_KEY in currentState)) {
+    return;
+  }
+
+  const { [CART_BUNDLE_RETURN_STATE_KEY]: _ignored, ...nextState } = currentState;
+  window.history.replaceState(nextState, '', window.location.href);
+};
+
+const findCartBundleAnchorNode = (anchorKey = '') => {
+  if (typeof document === 'undefined' || !anchorKey) {
+    return null;
+  }
+
+  return Array.from(document.querySelectorAll('[data-bundle-component-anchor]')).find(
+    (node) => node.getAttribute('data-bundle-component-anchor') === anchorKey
+  ) || null;
 };
 
 export default function CartPage() {
@@ -403,6 +490,38 @@ export default function CartPage() {
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
 
   const getImageUrl = (item) => resolveCartItemImageUrl(item, 'medium', '');
+  const getBundleComponentImageUrl = (item) => resolveCartItemImageUrl(item, 'medium', '');
+  const getBundleComponentAnchorKey = (cartKey, itemUid) => `${cartKey}::${itemUid}`;
+
+  const rememberBundleComponentReturnState = useEffectEvent((anchorKey = '') => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const anchorNode = findCartBundleAnchorNode(anchorKey);
+    writeCartBundleReturnState({
+      scrollY: window.scrollY,
+      anchorKey,
+      anchorViewportTop: anchorNode ? anchorNode.getBoundingClientRect().top : null,
+      updatedAt: Date.now(),
+    });
+  });
+
+  const handleBundleComponentLinkClick = useEffectEvent((event, anchorKey = '') => {
+    if (event?.defaultPrevented) {
+      return;
+    }
+
+    if (typeof event?.button === 'number' && event.button !== 0) {
+      return;
+    }
+
+    if (event?.metaKey || event?.ctrlKey || event?.shiftKey || event?.altKey) {
+      return;
+    }
+
+    rememberBundleComponentReturnState(anchorKey);
+  });
 
   const bundleStatesByKey = useMemo(() => {
     const bundleStateMap = new Map();
@@ -415,6 +534,57 @@ export default function CartPage() {
 
     return bundleStateMap;
   }, [cartItems]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || cartItems.length === 0) {
+      return undefined;
+    }
+
+    const savedReturnState = readCartBundleReturnState();
+
+    if (!savedReturnState) {
+      return undefined;
+    }
+
+    let isCancelled = false;
+    let frameId = 0;
+    const timeoutIds = [];
+
+    const restoreCartScrollPosition = () => {
+      if (isCancelled) {
+        return;
+      }
+
+      const anchorNode = findCartBundleAnchorNode(savedReturnState.anchorKey);
+      const anchorViewportTop = Number(savedReturnState.anchorViewportTop);
+      const targetTop = anchorNode && Number.isFinite(anchorViewportTop)
+        ? (window.scrollY + anchorNode.getBoundingClientRect().top - anchorViewportTop)
+        : savedReturnState.scrollY;
+
+      window.scrollTo({
+        top: Math.max(Math.round(targetTop), 0),
+        behavior: 'auto',
+      });
+    };
+
+    frameId = window.requestAnimationFrame(() => {
+      restoreCartScrollPosition();
+      timeoutIds.push(window.setTimeout(restoreCartScrollPosition, 150));
+      timeoutIds.push(window.setTimeout(restoreCartScrollPosition, 360));
+    });
+
+    clearCartBundleReturnState();
+
+    return () => {
+      isCancelled = true;
+
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    };
+  }, [cartItems.length]);
 
   const getBundleDiscountPercent = (bundleState) => (
     Math.round((bundleState?.comboDiscountRate || BUNDLE_DISCOUNT_RATE) * 100)
@@ -1488,22 +1658,86 @@ export default function CartPage() {
                           <div className={styles.mobileBundleList}>
                             {item.groupedItems.map((gi) => {
                               const giUid = gi.uid ?? gi.id;
+                              const bundleHref = buildBundleComponentDetailHref(gi);
+                              const bundleImageSrc = getBundleComponentImageUrl(gi);
+                              const bundleItemName = gi.name || `Sản phẩm #${gi.id}`;
+                              const bundleAnchorKey = getBundleComponentAnchorKey(item.cartKey, giUid);
                               return (
-                                <div key={`${item.cartKey}-bundle-${giUid}`} className={styles.mobileBundleItem}>
+                                <div
+                                  key={`${item.cartKey}-bundle-${giUid}`}
+                                  className={styles.mobileBundleItem}
+                                  data-bundle-component-anchor={bundleAnchorKey}
+                                >
                                   <div className={styles.mobileBundleCopy}>
-                                    <span className={styles.mobileBundleName}>
-                                      {gi.name || `Sản phẩm #${gi.id}`}
-                                    </span>
+                                    {bundleHref ? (
+                                      <Link
+                                        href={bundleHref}
+                                        className={styles.mobileBundleNameLink}
+                                        onClick={(event) => handleBundleComponentLinkClick(event, bundleAnchorKey)}
+                                      >
+                                        <span className={styles.mobileBundleName}>
+                                          {bundleItemName}
+                                        </span>
+                                      </Link>
+                                    ) : (
+                                      <span className={styles.mobileBundleName}>
+                                        {bundleItemName}
+                                      </span>
+                                    )}
                                     <span className={styles.mobileBundlePrice}>
                                       {formatPrice(parseFloat(gi.price || 0))}
                                     </span>
                                   </div>
 
                                   <div className={styles.mobileBundleActions}>
-                                    <div className={styles.mobileSubQtyCtrl}>
-                                      <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
-                                      <span>{gi.qty || 1}</span>
-                                      <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+                                    <div className={styles.mobileBundleActionStart}>
+                                      {bundleHref ? (
+                                        <Link
+                                          href={bundleHref}
+                                          className={styles.bundleThumbLink}
+                                          onClick={(event) => handleBundleComponentLinkClick(event, bundleAnchorKey)}
+                                          aria-label={`Xem sản phẩm ${bundleItemName}`}
+                                        >
+                                          <span className={`${styles.bundleThumb} ${styles.mobileBundleThumb}`}>
+                                            {bundleImageSrc ? (
+                                              <Image
+                                                src={bundleImageSrc}
+                                                alt={bundleItemName}
+                                                fill
+                                                sizes="32px"
+                                                unoptimized
+                                                style={{ objectFit: 'cover' }}
+                                              />
+                                            ) : (
+                                              <span className={styles.bundleThumbPlaceholder} aria-hidden="true">
+                                                <span className="material-symbols-outlined">image</span>
+                                              </span>
+                                            )}
+                                          </span>
+                                        </Link>
+                                      ) : (
+                                        <span className={`${styles.bundleThumb} ${styles.mobileBundleThumb}`} aria-hidden="true">
+                                          {bundleImageSrc ? (
+                                            <Image
+                                              src={bundleImageSrc}
+                                              alt={bundleItemName}
+                                              fill
+                                              sizes="32px"
+                                              unoptimized
+                                              style={{ objectFit: 'cover' }}
+                                            />
+                                          ) : (
+                                            <span className={styles.bundleThumbPlaceholder}>
+                                              <span className="material-symbols-outlined">image</span>
+                                            </span>
+                                          )}
+                                        </span>
+                                      )}
+                                      <div className={styles.mobileSubQtyCtrl}>
+                                        <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
+                                        <span>{gi.qty || 1}</span>
+                                        <button type="button" onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+                                      </div>
                                     </div>
 
                                     <button
@@ -1626,30 +1860,92 @@ export default function CartPage() {
                           <div className={styles.groupChildren}>
                             {item.groupedItems.map((gi) => {
                               const giUid = gi.uid ?? gi.id;
+                              const bundleHref = buildBundleComponentDetailHref(gi);
+                              const bundleImageSrc = getBundleComponentImageUrl(gi);
+                              const bundleItemName = gi.name || `Sản phẩm #${gi.id}`;
+                              const bundleAnchorKey = getBundleComponentAnchorKey(item.cartKey, giUid);
                               return (
-                                <div key={giUid} className={styles.childItem}>
-                                  <div className={styles.childIcon}>
-                                    <span className="material-symbols-outlined">check_circle</span>
+                                <div
+                                  key={giUid}
+                                  className={styles.childItem}
+                                  data-bundle-component-anchor={bundleAnchorKey}
+                                >
+                                  <div className={styles.childCopy}>
+                                    {bundleHref ? (
+                                      <Link
+                                        href={bundleHref}
+                                        className={styles.childNameLink}
+                                        onClick={(event) => handleBundleComponentLinkClick(event, bundleAnchorKey)}
+                                      >
+                                        <span className={styles.childName}>
+                                          {bundleItemName}
+                                        </span>
+                                      </Link>
+                                    ) : (
+                                      <span className={styles.childName}>
+                                        {bundleItemName}
+                                      </span>
+                                    )}
+                                    <span className={styles.childPrice}>
+                                      {formatPrice(parseFloat(gi.price || 0))}
+                                    </span>
                                   </div>
-                                  <span className={styles.childName} style={{ flex: 1 }}>
-                                    {gi.name || `Sản phẩm #${gi.id}`}
-                                  </span>
-                                  {/* Sub-item unit price */}
-                                  <span className={styles.childPrice}>
-                                    {formatPrice(parseFloat(gi.price || 0))}
-                                  </span>
-                                  {/* Sub-item qty controls */}
-                                  <div className={styles.subQtyCtrl}>
-                                    <button onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
-                                    <span>{gi.qty || 1}</span>
-                                    <button onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+
+                                  <div className={styles.childControls}>
+                                    {bundleHref ? (
+                                      <Link
+                                        href={bundleHref}
+                                        className={styles.bundleThumbLink}
+                                        onClick={(event) => handleBundleComponentLinkClick(event, bundleAnchorKey)}
+                                        aria-label={`Xem sản phẩm ${bundleItemName}`}
+                                      >
+                                        <span className={styles.bundleThumb}>
+                                          {bundleImageSrc ? (
+                                            <Image
+                                              src={bundleImageSrc}
+                                              alt={bundleItemName}
+                                              fill
+                                              sizes="32px"
+                                              unoptimized
+                                              style={{ objectFit: 'cover' }}
+                                            />
+                                          ) : (
+                                            <span className={styles.bundleThumbPlaceholder} aria-hidden="true">
+                                              <span className="material-symbols-outlined">image</span>
+                                            </span>
+                                          )}
+                                        </span>
+                                      </Link>
+                                    ) : (
+                                      <span className={styles.bundleThumb} aria-hidden="true">
+                                        {bundleImageSrc ? (
+                                          <Image
+                                            src={bundleImageSrc}
+                                            alt={bundleItemName}
+                                            fill
+                                            sizes="32px"
+                                            unoptimized
+                                            style={{ objectFit: 'cover' }}
+                                          />
+                                        ) : (
+                                          <span className={styles.bundleThumbPlaceholder}>
+                                            <span className="material-symbols-outlined">image</span>
+                                          </span>
+                                        )}
+                                      </span>
+                                    )}
+                                    <div className={styles.subQtyCtrl}>
+                                      <button onClick={() => handleSubItemQty(item.cartKey, giUid, -1)}>−</button>
+                                      <span>{gi.qty || 1}</span>
+                                      <button onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
+                                    </div>
+                                    <button
+                                      className={styles.childRemove}
+                                      onClick={() => handleRemoveSubItem(item.cartKey, giUid)}
+                                    >
+                                      Xóa
+                                    </button>
                                   </div>
-                                  <button
-                                    className={styles.childRemove}
-                                    onClick={() => handleRemoveSubItem(item.cartKey, giUid)}
-                                  >
-                                    Xóa
-                                  </button>
                                 </div>
                               );
                             })}

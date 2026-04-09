@@ -4,8 +4,8 @@ use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpKernel\Exception\PostTooLargeException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -24,6 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthenticationException $exception, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json([
+                    'error_code' => 'UNAUTHENTICATED',
                     'message' => 'Unauthenticated.',
                 ], 401);
             }
@@ -34,8 +35,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (PostTooLargeException $exception, Request $request) {
             if ($request->is('api/*') || $request->expectsJson()) {
                 return response()->json([
-                    'error' => 'File upload is too large for the server.',
-                    'detail' => 'Please increase upload_max_filesize and post_max_size on the API server, or upload a smaller bundle.',
+                    'error_code' => 'FILE_TOO_LARGE',
+                    'message' => 'File upload vuot qua gioi han dung luong cua may chu.',
+                    'detail' => 'Tang upload_max_filesize, post_max_size va client_max_body_size tren deploy, hoac giam dung luong anh upload.',
                 ], 413);
             }
 

@@ -12,6 +12,11 @@ const BANNER_SLOT_COUNT = 3;
 const FALLBACK_CATEGORY_TEXT = "Danh m\u1ee5c g\u1ed1m s\u1ee9";
 const FALLBACK_PRODUCT_ALT = "S\u1ea3n ph\u1ea9m g\u1ed1m s\u1ee9";
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
+const HERO_PRIMARY_CTA_LABEL = "KH\u00c1M PH\u00c1 NGAY";
+const HERO_SECONDARY_CTA_LABEL = "Kh\u00e1m ph\u00e1 ngay";
+const VIEW_ALL_LABEL = "Xem t\u1ea5t c\u1ea3";
+const NEW_BADGE_LABEL = "M\u1edbi";
+const EMPTY_CATEGORY_MESSAGE = "Danh m\u1ee5c n\u00e0y hi\u1ec7n ch\u01b0a c\u00f3 s\u1ea3n ph\u1ea9m \u0111\u1ec3 hi\u1ec3n th\u1ecb.";
 
 function shuffleItems(items) {
   const nextItems = [...items];
@@ -137,7 +142,7 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
               <p className={styles.heroSubtitle}>{heroBanner.eyebrow}</p>
               <h2 className={`${styles.heroTitle} ${styles.dynamicHeroTitle}`}>{heroBanner.name}</h2>
               <p className={styles.heroDescription}>{heroBanner.heroDescription}</p>
-              <span className={`btn-primary ${styles.heroCta}`}>KH\u00c1M PH\u00c1 NGAY</span>
+              <span className={`btn-primary ${styles.heroCta}`}>{HERO_PRIMARY_CTA_LABEL}</span>
             </div>
           </div>
         </Link>
@@ -154,7 +159,7 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
             <div className={styles.bannerText}>
               <p>{banner.eyebrow}</p>
               <h3>{banner.name}</h3>
-              <span className={styles.sideBannerCta}>Kh\u00e1m ph\u00e1 ngay</span>
+              <span className={styles.sideBannerCta}>{HERO_SECONDARY_CTA_LABEL}</span>
             </div>
           </Link>
         ))}
@@ -182,7 +187,7 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                   </div>
                 </div>
                 <Link href={section.href} className={styles.viewAll}>
-                  Xem t\u1ea5t c\u1ea3 <span className="material-symbols-outlined">arrow_forward</span>
+                  {VIEW_ALL_LABEL} <span className="material-symbols-outlined">arrow_forward</span>
                 </Link>
               </div>
 
@@ -211,7 +216,7 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                             <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>
                           )}
                           {!product.isFeatured && product.isNew && (
-                            <span className={`${styles.badge} ${styles.badgeSale}`}>M\u1edbi</span>
+                            <span className={`${styles.badge} ${styles.badgeSale}`}>{NEW_BADGE_LABEL}</span>
                           )}
                         </div>
 
@@ -229,7 +234,7 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                 </div>
               ) : (
                 <div className={styles.emptyCategoryState}>
-                  Danh m\u1ee5c n\u00e0y hi\u1ec7n ch\u01b0a c\u00f3 s\u1ea3n ph\u1ea9m \u0111\u1ec3 hi\u1ec3n th\u1ecb.
+                  {EMPTY_CATEGORY_MESSAGE}
                 </div>
               )}
             </article>

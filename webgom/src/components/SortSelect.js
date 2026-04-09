@@ -201,7 +201,7 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
   return (
     <div className={variant === "layout2" ? styles.sortContainer : styles.sortSelect}>
       {variant !== "layout2" && (
-        <span className={styles.sortLabel}>{"S\u1eafp x\u1ebfp:"}</span>
+        <span className={styles.sortLabel}>Sắp xếp:</span>
       )}
       <select
         defaultValue={currentSort || "popular"}

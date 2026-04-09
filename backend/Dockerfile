@@ -25,6 +25,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
+COPY docker/php/conf.d/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+
 # Expose port 9000 and start php-fpm server
 EXPOSE 9000
 CMD ["php-fpm"]

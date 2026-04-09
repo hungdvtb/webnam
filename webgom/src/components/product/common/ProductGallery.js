@@ -576,7 +576,7 @@ export default function ProductGallery({
         ) : (
           <div className={styles.productMediaPlaceholder}>
             <span className="material-symbols-outlined" aria-hidden="true">image</span>
-            <p>\u0110ang c\u1eadp nh\u1eadt media s\u1ea3n ph\u1ea9m</p>
+            <p>Đang cập nhật media sản phẩm</p>
           </div>
         )}
       </div>
@@ -587,7 +587,7 @@ export default function ProductGallery({
           style={railStyle}
           data-product-gallery-rail="true"
           role="tablist"
-          aria-label="Th\u01b0 vi\u1ec7n media s\u1ea3n ph\u1ea9m"
+          aria-label="Thư viện media sản phẩm"
         >
           {hasVideo ? (
             <button

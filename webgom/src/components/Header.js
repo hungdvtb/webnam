@@ -1054,6 +1054,9 @@ export default function Header({
                   : isOrderConfirmMode
                     ? ["Xác nhận", "đơn hàng"]
                     : getMobileBottomLabelLines(item.shortLabel);
+                const displayedItemLabelLines = isOrderSaveMode
+                  ? ["Lưu ảnh", "đơn hàng"]
+                  : itemLabelLines;
 
                 const content = (
                   <span className="mobile-bottom-item__content">
@@ -1072,15 +1075,15 @@ export default function Header({
                     </span>
                     <span
                       className={`mobile-bottom-item__label-wrap ${
-                        itemLabelLines.length > 1 ? "mobile-bottom-item__label-wrap-multiline" : ""
+                        displayedItemLabelLines.length > 1 ? "mobile-bottom-item__label-wrap-multiline" : ""
                       }`}
                     >
                       <span
                         className={`mobile-bottom-item__label ${
-                          itemLabelLines.length > 1 ? "mobile-bottom-item__label-multiline" : ""
+                          displayedItemLabelLines.length > 1 ? "mobile-bottom-item__label-multiline" : ""
                         }`}
                       >
-                        {itemLabelLines.map((line, index) => (
+                        {displayedItemLabelLines.map((line, index) => (
                           <span
                             key={`${item.id}-label-${index}`}
                             className="mobile-bottom-item__label-line"

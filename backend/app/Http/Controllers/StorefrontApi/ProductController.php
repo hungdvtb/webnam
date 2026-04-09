@@ -6,10 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Category;
 use App\Models\Attribute;
+use App\Models\Post;
 use App\Models\ProductAttributeValue;
+use App\Support\Utf8Sanitizer;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class ProductController extends Controller
@@ -137,6 +140,214 @@ class ProductController extends Controller
                 "{$alias}.bundle_option_title as bundle_option_title",
                 "{$alias}.category_order_key as category_order_key",
             ]);
+    }
+
+    private function mapPostPrimaryImage(?Post $post)
+    {
+        if (!$post) {
+            return null;
+        }
+
+        $featuredMedia = $post->featured_image_media;
+        if (is_array($featuredMedia) && !empty($featuredMedia)) {
+            return $featuredMedia;
+        }
+
+        $featuredImage = trim((string) ($post->featured_image ?? ''));
+        if ($featuredImage === '') {
+            return null;
+        }
+
+        return [
+            'url' => $featuredImage,
+            'path' => $featuredImage,
+            'image_url' => $featuredImage,
+        ];
+    }
+
+    private function extractImageUrl($image): ?string
+    {
+        if (is_array($image)) {
+            $candidate = trim((string) ($image['url'] ?? $image['path'] ?? $image['image_url'] ?? ''));
+            return $candidate !== '' ? $candidate : null;
+        }
+
+        $candidate = trim((string) $image);
+        return $candidate !== '' ? $candidate : null;
+    }
+
+    private function resolveBundleItemVariantFromMap($bundleItem, Collection $variantMap): ?Product
+    {
+        $selectedVariantId = filled(data_get($bundleItem, 'pivot.variant_id'))
+            ? (int) data_get($bundleItem, 'pivot.variant_id')
+            : 0;
+
+        if ($selectedVariantId <= 0) {
+            return null;
+        }
+
+        $selectedVariant = $variantMap->get($selectedVariantId);
+        return $selectedVariant instanceof Product ? $selectedVariant : null;
+    }
+
+    private function resolveBundleItemCurrentUnitPrice($bundleItem, ?Product $selectedVariant): float
+    {
+        $bundlePrice = data_get($bundleItem, 'pivot.price');
+        $selectedVariantId = $selectedVariant?->id ? (int) $selectedVariant->id : 0;
+        $defaultVariantId = filled(data_get($bundleItem, 'pivot.variant_id'))
+            ? (int) data_get($bundleItem, 'pivot.variant_id')
+            : 0;
+
+        if (
+            $selectedVariant instanceof Product
+            && $bundlePrice !== null
+            && is_numeric($bundlePrice)
+            && $selectedVariantId > 0
+            && $defaultVariantId > 0
+            && $selectedVariantId === $defaultVariantId
+        ) {
+            return (float) $bundlePrice;
+        }
+
+        if ($selectedVariant instanceof Product) {
+            $variantPrice = $selectedVariant->current_price ?? $selectedVariant->price;
+
+            if ($variantPrice !== null && is_numeric($variantPrice)) {
+                return (float) $variantPrice;
+            }
+        }
+
+        if ($bundlePrice !== null && is_numeric($bundlePrice)) {
+            return (float) $bundlePrice;
+        }
+
+        $itemPrice = $bundleItem->current_price ?? $bundleItem->price;
+        return $itemPrice !== null && is_numeric($itemPrice) ? (float) $itemPrice : 0.0;
+    }
+
+    private function resolveBundleItemBaseUnitPrice($bundleItem, ?Product $selectedVariant, float $fallback = 0.0): float
+    {
+        if ($selectedVariant instanceof Product && $selectedVariant->price !== null && is_numeric($selectedVariant->price)) {
+            return (float) $selectedVariant->price;
+        }
+
+        if ($bundleItem->price !== null && is_numeric($bundleItem->price)) {
+            return (float) $bundleItem->price;
+        }
+
+        return $fallback;
+    }
+
+    private function resolveBundleOptionPrimaryImage(?Post $optionPost, ?Product $selectedVariant, Product $bundleItem)
+    {
+        $optionImage = $this->mapPostPrimaryImage($optionPost);
+        if ($optionImage) {
+            return $optionImage;
+        }
+
+        if ($selectedVariant instanceof Product && $selectedVariant->primary_image) {
+            return $selectedVariant->primary_image;
+        }
+
+        if ($bundleItem->primary_image) {
+            return $bundleItem->primary_image;
+        }
+
+        $fallbackMainImage = $selectedVariant instanceof Product ? $selectedVariant->main_image : null;
+        $fallbackMainImage = $fallbackMainImage ?: $bundleItem->main_image;
+
+        if (!$fallbackMainImage) {
+            return null;
+        }
+
+        return [
+            'url' => $fallbackMainImage,
+            'path' => $fallbackMainImage,
+            'image_url' => $fallbackMainImage,
+        ];
+    }
+
+    private function buildBundleOptionCatalog(Collection $bundleProducts, Collection $variantMap, Collection $optionPosts): array
+    {
+        return $bundleProducts->mapWithKeys(function (Product $product) use ($variantMap, $optionPosts) {
+            return [
+                (int) $product->id => $this->buildBundleOptionCatalogForItems(
+                    $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
+                    $variantMap,
+                    $optionPosts,
+                ),
+            ];
+        })->all();
+    }
+
+    private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts): array
+    {
+        $catalog = [];
+
+        foreach ($bundleItems as $bundleItem) {
+            if (!$bundleItem instanceof Product) {
+                continue;
+            }
+
+            $optionPostId = filled($bundleItem->pivot?->option_post_id ?? null)
+                ? (int) $bundleItem->pivot->option_post_id
+                : null;
+            $optionTitle = Str::squish((string) ($bundleItem->pivot?->option_title ?? '')) ?: 'Mặc định';
+            $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+            $optionPost = $optionPostId ? $optionPosts->get($optionPostId) : null;
+            $selectedVariant = $this->resolveBundleItemVariantFromMap($bundleItem, $variantMap);
+            $quantity = max(1, (int) ($bundleItem->pivot?->quantity ?? 1));
+            $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
+            $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
+
+            if (!isset($catalog[$optionKey])) {
+                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost, $selectedVariant, $bundleItem);
+                $displayName = $optionTitle !== ''
+                    ? $optionTitle
+                    : (Str::squish((string) ($optionPost?->title ?? '')) ?: $bundleItem->name);
+
+                $catalog[$optionKey] = [
+                    'key' => $optionKey,
+                    'name' => $displayName,
+                    'title' => $optionTitle,
+                    'bundle_option_title' => $optionTitle,
+                    'bundle_option_post_id' => $optionPostId,
+                    'bundle_option_post_title' => Str::squish((string) ($optionPost?->title ?? '')) ?: null,
+                    'bundle_option_post_slug' => Str::squish((string) ($optionPost?->slug ?? '')) ?: null,
+                    'primary_image' => $displayImage,
+                    'main_image' => $this->extractImageUrl($displayImage),
+                    'price' => 0.0,
+                    'current_price' => 0.0,
+                    'special_price' => null,
+                    'items_count' => 0,
+                ];
+            }
+
+            if (!$catalog[$optionKey]['primary_image']) {
+                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost, $selectedVariant, $bundleItem);
+                $catalog[$optionKey]['primary_image'] = $displayImage;
+                $catalog[$optionKey]['main_image'] = $this->extractImageUrl($displayImage);
+            }
+
+            $catalog[$optionKey]['current_price'] += $currentUnitPrice * $quantity;
+            $catalog[$optionKey]['price'] += $baseUnitPrice * $quantity;
+            $catalog[$optionKey]['items_count'] += $quantity;
+        }
+
+        foreach ($catalog as $optionKey => $optionMeta) {
+            $currentPrice = round((float) ($optionMeta['current_price'] ?? 0), 2);
+            $basePrice = round((float) ($optionMeta['price'] ?? 0), 2);
+
+            if ($basePrice <= 0 || $basePrice < $currentPrice) {
+                $basePrice = $currentPrice;
+            }
+
+            $catalog[$optionKey]['current_price'] = $currentPrice;
+            $catalog[$optionKey]['price'] = $basePrice;
+            $catalog[$optionKey]['special_price'] = $basePrice > $currentPrice ? $currentPrice : null;
+        }
+
+        return $catalog;
     }
 
     public function index(Request $request)
@@ -275,6 +486,67 @@ class ProductController extends Controller
             return $product;
         });
 
+        $bundleOptionProductIds = $products->getCollection()
+            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option')
+            ->pluck('id')
+            ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        $bundleOptionCatalog = [];
+
+        if ($bundleOptionProductIds->isNotEmpty()) {
+            $bundleProducts = Product::query()
+                ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                ->whereIn('id', $bundleOptionProductIds->all())
+                ->with([
+                    'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                    'bundleItems' => fn ($query) => $query
+                        ->where('status', true)
+                        ->with([
+                            'images' => fn ($imageQuery) => $imageQuery->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                        ]),
+                ])
+                ->get();
+
+            $variantIds = $bundleProducts
+                ->flatMap(fn (Product $product) => $product->bundleItems->pluck('pivot.variant_id'))
+                ->filter(fn ($variantId) => filled($variantId))
+                ->map(fn ($variantId) => (int) $variantId)
+                ->unique()
+                ->values();
+
+            $variantMap = $variantIds->isNotEmpty()
+                ? Product::query()
+                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                    ->whereIn('id', $variantIds->all())
+                    ->with([
+                        'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                    ])
+                    ->get()
+                    ->keyBy(fn (Product $variant) => (int) $variant->id)
+                : collect();
+
+            $optionPostIds = $bundleProducts
+                ->flatMap(fn (Product $product) => $product->bundleItems->pluck('pivot.option_post_id'))
+                ->filter(fn ($postId) => filled($postId))
+                ->map(fn ($postId) => (int) $postId)
+                ->unique()
+                ->values();
+
+            $optionPosts = $optionPostIds->isNotEmpty()
+                ? Post::query()
+                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                    ->with('featuredMediaAsset')
+                    ->whereIn('id', $optionPostIds->all())
+                    ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
+                    ->keyBy(fn (Post $post) => (int) $post->id)
+                : collect();
+
+            $bundleOptionCatalog = $this->buildBundleOptionCatalog($bundleProducts, $variantMap, $optionPosts);
+        }
+
         // Calculate available filters
         $availableFilters = [];
         
@@ -384,9 +656,54 @@ class ProductController extends Controller
         }
 
         $responseData = $products->toArray();
+        $responseData['data'] = collect($responseData['data'] ?? [])
+            ->map(function (array $product) use ($bundleOptionCatalog) {
+                $itemType = ($product['item_type'] ?? '') === 'bundle_option' ? 'bundle_option' : 'product';
+                $productId = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
+                $bundleOptionKey = trim((string) ($product['bundle_option_key'] ?? ''));
+                $bundleOptionTitle = $itemType === 'bundle_option'
+                    ? (Str::squish((string) ($product['bundle_option_title'] ?? '')) ?: null)
+                    : null;
+                $baseProductName = $product['name'] ?? null;
+                $optionMeta = $itemType === 'bundle_option' && $productId > 0
+                    ? ($bundleOptionCatalog[$productId][$bundleOptionKey] ?? null)
+                    : null;
+
+                if (!is_array($optionMeta)) {
+                    return $product;
+                }
+
+                $primaryImage = $optionMeta['primary_image'] ?? ($product['primary_image'] ?? null);
+                $mainImage = $optionMeta['main_image']
+                    ?? $this->extractImageUrl($primaryImage)
+                    ?? ($product['main_image'] ?? null);
+                $currentPrice = round((float) ($optionMeta['current_price'] ?? $product['current_price'] ?? $product['price'] ?? 0), 2);
+                $basePrice = round((float) ($optionMeta['price'] ?? $currentPrice), 2);
+
+                if ($basePrice <= 0 || $basePrice < $currentPrice) {
+                    $basePrice = $currentPrice;
+                }
+
+                return [
+                    ...$product,
+                    'name' => $optionMeta['name'] ?? ($bundleOptionTitle ?: ($product['name'] ?? '')),
+                    'price' => $basePrice,
+                    'current_price' => $currentPrice,
+                    'special_price' => $basePrice > $currentPrice ? $currentPrice : null,
+                    'primary_image' => $primaryImage,
+                    'main_image' => $mainImage,
+                    'bundle_option_title' => $optionMeta['bundle_option_title'] ?? $bundleOptionTitle,
+                    'bundle_option_post_id' => $optionMeta['bundle_option_post_id'] ?? ($product['bundle_option_post_id'] ?? null),
+                    'bundle_option_post_title' => $optionMeta['bundle_option_post_title'] ?? null,
+                    'bundle_option_post_slug' => $optionMeta['bundle_option_post_slug'] ?? null,
+                    'bundle_parent_name' => $baseProductName,
+                ];
+            })
+            ->values()
+            ->all();
         $responseData['available_filters'] = $availableFilters;
 
-        return response()->json($responseData);
+        return response()->json(Utf8Sanitizer::normalize($responseData));
     }
 
     public function show(Request $request, $slug)
@@ -426,19 +743,39 @@ class ProductController extends Controller
                 ])
                 ->firstOrFail();
 
+            $bundleOptionPosts = collect();
+            $bundleOptionCatalog = [];
+            $variantMap = collect();
+
             // Enrich bundle items with variant data if variant_id is present
             if (($product->type === 'bundle' || $product->type === 'grouped') && $product->bundleItems) {
                 // Collect all variant IDs to fetch them in one query
                 $variantIds = $product->bundleItems->pluck('pivot.variant_id')->filter()->unique()->toArray();
-                
-                $variants = [];
+
+                $optionPostIds = $product->bundleItems
+                    ->pluck('pivot.option_post_id')
+                    ->filter(fn ($postId) => filled($postId))
+                    ->map(fn ($postId) => (int) $postId)
+                    ->unique()
+                    ->values()
+                    ->all();
+
                 if (!empty($variantIds)) {
-                    $variants = Product::whereIn('id', $variantIds)
+                    $variantMap = Product::whereIn('id', $variantIds)
                         ->with(['images', 'attributeValues.attribute'])
                         ->get()
-                        ->keyBy('id');
+                        ->keyBy(fn (Product $variant) => (int) $variant->id);
                 }
-                        
+
+                if (!empty($optionPostIds)) {
+                    $bundleOptionPosts = Post::query()
+                        ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                        ->with('featuredMediaAsset')
+                        ->whereIn('id', $optionPostIds)
+                        ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
+                        ->keyBy(fn (Post $post) => (int) $post->id);
+                }
+
                 foreach ($product->bundleItems as $item) {
                     // 1. Apply pivot price if set (this is the refreshed/saved price for this specific combo)
                     if ($item->pivot->price !== null) {
@@ -449,8 +786,8 @@ class ProductController extends Controller
                     }
 
                     $vId = $item->pivot->variant_id;
-                    if ($vId && isset($variants[$vId])) {
-                        $v = $variants[$vId];
+                    if ($vId && $variantMap->has((int) $vId)) {
+                        $v = $variantMap->get((int) $vId);
                         // Merge variant data into item. Fallback to variant price if pivot price was missing
                         if ($item->pivot->price === null) $item->price = $v->price;
                         if ($item->pivot->cost_price === null) $item->cost_price = $v->cost_price;
@@ -468,6 +805,14 @@ class ProductController extends Controller
                             }
                         }
                     }
+
+                if ($product->type === 'bundle') {
+                    $bundleOptionCatalog = $this->buildBundleOptionCatalogForItems(
+                        $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
+                        $variantMap,
+                        $bundleOptionPosts,
+                    );
+                }
             }
 
             if ($product->type === 'configurable') {
@@ -497,19 +842,28 @@ class ProductController extends Controller
             $responseData = $product->toArray();
             if (is_array($responseData['bundle_items'] ?? null)) {
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
-                    ->map(function (array $item) {
+                    ->map(function (array $item) use ($bundleOptionCatalog, $bundleOptionPosts) {
                         $optionPostId = data_get($item, 'pivot.option_post_id');
                         $optionTitle = data_get($item, 'pivot.option_title');
-                        $item['option_key'] = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $optionPost = filled($optionPostId) && is_numeric($optionPostId)
+                            ? $bundleOptionPosts->get((int) $optionPostId)
+                            : null;
+                        $optionMeta = $bundleOptionCatalog[$optionKey] ?? null;
+                        $item['option_key'] = $optionKey;
+                        $item['option_post_title'] = Str::squish((string) ($optionPost?->title ?? '')) ?: null;
+                        $item['option_post_slug'] = Str::squish((string) ($optionPost?->slug ?? '')) ?: null;
+                        $item['option_post_featured_image'] = $optionMeta['primary_image'] ?? $this->mapPostPrimaryImage($optionPost);
 
                         return $item;
                     })
                     ->values()
                     ->all();
             }
+            $responseData['bundle_options'] = array_values($bundleOptionCatalog);
             $responseData['all_attributes'] = $allProductAttributes;
 
-            return response()->json($responseData);
+            return response()->json(Utf8Sanitizer::normalize($responseData));
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Error in ProductController@show for slug '{$slug}': " . $e->getMessage());
             \Illuminate\Support\Facades\Log::error($e->getTraceAsString());
@@ -556,14 +910,14 @@ class ProductController extends Controller
             ->get();
 
         if ($explicitRelated->isNotEmpty()) {
-            return response()->json([
+            return response()->json(Utf8Sanitizer::normalize([
                 'items' => $this->formatRelatedProductsResponse($explicitRelated),
                 'meta' => [
                     'source' => 'explicit',
                     'has_explicit_related' => true,
                     'fallback_category' => $fallbackCategory,
                 ],
-            ]);
+            ]));
         }
 
         $categoryIds = collect([$product->category_id])
@@ -574,14 +928,14 @@ class ProductController extends Controller
             ->values();
 
         if ($categoryIds->isEmpty()) {
-            return response()->json([
+            return response()->json(Utf8Sanitizer::normalize([
                 'items' => [],
                 'meta' => [
                     'source' => 'empty',
                     'has_explicit_related' => false,
                     'fallback_category' => $fallbackCategory,
                 ],
-            ]);
+            ]));
         }
 
         $fallback = Product::query()
@@ -604,14 +958,14 @@ class ProductController extends Controller
             ->limit($limit)
             ->get();
 
-        return response()->json([
+        return response()->json(Utf8Sanitizer::normalize([
             'items' => $this->formatRelatedProductsResponse($fallback),
             'meta' => [
                 'source' => 'category',
                 'has_explicit_related' => false,
                 'fallback_category' => $fallbackCategory,
             ],
-        ]);
+        ]));
     }
 
     private function formatRelatedProductsResponse($products)

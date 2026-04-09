@@ -596,6 +596,8 @@ class OrderController extends Controller
             'report_revenue_total' => (float) ($order->report_revenue_total ?? 0),
             'report_cost_total' => (float) ($order->report_cost_total ?? 0),
             'report_profit_total' => (float) ($order->report_profit_total ?? 0),
+            'print_count' => (int) ($order->print_count ?? 0),
+            'last_printed_at' => $order->last_printed_at?->toISOString(),
             'shipping_status_source' => $order->shipping_status_source ?: self::SHIPPING_STATUS_SOURCE_MANUAL,
             'converted_from_order_id' => $order->converted_from_order_id,
             'converted_from_kind' => $order->converted_from_kind,
@@ -2150,15 +2152,16 @@ class OrderController extends Controller
         // Base select for listing - avoid * to reduce payload
         $query = Order::query()
             ->where('account_id', $accountId)
-            ->select([
+            ->select($this->selectExistingOrderColumns([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
                 'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
+                'print_count', 'last_printed_at',
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
                 'deleted_at',
-            ]);
+            ]));
 
         // Eager load only what is needed for the table
         $query->with([
@@ -2614,6 +2617,8 @@ class OrderController extends Controller
                 'return_status',
                 'cost_total',
                 'profit_total',
+                'print_count',
+                'last_printed_at',
                 'supplement_items_total_price',
                 'supplement_items_cost_total',
                 'report_revenue_total',
@@ -2860,12 +2865,13 @@ class OrderController extends Controller
 
         $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $ids->all())
-            ->select([
+            ->select($this->selectExistingOrderColumns([
                 'id',
                 'status',
                 'order_kind',
                 'shipping_dispatched_at',
-            ])
+                'print_count',
+            ]))
             ->with([
                 'activeShipment:id,order_id',
             ])
@@ -2876,13 +2882,23 @@ class OrderController extends Controller
         }
 
         $updatedIds = [];
-        $keptIds = [];
-        $ignoredIds = [];
+        $statusPreservedIds = [];
+        $statusIgnoredIds = [];
+        $printCounts = [];
+        $printedAt = now();
 
-        DB::transaction(function () use ($orders, &$updatedIds, &$keptIds, &$ignoredIds) {
+        DB::transaction(function () use ($orders, $printedAt, &$updatedIds, &$statusPreservedIds, &$statusIgnoredIds, &$printCounts) {
             foreach ($orders as $order) {
+                $nextPrintCount = max((int) ($order->print_count ?? 0), 0) + 1;
+                $updatePayload = [
+                    'print_count' => $nextPrintCount,
+                    'last_printed_at' => $printedAt,
+                ];
+
                 if (!$this->shouldManageInventory((string) $order->order_kind)) {
-                    $ignoredIds[] = (int) $order->id;
+                    $statusIgnoredIds[] = (int) $order->id;
+                    $order->update($updatePayload);
+                    $printCounts[(string) $order->id] = $nextPrintCount;
                     continue;
                 }
 
@@ -2892,7 +2908,9 @@ class OrderController extends Controller
                     || $order->shipping_dispatched_at
                     || $order->activeShipment
                 ) {
-                    $keptIds[] = (int) $order->id;
+                    $statusPreservedIds[] = (int) $order->id;
+                    $order->update($updatePayload);
+                    $printCounts[(string) $order->id] = $nextPrintCount;
                     continue;
                 }
 
@@ -2905,22 +2923,24 @@ class OrderController extends Controller
                     'reason' => 'Tự động cập nhật sau khi in đơn hàng',
                 ]);
 
-                $order->update([
-                    'status' => OrderStatusCatalog::PRINTED_CODE,
-                ]);
+                $updatePayload['status'] = OrderStatusCatalog::PRINTED_CODE;
+                $order->update($updatePayload);
 
                 $updatedIds[] = (int) $order->id;
+                $printCounts[(string) $order->id] = $nextPrintCount;
             }
         });
 
         return response()->json([
             'message' => 'Đã ghi nhận thao tác in đơn.',
+            'recorded_count' => count($printCounts),
             'updated_count' => count($updatedIds),
-            'preserved_count' => count($keptIds),
-            'ignored_count' => count($ignoredIds),
+            'preserved_count' => count($statusPreservedIds),
+            'ignored_count' => count($statusIgnoredIds),
             'updated_ids' => $updatedIds,
-            'preserved_ids' => $keptIds,
-            'ignored_ids' => $ignoredIds,
+            'preserved_ids' => $statusPreservedIds,
+            'ignored_ids' => $statusIgnoredIds,
+            'print_counts' => $printCounts,
         ]);
     }
 

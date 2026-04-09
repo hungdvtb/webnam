@@ -9,7 +9,10 @@ import { resolveImageObjectUrl } from '@/lib/media';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
-const FALLBACK_PRODUCT_ALT = 'S\u1ea3n ph\u1ea9m g\u1ed1m s\u1ee9';
+const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
+const BESTSELLER_LABEL = 'Bán chạy';
+const ADD_TO_CART_LABEL = 'Giỏ hàng';
+const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.';
 
 export default function InfiniteProductListLayout2({ initialData }) {
   const products = initialData?.data || [];
@@ -35,8 +38,8 @@ export default function InfiniteProductListLayout2({ initialData }) {
                     unoptimized
                   />
                 </Link>
+                {product.is_new && <div className={styles.badge}>{BESTSELLER_LABEL}</div>}
 
-                {product.is_new && <div className={styles.badge}>B\u00e1n ch\u1ea1y</div>}
               </div>
 
               <div className={styles.cardBody}>
@@ -61,7 +64,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
                       }}
                     >
                       <span className={`material-symbols-outlined ${styles.cartActionIcon}`}>add_shopping_cart</span>
-                      Gi\u1ecf h\u00e0ng
+                      {ADD_TO_CART_LABEL}
                     </button>
                   </div>
                 </div>
@@ -74,7 +77,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
       {products.length === 0 && (
         <div className={styles.emptyState}>
           <span className={`material-symbols-outlined ${styles.emptyStateIcon}`}>search_off</span>
-          <p className={styles.emptyStateText}>Kh\u00f4ng t\u00ecm th\u1ea5y s\u1ea3n ph\u1ea9m n\u00e0o ph\u00f9 h\u1ee3p.</p>
+          <p className={styles.emptyStateText}>{EMPTY_PRODUCTS_MESSAGE}</p>
         </div>
       )}
     </>

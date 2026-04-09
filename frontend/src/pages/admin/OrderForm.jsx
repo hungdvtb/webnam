@@ -61,12 +61,12 @@ const AdminField = ({ label, children, required = false, className = '' }) => (
     </div>
 );
 
-const Field = ({ label, children, className = '' }) => (
+const Field = ({ label, children, className = '', labelClassName = '' }) => (
     React.Children.toArray(children).some((child) => React.isValidElement(child) && child.props?.readOnly && child.props?.name === 'shipping_address')
         ? null
         : (
             <div className={`space-y-1 ${className}`}>
-                <label className="block text-[11px] font-bold uppercase tracking-widest text-primary/70">{label}</label>
+                <label className={`block text-[11px] font-bold uppercase tracking-widest text-primary/70 ${labelClassName}`}>{label}</label>
                 {children}
             </div>
         )
@@ -1636,6 +1636,25 @@ const wrapCanvasText = (ctx, text, maxWidth) => {
     });
 
     return lines.length ? lines : [''];
+};
+
+const fitCanvasText = (ctx, text, maxWidth) => {
+    const normalized = normalizeCanvasText(text);
+    if (!normalized) return '';
+    if (ctx.measureText(normalized).width <= maxWidth) return normalized;
+
+    const ellipsis = '...';
+    let endIndex = normalized.length;
+
+    while (endIndex > 0) {
+        const candidate = `${normalized.slice(0, endIndex).trim()}${ellipsis}`;
+        if (ctx.measureText(candidate).width <= maxWidth) {
+            return candidate;
+        }
+        endIndex -= 1;
+    }
+
+    return ellipsis;
 };
 
 const drawTextLines = (ctx, lines, x, y, lineHeight, align = 'left') => {
@@ -4531,6 +4550,9 @@ const OrderForm = () => {
             const addressText = normalizeCanvasText(quoteSettings.quote_store_address || 'Bổ sung địa chỉ cửa hàng trong Cài đặt web > Báo giá');
             const phoneText = normalizeCanvasText(quoteSettings.quote_store_phone || 'Chưa có số điện thoại');
             const selectedTemplateName = normalizeCanvasText(template.name || 'Chưa đặt tên mẫu');
+            const customerName = String(formData.customer_name || '').trim();
+            const hasCustomerName = customerName !== '';
+            const rightCardHeight = hasCustomerName ? 176 : 156;
 
             ctx.fillStyle = brandDark;
             ctx.font = `800 42px ${quoteCanvasFontFamily}`;
@@ -4549,8 +4571,8 @@ const OrderForm = () => {
 
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#D8C4AF';
-            ctx.fillRect(rightCardX, 46, rightCardWidth, 156);
-            ctx.strokeRect(rightCardX, 46, rightCardWidth, 156);
+            ctx.fillRect(rightCardX, 46, rightCardWidth, rightCardHeight);
+            ctx.strokeRect(rightCardX, 46, rightCardWidth, rightCardHeight);
 
             ctx.fillStyle = subtleBg;
             ctx.fillRect(rightCardX + 18, 64, rightCardWidth - 36, 40);
@@ -4568,9 +4590,18 @@ const OrderForm = () => {
             ctx.fillStyle = textPrimary;
             ctx.font = `700 24px ${quoteCanvasFontFamily}`;
             ctx.fillText(selectedTemplateName, rightCardX + 24, 148);
+            if (hasCustomerName) {
+                ctx.fillStyle = textPrimary;
+                ctx.font = `700 13px ${quoteCanvasFontFamily}`;
+                ctx.fillText(
+                    fitCanvasText(ctx, `Tên khách hàng: ${customerName}`, rightCardWidth - 48),
+                    rightCardX + 24,
+                    176
+                );
+            }
             ctx.fillStyle = textMuted;
             ctx.font = `400 13px ${quoteCanvasFontFamily}`;
-            ctx.fillText(normalizeCanvasText(`Ngày tạo: ${new Date().toLocaleDateString('vi-VN')}`), rightCardX + 24, 180);
+            ctx.fillText(normalizeCanvasText(`Ngày tạo: ${new Date().toLocaleDateString('vi-VN')}`), rightCardX + 24, hasCustomerName ? 198 : 180);
 
             ctx.fillStyle = brandDark;
             ctx.fillRect(0, headerHeight, pageWidth, tableHeaderHeight);
@@ -6308,7 +6339,7 @@ const OrderForm = () => {
                                 <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                             </Field>
 
-                            <Field label="Tên khách hàng">
+                            <Field label="Tên khách hàng" labelClassName="text-brick">
                                 <input
                                     type="text"
                                     name="customer_name"
@@ -6319,7 +6350,7 @@ const OrderForm = () => {
                                 />
                             </Field>
 
-                            <Field label="Số điện thoại">
+                            <Field label="Số điện thoại" labelClassName="text-brick">
                                 <input
                                     type="text"
                                     name="customer_phone"
@@ -6420,7 +6451,11 @@ const OrderForm = () => {
                                 </div>
                             </div>
 
-                            <Field label="Địa chỉ giao hàng (Số nhà, tên đường...)" className="min-h-[100px] items-start pt-3">
+                            <Field
+                                label="Địa chỉ giao hàng (Số nhà, tên đường...)"
+                                labelClassName="text-brick"
+                                className="min-h-[100px] items-start pt-3"
+                            >
                                 <textarea
                                     name="shipping_address"
                                     value={formData.shipping_address}

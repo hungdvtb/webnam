@@ -9,7 +9,10 @@ import { resolveImageObjectUrl } from '@/lib/media';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
-const FALLBACK_PRODUCT_ALT = 'S\u1ea3n ph\u1ea9m g\u1ed1m s\u1ee9';
+const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
+const NEW_BADGE_LABEL = 'Mới';
+const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.';
+const EMPTY_PRODUCTS_HINT = 'Hãy thử đổi từ khóa khác hoặc xóa bộ lọc.';
 
 export default function InfiniteProductList({ initialData }) {
   const products = initialData?.data || [];
@@ -33,7 +36,7 @@ export default function InfiniteProductList({ initialData }) {
                   style={{ objectFit: 'cover' }}
                   unoptimized
                 />
-                {product.is_new && <span className={styles.badge}>M\u1edbi</span>}
+                {product.is_new && <span className={styles.badge}>{NEW_BADGE_LABEL}</span>}
               </Link>
 
               <div className={styles.productInfo}>
@@ -67,8 +70,8 @@ export default function InfiniteProductList({ initialData }) {
       {products.length === 0 && (
         <div style={{ textAlign: 'center', padding: '5rem 2rem', opacity: 0.5 }}>
           <span className="material-symbols-outlined" style={{ fontSize: '64px', marginBottom: '1rem' }}>search_off</span>
-          <p style={{ fontSize: '18px' }}>Kh\u00f4ng t\u00ecm th\u1ea5y s\u1ea3n ph\u1ea9m n\u00e0o ph\u00f9 h\u1ee3p v\u1edbi y\u00eau c\u1ea7u c\u1ee7a b\u1ea1n.</p>
-          <p style={{ fontSize: '14px', marginTop: '0.5rem' }}>H\u00e3y th\u1eed \u0111\u1ed5i t\u1eeb kh\u00f3a kh\u00e1c ho\u1eb7c x\u00f3a b\u1ed9 l\u1ecdc.</p>
+          <p style={{ fontSize: '18px' }}>{EMPTY_PRODUCTS_MESSAGE}</p>
+          <p style={{ fontSize: '14px', marginTop: '0.5rem' }}>{EMPTY_PRODUCTS_HINT}</p>
         </div>
       )}
     </>

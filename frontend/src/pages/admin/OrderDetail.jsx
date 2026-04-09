@@ -8,12 +8,22 @@ const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
 const formatMoney = (value) => `${moneyFormatter.format(Number(value || 0))}đ`;
 
+const formatPrintCountLabel = (value) => {
+    const printCount = Math.max(Number.parseInt(value, 10) || 0, 0);
+
+    if (printCount <= 0) return '';
+    if (printCount === 1) return 'Đã in 1 lần';
+
+    return `Đã in ${printCount} lần`;
+};
+
 const OrderDetail = () => {
     const { id } = useParams();
     const navigate = useNavigate();
     const [order, setOrder] = useState(null);
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
+    const [printing, setPrinting] = useState(false);
 
     const [orderStatuses, setOrderStatuses] = useState([]);
 
@@ -65,9 +75,26 @@ const OrderDetail = () => {
         return {};
     };
 
+    const handlePrintOrder = async () => {
+        if (printing) return;
+
+        setPrinting(true);
+        try {
+            window.print();
+            await orderApi.markPrinted([Number(id)]);
+            const response = await orderApi.getOne(id);
+            setOrder(response.data);
+        } catch (error) {
+            console.error('Error recording order print', error);
+        } finally {
+            setPrinting(false);
+        }
+    };
+
     const orderTypeMeta = getOrderTypeMeta(order?.order_type);
     const specialOrderType = isSpecialOrderType(order?.order_type);
     const supplementItems = order?.supplement_items || order?.supplementItems || [];
+    const printCountLabel = formatPrintCountLabel(order?.print_count);
 
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải chi tiết đơn hàng...</div>;
     if (!order) return <div className="p-8 text-center text-brick">Không tìm thấy đơn hàng.</div>;
@@ -92,10 +119,16 @@ const OrderDetail = () => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 print:hidden">
+                <div className="flex gap-2 print:hidden items-center">
+                    {printCountLabel && (
+                        <div className="inline-flex items-center rounded-sm border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[11px] font-black text-primary/70">
+                            {printCountLabel}
+                        </div>
+                    )}
                     <button
-                        onClick={() => window.print()}
-                        className="px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest hover:bg-primary/10 transition-all flex items-center gap-2 shadow-sm"
+                        onClick={handlePrintOrder}
+                        disabled={printing}
+                        className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
                     >
                         <span className="material-symbols-outlined text-sm">print</span>
                         In Hóa Đơn

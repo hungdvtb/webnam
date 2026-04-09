@@ -239,7 +239,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                     >
                       <div className={styles.itemInfo}>
                         <span className={styles.itemLabel}>
-                          {category.level > 0 ? "— " : ""}
+                          {category.level > 0 ? "- " : ""}
                           {category.name}
                         </span>
                         <span className={styles.itemCount}>{category.products_count || 0}</span>
@@ -300,7 +300,6 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
 
                         {isExpanded && (
                           <div className={styles.mobileCategoryChildren}>
-
                             {flattenedChildren.map((childCategory) => (
                               <Link
                                 key={childCategory._nodeKey}

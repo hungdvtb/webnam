@@ -311,6 +311,15 @@ const formatDateTimeParts = (value) => {
     };
 };
 
+const formatPrintCountLabel = (value) => {
+    const printCount = Math.max(Number.parseInt(value, 10) || 0, 0);
+
+    if (printCount <= 0) return '';
+    if (printCount === 1) return 'Đã in 1 lần';
+
+    return `Đã in ${printCount} lần`;
+};
+
 const getCompactColumnLabelLines = (columnId, label) => {
     if (columnId === 'created_at') return ['Ngày', 'đặt'];
     if (columnId === 'shipping_dispatched_at') return ['Ngày gửi', 'VC'];
@@ -2185,21 +2194,34 @@ const OrderList = () => {
 
             const markResponse = await orderApi.markPrinted(ids);
             const markSummary = markResponse?.data || {};
+            const recordedCount = Number(markSummary.recorded_count || 0);
             const updatedCount = Number(markSummary.updated_count || 0);
             const preservedCount = Number(markSummary.preserved_count || 0);
             const ignoredCount = Number(markSummary.ignored_count || 0);
+            const printCounts = markSummary.print_counts || {};
             const messageParts = [`Đã mở in ${printableOrders.length} đơn`];
+
+            if (recordedCount > 0) {
+                messageParts.push(`Đã ghi nhận ${recordedCount} lượt in`);
+            }
 
             if (updatedCount > 0) {
                 messageParts.push(`${updatedCount} đơn chuyển sang "Đã in"`);
             }
 
             if (preservedCount > 0) {
-                messageParts.push(`${preservedCount} đơn giữ nguyên trạng thái vì đang ở luồng giao hàng hoặc đã in`);
+                messageParts.push(`${preservedCount} đơn giữ nguyên trạng thái hiện tại`);
             }
 
             if (ignoredCount > 0) {
-                messageParts.push(`${ignoredCount} đơn nháp hoặc đơn mẫu không đổi trạng thái`);
+                messageParts.push(`${ignoredCount} đơn nháp hoặc đơn mẫu vẫn giữ nguyên trạng thái`);
+            }
+
+            if (ids.length === 1) {
+                const singleOrderPrintLabel = formatPrintCountLabel(printCounts[String(ids[0])]);
+                if (singleOrderPrintLabel) {
+                    messageParts.push(singleOrderPrintLabel);
+                }
             }
 
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
@@ -3333,31 +3355,39 @@ const OrderList = () => {
                                         if (c.id === 'status') {
                                             const isDraftRow = isDraftOrder(o.order_kind);
                                             const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
+                                            const printCountLabel = formatPrintCountLabel(o.print_count);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
-                                                    <div className="flex items-center justify-start gap-1">
-                                                        {!isTrashView && !isDraftRow ? (
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    statusMenuAnchorRef.current = e.currentTarget;
-                                                                    setStatusMenuOrderId(o.id);
-                                                                }}
-                                                                data-status-edit-btn
-                                                                className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
-                                                                style={getStatusStyle(o.status)}
-                                                            >
-                                                                <span className="truncate">{statusName}</span>
-                                                                <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
+                                                    <div className="flex flex-col items-start gap-1">
+                                                        <div className="flex items-center justify-start gap-1">
+                                                            {!isTrashView && !isDraftRow ? (
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        statusMenuAnchorRef.current = e.currentTarget;
+                                                                        setStatusMenuOrderId(o.id);
+                                                                    }}
+                                                                    data-status-edit-btn
+                                                                    className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
+                                                                    style={getStatusStyle(o.status)}
+                                                                >
+                                                                    <span className="truncate">{statusName}</span>
+                                                                    <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
+                                                                </button>
+                                                            ) : (
+                                                                <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
+                                                                    <span className="truncate">{statusName}</span>
+                                                                </span>
+                                                            )}
+                                                            <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                                <span className="material-symbols-outlined text-[13px]">content_copy</span>
                                                             </button>
-                                                        ) : (
-                                                            <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
-                                                                <span className="truncate">{statusName}</span>
+                                                        </div>
+                                                        {printCountLabel && (
+                                                            <span className="text-[11px] font-semibold text-primary/55 whitespace-nowrap">
+                                                                {printCountLabel}
                                                             </span>
                                                         )}
-                                                        <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
-                                                            <span className="material-symbols-outlined text-[13px]">content_copy</span>
-                                                        </button>
                                                     </div>
                                                 </td>
                                             );

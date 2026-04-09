@@ -66,8 +66,8 @@ const sentenceCaseButtonStyle = { textTransform: 'none' };
 const BUNDLE_WORKSPACE_STATE_KEY = '__webgomBundleWorkspace';
 
 
-const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi kích thước';
-const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi kích thước cho sản phẩm trong bộ';
+const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi mẫu, size';
+const BUNDLE_ITEM_CHANGE_TITLE = 'Đổi mẫu, size cho sản phẩm trong bộ';
 
 const getBundleWorkspacePageKey = () => {
   if (typeof window === 'undefined') {
@@ -462,8 +462,53 @@ export default function BundleProductView({
     );
   };
 
+  const activeBundleOptionDisplay = useMemo(() => {
+    const bundleOptions = Array.isArray(product?.bundle_options) ? product.bundle_options : [];
+    const selectedConfig = String(
+      activeBundleConfig
+      || manualActiveTab
+      || bundleOptions[0]?.bundle_option_title
+      || bundleOptions[0]?.title
+      || bundleOptions[0]?.name
+      || ''
+    ).trim();
+
+    if (!selectedConfig || bundleOptions.length === 0) {
+      return null;
+    }
+
+    const selectedConfigKey = normalizeConfigMediaKey(selectedConfig);
+    const matchedOption = bundleOptions.find((option) => {
+      const optionTitle = String(
+        option?.bundle_option_title
+        || option?.title
+        || option?.name
+        || ''
+      ).trim();
+
+      return normalizeConfigMediaKey(optionTitle) === selectedConfigKey;
+    }) || null;
+
+    if (!matchedOption) {
+      return null;
+    }
+
+    return {
+      name: String(
+        matchedOption?.name
+        || matchedOption?.bundle_option_title
+        || selectedConfig
+      ).trim() || selectedConfig,
+      primaryImage: matchedOption?.primary_image || null,
+    };
+  }, [activeBundleConfig, manualActiveTab, product?.bundle_options]);
+
+  const bundleHeroProductName = activeBundleOptionDisplay?.name || product.name;
+
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
+    const optionImage = activeBundleOptionDisplay?.primaryImage || null;
+    const optionImageUrl = resolveImageObjectUrl(optionImage, 'large', '');
     const seenSources = new Set();
 
     const isRenderableGallerySource = (value) => {
@@ -480,6 +525,10 @@ export default function BundleProductView({
       return true;
     };
 
+    if (optionImageUrl) {
+      seenSources.add(optionImageUrl);
+    }
+
     const cleanedImages = sourceImages.filter((image) => {
       const resolvedSource = getImageUrl(image);
 
@@ -491,8 +540,12 @@ export default function BundleProductView({
       return true;
     });
 
+    if (optionImageUrl) {
+      return [optionImage, ...(cleanedImages.length > 0 ? cleanedImages : sourceImages)];
+    }
+
     return cleanedImages.length > 0 ? cleanedImages : sourceImages;
-  }, [getImageUrl, images]);
+  }, [activeBundleOptionDisplay?.primaryImage, getImageUrl, images]);
 
   const getCompactConfigLabel = (configName) => {
     const normalized = String(configName || '').replace(/\s+/g, ' ').trim();
@@ -1319,12 +1372,12 @@ export default function BundleProductView({
           <div className={styles.galleryColumn}>
             <div className={styles.bundleGalleryDesktopOnly}>
               <ProductGallery
-                images={images}
+                images={bundleMobileGalleryImages}
                 videoUrl={videoUrl}
                 activeIndex={activeIndex}
                 setActiveIndex={setActiveIndex}
                 getImageUrl={getImageUrl}
-                productName={product.name}
+                productName={bundleHeroProductName}
               />
             </div>
 
@@ -1335,7 +1388,7 @@ export default function BundleProductView({
                 activeIndex={activeIndex}
                 setActiveIndex={setActiveIndex}
                 getImageUrl={getImageUrl}
-                productName={product.name}
+                productName={bundleHeroProductName}
                 showSingleThumbnail
               />
             </div>
@@ -1345,7 +1398,7 @@ export default function BundleProductView({
           <div className={styles.infoColumn}>
             <div className={styles.infoWrapper}>
               <div className={styles.titleSection}>
-                <h1 className={styles.title}>{product.name}</h1>
+                <h1 className={styles.title}>{bundleHeroProductName}</h1>
                 <div className={styles.meta}>
                   <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
                   <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>

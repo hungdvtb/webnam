@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export const metadata = {
-  title: 'Sản Phẩm Gốm Sứ Bát Tràng | GỐM ĐẠI THÀNH',
+  title: 'Sản phẩm gốm sứ Bát Tràng | GỐM ĐẠI THÀNH',
   description: 'Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản, từ gốm men lam truyền thống đến những tác phẩm hiện đại.',
 };
 
@@ -351,16 +351,15 @@ export default async function ProductsPage({ searchParams }) {
         <div className={styles.filterBar}>
           <div className={styles.filterBarHeader}>
             <span className={styles.filterLabel}>
-            <span className="material-symbols-outlined" style={{ color: 'var(--accent)' }}>filter_list</span> Bộ lọc:
+              <span className="material-symbols-outlined" style={{ color: 'var(--accent)' }}>filter_list</span> Bộ lọc:
             </span>
           </div>
 
           <div className={styles.filterBarControls}>
-
-          <CategoryDropdown
-            categories={categories}
-            currentCategorySlug={currentCategorySlug}
-          />
+            <CategoryDropdown
+              categories={categories}
+              currentCategorySlug={currentCategorySlug}
+            />
 
             <SortSelect currentSort={currentSort} />
           </div>

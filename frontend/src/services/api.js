@@ -1,9 +1,38 @@
 import axios from 'axios';
 
 const DEFAULT_API_BASE_URL = '/api';
+const ADMIN_HOST_PATTERN = /(^|\.)admin\.gomdaithanh\.com$/i;
+const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 
-export const API_BASE_URL = trimTrailingSlash(
+const resolveApiBaseUrl = (value) => {
+    const normalized = trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
+
+    if (typeof window === 'undefined' || normalized.startsWith('/')) {
+        return normalized;
+    }
+
+    try {
+        const parsed = new URL(normalized, window.location.origin);
+        const currentOrigin = window.location.origin;
+        const currentHost = window.location.hostname;
+        const normalizedPath = trimTrailingSlash(parsed.pathname) || '/';
+        const shouldPreferSameOriginProxy = ADMIN_HOST_PATTERN.test(currentHost)
+            && API_HOST_PATTERN.test(parsed.hostname)
+            && normalizedPath === '/api'
+            && parsed.origin !== currentOrigin;
+
+        if (shouldPreferSameOriginProxy) {
+            return DEFAULT_API_BASE_URL;
+        }
+    } catch (error) {
+        console.warn('Unable to normalize API base URL.', error);
+    }
+
+    return normalized;
+};
+
+export const API_BASE_URL = resolveApiBaseUrl(
     import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL
 );
 export const STORAGE_BASE_URL = (
@@ -316,7 +345,15 @@ export const orderApi = {
     getBatchReturn: (documentId) => api.get(`/orders/inventory-returns/${documentId}`),
     updateBatchReturn: (documentId, data) => api.put(`/orders/inventory-returns/${documentId}`, data),
     getPrintData: (ids) => api.post('/orders/print-data', { ids }),
-    markPrinted: (ids) => api.post('/orders/mark-printed', { ids }),
+    markPrinted: (ids) => api.post('/orders/mark-printed', { ids }).then((response) => {
+        const normalizedIds = Array.isArray(ids) ? ids : [ids];
+        normalizedIds.forEach((id) => {
+            if (!id) return;
+            invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+        });
+
+        return response;
+    }),
     store: (data) => api.post('/orders', data),
     update: (id, data) => api.put(`/orders/${id}`, data).then((response) => {
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));

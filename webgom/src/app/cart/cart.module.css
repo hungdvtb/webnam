@@ -729,9 +729,11 @@
 }
 
 .childItem {
+    --bundle-thumb-size: 2rem;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    justify-content: space-between;
+    gap: 0.75rem;
     padding: 0.65rem 0.75rem;
     background: rgba(245,241,234,0.88);
     border-radius: 14px;
@@ -739,24 +741,83 @@
     flex-wrap: wrap;
 }
 
-.childIcon {
-    width: 28px;
-    height: 28px;
-    background: white;
-    border-radius: 3px;
+.childCopy {
     display: flex;
     align-items: center;
-    justify-content: center;
-    color: var(--accent, #C5A065);
+    gap: 0.5rem;
+    flex: 1 1 14rem;
+    min-width: 0;
+    flex-wrap: wrap;
+}
+
+.childControls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    min-width: 0;
+}
+
+.childNameLink,
+.bundleThumbLink {
+    color: inherit;
+    text-decoration: none;
+}
+
+.childNameLink {
+    flex: 1 1 12rem;
+    min-width: 0;
+}
+
+.childNameLink:hover .childName,
+.childNameLink:focus-visible .childName,
+.mobileBundleNameLink:hover .mobileBundleName,
+.mobileBundleNameLink:focus-visible .mobileBundleName {
+    color: var(--accent-dark);
+}
+
+.bundleThumbLink {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    border-radius: 10px;
+}
+
+.bundleThumbLink:focus-visible {
+    outline: 2px solid rgba(197,160,101,0.45);
+    outline-offset: 2px;
+}
+
+.bundleThumb {
+    position: relative;
+    display: inline-flex;
+    width: var(--bundle-thumb-size);
+    height: var(--bundle-thumb-size);
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid rgba(197,160,101,0.18);
+    background: #fff;
     flex-shrink: 0;
 }
 
-.childIcon .material-symbols-outlined {
-    font-size: 16px;
+.bundleThumbPlaceholder {
+    width: 100%;
+    height: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #F0EDE6;
+    color: var(--accent, #C5A065);
+}
+
+.bundleThumbPlaceholder .material-symbols-outlined {
+    font-size: 0.95rem;
 }
 
 .childName {
-    flex: 1;
+    display: block;
     font-weight: 600;
     color: var(--primary);
     min-width: 0;
@@ -795,7 +856,7 @@
     border: 1px solid rgba(197,160,101,0.3);
     border-radius: 3px;
     flex-shrink: 0;
-    margin-right: 0.5rem;
+    min-height: var(--bundle-thumb-size);
 }
 
 .subQtyCtrl button {
@@ -807,6 +868,10 @@
     font-size: 0.85rem;
     line-height: 1;
     transition: background 0.15s;
+    min-height: calc(var(--bundle-thumb-size) - 2px);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .subQtyCtrl button:hover {
@@ -815,6 +880,7 @@
 
 .subQtyCtrl span {
     min-width: 20px;
+    min-height: calc(var(--bundle-thumb-size) - 2px);
     text-align: center;
     font-size: 0.8rem;
     font-weight: 700;
@@ -822,6 +888,9 @@
     border-left: 1px solid rgba(197,160,101,0.3);
     border-right: 1px solid rgba(197,160,101,0.3);
     padding: 0.1rem 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* Combo discount status tag */
@@ -1602,6 +1671,7 @@
     }
 
     .mobileBundleItem {
+        --bundle-thumb-size: 2rem;
         display: flex;
         flex-direction: column;
         gap: 0.55rem;
@@ -1627,8 +1697,15 @@
         min-width: 0;
     }
 
+    .mobileBundleNameLink {
+        flex: 1 1 auto;
+        min-width: 0;
+        color: inherit;
+        text-decoration: none;
+    }
+
     .mobileBundleName {
-        flex: 1;
+        display: block;
         min-width: 0;
         font-size: var(--mobile-body-size);
         line-height: var(--mobile-body-line);
@@ -1656,17 +1733,31 @@
         flex-wrap: wrap;
     }
 
+    .mobileBundleActionStart {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        min-width: 0;
+        flex-wrap: nowrap;
+    }
+
+    .mobileBundleThumb {
+        width: var(--bundle-thumb-size);
+        height: var(--bundle-thumb-size);
+    }
+
     .mobileSubQtyCtrl {
         display: inline-flex;
         align-items: center;
+        min-height: var(--bundle-thumb-size);
         border: 1px solid rgba(197, 160, 101, 0.3);
         border-radius: 999px;
         background: #F9F5F0;
     }
 
     .mobileSubQtyCtrl button {
-        width: 2rem;
-        height: 2rem;
+        width: var(--bundle-thumb-size);
+        height: var(--bundle-thumb-size);
         border: none;
         background: transparent;
         color: var(--primary);
@@ -1679,11 +1770,15 @@
 
     .mobileSubQtyCtrl span {
         min-width: 1.75rem;
+        min-height: calc(var(--bundle-thumb-size) - 2px);
         text-align: center;
         font-family: var(--font-roboto);
         font-size: var(--mobile-body-size);
         font-weight: 700;
         color: var(--primary);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
     }
 
     .mobileChildRemove {

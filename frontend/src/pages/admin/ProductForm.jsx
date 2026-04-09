@@ -29,6 +29,7 @@ import {
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
+import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
 
 const ItemType = {
     IMAGE: 'image',
@@ -850,6 +851,46 @@ const resolveApiErrorMessage = (error, fallbackMessage) => {
 
     return error?.response?.data?.message || fallbackMessage;
 };
+
+const createClientUploadError = (message) => {
+    const error = new Error(message);
+    error.userMessage = message;
+    return error;
+};
+
+const extractUploadedImageUrl = (response) => {
+    const primaryImage = response?.data?.image;
+
+    return String(
+        response?.data?.url
+        || primaryImage?.large_url
+        || primaryImage?.medium_url
+        || primaryImage?.image_url
+        || ''
+    ).trim();
+};
+
+const uploadImageViaMediaApi = async (file) => {
+    const validationMessage = validateImageFileForUpload(file);
+
+    if (validationMessage) {
+        throw createClientUploadError(validationMessage);
+    }
+
+    const uploadData = new FormData();
+    uploadData.append('image', file);
+
+    const response = await mediaApi.upload(uploadData);
+    const imageUrl = extractUploadedImageUrl(response);
+
+    if (!imageUrl) {
+        throw createClientUploadError('API upload khong tra ve URL anh hop le.');
+    }
+
+    return imageUrl;
+};
+
+const resolveProductImageUploadErrorMessage = (error) => resolveImageUploadError(error).message;
 
 const moveListItem = (items, fromIndex, toIndex) => {
     if (
@@ -2274,12 +2315,8 @@ const ProductForm = () => {
         input.onchange = async () => {
             const file = input.files[0];
             if (file) {
-                const formData = new FormData();
-                formData.append('image', file);
-
                 try {
-                    const res = await mediaApi.upload(formData);
-                    const url = res.data.url;
+                    const url = await uploadImageViaMediaApi(file);
                     
                     let quill;
                     try {
@@ -2291,6 +2328,12 @@ const ProductForm = () => {
                     // Set default width to 100% or allow resizing later
                     quill.setSelection(range.index + 1);
                 } catch (error) {
+                    showToast({
+                        message: resolveProductImageUploadErrorMessage(error),
+                        type: 'error',
+                        duration: 7000,
+                    });
+                    return;
                     showToast('Lỗi khi tải ảnh lên', 'error');
                 }
             }
@@ -2489,17 +2532,21 @@ const ProductForm = () => {
                     input.onchange = async () => {
                         const file = input.files[0];
                         if (file) {
-                            const uploadData = new FormData();
-                            uploadData.append('image', file);
                             try {
-                                const res = await mediaApi.upload(uploadData);
+                                const url = await uploadImageViaMediaApi(file);
                                 // Replace src but keep existing width/height/style
-                                target.src = res.data.url;
+                                target.src = url;
                                 // Update form state
                                 setFormData(prev => ({ ...prev, description: editorRoot.innerHTML }));
                                 showToast('Đã cập nhật ảnh mới, giữ nguyên kích thước', 'success');
                                 removeExistingPopups();
                             } catch (err) {
+                                showToast({
+                                    message: resolveProductImageUploadErrorMessage(err),
+                                    type: 'error',
+                                    duration: 7000,
+                                });
+                                return;
                                 showToast('Lỗi khi tải ảnh mới', 'error');
                             }
                         }
@@ -3421,12 +3468,12 @@ const ProductForm = () => {
                 }
             });
 
-            const errorMessage = error?.response?.data?.message
+            const errorMessage = resolveProductImageUploadErrorMessage(error)
                 || (isEdit
                     ? 'Loi tai anh. He thong da chia anh thanh tung dot nho, vui long thu lai.'
                     : 'Loi toi uu anh. Vui long thu lai.');
 
-            showToast({ message: errorMessage, type: 'error' });
+            showToast({ message: errorMessage, type: 'error', duration: 7000 });
         }
     };
 
@@ -4313,6 +4360,33 @@ const ProductForm = () => {
         }).catch(err => {
             showToast('Lỗi khi tải ảnh', 'error');
         });
+    }, [showToast]);
+
+    const handleUploadBundleOptionImageSafe = useCallback(async (optionId, event) => {
+        const input = event.target;
+        const file = input.files[0];
+        input.value = '';
+
+        if (!file) {
+            return;
+        }
+
+        try {
+            const url = await uploadImageViaMediaApi(file);
+            setBundleOptions((prev) => prev.map((opt) => (
+                opt.id === optionId ? { ...opt, image_url: url } : opt
+            )));
+            showToast({
+                message: 'Da tai anh bundle thanh cong.',
+                type: 'success',
+            });
+        } catch (error) {
+            showToast({
+                message: resolveProductImageUploadErrorMessage(error),
+                type: 'error',
+                duration: 7000,
+            });
+        }
     }, [showToast]);
 
     const handleRemoveBundleOptionImage = useCallback((optionId) => {
@@ -6591,7 +6665,7 @@ const ProductForm = () => {
                                                                  id={`bundle-option-image-${option.id}`}
                                                                  className="hidden"
                                                                  accept="image/*"
-                                                                 onChange={(e) => handleUploadBundleOptionImage(option.id, e)}
+                                                                 onChange={(e) => handleUploadBundleOptionImageSafe(option.id, e)}
                                                              />
                                                              {option.image_url ? (
                                                                  <div className="relative group/optimg size-10 rounded-sm border border-gold/20 overflow-hidden shadow-sm">

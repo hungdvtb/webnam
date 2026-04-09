@@ -98,18 +98,62 @@ const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle =
   };
 };
 
+const buildInitialBundleSelectionState = (
+  product,
+  requestedKey = '',
+  requestedTitle = '',
+) => {
+  if (product?.type !== 'bundle') {
+    return {
+      bundleItems: [],
+      activeBundleConfig: '',
+    };
+  }
+
+  const items = product.bundle_items || product.grouped_items || [];
+
+  if (items.length === 0) {
+    return {
+      bundleItems: [],
+      activeBundleConfig: '',
+    };
+  }
+
+  const { mappedItems, initialConfigTitle } = mapBundleItemsForConfig(
+    items,
+    requestedKey,
+    requestedTitle,
+  );
+
+  return {
+    bundleItems: mappedItems.map((item) => ({
+      ...item,
+      selected: !item.option_title || item.option_title === initialConfigTitle,
+    })),
+    activeBundleConfig: initialConfigTitle,
+  };
+};
+
 export default function ProductDetailContent({
   product,
   requestedBundleOptionKey = '',
   requestedBundleOptionTitle = '',
   requestedVariantId = 0,
 }) {
+  const initialBundleSelectionState = useMemo(
+    () => buildInitialBundleSelectionState(
+      product,
+      requestedBundleOptionKey,
+      requestedBundleOptionTitle,
+    ),
+    [product, requestedBundleOptionKey, requestedBundleOptionTitle],
+  );
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
-  const [bundleItems, setBundleItems] = useState([]);
-  const [activeBundleConfig, setActiveBundleConfig] = useState('');
+  const [bundleItems, setBundleItems] = useState(initialBundleSelectionState.bundleItems);
+  const [activeBundleConfig, setActiveBundleConfig] = useState(initialBundleSelectionState.activeBundleConfig);
   const [quantity, setQuantity] = useState(1);
   const [activeIndex, setActiveIndex] = useState(0);
   const { addToCart } = useCart();

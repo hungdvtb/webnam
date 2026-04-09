@@ -9,18 +9,20 @@ import { resolveImageObjectUrl, resolveMediaUrl } from "@/lib/media";
 const FALLBACK_CATEGORY_BANNER = "/banner-store.png";
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
 const HOME_CATEGORY_PRODUCT_LIMIT = 6;
-const FALLBACK_CATEGORY_TEXT = "Danh mục gốm sứ";
+const FALLBACK_CATEGORY_TEXT = "Danh m\u1ee5c g\u1ed1m s\u1ee9";
+const FALLBACK_PRODUCT_NAME = "S\u1ea3n ph\u1ea9m g\u1ed1m s\u1ee9";
+const HOME_CATEGORY_HEADER = "DANH M\u1ee4C";
 const categoryNameSorter = new Intl.Collator("vi");
 const VIETNAMESE_LOCALE = "vi-VN";
 
 const FALLBACK_CATEGORIES = [
-  { name: "Gốm Men Lam", slug: "gom-men-lam" },
-  { name: "Gốm Men Rạn", slug: "gom-men-ran" },
-  { name: "Bộ Ấm Trà Đạo", slug: "bo-am-tra-dao" },
-  { name: "Tượng Nghệ Thuật", slug: "tuong-phong-thuy" },
-  { name: "Gia Dụng Sang Trọng", slug: "gia-dung" },
-  { name: "Đèn Trang Trí", slug: "den-trang-tri" },
-  { name: "Quà Tặng Doanh Nghiệp", slug: "qua-tang" },
+  { name: "G\u1ed1m Men Lam", slug: "gom-men-lam" },
+  { name: "G\u1ed1m Men R\u1ea1n", slug: "gom-men-ran" },
+  { name: "B\u1ed9 \u1ea4m Tr\u00e0 \u0110\u1ea1o", slug: "bo-am-tra-dao" },
+  { name: "T\u01b0\u1ee3ng Ngh\u1ec7 Thu\u1eadt", slug: "tuong-phong-thuy" },
+  { name: "Gia D\u1ee5ng Sang Tr\u1ecdng", slug: "gia-dung" },
+  { name: "\u0110\u00e8n Trang Tr\u00ed", slug: "den-trang-tri" },
+  { name: "Qu\u00e0 T\u1eb7ng Doanh Nghi\u1ec7p", slug: "qua-tang" },
 ];
 
 function uniqueBySlug(items = []) {
@@ -83,7 +85,7 @@ function normalizeCategory(category, index) {
 function normalizeProduct(product) {
   return {
     id: product?.id,
-    name: String(product?.name || "").trim() || "Sản phẩm gốm sứ",
+    name: String(product?.name || "").trim() || FALLBACK_PRODUCT_NAME,
     slug: String(product?.slug || product?.id || "").trim(),
     price: product?.price ?? product?.current_price ?? 0,
     currentPrice: product?.current_price ?? product?.price ?? 0,
@@ -116,7 +118,7 @@ function resolveCategoryProductsCount(category, totalProducts) {
 function getCategoryEyebrow(category, totalProducts) {
   const productsCount = resolveCategoryProductsCount(category, totalProducts);
   if (productsCount > 0) {
-    return `${productsCount} sản phẩm`;
+    return `${productsCount} s\u1ea3n ph\u1ea9m`;
   }
 
   const description = String(category?.metaDescription || category?.description || "").trim();
@@ -131,7 +133,7 @@ function getCategoryHeroDescription(category, totalProducts) {
 
   const productsCount = resolveCategoryProductsCount(category, totalProducts);
   if (productsCount > 0) {
-    return `Khám phá ${productsCount} sản phẩm trong danh mục ${category.name}.`;
+    return `Kh\u00e1m ph\u00e1 ${productsCount} s\u1ea3n ph\u1ea9m trong danh m\u1ee5c ${category.name}.`;
   }
 
   return FALLBACK_CATEGORY_TEXT;
@@ -226,12 +228,13 @@ export default async function Home() {
         <aside className={styles.sidebar}>
           <div className={styles.sidebarHeader}>
             <span className="material-symbols-outlined">menu</span>
-            <h2>DANH MỤC</h2>
+            <h2>{HOME_CATEGORY_HEADER}</h2>
           </div>
           <nav className={styles.categoryNav}>
             {visibleCategories.map((category) => (
               <Link key={category.slug} href={category.href}>
-                {category.name} <span className="material-symbols-outlined">chevron_right</span>
+                <span className={styles.categoryNavLabel}>{category.name}</span>
+                <span className={`material-symbols-outlined ${styles.categoryNavIcon}`}>chevron_right</span>
               </Link>
             ))}
           </nav>
@@ -250,19 +253,19 @@ export default async function Home() {
       <section className={`container ${styles.valuesSection}`}>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">auto_fix_high</span>
-          <h4>Chế tác <br />thủ công</h4>
+          <h4>{"Ch\u1ebf t\u00e1c"} <br />{"th\u1ee7 c\u00f4ng"}</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">brush</span>
-          <h4>Nghệ nhân <wbr />Bát Tràng</h4>
+          <h4>{"Ngh\u1ec7 nh\u00e2n"} <wbr />{"B\u00e1t Tr\u00e0ng"}</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">factory</span>
-          <h4>Dây chuyền <wbr />hiện đại</h4>
+          <h4>{"D\u00e2y chuy\u1ec1n"} <wbr />{"hi\u1ec7n \u0111\u1ea1i"}</h4>
         </div>
         <div className={styles.valueCard}>
           <span className="material-symbols-outlined">public</span>
-          <h4>Phân phối <wbr />toàn quốc</h4>
+          <h4>{"Ph\u00e2n ph\u1ed1i"} <wbr />{"to\u00e0n qu\u1ed1c"}</h4>
         </div>
       </section>
 

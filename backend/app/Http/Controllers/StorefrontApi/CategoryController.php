@@ -4,6 +4,7 @@ namespace App\Http\Controllers\StorefrontApi;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Support\Utf8Sanitizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -67,7 +68,7 @@ class CategoryController extends Controller
 
         $this->applyStorefrontCategoryItemCounts($categories, $accountId);
 
-        return response()->json($categories);
+        return response()->json(Utf8Sanitizer::normalize($categories->toArray()));
     }
 
     public function show(Request $request, $slug)
@@ -87,6 +88,6 @@ class CategoryController extends Controller
             $accountId
         );
 
-        return response()->json($category);
+        return response()->json(Utf8Sanitizer::normalize($category->toArray()));
     }
 }

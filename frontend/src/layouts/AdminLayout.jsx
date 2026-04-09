@@ -3,6 +3,7 @@ import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-d
 import { useAuth } from '../context/AuthContext';
 import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
 import useUserSettingsBootstrap from '../hooks/useUserSettingsBootstrap';
+import { normalizeAdminPermissions } from '../utils/adminPermissions';
 
 
 const SidebarText = ({ isExpanded, className = '', children }) => (
@@ -115,12 +116,11 @@ const AdminLayout = () => {
         );
     }
 
+    const normalizedPermissions = normalizeAdminPermissions(user);
     const canAccess = (permId) => {
         if (!user) return false;
         if (user.is_admin) return true;
-        let perms = [];
-        try { perms = typeof user.permissions === 'string' ? JSON.parse(user.permissions) : (user.permissions || []); } catch { perms = []; }
-        return perms.includes(permId);
+        return normalizedPermissions.includes(permId);
     };
 
     const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');

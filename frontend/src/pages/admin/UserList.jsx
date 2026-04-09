@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { userApi, accountApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
+import { ADMIN_PERMISSION_OPTIONS, normalizeAdminPermissions } from '../../utils/adminPermissions';
 
 const PAGE_PERMISSIONS = [
     { id: 'dashboard', label: 'Tổng quan' },
@@ -82,11 +83,8 @@ const UserList = () => {
     };
 
     const handleEdit = (u) => {
-        let perms = [];
-        try {
-            perms = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : (u.permissions || []);
-        } catch(e) {}
-        
+        const perms = normalizeAdminPermissions(u);
+
         setFormData({
             id: u.id,
             name: u.name,
@@ -230,8 +228,7 @@ const UserList = () => {
                             </tr>
                         ) : (
                             users.map(u => {
-                                let perms = [];
-                                try { perms = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : (u.permissions || []); } catch(e){}
+                                const perms = normalizeAdminPermissions(u);
                                 return (
                                     <tr key={u.id} className="hover:bg-gold/5 transition-all group active:bg-gold/10">
                                         <td className="px-4 py-3.5">
@@ -252,7 +249,7 @@ const UserList = () => {
                                                 <div className="flex flex-wrap gap-1 max-w-[220px]">
                                                     {perms.length > 0 ? perms.slice(0,3).map(p => (
                                                         <span key={p} className="px-1.5 py-0.5 bg-[#fcf8f1] border border-gold/10 text-[8px] font-black uppercase tracking-tighter text-stone/50 hover:bg-gold/10 transition-colors">
-                                                            {PAGE_PERMISSIONS.find(o => o.id === p)?.label.split(' (')[0] || p}
+                                                            {ADMIN_PERMISSION_OPTIONS.find(o => o.id === p)?.label || p}
                                                         </span>
                                                     )) : <span className="text-brick/50 text-[10px] font-bold italic">Chưa cấp quyền</span>}
                                                     {perms.length > 3 && <span className="text-[9px] font-ui font-black text-gold/40">+{perms.length - 3}</span>}
@@ -356,7 +353,7 @@ const UserList = () => {
                                     <div className="h-px bg-gold/20 flex-1"></div>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                                    {PAGE_PERMISSIONS.map(perm => (
+                                    {ADMIN_PERMISSION_OPTIONS.map(perm => (
                                         <label key={perm.id} className={`flex items-center gap-2.5 p-2.5 rounded-sm border transition-all cursor-pointer group ${formData.permissions.includes(perm.id) ? 'bg-gold/5 border-gold/30' : 'bg-white border-gold/10 hover:border-gold/30'}`}>
                                             <div className={`size-4 border rounded-[2px] flex items-center justify-center transition-all ${formData.permissions.includes(perm.id) ? 'bg-primary border-primary text-white scale-110' : 'bg-white border-gold/20'}`}>
                                                 {formData.permissions.includes(perm.id) && <span className="material-symbols-outlined text-[10px] font-black">check</span>}
@@ -367,7 +364,7 @@ const UserList = () => {
                                                 onChange={() => togglePermission(perm.id)}
                                                 className="hidden"
                                             />
-                                            <span className={`text-[11px] font-bold uppercase tracking-tight transition-colors ${formData.permissions.includes(perm.id) ? 'text-primary' : 'text-stone/40 group-hover:text-stone/60'}`}>{perm.label.split(' (')[0]}</span>
+                                            <span className={`text-[11px] font-bold uppercase tracking-tight transition-colors ${formData.permissions.includes(perm.id) ? 'text-primary' : 'text-stone/40 group-hover:text-stone/60'}`}>{perm.label}</span>
                                         </label>
                                     ))}
                                 </div>

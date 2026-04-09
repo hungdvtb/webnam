@@ -35,7 +35,7 @@ class UserController extends Controller
                 'email' => $validated['email'],
                 'password' => Hash::make($validated['password']),
                 'status' => $request->has('status') ? $validated['status'] : 1,
-                'permissions' => json_encode($validated['permissions'] ?? []),
+                'permissions' => $validated['permissions'] ?? [],
             ]);
 
             if (!empty($validated['account_ids'])) {
@@ -75,7 +75,7 @@ class UserController extends Controller
                 $user->status = $validated['status'];
             }
             if (isset($validated['permissions'])) {
-                $user->permissions = json_encode($validated['permissions']);
+                $user->permissions = $validated['permissions'];
             }
             
             $user->save();

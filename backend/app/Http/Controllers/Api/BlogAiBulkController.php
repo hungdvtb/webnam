@@ -20,7 +20,7 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            return response()->json(['error' => 'Account ID is required'], 400);
+            return response()->json(['error' => 'Thiếu Account ID.'], 400);
         }
 
         $limit = max(min((int) $request->query('limit', 5), 20), 1);
@@ -40,17 +40,19 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            return response()->json(['error' => 'Account ID is required'], 400);
+            return response()->json(['error' => 'Thiếu Account ID.'], 400);
         }
 
         $validated = $request->validate([
             'file' => 'required|file|max:10240|mimes:xlsx,csv,txt',
+            'requested_post_count' => 'nullable|integer|min:1|max:500',
         ]);
 
         $job = $this->generationService->createJobFromUpload(
             $accountId,
             $validated['file'],
-            auth()->id()
+            auth()->id(),
+            isset($validated['requested_post_count']) ? (int) $validated['requested_post_count'] : null
         );
 
         return response()->json([
@@ -81,7 +83,7 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            abort(400, 'Account ID is required');
+            abort(400, 'Thiếu Account ID.');
         }
 
         return BlogAiBulkJob::query()
@@ -106,6 +108,9 @@ class BlogAiBulkController extends Controller
             'posts_created' => (int) $job->posts_created,
             'posts_failed' => (int) $job->posts_failed,
             'ai_model' => $job->ai_model,
+            'requested_post_count' => isset($job->metadata['requested_post_count'])
+                ? (int) $job->metadata['requested_post_count']
+                : null,
             'summary' => $job->summary ?? [],
             'errors' => $job->errors ?? [],
             'metadata' => $job->metadata ?? [],

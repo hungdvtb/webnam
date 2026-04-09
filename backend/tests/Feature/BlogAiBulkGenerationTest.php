@@ -240,6 +240,110 @@ class BlogAiBulkGenerationTest extends TestCase
         ]);
     }
 
+    public function test_it_respects_requested_post_count_when_running_bulk_generation(): void
+    {
+        $account = Account::create([
+            'name' => 'Limited SEO Blog',
+            'domain' => 'limited-seo.local',
+            'subdomain' => 'limited-seo',
+            'site_code' => 'LIMITED_SEO',
+        ]);
+
+        $user = User::factory()->create();
+        $user->accounts()->attach($account->id, ['role' => 'owner']);
+        Sanctum::actingAs($user);
+
+        $counter = 0;
+        $gemini = Mockery::mock(GeminiService::class);
+        $gemini->shouldReceive('generateText')
+            ->twice()
+            ->andReturnUsing(function () use (&$counter) {
+                $counter++;
+
+                return [
+                    'text' => json_encode([
+                        'title' => 'Bai viet AI gioi han so ' . $counter,
+                        'slug_hint' => 'bai-viet-ai-gioi-han-so-' . $counter,
+                        'excerpt' => 'Noi dung duoc tao theo so bai da chon.',
+                        'seo_title' => 'Bai viet AI gioi han so ' . $counter,
+                        'seo_description' => 'Mo ta SEO cho bai viet gioi han so ' . $counter . '.',
+                        'seo_keywords' => ['gom Bat Trang', 'seo blog', 'keyword cluster', 'bai viet ai'],
+                        'category_name' => 'Kien thuc gom su Bat Trang',
+                        'image_brief' => 'Anh bia blog gom su Bat Trang.',
+                        'sections' => [
+                            [
+                                'heading' => 'Tong quan',
+                                'paragraphs' => ['Noi dung mo ta chinh.'],
+                                'list_items' => ['Y 1', 'Y 2'],
+                            ],
+                            [
+                                'heading' => 'Chi tiet',
+                                'paragraphs' => ['Noi dung bo sung.'],
+                                'list_items' => ['Y 3', 'Y 4'],
+                            ],
+                            [
+                                'heading' => 'Ket luan',
+                                'paragraphs' => ['Tong hop va goi y.'],
+                                'list_items' => [],
+                            ],
+                        ],
+                        'faq' => [
+                            ['question' => 'Cau hoi 1?', 'answer' => 'Tra loi 1.'],
+                            ['question' => 'Cau hoi 2?', 'answer' => 'Tra loi 2.'],
+                        ],
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    'model' => 'gemini-limit-test',
+                ];
+            });
+        $this->app->instance(GeminiService::class, $gemini);
+
+        $binary = SimpleXlsx::buildWorkbook([
+            [
+                'name' => 'Keywords',
+                'rows' => [
+                    ['keyword', 'search volume'],
+                    ['bo do tho bat trang', 1500],
+                    ['qua tang gom su doanh nghiep', 1200],
+                    ['y nghia loc binh bat trang', 950],
+                    ['cach bao quan am chen bat trang', 720],
+                ],
+            ],
+        ]);
+
+        $file = UploadedFile::fake()->createWithContent('limited-keywords.xlsx', $binary);
+
+        $createResponse = $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->post('/api/blog/ai-bulk/jobs', [
+            'file' => $file,
+            'requested_post_count' => 2,
+        ]);
+
+        $createResponse
+            ->assertCreated()
+            ->assertJsonPath('data.requested_post_count', 2);
+
+        $jobId = (int) $createResponse->json('data.id');
+
+        $runResponse = $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->postJson("/api/blog/ai-bulk/jobs/{$jobId}/run");
+
+        $runResponse
+            ->assertOk()
+            ->assertJsonPath('data.status', BlogAiBulkJob::STATUS_COMPLETED)
+            ->assertJsonPath('data.cluster_count', 2)
+            ->assertJsonPath('data.posts_created', 2)
+            ->assertJsonPath('data.requested_post_count', 2)
+            ->assertJsonPath('data.metadata.total_cluster_candidates', 4)
+            ->assertJsonPath('data.summary.selected_cluster_count', 2);
+
+        $this->assertSame(
+            2,
+            Post::query()->where('account_id', $account->id)->where('is_system', false)->count()
+        );
+    }
+
     public function test_it_skips_semantically_duplicate_clusters_against_existing_posts(): void
     {
         $account = Account::create([

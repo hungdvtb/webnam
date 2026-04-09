@@ -1185,7 +1185,7 @@ const BlogList = () => {
                         disabled={importingBundle || exportingBundle}
                         className="h-9 px-4 bg-white border border-primary/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
                     >
-                        Tao bai AI tu Excel
+                        Tạo bài AI từ Excel
                     </button>
                     <Link to="/admin/blog/new" className="h-9 px-4 bg-brick text-white hover:bg-umber rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Tạo bài mới</Link>
                 </div>

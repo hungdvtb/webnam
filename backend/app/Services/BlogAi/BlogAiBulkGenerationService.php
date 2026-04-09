@@ -65,14 +65,19 @@ class BlogAiBulkGenerationService
     ) {
     }
 
-    public function createJobFromUpload(int $accountId, UploadedFile $file, ?int $userId = null): BlogAiBulkJob
+    public function createJobFromUpload(
+        int $accountId,
+        UploadedFile $file,
+        ?int $userId = null,
+        ?int $requestedPostCount = null
+    ): BlogAiBulkJob
     {
         $extension = Str::lower($file->getClientOriginalExtension() ?: 'xlsx');
         $fileName = 'blog-ai-' . Str::lower((string) Str::ulid()) . '.' . $extension;
         $storedPath = $file->storeAs(self::IMPORT_DIRECTORY, $fileName, 'local');
 
         if (!$storedPath) {
-            throw new \RuntimeException('Khong the luu file keyword vao storage.');
+            throw new \RuntimeException('Không thể lưu file keyword vào storage.');
         }
 
         return BlogAiBulkJob::query()->create([
@@ -86,6 +91,7 @@ class BlogAiBulkGenerationService
                 'mime_type' => $file->getClientMimeType(),
                 'size_bytes' => $file->getSize(),
                 'extension' => $extension,
+                'requested_post_count' => $requestedPostCount !== null ? max($requestedPostCount, 1) : null,
             ],
         ]);
     }
@@ -96,7 +102,7 @@ class BlogAiBulkGenerationService
 
         if ($job->status === BlogAiBulkJob::STATUS_RUNNING) {
             throw ValidationException::withMessages([
-                'job' => ['Tien trinh nay dang duoc xu ly.'],
+                'job' => ['Tiến trình này đang được xử lý.'],
             ]);
         }
 
@@ -120,30 +126,53 @@ class BlogAiBulkGenerationService
                 'info',
                 'read_file',
                 sprintf(
-                    'Da doc %d dong keyword, con %d keyword duy nhat sau khi loai trung.',
+                    'Đã đọc %d dòng keyword, còn %d keyword duy nhất sau khi loại trùng.',
                     count($keywordRows['raw_rows']),
                     count($keywordRows['rows'])
                 )
             );
 
-            $clusters = $this->clusterKeywords($keywordRows['rows']);
-            if ($clusters === []) {
+            $allClusters = $this->clusterKeywords($keywordRows['rows']);
+            if ($allClusters === []) {
                 throw ValidationException::withMessages([
-                    'file' => ['Khong tim thay cum keyword hop le de tao bai viet.'],
+                    'file' => ['Không tìm thấy cụm keyword hợp lệ để tạo bài viết.'],
                 ]);
             }
+
+            $requestedPostCount = $this->resolveRequestedPostCount($job);
+            $clusters = $requestedPostCount !== null
+                ? array_slice($allClusters, 0, $requestedPostCount)
+                : $allClusters;
+            $totalClusterCandidates = count($allClusters);
 
             $resourceContext = $this->loadResourceContext($job->account_id);
 
             $job->update([
                 'cluster_count' => count($clusters),
+                'metadata' => array_merge($job->metadata ?? [], [
+                    'requested_post_count' => $requestedPostCount,
+                    'total_cluster_candidates' => $totalClusterCandidates,
+                    'selected_cluster_count' => count($clusters),
+                ]),
             ]);
 
             $this->appendLog(
                 $job,
                 'info',
                 'cluster_keywords',
-                sprintf('Da gom %d keyword thanh %d cum chu de.', count($keywordRows['rows']), count($clusters))
+                $requestedPostCount !== null
+                    ? sprintf(
+                        'Đã gom %d keyword thành %d cụm chủ đề, chọn %d cụm ưu tiên cao nhất theo yêu cầu tạo %d bài.',
+                        count($keywordRows['rows']),
+                        $totalClusterCandidates,
+                        count($clusters),
+                        $requestedPostCount
+                    )
+                    : sprintf(
+                        'Đã gom %d keyword thành %d cụm chủ đề.',
+                        count($keywordRows['rows']),
+                        count($clusters)
+                    )
             );
 
             $summary = [
@@ -152,6 +181,9 @@ class BlogAiBulkGenerationService
                 'categories_created' => 0,
                 'skipped_clusters' => 0,
                 'skipped_duplicates' => 0,
+                'requested_post_count' => $requestedPostCount,
+                'total_cluster_candidates' => $totalClusterCandidates,
+                'selected_cluster_count' => count($clusters),
                 'created_post_ids' => [],
                 'updated_post_ids' => [],
                 'created_category_ids' => [],
@@ -169,7 +201,7 @@ class BlogAiBulkGenerationService
                         'info',
                         'generate_cluster',
                         sprintf(
-                            'Dang xu ly cum %d/%d: %s',
+                            'Đang xử lý cụm %d/%d: %s',
                             $clusterNumber,
                             count($clusters),
                             $cluster['primary_keyword']
@@ -206,7 +238,7 @@ class BlogAiBulkGenerationService
                             'warning',
                             'duplicate_cluster',
                             sprintf(
-                                'Bo qua cum "%s" vi qua gan voi bai da co "%s".',
+                                'Bỏ qua cụm "%s" vì quá gần với bài đã có "%s".',
                                 $cluster['primary_keyword'],
                                 $duplicateMatch['post']['title']
                             ),
@@ -304,8 +336,8 @@ class BlogAiBulkGenerationService
                     ]);
 
                     $message = $persistedPost['action'] === 'created'
-                        ? sprintf('Da tao bai nhap "%s".', $persistedPost['post']->title)
-                        : sprintf('Da cap nhat bai nhap ton tai "%s".', $persistedPost['post']->title);
+                        ? sprintf('Đã tạo bài nháp "%s".', $persistedPost['post']->title)
+                        : sprintf('Đã cập nhật bài nháp tồn tại "%s".', $persistedPost['post']->title);
 
                     $this->appendLog(
                         $job,
@@ -323,9 +355,9 @@ class BlogAiBulkGenerationService
                     );
                 } catch (\Throwable $exception) {
                     $errors[] = sprintf(
-                        'Cum "%s": %s',
+                        'Cụm "%s": %s',
                         $cluster['primary_keyword'],
-                        trim((string) $exception->getMessage()) ?: 'Khong the tao bai viet cho cum nay.'
+                        trim((string) $exception->getMessage()) ?: 'Không thể tạo bài viết cho cụm này.'
                     );
 
                     $job->update([
@@ -367,7 +399,7 @@ class BlogAiBulkGenerationService
                 $errors === [] ? 'info' : 'warning',
                 'completed',
                 sprintf(
-                    'Hoan tat xu ly file. Tao moi %d bai, cap nhat %d bai, bo qua %d cum trung y, tao %d danh muc, loi %d cum.',
+                    'Hoàn tất xử lý file. Tạo mới %d bài, cập nhật %d bài, bỏ qua %d cụm trùng ý, tạo %d danh mục, lỗi %d cụm.',
                     $summary['posts_created'],
                     $summary['posts_updated'],
                     $summary['skipped_duplicates'],
@@ -376,7 +408,7 @@ class BlogAiBulkGenerationService
                 )
             );
         } catch (\Throwable $exception) {
-            $message = trim((string) $exception->getMessage()) ?: 'Khong the xu ly file keyword.';
+            $message = trim((string) $exception->getMessage()) ?: 'Không thể xử lý file keyword.';
 
             $job->update([
                 'status' => BlogAiBulkJob::STATUS_FAILED,
@@ -403,7 +435,7 @@ class BlogAiBulkGenerationService
             $job,
             'info',
             'start',
-            sprintf('Bat dau xu ly file "%s".', $job->source_filename)
+            sprintf('Bắt đầu xử lý file "%s".', $job->source_filename)
         );
     }
 
@@ -418,7 +450,7 @@ class BlogAiBulkGenerationService
             $workbook = $this->xlsxService->read($path);
         } else {
             throw ValidationException::withMessages([
-                'file' => ['Chi ho tro file .xlsx hoac .csv cho tool nay.'],
+                'file' => ['Chỉ hỗ trợ file .xlsx hoặc .csv cho tool này.'],
             ]);
         }
 
@@ -430,7 +462,7 @@ class BlogAiBulkGenerationService
 
         if ($headers === [] || $rows === []) {
             throw ValidationException::withMessages([
-                'file' => ['File keyword khong co du lieu hop le.'],
+                'file' => ['File keyword không có dữ liệu hợp lệ.'],
             ]);
         }
 
@@ -444,7 +476,7 @@ class BlogAiBulkGenerationService
 
         if ($keywordHeader === null || $volumeHeader === null) {
             throw ValidationException::withMessages([
-                'file' => ['File keyword phai co it nhat 2 cot: keyword va search volume.'],
+                'file' => ['File keyword phải có ít nhất 2 cột: keyword và search volume.'],
             ]);
         }
 
@@ -530,7 +562,7 @@ class BlogAiBulkGenerationService
     {
         $handle = fopen($path, 'rb');
         if (!$handle) {
-            throw new \RuntimeException('Khong the doc file CSV keyword.');
+            throw new \RuntimeException('Không thể đọc file CSV keyword.');
         }
 
         $headers = [];
@@ -1009,7 +1041,7 @@ class BlogAiBulkGenerationService
             $job,
             'info',
             'create_category',
-            sprintf('Da tao danh muc blog "%s".', $category->name),
+            sprintf('Đã tạo danh mục blog "%s".', $category->name),
             [
                 'category_id' => $category->id,
                 'slug' => $category->slug,
@@ -1222,8 +1254,8 @@ class BlogAiBulkGenerationService
   <text x="160" y="240" fill="{$palette['line']}" font-size="32" font-family="Georgia, 'Times New Roman', serif" letter-spacing="3">BAT TRANG CERAMICS BLOG</text>
   <text x="160" y="390" fill="#ffffff" font-size="78" font-weight="700" font-family="Georgia, 'Times New Roman', serif">{$this->escapeForSvg($title)}</text>
   <text x="160" y="470" fill="{$palette['line']}" font-size="34" font-family="Arial, sans-serif">{$this->escapeForSvg($subtitle)}</text>
-  <text x="160" y="620" fill="{$palette['line']}" font-size="26" font-family="Arial, sans-serif">Noi dung theo cum keyword va search intent</text>
-  <text x="160" y="665" fill="{$palette['line']}" font-size="26" font-family="Arial, sans-serif">Danh cho blog gom su, do tho va qua tang gom su</text>
+  <text x="160" y="620" fill="{$palette['line']}" font-size="26" font-family="Arial, sans-serif">Nội dung theo cụm keyword và search intent</text>
+  <text x="160" y="665" fill="{$palette['line']}" font-size="26" font-family="Arial, sans-serif">Dành cho blog gốm sứ, đồ thờ và quà tặng gốm sứ</text>
 </svg>
 SVG;
     }
@@ -1238,7 +1270,7 @@ SVG;
     ): array {
         $title = trim((string) ($article['title'] ?? ''));
         if ($title === '') {
-            throw new \RuntimeException('Bai viet AI khong co tieu de hop le.');
+            throw new \RuntimeException('Bài viết AI không có tiêu đề hợp lệ.');
         }
 
         $requestedSlug = Str::slug((string) ($article['slug_hint'] ?? $title)) ?: 'blog-ai-post';
@@ -1348,14 +1380,24 @@ SVG;
     private function resolveStoredFilePath(BlogAiBulkJob $job): string
     {
         if ($job->source_disk !== 'local') {
-            throw new \RuntimeException('Chi ho tro storage local cho file keyword.');
+            throw new \RuntimeException('Chỉ hỗ trợ storage local cho file keyword.');
         }
 
         if (!Storage::disk('local')->exists($job->source_path)) {
-            throw new \RuntimeException('Khong tim thay file keyword da upload.');
+            throw new \RuntimeException('Không tìm thấy file keyword đã upload.');
         }
 
         return Storage::disk('local')->path($job->source_path);
+    }
+
+    private function resolveRequestedPostCount(BlogAiBulkJob $job): ?int
+    {
+        $value = $job->metadata['requested_post_count'] ?? null;
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return max((int) $value, 1);
     }
 
     private function resolveHeaderAlias(array $headerMap, array $aliases): ?string

@@ -35,7 +35,7 @@ class UserController extends Controller
                 'email' => $validated['email'],
                 'password' => Hash::make($validated['password']),
                 'status' => $request->has('status') ? $validated['status'] : 1,
-                'permissions' => $validated['permissions'] ?? [],
+                'permissions' => $validated['permissions'] ?? null,
             ]);
 
             if (!empty($validated['account_ids'])) {

@@ -24,6 +24,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
         {products.map((product) => {
           const productHref = buildProductDetailHref(product);
           const productCardKey = buildProductCardKey(product);
+          const displayPrice = product.current_price ?? product.price ?? 0;
 
           return (
             <div key={productCardKey} className={styles.productCard}>
@@ -49,7 +50,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
 
                 <div className={styles.footer}>
                   <p className={styles.price}>
-                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(product.price)}
+                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(displayPrice)}
                   </p>
 
                   <div className={styles.actions}>

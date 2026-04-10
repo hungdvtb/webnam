@@ -17,6 +17,7 @@ import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
+import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
 import MultiKeywordSearchInput, {
     buildActiveKeywordTokens,
     parseKeywordTokens,
@@ -1052,6 +1053,12 @@ const OrderList = () => {
 
     const [notification, setNotification] = useState(null);
     const [printingOrders, setPrintingOrders] = useState(false);
+    const [printConfirmState, setPrintConfirmState] = useState({
+        open: false,
+        ids: [],
+        printableCount: 0,
+        submitting: false,
+    });
     const [shippingAlerts, setShippingAlerts] = useState([]);
     const [showShippingAlerts, setShowShippingAlerts] = useState(false);
     const [shippingAlertUnread, setShippingAlertUnread] = useState([]);
@@ -2176,7 +2183,7 @@ const OrderList = () => {
     };
 
     const handleBulkPrint = async () => {
-        if (!selectedIds.length || printingOrders) return;
+        if (!selectedIds.length || printingOrders || printConfirmState.open) return;
 
         const ids = [...selectedIds];
 
@@ -2185,12 +2192,48 @@ const OrderList = () => {
 
             const response = await orderApi.getPrintData(ids);
             const printableOrders = response?.data?.data || [];
+            const printableIds = printableOrders
+                .map((order) => Number(order?.id))
+                .filter((value) => Number.isInteger(value) && value > 0);
 
-            if (!printableOrders.length) {
+            if (!printableOrders.length || !printableIds.length) {
                 throw new Error('Không có đơn hàng hợp lệ để in.');
             }
 
             await printOrders(printableOrders);
+            setPrintConfirmState({
+                open: true,
+                ids: printableIds,
+                printableCount: printableOrders.length,
+                submitting: false,
+            });
+        } catch (error) {
+            console.error('Print orders error', error);
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || error.message || 'Không thể in đơn hàng.',
+            });
+        } finally {
+            setPrintingOrders(false);
+        }
+    };
+
+    const closePrintConfirmation = useCallback(() => {
+        setPrintConfirmState((prev) => ({
+            ...prev,
+            open: false,
+            ids: [],
+            printableCount: 0,
+            submitting: false,
+        }));
+    }, []);
+
+    const handleConfirmPrinted = useCallback(async () => {
+        const ids = [...printConfirmState.ids];
+        if (!ids.length || printConfirmState.submitting) return;
+
+        try {
+            setPrintConfirmState((prev) => ({ ...prev, submitting: true }));
 
             const markResponse = await orderApi.markPrinted(ids);
             const markSummary = markResponse?.data || {};
@@ -2199,11 +2242,7 @@ const OrderList = () => {
             const preservedCount = Number(markSummary.preserved_count || 0);
             const ignoredCount = Number(markSummary.ignored_count || 0);
             const printCounts = markSummary.print_counts || {};
-            const messageParts = [`Đã mở in ${printableOrders.length} đơn`];
-
-            if (recordedCount > 0) {
-                messageParts.push(`Đã ghi nhận ${recordedCount} lượt in`);
-            }
+            const messageParts = [`Đã ghi nhận in ${recordedCount || ids.length} đơn`];
 
             if (updatedCount > 0) {
                 messageParts.push(`${updatedCount} đơn chuyển sang "Đã in"`);
@@ -2226,17 +2265,17 @@ const OrderList = () => {
 
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setSelectedIds([]);
+            closePrintConfirmation();
             setNotification({ type: 'success', message: messageParts.join('. ') });
         } catch (error) {
-            console.error('Print orders error', error);
+            console.error('Confirm print orders error', error);
+            setPrintConfirmState((prev) => ({ ...prev, submitting: false }));
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || error.message || 'Không thể in đơn hàng.',
+                message: error.response?.data?.message || error.message || 'Không thể ghi nhận trạng thái in đơn hàng.',
             });
-        } finally {
-            setPrintingOrders(false);
         }
-    };
+    }, [closePrintConfirmation, fetchOrders, filters, pagination.current_page, pagination.per_page, printConfirmState.ids, printConfirmState.submitting, sortConfig]);
 
     const currentListUrl = useMemo(() => `${location.pathname}${location.search}`, [location.pathname, location.search]);
 
@@ -2538,7 +2577,7 @@ const OrderList = () => {
                         ) : (
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
+                                <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
                                 {canCreateBatchReturn && (
                                     <button
@@ -3498,6 +3537,14 @@ const OrderList = () => {
                 <div className="flex items-center gap-4"><span>Hiển thị {orders.length} / {pagination.total}</span><div className="flex items-center gap-2"><span>Số dòng:</span><select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">{[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}</select></div></div>
                 <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
             </div>
+
+            <PrintCompletionConfirmModal
+                open={printConfirmState.open}
+                orderCount={printConfirmState.printableCount}
+                confirming={printConfirmState.submitting}
+                onCancel={closePrintConfirmation}
+                onConfirm={handleConfirmPrinted}
+            />
 
             <StatusDropdownPortal
                 order={activeStatusMenuOrder}

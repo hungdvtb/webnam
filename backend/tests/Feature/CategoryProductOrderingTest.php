@@ -6,9 +6,11 @@ use App\Models\Account;
 use App\Models\Category;
 use App\Models\Post;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -159,6 +161,60 @@ class CategoryProductOrderingTest extends TestCase
         ]);
     }
 
+    public function test_web_api_products_bundle_option_listing_falls_back_to_bundle_parent_image_when_option_has_no_image(): void
+    {
+        [$category, , , $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();
+        $bundleItem = $bundle->bundleItems()->firstOrFail();
+
+        $bundleItem->update(['price' => 222000]);
+        $this->attachPrimaryImage($bundle, '/bundle-parent.jpg');
+        $this->attachPrimaryImage($bundleItem, '/component.jpg');
+
+        $response = $this->getJson("/api/web-api/products?category={$category->slug}")
+            ->assertOk();
+
+        $bundleOption = collect($response->json('data'))
+            ->firstWhere('bundle_option_key', 'post:' . $optionPost->id);
+
+        $this->assertNotNull($bundleOption);
+        $this->assertSame('bundle_option', data_get($bundleOption, 'item_type'));
+        $this->assertSame('Lua chon men lam', data_get($bundleOption, 'name'));
+        $this->assertSame(222000.0, (float) data_get($bundleOption, 'price'));
+        $this->assertSame(222000.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame('/bundle-parent.jpg', data_get($bundleOption, 'primary_image.url'));
+    }
+
+    public function test_web_api_products_bundle_option_listing_supports_legacy_product_rows_with_option_metadata(): void
+    {
+        [$category, , , $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();
+        $bundleItem = $bundle->bundleItems()->firstOrFail();
+
+        $bundleItem->update(['price' => 222000]);
+        $this->attachPrimaryImage($bundle, '/bundle-parent.jpg');
+
+        DB::table('category_product')
+            ->where('category_id', $category->id)
+            ->where('product_id', $bundle->id)
+            ->where('bundle_option_key', 'post:' . $optionPost->id)
+            ->update([
+                'item_type' => 'product',
+                'updated_at' => now(),
+            ]);
+
+        $response = $this->getJson("/api/web-api/products?category={$category->slug}")
+            ->assertOk();
+
+        $bundleOption = collect($response->json('data'))
+            ->firstWhere('bundle_option_key', 'post:' . $optionPost->id);
+
+        $this->assertNotNull($bundleOption);
+        $this->assertSame('bundle_option', data_get($bundleOption, 'item_type'));
+        $this->assertSame('Lua chon men lam', data_get($bundleOption, 'name'));
+        $this->assertSame(222000.0, (float) data_get($bundleOption, 'price'));
+        $this->assertSame(222000.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame('Lua chon men lam', data_get($bundleOption, 'bundle_option_title'));
+    }
+
     private function seedCategoryWithVariantAndBundleOptionAssignments(): array
     {
         $account = $this->createAccount();
@@ -305,5 +361,15 @@ class CategoryProductOrderingTest extends TestCase
             'created_at' => $createdAt,
             'updated_at' => $createdAt,
         ], $overrides));
+    }
+
+    private function attachPrimaryImage(Product $product, string $imageUrl): void
+    {
+        ProductImage::query()->create([
+            'product_id' => $product->id,
+            'image_url' => $imageUrl,
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
     }
 }

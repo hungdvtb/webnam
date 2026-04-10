@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { orderApi, orderStatusApi } from '../../services/api';
+import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
+import { printCurrentPage } from '../../utils/orderPrint';
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
@@ -24,27 +26,29 @@ const OrderDetail = () => {
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
     const [printing, setPrinting] = useState(false);
+    const [printConfirmOpen, setPrintConfirmOpen] = useState(false);
+    const [confirmingPrinted, setConfirmingPrinted] = useState(false);
 
     const [orderStatuses, setOrderStatuses] = useState([]);
 
     useEffect(() => {
+        const fetchInitialData = async () => {
+            try {
+                const [orderRes, statusRes] = await Promise.all([
+                    orderApi.getOne(id),
+                    orderStatusApi.getAll()
+                ]);
+                setOrder(orderRes.data);
+                setOrderStatuses(statusRes.data);
+            } catch (error) {
+                console.error("Error fetching order detail data", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
         fetchInitialData();
     }, [id]);
-
-    const fetchInitialData = async () => {
-        try {
-            const [orderRes, statusRes] = await Promise.all([
-                orderApi.getOne(id),
-                orderStatusApi.getAll()
-            ]);
-            setOrder(orderRes.data);
-            setOrderStatuses(statusRes.data);
-        } catch (error) {
-            console.error("Error fetching order detail data", error);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const handleUpdateStatus = async (newStatus) => {
         setUpdating(true);
@@ -56,11 +60,6 @@ const OrderDetail = () => {
         } finally {
             setUpdating(false);
         }
-    };
-
-    const getStatusLabel = (status) => {
-        const found = orderStatuses.find(s => s.code === status);
-        return found ? found.name : status;
     };
 
     const getStatusColorStyle = (status) => {
@@ -76,18 +75,32 @@ const OrderDetail = () => {
     };
 
     const handlePrintOrder = async () => {
-        if (printing) return;
+        if (printing || printConfirmOpen) return;
 
         setPrinting(true);
         try {
-            window.print();
-            await orderApi.markPrinted([Number(id)]);
-            const response = await orderApi.getOne(id);
-            setOrder(response.data);
+            await printCurrentPage(window);
+            setPrintConfirmOpen(true);
         } catch (error) {
             console.error('Error recording order print', error);
         } finally {
             setPrinting(false);
+        }
+    };
+
+    const handleConfirmPrinted = async () => {
+        if (confirmingPrinted) return;
+
+        setConfirmingPrinted(true);
+        try {
+            await orderApi.markPrinted([Number(id)]);
+            const response = await orderApi.getOne(id);
+            setOrder(response.data);
+            setPrintConfirmOpen(false);
+        } catch (error) {
+            console.error('Error recording order print', error);
+        } finally {
+            setConfirmingPrinted(false);
         }
     };
 
@@ -127,8 +140,8 @@ const OrderDetail = () => {
                     )}
                     <button
                         onClick={handlePrintOrder}
-                        disabled={printing}
-                        className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
+                        disabled={printing || printConfirmOpen}
+                        className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing || printConfirmOpen ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
                     >
                         <span className="material-symbols-outlined text-sm">print</span>
                         In Hóa Đơn
@@ -373,6 +386,14 @@ const OrderDetail = () => {
                     )}
                 </div>
             </div>
+
+            <PrintCompletionConfirmModal
+                open={printConfirmOpen}
+                orderCount={1}
+                confirming={confirmingPrinted}
+                onCancel={() => setPrintConfirmOpen(false)}
+                onConfirm={handleConfirmPrinted}
+            />
         </div>
     );
 };

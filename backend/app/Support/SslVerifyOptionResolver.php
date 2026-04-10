@@ -49,6 +49,12 @@ class SslVerifyOptionResolver
         return [
             env('SSL_CERT_FILE'),
             env('CURL_CA_BUNDLE'),
+            '/etc/ssl/certs/ca-certificates.crt',
+            '/etc/ssl/cert.pem',
+            '/etc/pki/tls/certs/ca-bundle.crt',
+            '/etc/ssl/ca-bundle.pem',
+            '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+            '/etc/ssl/certs/ca-bundle.crt',
             'C:\\xampp\\apache\\bin\\curl-ca-bundle.crt',
             'C:\\xampp\\php\\extras\\ssl\\cacert.pem',
             base_path('vendor/composer/ca-bundle/res/cacert.pem'),

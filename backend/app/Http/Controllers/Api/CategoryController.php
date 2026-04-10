@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\SiteDomain;
 use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
+use App\Support\Utf8Sanitizer;
 use App\Support\SimpleXlsx;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
@@ -365,9 +366,64 @@ class CategoryController extends Controller
     {
         $requestedItems = $this->resolveRequestedCategoryItems($rawItems);
 
-        DB::transaction(function () use ($category, $requestedItems) {
-            $timestamp = now();
+        DB::transaction(function () use ($category, &$requestedItems) {
             $existingRows = $this->loadCategoryAssignmentRows((int) $category->id);
+            $parentProductIds = $requestedItems
+                ->where('item_type', 'product')
+                ->pluck('product_id')
+                ->unique()
+                ->all();
+
+            $variationsByParent = Product::query()
+                ->join('product_links', 'products.id', '=', 'product_links.linked_product_id')
+                ->where('product_links.link_type', 'super_link')
+                ->whereIn('product_links.product_id', $parentProductIds)
+                ->get(['products.id', 'product_links.product_id as parent_id'])
+                ->groupBy('parent_id');
+
+            $expandedRequestedItems = collect();
+
+            foreach ($requestedItems as $item) {
+                $expandedRequestedItems->push($item);
+
+                if ($item['item_type'] === 'product') {
+                    $productId = (int) $item['product_id'];
+
+                    // Preserve existing bundle options of this product (hidden in UI)
+                    $existingOptions = $existingRows->filter(fn ($row) => (int) $row->product_id === $productId && $row->item_type === 'bundle_option'
+                    );
+                    foreach ($existingOptions as $option) {
+                        $expandedRequestedItems->push([
+                            'assignment_key' => $this->buildCategoryAssignmentKey('bundle_option', $productId, $option->bundle_option_key),
+                            'item_type' => 'bundle_option',
+                            'product_id' => $productId,
+                            'bundle_option_key' => $option->bundle_option_key,
+                            'bundle_option_post_id' => $option->bundle_option_post_id,
+                            'bundle_option_title' => $option->bundle_option_title,
+                        ]);
+                    }
+
+                    // Preserve existing variations of this product (hidden in UI)
+                    if ($variationsByParent->has($productId)) {
+                        $potentialVariationIds = $variationsByParent->get($productId)->pluck('id')->all();
+                        $existingVariations = $existingRows->filter(fn ($row) => $row->item_type === 'product' && in_array((int) $row->product_id, $potentialVariationIds)
+                        );
+                        foreach ($existingVariations as $variation) {
+                            $expandedRequestedItems->push([
+                                'assignment_key' => $this->buildCategoryAssignmentKey('product', (int) $variation->product_id),
+                                'item_type' => 'product',
+                                'product_id' => (int) $variation->product_id,
+                                'bundle_option_key' => '',
+                                'bundle_option_post_id' => null,
+                                'bundle_option_title' => null,
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            $requestedItems = $expandedRequestedItems->unique('assignment_key')->values();
+            $timestamp = now();
             $existingByKey = $existingRows->keyBy(function ($row) {
                 $itemType = $row->item_type === 'bundle_option' ? 'bundle_option' : 'product';
 
@@ -507,6 +563,7 @@ class CategoryController extends Controller
         }
 
         $parentId = $this->resolveValidatedParentId($request->input('parent_id'));
+        $normalizedName = $this->normalizeRequiredString($request->input('name'));
 
         $normalizedCode = Category::normalizeCode($request->input('code'));
 
@@ -525,11 +582,11 @@ class CategoryController extends Controller
                 : null;
 
             $category = Category::create([
-                'name' => $request->name,
-                'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($request->name),
-                'slug' => Category::buildUniqueSlug($request->name),
+                'name' => $normalizedName,
+                'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($normalizedName),
+                'slug' => Category::buildUniqueSlug($normalizedName),
                 'parent_id' => $parentId,
-                'description' => $request->description,
+                'description' => $this->normalizeNullableString($request->input('description')),
                 'meta_title' => $this->normalizeNullableString($request->input('meta_title')),
                 'meta_description' => $this->normalizeNullableString($request->input('meta_description')),
                 'meta_keywords' => $this->normalizeNullableString($request->input('meta_keywords')),
@@ -603,8 +660,9 @@ class CategoryController extends Controller
         }
 
         if ($request->has('name')) {
-            $category->name = $request->name;
-            $category->slug = Category::buildUniqueSlug($request->name, (int) $category->id);
+            $normalizedName = $this->normalizeRequiredString($request->input('name'));
+            $category->name = $normalizedName;
+            $category->slug = Category::buildUniqueSlug($normalizedName, (int) $category->id);
         }
 
         if ($request->filled('code')) {
@@ -637,7 +695,9 @@ class CategoryController extends Controller
                 $category->order = $this->nextSiblingOrder($resolvedParentId, (int) $category->id);
             }
         }
-        $category->description = $request->input('description', $category->description);
+        if ($request->has('description')) {
+            $category->description = $this->normalizeNullableString($request->input('description'));
+        }
         if ($request->has('meta_title')) {
             $category->meta_title = $this->normalizeNullableString($request->input('meta_title'));
         }
@@ -1237,6 +1297,7 @@ class CategoryController extends Controller
                 ];
             })
             ->filter()
+            ->filter(fn ($p) => !($p['is_variant_child'] ?? false) && ($p['item_type'] ?? '') !== 'bundle_option')
             ->values();
 
         return [
@@ -2956,9 +3017,14 @@ class CategoryController extends Controller
             return null;
         }
 
-        $normalized = trim((string) $value);
+        $normalized = $this->normalizeRequiredString($value);
 
         return $normalized !== '' ? $normalized : null;
+    }
+
+    private function normalizeRequiredString($value): string
+    {
+        return trim(Utf8Sanitizer::normalizeString((string) $value));
     }
 
     private function shouldSkipCategoryImportRow(array $row): bool
@@ -2977,7 +3043,7 @@ class CategoryController extends Controller
     {
         $index = $headerMap[$field] ?? null;
 
-        return $index === null ? '' : trim((string) ($row[$index] ?? ''));
+        return $index === null ? '' : $this->normalizeRequiredString($row[$index] ?? '');
     }
 
     private function splitReferenceToken(string $value): array

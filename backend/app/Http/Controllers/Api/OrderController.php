@@ -75,6 +75,25 @@ class OrderController extends Controller
         'quote_store_phone',
     ];
     private const ORDER_QUICK_PICK_SETTING_KEY = 'order_quick_pick_groups';
+    private const QUICK_DISPATCH_MODE_MANUAL_SHIPMENT = 'manual_shipment';
+    private const QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY = 'outside_delivery';
+    private const QUICK_DISPATCH_MODES = [
+        self::QUICK_DISPATCH_MODE_MANUAL_SHIPMENT,
+        self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+    ];
+    private const OUTSIDE_DELIVERY_CARRIER_CODE = 'outside_delivery';
+    private const OUTSIDE_DELIVERY_TYPES = [
+        'xe_om',
+        'xe_khach',
+        'tu_giao',
+        'khac',
+    ];
+    private const OUTSIDE_DELIVERY_TYPE_LABELS = [
+        'xe_om' => 'Xe ôm',
+        'xe_khach' => 'Xe khách',
+        'tu_giao' => 'Tự giao',
+        'khac' => 'Khác',
+    ];
 
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
@@ -427,7 +446,7 @@ class OrderController extends Controller
 
     private function freshShippingState(): array
     {
-        return [
+        $state = [
             'shipping_status' => null,
             'shipping_synced_at' => null,
             'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
@@ -439,6 +458,12 @@ class OrderController extends Controller
             'shipping_issue_message' => null,
             'shipping_issue_detected_at' => null,
         ];
+
+        if ($this->orderTableHasColumn('external_delivery_meta')) {
+            $state['external_delivery_meta'] = null;
+        }
+
+        return $state;
     }
 
     private function orderDetailRelations(): array
@@ -1504,6 +1529,157 @@ class OrderController extends Controller
         ];
     }
 
+    private function normalizeQuickDispatchMode(mixed $mode): string
+    {
+        $normalized = Str::lower(trim((string) $mode));
+
+        return in_array($normalized, self::QUICK_DISPATCH_MODES, true)
+            ? $normalized
+            : self::QUICK_DISPATCH_MODE_MANUAL_SHIPMENT;
+    }
+
+    private function normalizeOutsideDeliveryType(mixed $value): ?string
+    {
+        $normalized = Str::lower(trim((string) $value));
+
+        return in_array($normalized, self::OUTSIDE_DELIVERY_TYPES, true)
+            ? $normalized
+            : null;
+    }
+
+    private function formatOutsideDeliveryTypeLabel(?string $value): string
+    {
+        return self::OUTSIDE_DELIVERY_TYPE_LABELS[(string) $value] ?? self::OUTSIDE_DELIVERY_TYPE_LABELS['khac'];
+    }
+
+    private function hasLegacyDispatchMarker(Order $order): bool
+    {
+        if (
+            filled($order->shipping_tracking_code)
+            || filled($order->shipping_carrier_code)
+            || filled($order->shipping_carrier_name)
+        ) {
+            return true;
+        }
+
+        if ($order->shipping_dispatched_at || filled($order->shipping_status)) {
+            return true;
+        }
+
+        if ($this->orderTableHasColumn('external_delivery_meta') && !empty($order->external_delivery_meta)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function buildOutsideDeliveryMetaPayload(array $shipmentInput): array
+    {
+        $deliveryType = $this->normalizeOutsideDeliveryType($shipmentInput['external_delivery_type'] ?? null);
+        $contactName = trim((string) ($shipmentInput['external_delivery_contact'] ?? ''));
+        $note = trim((string) ($shipmentInput['external_note'] ?? ''));
+
+        return array_filter([
+            'mode' => self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+            'delivery_type' => $deliveryType,
+            'delivery_type_label' => $this->formatOutsideDeliveryTypeLabel($deliveryType),
+            'contact_name' => $contactName !== '' ? $contactName : null,
+            'shipping_cost' => (float) ($shipmentInput['shipping_cost'] ?? 0),
+            'note' => $note !== '' ? $note : null,
+        ], static fn ($value) => $value !== null);
+    }
+
+    private function buildOutsideDeliverySummary(array $meta): string
+    {
+        $parts = ['Gửi ngoài'];
+
+        if (!empty($meta['delivery_type'])) {
+            $parts[] = $this->formatOutsideDeliveryTypeLabel((string) $meta['delivery_type']);
+        }
+
+        if (!empty($meta['contact_name'])) {
+            $parts[] = trim((string) $meta['contact_name']);
+        }
+
+        return implode(' · ', $parts);
+    }
+
+    private function assertOrderCanQuickDispatch(Order $order): void
+    {
+        $activeShipment = Shipment::query()
+            ->where('order_id', (int) $order->id)
+            ->whereNull('deleted_at')
+            ->whereNotIn('shipment_status', ['canceled'])
+            ->latest('id')
+            ->first();
+
+        if ($activeShipment) {
+            throw new \RuntimeException("Đơn đã có vận đơn {$activeShipment->shipment_number}.");
+        }
+
+        if ($this->hasLegacyDispatchMarker($order)) {
+            $outsideSummary = $this->orderTableHasColumn('external_delivery_meta') && is_array($order->external_delivery_meta)
+                ? $this->buildOutsideDeliverySummary($order->external_delivery_meta)
+                : '';
+
+            if ($outsideSummary !== '') {
+                throw new \RuntimeException("Đơn đã được ghi nhận {$outsideSummary}.");
+            }
+
+            if (filled($order->shipping_tracking_code)) {
+                throw new \RuntimeException("Đơn đã có mã vận đơn {$order->shipping_tracking_code}.");
+            }
+
+            throw new \RuntimeException('Đơn đã được ghi nhận gửi hàng trước đó.');
+        }
+    }
+
+    private function createOutsideDispatchForOrder(Order $order, array $shipmentInput): Order
+    {
+        return DB::transaction(function () use ($order, $shipmentInput) {
+            /** @var Order $lockedOrder */
+            $lockedOrder = Order::query()
+                ->whereKey($order->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $this->assertOrderCanQuickDispatch($lockedOrder);
+
+            $meta = $this->buildOutsideDeliveryMetaPayload($shipmentInput);
+            $carrierSummary = $this->buildOutsideDeliverySummary($meta);
+            $now = now();
+
+            \App\Models\OrderStatusLog::query()->create([
+                'order_id' => $lockedOrder->id,
+                'from_status' => $lockedOrder->status,
+                'to_status' => 'shipping',
+                'from_shipping_status' => $lockedOrder->shipping_status,
+                'to_shipping_status' => 'out_for_delivery',
+                'source' => 'manual_outside_dispatch',
+                'changed_by' => auth()->id(),
+                'reason' => 'Gửi ngoài từ quản lý đơn hàng',
+            ]);
+
+            $lockedOrder->forceFill($this->filterPersistableOrderData([
+                'status' => 'shipping',
+                'shipment_status' => 'shipped',
+                'shipping_status' => 'out_for_delivery',
+                'shipping_synced_at' => $now,
+                'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
+                'shipping_carrier_code' => self::OUTSIDE_DELIVERY_CARRIER_CODE,
+                'shipping_carrier_name' => $carrierSummary,
+                'shipping_tracking_code' => null,
+                'shipping_dispatched_at' => $now,
+                'shipping_issue_code' => null,
+                'shipping_issue_message' => null,
+                'shipping_issue_detected_at' => null,
+                'external_delivery_meta' => $meta,
+            ]))->save();
+
+            return $lockedOrder->fresh(['activeShipment']);
+        });
+    }
+
     private function createQuickShipmentForOrder(
         Order $order,
         array $shipmentInput,
@@ -2159,6 +2335,7 @@ class OrderController extends Controller
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
+                'external_delivery_meta',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
                 'deleted_at',
             ]));
@@ -2653,6 +2830,15 @@ class OrderController extends Controller
         }
 
         $positions = $ids->flip();
+
+        if (false && $shipmentsPayload->contains(
+            fn (array $item) => $item['dispatch_mode'] === self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY
+                && !$item['external_delivery_type']
+        )) {
+            return response()->json([
+                'message' => 'Cần chọn hình thức gửi ngoài cho các đơn dùng luồng Gửi ngoài.',
+            ], 422);
+        }
 
         $orders = $this->scopedOrderQuery($request)
             ->whereIn('id', $ids->all())
@@ -3399,23 +3585,43 @@ class OrderController extends Controller
         $validated = $request->validate([
             'shipments' => 'required|array|min:1',
             'shipments.*.order_id' => 'required|integer',
-            'shipments.*.tracking_number' => 'required|string|max:100',
-            'shipments.*.carrier_name' => 'required|string|max:255',
+            'shipments.*.dispatch_mode' => 'nullable|string|in:' . self::QUICK_DISPATCH_MODE_MANUAL_SHIPMENT . ',' . self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+            'shipments.*.tracking_number' => 'nullable|string|max:100',
+            'shipments.*.carrier_name' => 'nullable|string|max:255',
             'shipments.*.shipping_cost' => 'required|numeric|min:0',
+            'shipments.*.external_delivery_type' => 'nullable|string|in:' . implode(',', self::OUTSIDE_DELIVERY_TYPES),
+            'shipments.*.external_delivery_contact' => 'nullable|string|max:255',
+            'shipments.*.external_note' => 'nullable|string|max:2000',
         ]);
 
         $shipmentsPayload = collect($validated['shipments'])
             ->map(function (array $item) {
                 return [
                     'order_id' => (int) $item['order_id'],
-                    'tracking_number' => trim((string) $item['tracking_number']),
-                    'carrier_name' => trim((string) $item['carrier_name']),
+                    'dispatch_mode' => $this->normalizeQuickDispatchMode($item['dispatch_mode'] ?? null),
+                    'tracking_number' => trim((string) ($item['tracking_number'] ?? '')),
+                    'carrier_name' => trim((string) ($item['carrier_name'] ?? '')),
                     'shipping_cost' => (float) $item['shipping_cost'],
+                    'external_delivery_type' => $this->normalizeOutsideDeliveryType($item['external_delivery_type'] ?? null),
+                    'external_delivery_contact' => trim((string) ($item['external_delivery_contact'] ?? '')),
+                    'external_note' => trim((string) ($item['external_note'] ?? '')),
                 ];
             })
             ->values();
 
-        if ($shipmentsPayload->contains(fn (array $item) => $item['tracking_number'] === '' || $item['carrier_name'] === '')) {
+        if ($shipmentsPayload->contains(
+            fn (array $item) => $item['dispatch_mode'] === self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY
+                && !$item['external_delivery_type']
+        )) {
+            return response()->json([
+                'message' => 'Cần chọn hình thức gửi ngoài cho các đơn dùng luồng Gửi ngoài.',
+            ], 422);
+        }
+
+        if ($shipmentsPayload->contains(
+            fn (array $item) => $item['dispatch_mode'] === self::QUICK_DISPATCH_MODE_MANUAL_SHIPMENT
+                && ($item['tracking_number'] === '' || $item['carrier_name'] === '')
+        )) {
             return response()->json([
                 'message' => 'Mã vận đơn và đơn vị vận chuyển không được để trống.',
             ], 422);
@@ -3453,6 +3659,24 @@ class OrderController extends Controller
             }
 
             try {
+                if ($shipmentInput['dispatch_mode'] === self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY) {
+                    $updatedOrder = $this->createOutsideDispatchForOrder($order, $shipmentInput);
+
+                    $successCount++;
+                    $results[] = [
+                        'order_id' => $updatedOrder->id,
+                        'order_number' => $updatedOrder->order_number,
+                        'success' => true,
+                        'dispatch_mode' => self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+                        'shipment_id' => null,
+                        'shipment_number' => null,
+                        'tracking_number' => null,
+                    ];
+
+                    continue;
+                }
+
+                $this->assertOrderCanQuickDispatch($order);
                 $shipment = $this->createQuickShipmentForOrder($order, $shipmentInput, $syncService);
 
                 $successCount++;
@@ -3460,6 +3684,7 @@ class OrderController extends Controller
                     'order_id' => $order->id,
                     'order_number' => $order->order_number,
                     'success' => true,
+                    'dispatch_mode' => self::QUICK_DISPATCH_MODE_MANUAL_SHIPMENT,
                     'shipment_id' => $shipment->id,
                     'shipment_number' => $shipment->shipment_number,
                     'tracking_number' => $shipment->carrier_tracking_code ?: $shipment->tracking_number,

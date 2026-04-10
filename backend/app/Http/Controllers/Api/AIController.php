@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\Product;
+use App\Services\AI\AiExceptionClassifier;
 use App\Services\AI\GeminiService;
 use App\Services\AI\ProductSeoAiService;
 use App\Services\Inventory\InvoiceAnalysisService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -17,6 +19,7 @@ use Illuminate\Validation\ValidationException;
 class AIController extends Controller
 {
     public function __construct(
+        private readonly AiExceptionClassifier $aiExceptionClassifier,
         private readonly GeminiService $geminiService,
         private readonly ProductSeoAiService $productSeoAiService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
@@ -274,7 +277,11 @@ class AIController extends Controller
                 'status' => 'success',
             ]);
         } catch (\Throwable $exception) {
-            return $this->handleAiException($exception);
+            return $this->handleAiException($exception, [
+                'endpoint' => 'generate-product-seo',
+                'product_id' => !empty($validated['product_id']) ? (int) $validated['product_id'] : null,
+                'persist' => $persist,
+            ]);
         }
     }
 
@@ -332,20 +339,36 @@ class AIController extends Controller
         return null;
     }
 
-    private function handleAiException(\Throwable $exception): JsonResponse
+    private function handleAiException(\Throwable $exception, array $context = []): JsonResponse
     {
         if ($exception instanceof ValidationException) {
             throw $exception;
         }
 
-        $message = $exception->getMessage();
-        $status = str_contains($message, 'Chưa cấu hình API key Gemini')
-            || str_contains($message, 'AI đang tạm tắt')
-            ? 503
-            : 500;
+        $error = $this->aiExceptionClassifier->classify($exception);
+        $logContext = [
+            'error_code' => $error['error_code'],
+            'status' => $error['status'],
+            'retryable' => $error['retryable'],
+            'exception_class' => $exception::class,
+            'message' => trim((string) $exception->getMessage()),
+        ];
+
+        if ($context !== []) {
+            $logContext = [...$logContext, ...$context];
+        }
+
+        if ($error['status'] >= 500) {
+            Log::error('AI request failed.', $logContext);
+        } else {
+            Log::warning('AI request failed.', $logContext);
+        }
 
         return response()->json([
-            'message' => $message !== '' ? $message : 'Không thể xử lý yêu cầu AI lúc này.',
-        ], $status);
+            'message' => $error['message'],
+            'error_code' => $error['error_code'],
+            'detail' => $error['detail'],
+            'retryable' => $error['retryable'],
+        ], $error['status']);
     }
 }

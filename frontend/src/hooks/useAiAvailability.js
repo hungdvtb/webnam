@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { aiApi } from '../services/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { aiApi, isRetryableNetworkError } from '../services/api';
 
 const defaultStatus = {
     provider: 'gemini',
@@ -13,32 +13,71 @@ const defaultStatus = {
 export const useAiAvailability = (autoFetch = true) => {
     const [status, setStatus] = useState(defaultStatus);
     const [loading, setLoading] = useState(autoFetch);
+    const retryTimeoutRef = useRef(null);
 
-    const refresh = useCallback(async () => {
-        setLoading(true);
+    const clearScheduledRefresh = useCallback(() => {
+        if (retryTimeoutRef.current) {
+            window.clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = null;
+        }
+    }, []);
+
+    const refresh = useCallback(async ({ silent = false } = {}) => {
+        clearScheduledRefresh();
+
+        if (!silent) {
+            setLoading(true);
+        }
+
         try {
             const response = await aiApi.getStatus();
             setStatus({
                 ...defaultStatus,
                 ...(response.data || {}),
             });
-        } catch {
-            setStatus(defaultStatus);
+        } catch (error) {
+            if (isRetryableNetworkError(error)) {
+                retryTimeoutRef.current = window.setTimeout(() => {
+                    refresh({ silent: true });
+                }, 3000);
+            } else {
+                setStatus(defaultStatus);
+            }
         } finally {
-            setLoading(false);
+            if (!silent) {
+                setLoading(false);
+            }
         }
-    }, []);
+    }, [clearScheduledRefresh]);
 
     useEffect(() => {
-        if (autoFetch) {
-            refresh();
+        if (!autoFetch) {
+            return undefined;
         }
-    }, [autoFetch, refresh]);
+
+        refresh();
+
+        return () => {
+            clearScheduledRefresh();
+        };
+    }, [autoFetch, clearScheduledRefresh, refresh]);
+
+    useEffect(() => {
+        const handleOnline = () => {
+            refresh({ silent: true });
+        };
+
+        window.addEventListener('online', handleOnline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+        };
+    }, [refresh]);
 
     const disabledReason = !status.configured
-        ? 'Chưa cấu hình API key Gemini trong Cài đặt web.'
+        ? 'Chua cau hinh API key Gemini trong Cai dat web.'
         : !status.enabled
-            ? 'AI đang tạm tắt trong Cài đặt web.'
+            ? 'AI dang tam tat trong Cai dat web.'
             : '';
 
     return {

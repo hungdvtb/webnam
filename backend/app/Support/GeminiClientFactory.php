@@ -9,22 +9,59 @@ use InvalidArgumentException;
 
 class GeminiClientFactory
 {
+    public function __construct(
+        private readonly SslVerifyOptionResolver $sslVerifyOptionResolver,
+    ) {
+    }
+
     public function resolveApiKey(?string ...$candidates): ?string
     {
         foreach ($candidates as $candidate) {
             $normalized = trim((string) $candidate);
-            if ($this->isConfiguredApiKey($normalized)) {
-                return $normalized;
+            if ($normalized === '') {
+                continue;
+            }
+
+            // Split by newline or comma to support multiple keys
+            $keys = preg_split('/[\n,\s]+/', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+            $validKeys = array_filter($keys, fn ($k) => $this->isConfiguredApiKey($k));
+
+            if (!empty($validKeys)) {
+                // If there are multiple keys, pick one randomly for simple load balancing
+                return $validKeys[array_rand($validKeys)];
             }
         }
 
         return null;
     }
 
+    public function resolveAllApiKeys(?string ...$candidates): array
+    {
+        $allKeys = [];
+        foreach ($candidates as $candidate) {
+            $normalized = trim((string) $candidate);
+            if ($normalized === '') {
+                continue;
+            }
+
+            $keys = preg_split('/[\n,\s]+/', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+            foreach ($keys as $key) {
+                if ($this->isConfiguredApiKey($key)) {
+                    $allKeys[] = $key;
+                }
+            }
+        }
+
+        $uniqueKeys = array_values(array_unique($allKeys));
+        shuffle($uniqueKeys); // Shuffle to distribute load evenly across all keys
+
+        return $uniqueKeys;
+    }
+
     public function make(?string $apiKey): GeminiClient
     {
-        $normalizedApiKey = $this->resolveApiKey($apiKey);
-        if ($normalizedApiKey === null) {
+        $normalizedApiKey = trim((string) $apiKey);
+        if ($normalizedApiKey === '' || !$this->isConfiguredApiKey($normalizedApiKey)) {
             throw new InvalidArgumentException('Chua cau hinh Gemini API key hop le.');
         }
 
@@ -41,33 +78,11 @@ class GeminiClientFactory
 
     public function resolveVerifyOption(): bool|string
     {
-        $verifySsl = config('services.gemini.verify_ssl', true);
-        if ($verifySsl === false || $verifySsl === 'false' || $verifySsl === 0 || $verifySsl === '0') {
-            return false;
-        }
-
-        $configuredBundle = config('services.gemini.ca_bundle_path');
-        if (is_string($configuredBundle) && $configuredBundle !== '' && is_file($configuredBundle)) {
-            return $configuredBundle;
-        }
-
-        $candidates = array_filter([
-            env('SSL_CERT_FILE'),
-            env('CURL_CA_BUNDLE'),
-            'C:\\xampp\\apache\\bin\\curl-ca-bundle.crt',
-            'C:\\xampp\\php\\extras\\ssl\\cacert.pem',
-            base_path('vendor/composer/ca-bundle/res/cacert.pem'),
-            ini_get('curl.cainfo') ?: null,
-            ini_get('openssl.cafile') ?: null,
-        ]);
-
-        foreach ($candidates as $candidate) {
-            if (is_string($candidate) && is_file($candidate)) {
-                return $candidate;
-            }
-        }
-
-        return app()->environment('local') ? false : true;
+        return $this->sslVerifyOptionResolver->resolve(
+            config('services.gemini.verify_ssl', true),
+            config('services.gemini.ca_bundle_path'),
+            app()->environment('local')
+        );
     }
 
     private function isConfiguredApiKey(string $value): bool

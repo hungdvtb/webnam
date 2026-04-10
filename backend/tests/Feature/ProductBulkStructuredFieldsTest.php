@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Category;
 use App\Models\InventoryUnit;
 use App\Models\Post;
 use App\Models\Product;
@@ -349,6 +350,82 @@ class ProductBulkStructuredFieldsTest extends TestCase
         $this->assertNull($secondProduct->inventory_unit_id);
     }
 
+    public function test_bulk_update_attributes_can_update_multiple_categories_and_undo_them(): void
+    {
+        $account = $this->authenticate();
+
+        $legacyPrimaryCategory = $this->createCategory($account, 'Do tho', 'do-tho');
+        $legacySecondaryCategory = $this->createCategory($account, 'Phong thuy', 'phong-thuy');
+        $newPrimaryCategory = $this->createCategory($account, 'Trang tri', 'trang-tri');
+        $newSecondaryCategory = $this->createCategory($account, 'Qua tang', 'qua-tang');
+
+        $firstProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 1',
+            'category_id' => $legacyPrimaryCategory->id,
+        ]);
+        $firstProduct->categories()->sync([
+            $legacyPrimaryCategory->id => ['sort_order' => 0, 'item_type' => 'product'],
+            $legacySecondaryCategory->id => ['sort_order' => 0, 'item_type' => 'product'],
+        ]);
+
+        $secondProduct = $this->createProduct($account, [
+            'name' => 'Bo do tho 2',
+            'category_id' => $legacySecondaryCategory->id,
+        ]);
+        $secondProduct->categories()->sync([
+            $legacySecondaryCategory->id => ['sort_order' => 0, 'item_type' => 'product'],
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-attributes', [
+                'ids' => [$firstProduct->id, $secondProduct->id],
+                'basic_info' => [
+                    'category_ids' => [$newPrimaryCategory->id, $newSecondaryCategory->id],
+                ],
+            ]);
+
+        $response->assertOk();
+
+        $logId = (int) $response->json('log_id');
+
+        $firstProduct->refresh()->load('categories');
+        $secondProduct->refresh()->load('categories');
+
+        $this->assertSame($newPrimaryCategory->id, (int) $firstProduct->category_id);
+        $this->assertSame($newPrimaryCategory->id, (int) $secondProduct->category_id);
+        $this->assertEqualsCanonicalizing(
+            [$newPrimaryCategory->id, $newSecondaryCategory->id],
+            $firstProduct->categories->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+        $this->assertEqualsCanonicalizing(
+            [$newPrimaryCategory->id, $newSecondaryCategory->id],
+            $secondProduct->categories->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+
+        $undoResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products/bulk-update-undo', [
+                'log_id' => $logId,
+            ]);
+
+        $undoResponse->assertOk();
+
+        $firstProduct->refresh()->load('categories');
+        $secondProduct->refresh()->load('categories');
+
+        $this->assertSame($legacyPrimaryCategory->id, (int) $firstProduct->category_id);
+        $this->assertSame($legacySecondaryCategory->id, (int) $secondProduct->category_id);
+        $this->assertEqualsCanonicalizing(
+            [$legacyPrimaryCategory->id, $legacySecondaryCategory->id],
+            $firstProduct->categories->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+        $this->assertEqualsCanonicalizing(
+            [$legacySecondaryCategory->id],
+            $secondProduct->categories->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([
@@ -414,6 +491,18 @@ class ProductBulkStructuredFieldsTest extends TestCase
             'normalized_name' => Str::lower(Str::ascii($name)),
             'code' => $code,
             'sort_order' => ((int) InventoryUnit::query()->max('sort_order')) + 1,
+        ]);
+    }
+
+    private function createCategory(Account $account, string $name, string $code): Category
+    {
+        return Category::query()->create([
+            'account_id' => $account->id,
+            'name' => $name,
+            'code' => $code,
+            'slug' => Str::slug($name),
+            'status' => true,
+            'order' => 0,
         ]);
     }
 

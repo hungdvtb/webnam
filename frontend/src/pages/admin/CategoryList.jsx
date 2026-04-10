@@ -6,6 +6,7 @@ import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
 import { useUI } from '../../context/UIContext';
 import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
+import CategorySubSortModal from '../../components/admin/CategorySubSortModal';
 import CategoryItemPickerModal from '../../components/admin/CategoryItemPickerModal';
 import { resolveEntityImageUrl } from '../../utils/mediaUrl';
 import {
@@ -356,6 +357,7 @@ const formatCategoryTimestamp = (value) => {
 
 const buildCategorySlugPreview = (value = '') => String(value || '')
     .normalize('NFD')
+    .replace(/[đĐ]/g, 'd')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -770,6 +772,7 @@ const CategoryList = () => {
     const [draggingProductId, setDraggingProductId] = useState(null);
     const [dragOverProductId, setDragOverProductId] = useState(null);
     const [isCategorySortModalOpen, setIsCategorySortModalOpen] = useState(false);
+    const [isCategorySubSortModalOpen, setIsCategorySubSortModalOpen] = useState(false);
     const [isCategoryItemPickerOpen, setIsCategoryItemPickerOpen] = useState(false);
     const [categoryItemPickerMode, setCategoryItemPickerMode] = useState('form');
     const [categoryItemSearchQuery, setCategoryItemSearchQuery] = useState('');
@@ -991,12 +994,6 @@ const CategoryList = () => {
 
             return [...currentItems, normalizedItem];
         });
-    };
-
-    const removeFormCategoryItem = (assignmentKey) => {
-        setFormCategoryItems((currentItems) => currentItems.filter((item) => (
-            item.assignment_key !== assignmentKey || item.is_removable === false
-        )));
     };
 
     const directSelectedItemMap = React.useMemo(() => new Map(
@@ -1545,20 +1542,12 @@ const CategoryList = () => {
         }));
     };
 
-    const resetSelectedChildOrderDrafts = () => {
-        setSelectedChildOrderDrafts(selectedChildPositionMap);
-    };
-
-    const saveSelectedChildOrder = async () => {
+    const saveSelectedChildOrder = async (manualOrderedChildren = null) => {
         if (!selectedCategoryNode || selectedChildNodes.length === 0 || selectedChildOrderSaving) {
             return;
         }
 
-        if (!isSelectedChildOrderDirty) {
-            return;
-        }
-
-        const orderedChildren = reorderSiblingNodesFromDrafts(selectedChildNodes, selectedChildOrderDrafts);
+        const orderedChildren = manualOrderedChildren || reorderSiblingNodesFromDrafts(selectedChildNodes, selectedChildOrderDrafts);
         setSelectedChildOrderSaving(true);
 
         try {
@@ -1584,6 +1573,7 @@ const CategoryList = () => {
                 message: `Đã lưu thứ tự danh mục con của "${selectedCategoryNode.text}".`,
                 type: 'success',
             });
+            setIsCategorySubSortModalOpen(false);
         } catch (error) {
             console.error('Child category order save error:', error);
             showModal({
@@ -1701,8 +1691,8 @@ const CategoryList = () => {
             } catch (error) {
                 console.error('Error loading category items for edit form:', error);
                 showModal({
-                    title: 'Lá»—i',
-                    content: 'KhÃ´ng thá»ƒ táº£i danh sÃ¡ch item trong danh má»¥c. Báº¡n váº«n cÃ³ thá»ƒ sá»­a thÃ´ng tin khÃ¡c.',
+                    title: 'Lỗi',
+                    content: 'Không thể tải danh sách item trong danh mục. Bạn vẫn có thể sửa thông tin khác.',
                     type: 'error',
                 });
             }
@@ -2016,7 +2006,7 @@ const CategoryList = () => {
         try {
             const response = await categoryApi.importExcel(data);
             showToast({
-                message: response?.data?.message || 'Import Excel thÃ nh cÃ´ng.',
+                message: response?.data?.message || 'Import Excel thành công.',
                 type: 'success',
                 duration: 3500,
             });
@@ -2029,10 +2019,10 @@ const CategoryList = () => {
                 : [];
 
             showModal({
-                title: 'Import Excel tháº¥t báº¡i',
+                title: 'Import Excel thất bại',
                 content: importErrors.length > 0
                     ? buildImportErrorHtml(importErrors)
-                    : (error?.response?.data?.message || 'KhÃ´ng thá»ƒ import file Excel.'),
+                    : (error?.response?.data?.message || 'Không thể import file Excel.'),
                 type: 'error',
             });
         } finally {
@@ -2295,7 +2285,7 @@ const CategoryList = () => {
                             <button
                                 onClick={handleDownloadTemplate}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isDownloadingTemplate ? 'text-primary' : 'text-stone'}`}
-                                title="Táº£i file máº«u Excel"
+                                title="Tải file mẫu Excel"
                                 disabled={isDownloadingTemplate || isTrashView}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isDownloadingTemplate ? 'animate-spin' : ''}`}>
@@ -2306,7 +2296,7 @@ const CategoryList = () => {
                             <button
                                 onClick={handleDownloadExcel}
                                 className={`bg-white border border-gold/20 p-1.5 hover:border-gold/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${isExportingExcel ? 'text-primary' : 'text-stone'}`}
-                                title={selectedIds.size > 0 ? `Xuáº¥t ${selectedIds.size} danh má»¥c Ä‘Ã£ chá»n` : 'Xuáº¥t Excel'}
+                                title={selectedIds.size > 0 ? `Xuất ${selectedIds.size} danh mục đã chọn` : 'Xuất Excel'}
                                 disabled={isExportingExcel || isTrashView}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${isExportingExcel ? 'animate-spin' : ''}`}>
@@ -2562,91 +2552,44 @@ const CategoryList = () => {
                         </div>
 
                         {selectedCategoryNode && !isTrashView ? (
-                            <div className="flex-none border-b border-gold/10 px-4 py-3">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div>
-                                        <h4 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-primary">
-                                            <span className="material-symbols-outlined text-[16px]">format_list_numbered</span>
-                                            Sắp xếp danh mục con
-                                        </h4>
-                                        <p className="mt-1 text-[11px] leading-relaxed text-stone/55">
-                                            Chọn số thứ tự cho các danh mục con trực tiếp của &quot;{selectedCategoryNode.text}&quot;, rồi lưu.
-                                        </p>
+                            <div className="flex-none border-b border-gold/10 px-4 py-3 bg-white">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-1.5 rounded-sm bg-primary/5 px-2 py-1">
+                                            <span className="text-[10px] font-black uppercase tracking-[0.16em] text-stone/40">Đang chọn:</span>
+                                            <span className="text-[12px] font-bold text-primary italic">{selectedCategoryNode.text}</span>
+                                        </div>
+                                        <span className="mx-1 h-3 w-px bg-gold/10" />
+                                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/35">ID: {selectedCategoryNode.id}</span>
+                                        {selectedChildNodes.length > 0 && (
+                                            <>
+                                                <span className="mx-1 h-3 w-px bg-gold/10" />
+                                                <span className="text-[10px] font-bold text-amber-700">{selectedChildNodes.length} danh mục con</span>
+                                            </>
+                                        )}
                                     </div>
 
-                                    <div className="flex flex-wrap items-center gap-2">
+                                    <div className="flex items-center gap-2">
+                                        {selectedChildNodes.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsCategorySubSortModalOpen(true)}
+                                                className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-primary/20 bg-primary/5 px-3 text-[10px] font-black uppercase tracking-[0.16em] text-primary transition-all hover:bg-primary hover:text-white shadow-sm"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">format_list_numbered</span>
+                                                Sắp xếp danh mục con
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
-                                            onClick={resetSelectedChildOrderDrafts}
-                                            disabled={!isSelectedChildOrderDirty || selectedChildOrderSaving}
-                                            className="rounded-sm border border-gold/15 px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
+                                            onClick={() => handleEdit(selectedCategoryNode)}
+                                            className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-gold/20 bg-white px-3 text-[10px] font-black uppercase tracking-[0.16em] text-stone/70 transition-all hover:border-primary hover:text-primary shadow-sm"
                                         >
-                                            Hoàn tác STT con
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={saveSelectedChildOrder}
-                                            disabled={selectedChildNodes.length === 0 || !isSelectedChildOrderDirty || selectedChildOrderSaving}
-                                            className="rounded-sm bg-brick px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-white transition-colors hover:bg-umber disabled:opacity-40"
-                                        >
-                                            {selectedChildOrderSaving ? 'Đang lưu' : 'Lưu STT con'}
+                                            <span className="material-symbols-outlined text-[16px]">edit</span>
+                                            Sửa thong tin
                                         </button>
                                     </div>
                                 </div>
-
-                                {selectedChildNodes.length === 0 ? (
-                                    <div className="mt-3 rounded-sm border border-dashed border-gold/20 bg-stone/5 px-3 py-3 text-[11px] text-stone/50">
-                                        Danh mục này hiện chưa có danh mục con trực tiếp để sắp xếp.
-                                    </div>
-                                ) : (
-                                    <div className="mt-3 space-y-2">
-                                        {selectedChildNodes.map((childNode) => {
-                                            const currentPosition = selectedChildPositionMap[childNode.id] ?? '';
-                                            const draftValue = selectedChildOrderDrafts[childNode.id] ?? currentPosition;
-                                            const isActive = String(draftValue) !== String(currentPosition);
-
-                                            return (
-                                                <div
-                                                    key={`child-order-${childNode.id}`}
-                                                    className={`flex items-center gap-3 rounded-sm border px-3 py-2 transition-colors ${
-                                                        isActive
-                                                            ? 'border-amber-200 bg-amber-50/70'
-                                                            : 'border-gold/10 bg-white'
-                                                    }`}
-                                                >
-                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-primary/10 text-[11px] font-black text-primary">
-                                                        {currentPosition}
-                                                    </div>
-                                                    <div className="min-w-0 flex-1">
-                                                        <div className="truncate text-[12px] font-bold text-primary">
-                                                            {childNode.text}
-                                                        </div>
-                                                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-stone/50">
-                                                            <span>ID: {childNode.id}</span>
-                                                            {childNode.data?.slug ? <span>Slug: {childNode.data.slug}</span> : null}
-                                                            <span className={Number(childNode.data?.status ?? 0) === 1 ? 'text-emerald-700' : 'text-stone-500'}>
-                                                                {Number(childNode.data?.status ?? 0) === 1 ? 'Đang hiển thị' : 'Đang ẩn'}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex shrink-0 items-center gap-2">
-                                                        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/45">
-                                                            STT
-                                                        </span>
-                                                        <input
-                                                            type="number"
-                                                            min="1"
-                                                            value={draftValue}
-                                                            onChange={(event) => handleSelectedChildOrderDraftChange(childNode.id, event.target.value)}
-                                                            disabled={selectedChildOrderSaving}
-                                                            className="h-9 w-16 rounded-sm border border-gold/20 bg-white px-2 text-center text-[12px] font-bold text-primary outline-none transition-colors focus:border-primary disabled:cursor-not-allowed disabled:bg-stone-100"
-                                                        />
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                )}
                             </div>
                         ) : null}
 
@@ -2751,32 +2694,6 @@ const CategoryList = () => {
                                     />
                             )}
                         </div>
-
-                        {false && (
-                            <div className="absolute bottom-6 left-1/2 z-[100] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-3 rounded-[1.5rem] border border-white/10 bg-primary px-4 py-3 text-white shadow-[0_10px_40px_rgba(0,0,0,0.3)] animate-in slide-in-from-bottom duration-300">
-                                <div className="flex items-center gap-3 border-r border-white/10 pr-4">
-                                    <div className="text-xl font-bold text-gold">{selectedIds.size}</div>
-                                    <div className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">đã chọn</div>
-                                </div>
-                                <div className="flex flex-wrap items-center justify-center gap-2">
-                                    <button
-                                        disabled={isBulkDeleting}
-                                        onClick={handleBulkDelete}
-                                        className="flex items-center gap-2 rounded-full bg-brick px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-white transition-all hover:bg-[#8f2d1d] disabled:opacity-50"
-                                    >
-                                        <span className={`material-symbols-outlined text-[18px] ${isBulkDeleting ? 'animate-pulse' : ''}`}>delete</span>
-                                        {isBulkDeleting ? 'Đang xóa' : 'Xóa'}
-                                    </button>
-                                </div>
-                                <button 
-                                    disabled={isBulkDeleting}
-                                    onClick={() => setSelectedIds(new Set())}
-                                    className="size-8 flex items-center justify-center rounded-full hover:bg-brick/20 text-white transition-all disabled:opacity-40"
-                                >
-                                    <span className="material-symbols-outlined text-[20px]">close</span>
-                                </button>
-                            </div>
-                        )}
                     </div>
 
                     {/* Update Form Area */}
@@ -2825,7 +2742,7 @@ const CategoryList = () => {
                                             />
                                         </div>
                                         <div className="space-y-1.5">
-                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Slug hiá»ƒn thá»‹</label>
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Slug hiển thị</label>
                                             <input
                                                 type="text"
                                                 value={formData.slug || buildCategorySlugPreview(formData.name) || 'se-duoc-tao-tu-dong'}
@@ -2833,7 +2750,7 @@ const CategoryList = () => {
                                                 className="w-full bg-stone/5 border border-gold/10 p-3 text-sm text-stone/70 rounded-sm font-mono"
                                             />
                                             <p className="text-[10px] leading-relaxed text-stone/45">
-                                                Slug Ä‘Æ°á»£c táº¡o tá»± Ä‘á»™ng tá»« tÃªn danh má»¥c Ä‘á»ƒ dÃ¹ng cho URL frontend.
+                                                Slug được tạo tự động từ tên danh mục để dùng cho URL frontend.
                                             </p>
                                         </div>
                                         <div className="space-y-1.5">
@@ -2871,9 +2788,9 @@ const CategoryList = () => {
                                         </div>
                                         <div className="space-y-3 rounded-sm border border-gold/10 bg-white p-4">
                                             <div>
-                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">SEO category</label>
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">SEO danh mục</label>
                                                 <p className="mt-1 text-[10px] leading-relaxed text-stone/50">
-                                                    Meta title dÃ¹ng cho Google, meta description dÃ¹ng cho hiá»ƒn thá»‹ ngáº¯n gá»n ngoÃ i frontend, keywords dÃ¹ng Ä‘á»ƒ bÃ¡m nhÃ³m tá»« khÃ³a.
+                                                    Meta title dùng cho Google, meta description dùng cho hiển thị ngắn gọn ngoài frontend, keywords dùng để bám nhóm từ khóa.
                                                 </p>
                                             </div>
                                             <div className="space-y-1.5">
@@ -2883,7 +2800,7 @@ const CategoryList = () => {
                                                     value={formData.meta_title}
                                                     onChange={e => setFormData({ ...formData, meta_title: e.target.value })}
                                                     className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body rounded-sm"
-                                                    placeholder="TiÃªu Ä‘á» SEO cho trang danh má»¥c"
+                                                    placeholder="Tiêu đề SEO cho trang danh mục"
                                                 />
                                             </div>
                                             <div className="space-y-1.5">
@@ -2892,7 +2809,7 @@ const CategoryList = () => {
                                                     value={formData.meta_description}
                                                     onChange={e => setFormData({ ...formData, meta_description: e.target.value })}
                                                     className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-24 resize-none rounded-sm"
-                                                    placeholder="MÃ´ táº£ tá»‘i Æ°u hiá»ƒn thá»‹ banner, hero vÃ  tháº» SEO"
+                                                    placeholder="Mô tả tối ưu hiển thị banner, hero và thẻ SEO"
                                                 />
                                             </div>
                                             <div className="space-y-1.5">
@@ -2901,12 +2818,12 @@ const CategoryList = () => {
                                                     value={formData.meta_keywords}
                                                     onChange={e => setFormData({ ...formData, meta_keywords: e.target.value })}
                                                     className="w-full bg-stone/5 border border-gold/10 p-3 text-sm focus:outline-none focus:border-primary font-body h-20 resize-none rounded-sm"
-                                                    placeholder="gá»‘m bÃ¡t trÃ ng, Ä‘á»“ thá», men lam, men ráº¡n..."
+                                                    placeholder="gốm bát tràng, đồ thờ, men lam, men rạn..."
                                                 />
                                             </div>
                                         </div>
 
-                                        <div className="space-y-3 rounded-sm border border-gold/10 bg-gold/5 p-4">
+                                        <div className="space-y-2.5 rounded-sm border border-gold/10 bg-gold/5 p-4">
                                             <div className="flex flex-wrap items-start justify-between gap-3">
                                                 <div>
                                                     <label className="text-[10px] font-black uppercase tracking-widest text-primary">San pham trong danh muc</label>
@@ -2940,172 +2857,10 @@ const CategoryList = () => {
                                                 ) : null}
                                             </div>
 
-                                            {selectedCategoryItems.length === 0 ? (
-                                                <div className="rounded-sm border border-dashed border-gold/20 bg-white/80 px-3 py-4 text-[11px] leading-relaxed text-stone/50">
-                                                    Chua co item nao duoc gan vao danh muc nay. Bam "Chon san pham" de tim va them san pham, bien the hoac tuy chon bundle.
-                                                </div>
-                                            ) : (
-                                                <div className="space-y-2">
-                                                    {selectedCategoryItems.map((item) => (
-                                                        <div
-                                                            key={item.assignment_key}
-                                                            className="rounded-sm border border-gold/10 bg-white px-3 py-3"
-                                                        >
-                                                            <div className="flex items-start gap-3">
-                                                                <div className="min-w-0 flex-1">
-                                                                    <div className="flex flex-wrap items-center gap-2">
-                                                                        <div className="truncate text-[12px] font-bold text-primary">
-                                                                            {item.item_type === 'bundle_option'
-                                                                                ? (item.bundle_option_title || item.name || 'Tuy chon bundle')
-                                                                                : (item.name || 'San pham')}
-                                                                        </div>
-                                                                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${resolveCategoryItemBadgeClasses(item)}`}>
-                                                                            {item.display_label || 'San pham'}
-                                                                        </span>
-                                                                        {item.is_removable === false ? (
-                                                                            <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-stone-500">
-                                                                                Khoa boi danh muc chinh
-                                                                            </span>
-                                                                        ) : null}
-                                                                    </div>
-
-                                                                    {item.item_type === 'bundle_option' ? (
-                                                                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
-                                                                            Bundle: {item.bundle_parent_name || 'San pham bundle'}
-                                                                        </p>
-                                                                    ) : item.variant_parent_name ? (
-                                                                        <p className="mt-1 text-[11px] font-semibold text-primary/70">
-                                                                            Thuoc: {item.variant_parent_name}
-                                                                        </p>
-                                                                    ) : null}
-
-                                                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
-                                                                        {item.sku ? <span>SKU: {item.sku}</span> : null}
-                                                                        <span>ID: {item.product_id || '--'}</span>
-                                                                        {item.item_type === 'bundle_option' && item.bundle_items_count > 0 ? (
-                                                                            <span>{item.bundle_items_count} thanh phan</span>
-                                                                        ) : null}
-                                                                    </div>
-
-                                                                    {item.item_type === 'bundle_option' && Array.isArray(item.bundle_items_summary) && item.bundle_items_summary.length > 0 ? (
-                                                                        <div className="mt-2 flex flex-wrap gap-1.5">
-                                                                            {item.bundle_items_summary.slice(0, 3).map((summary, summaryIndex) => (
-                                                                                <span
-                                                                                    key={`${item.assignment_key}-form-summary-${summaryIndex}`}
-                                                                                    className="inline-flex max-w-full items-center rounded-full bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700"
-                                                                                >
-                                                                                    <span className="truncate">
-                                                                                        {summary.name || 'San pham'}
-                                                                                        {summary.sku ? ` - ${summary.sku}` : ''}
-                                                                                    </span>
-                                                                                </span>
-                                                                            ))}
-                                                                            {item.bundle_items_summary.length > 3 ? (
-                                                                                <span className="inline-flex items-center rounded-full bg-stone-100 px-2 py-1 text-[10px] font-bold text-stone-500">
-                                                                                    +{item.bundle_items_summary.length - 3}
-                                                                                </span>
-                                                                            ) : null}
-                                                                        </div>
-                                                                    ) : null}
-                                                                </div>
-
-                                                                {item.is_removable === false ? (
-                                                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500" title="Item nay dang khoa boi danh muc chinh">
-                                                                        <span className="material-symbols-outlined text-[16px]">lock</span>
-                                                                    </div>
-                                                                ) : (
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => removeFormCategoryItem(item.assignment_key)}
-                                                                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone/45 transition-colors hover:bg-brick/5 hover:text-brick"
-                                                                        title="Go item khoi danh muc"
-                                                                    >
-                                                                        <span className="material-symbols-outlined text-[16px]">close</span>
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {false && (
-                                        <div className="space-y-3 bg-gold/5 p-4 border border-gold/10 rounded-sm">
-                                            <div className="flex items-center justify-between border-b border-gold/10 pb-2">
-                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">Bộ lọc thuộc tính</label>
-                                                <span className="text-[9px] text-stone/40 italic">Chọn các thuộc tính hiển thị</span>
+                                            <div className="rounded-sm border border-dashed border-gold/20 bg-white/80 px-3 py-3 text-[11px] leading-relaxed text-stone/55">
+                                                Danh sach chi tiet chi hien thi o cot "San pham trong danh muc" de tranh trung noi dung. Tai day ban van co the bam "Chon san pham" de them hoac cap nhat gan ket.
                                             </div>
-                                            
-                                            <div className="grid grid-cols-1 gap-1 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                                                {allAttributes.filter(a => a.entity_type === 'product').map(attr => (
-                                                    <label key={attr.id} className="flex items-center gap-3 cursor-pointer group hover:bg-white/50 p-1.5 rounded transition-colors select-none">
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={formData.filterable_attribute_ids?.some(id => Number(id) === Number(attr.id))}
-                                                            onChange={e => {
-                                                                const checked = e.target.checked;
-                                                                setFormData(prev => {
-                                                                    const currentList = Array.isArray(prev.filterable_attribute_ids) ? prev.filterable_attribute_ids : [];
-                                                                    let newList;
-                                                                    if (checked) {
-                                                                        // Add as Number and ensure uniqueness
-                                                                        newList = currentList.some(id => Number(id) === Number(attr.id))
-                                                                            ? currentList
-                                                                            : [...currentList, Number(attr.id)];
-                                                                    } else {
-                                                                        // Remove all instances via Number comparison
-                                                                        newList = currentList.filter(id => Number(id) !== Number(attr.id));
-                                                                    }
-                                                                    return {
-                                                                        ...prev,
-                                                                        filterable_attribute_ids: newList
-                                                                    };
-                                                                });
-                                                            }}
-                                                            className="size-4 accent-primary rounded-sm shadow-sm"
-                                                        />
-                                                        <div className="flex flex-col">
-                                                            <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider group-hover:text-primary transition-colors leading-tight">{attr.name}</span>
-                                                            <span className="text-[9px] text-slate-400 font-mono tracking-tighter uppercase leading-tight">{attr.code}</span>
-                                                        </div>
-                                                    </label>
-                                                ))}
-                                                {allAttributes.length === 0 && <div className="text-[10px] text-stone/40 italic py-2">Chưa có thuộc tính sản phẩm nào.</div>}
-                                            </div>
-
-                                            {/* Order selected attributes */}
-                                            {formData.filterable_attribute_ids?.length > 1 && (
-                                                <div className="mt-4 pt-3 border-t border-gold/10">
-                                                    <label className="text-[10px] font-black uppercase tracking-widest text-primary mb-2 block">Thứ tự hiển thị ngoài web</label>
-                                                    <div className="flex flex-col">
-                                                        {formData.filterable_attribute_ids.map((id, idx) => {
-                                                            const attr = allAttributes.find(a => Number(a.id) === Number(id));
-                                                            if (!attr) return null;
-                                                            return (
-                                                                <DraggableAttributeItem 
-                                                                    key={id}
-                                                                    attrId={id}
-                                                                    name={attr.name}
-                                                                    index={idx}
-                                                                    moveItem={(dragIndex, hoverIndex) => {
-                                                                        setFormData(prev => {
-                                                                            const newList = [...prev.filterable_attribute_ids];
-                                                                            const draggedItem = newList[dragIndex];
-                                                                            newList.splice(dragIndex, 1);
-                                                                            newList.splice(hoverIndex, 0, draggedItem);
-                                                                            return { ...prev, filterable_attribute_ids: newList };
-                                                                        });
-                                                                    }}
-                                                                />
-                                                            );
-                                                        })}
-                                                    </div>
-                                                    <p className="text-[9px] text-stone/40 italic mt-1">Kéo thả để thay đổi vị trí bộ lọc trên website</p>
-                                                </div>
-                                            )}
                                         </div>
-                                        )}
 
                                         <div className="space-y-1.5">
                                             <div className="flex items-center justify-between gap-3">
@@ -3653,6 +3408,14 @@ const CategoryList = () => {
                 onRefresh={() => loadCategoryProducts(selectedId)}
                 onReset={() => loadCategoryProducts(selectedId)}
                 onSave={saveCategoryProductOrder}
+            />
+            <CategorySubSortModal
+                open={isCategorySubSortModalOpen}
+                onClose={() => setIsCategorySubSortModalOpen(false)}
+                parentCategory={selectedCategoryNode}
+                childNodes={selectedChildNodes}
+                isSaving={selectedChildOrderSaving}
+                onSave={saveSelectedChildOrder}
             />
         </DndProvider>
     );

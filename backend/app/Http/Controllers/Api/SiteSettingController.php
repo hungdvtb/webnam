@@ -19,6 +19,7 @@ class SiteSettingController extends Controller
         'store_locations',
         'inventory_import_print_templates',
         'order_quick_pick_groups',
+        GeminiService::SETTING_KEYS,
     ];
 
     private const BOOLEAN_SETTING_KEYS = [
@@ -55,7 +56,36 @@ class SiteSettingController extends Controller
                     return;
                 }
 
-                $settings[$setting->key] = $this->decodeSettingValue($setting->key, $setting->value);
+                $value = $this->decodeSettingValue($setting->key, $setting->value);
+                
+                // Mask API keys for security while still allowing metadata editing
+                if ($setting->key === GeminiService::SETTING_KEYS && is_array($value)) {
+                    $value = array_map(function($item) {
+                        $realKey = $item['key'] ?? '';
+                        $status = 'ready';
+                        $retryAfter = 0;
+
+                        if (!empty($realKey)) {
+                            $cacheKey = 'gemini_key_exhausted_' . md5(trim($realKey));
+                            $exhaustedUntil = \Illuminate\Support\Facades\Cache::get($cacheKey);
+                            if ($exhaustedUntil) {
+                                $status = 'exhausted';
+                                $retryAfter = max(0, (int) $exhaustedUntil - now()->timestamp);
+                            }
+                        }
+
+                        if (is_string($realKey) && strlen($realKey) > 8) {
+                            $item['key'] = substr($realKey, 0, 4) . '...' . substr($realKey, -4);
+                        }
+
+                        $item['status'] = $status;
+                        $item['retry_after_seconds'] = $retryAfter;
+                        
+                        return $item;
+                    }, $value);
+                }
+
+                $settings[$setting->key] = $value;
             });
 
         $aiStatus = $this->geminiService->status($accountId);
@@ -129,6 +159,26 @@ class SiteSettingController extends Controller
         foreach ($validated['settings'] as $key => $value) {
             if ($key === GeminiService::SETTING_MODEL) {
                 $value = $this->geminiService->normalizeModelName(is_scalar($value) ? (string) $value : null);
+            }
+
+            if ($key === GeminiService::SETTING_KEYS && is_array($value)) {
+                $oldValue = SiteSetting::getValue(GeminiService::SETTING_KEYS, (int) $validated['account_id']);
+                $oldDecoded = is_string($oldValue) ? json_decode($oldValue, true) : [];
+                $oldKeyMap = [];
+                if (is_array($oldDecoded)) {
+                    foreach ($oldDecoded as $oldItem) {
+                        if (isset($oldItem['id'], $oldItem['key'])) {
+                            $oldKeyMap[$oldItem['id']] = $oldItem['key'];
+                        }
+                    }
+                }
+
+                $value = array_map(function($item) use ($oldKeyMap) {
+                    if (isset($item['id'], $item['key']) && str_contains($item['key'], '...') && isset($oldKeyMap[$item['id']])) {
+                        $item['key'] = $oldKeyMap[$item['id']];
+                    }
+                    return $item;
+                }, $value);
             }
 
             if ($this->shouldSkipEmptySecretSetting($key, $value)) {

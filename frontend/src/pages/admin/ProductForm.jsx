@@ -14,6 +14,7 @@ ReactQuill.Quill.register('modules/resize', QuillResizeImage);
 
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
+import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
 import {
@@ -29,7 +30,9 @@ import {
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
+import { formatCategorySummary, getCategoryNamesByIds, getProductCategoryIds, normalizeCategoryIds } from '../../utils/productCategories';
 import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
+import { resolveAiRequestError } from '../../utils/aiError';
 
 const ItemType = {
     IMAGE: 'image',
@@ -1552,6 +1555,29 @@ const ProductForm = () => {
         bundle_title: '',
         site_domain_id: ''
     });
+    const normalizeSelectedCategoryIds = useCallback((values) => normalizeCategoryIds(values), []);
+    const applySelectedCategoryIds = useCallback((nextValuesOrUpdater) => {
+        setFormData((prev) => {
+            const incomingValues = typeof nextValuesOrUpdater === 'function'
+                ? nextValuesOrUpdater(prev.category_ids || [])
+                : nextValuesOrUpdater;
+            const nextCategoryIds = normalizeSelectedCategoryIds(incomingValues);
+
+            return {
+                ...prev,
+                category_ids: nextCategoryIds,
+                category_id: nextCategoryIds[0] || '',
+            };
+        });
+    }, [normalizeSelectedCategoryIds]);
+    const selectedCategoryNames = useMemo(
+        () => getCategoryNamesByIds(formData.category_ids, categories),
+        [categories, formData.category_ids]
+    );
+    const selectedCategorySummary = useMemo(
+        () => formatCategorySummary(selectedCategoryNames, 'Chưa gắn danh mục'),
+        [selectedCategoryNames]
+    );
     const [productMeta, setProductMeta] = useState({
         originalType: '',
         parentConfigurable: null,
@@ -2985,8 +3011,8 @@ const ProductForm = () => {
             });
 
             // Nếu không có search/filter, dùng danh mục mặc định
-            if (!hasSearch && !hasCategory && !hasAttrs && formData.category_id) {
-                params.category_ids = String(formData.category_id);
+            if (!hasSearch && !hasCategory && !hasAttrs && formData.category_ids.length > 0) {
+                params.category_ids = formData.category_ids.join(',');
                 params.sort_by = 'random';
             }
 
@@ -2999,7 +3025,7 @@ const ProductForm = () => {
         } finally {
             setSearchingRelated(false);
         }
-    }, [relatedQuery, relatedCategory, relatedAttrFilter, id, formData.id, formData.category_id]);
+    }, [relatedQuery, relatedCategory, relatedAttrFilter, id, formData.id, formData.category_ids]);
 
     // Lazy load bundle items on demand
     const fetchBundleItems = useCallback(async () => {
@@ -3120,11 +3146,12 @@ const ProductForm = () => {
                 name: data.name,
                 sku: data.sku,
             }));
+            const resolvedCategoryIds = getProductCategoryIds(data);
             setFormData({
                 type: data.type || 'simple',
                 name: duplicateName,
-                category_id: data.category_id || '',
-                category_ids: data.categories ? data.categories.map(c => c.id) : [],
+                category_id: resolvedCategoryIds[0] || '',
+                category_ids: resolvedCategoryIds,
                 price: normalizeMoneyValue(data.price),
                 price_type: data.price_type || 'fixed',
                 expected_cost: normalizeImportCostValue(data.expected_cost),
@@ -3736,7 +3763,7 @@ const ProductForm = () => {
 
         setAiGenerating(true);
         try {
-            const categoryName = categories.find(c => c.id == formData.category_id)?.name || 'Gốm sứ';
+            const categoryName = selectedCategoryNames.length > 0 ? selectedCategorySummary : 'Gốm sứ';
             const attrData = {};
             Object.entries(formData.custom_attributes).forEach(([id, val]) => {
                 const attr = allAttributes.find(a => a.id == id);
@@ -3752,14 +3779,18 @@ const ProductForm = () => {
 
             setFormData(prev => ({ ...prev, description: response.data.description }));
         } catch (error) {
-            showModal({ title: 'Lỗi AI', content: 'Không thể kết nối AI lúc này. Vui lòng thử lại sau.', type: 'error' });
+            showModal({
+                title: 'Lỗi AI',
+                content: resolveAiRequestError(error, 'Không thể tạo mô tả bằng AI lúc này.'),
+                type: 'error',
+            });
         } finally {
             setAiGenerating(false);
         }
     };
 
     const buildAiSeoPayload = () => {
-        const categoryName = categories.find((category) => String(category.id) === String(formData.category_id))?.name || 'Gốm sứ';
+        const categoryName = selectedCategoryNames.length > 0 ? selectedCategorySummary : 'Gốm sứ';
         const attrData = {};
 
         Object.entries(formData.custom_attributes || {}).forEach(([attributeId, value]) => {
@@ -3865,8 +3896,11 @@ const ProductForm = () => {
                 type: 'success',
             });
         } catch (error) {
-            const message = error?.response?.data?.message || 'Không thể tạo SEO bằng AI lúc này. Vui lòng thử lại sau.';
-            showModal({ title: 'Lỗi AI', content: message, type: 'error' });
+            showModal({
+                title: 'Lỗi AI',
+                content: resolveAiRequestError(error, 'Không thể tạo SEO bằng AI lúc này.'),
+                type: 'error',
+            });
         } finally {
             setAiGeneratingSeo(false);
         }
@@ -3910,8 +3944,14 @@ const ProductForm = () => {
             setFormData(prev => ({ ...prev, description: finalHtml }));
         } catch (error) {
             console.error("Rewrite Error:", error.response?.data || error);
-            const errMessage = error.response?.data?.message || 'Không thể kết nối AI (Có thể nội dung quá dài/quá tải). Vui lòng thử lại sau.';
-            showModal({ title: 'Lỗi AI', content: errMessage, type: 'error' });
+            showModal({
+                title: 'Lỗi AI',
+                content: resolveAiRequestError(
+                    error,
+                    'Không thể viết lại mô tả bằng AI lúc này. Có thể nội dung quá dài hoặc backend AI đang lỗi.'
+                ),
+                type: 'error',
+            });
         } finally {
             setAiRewriting(false);
         }
@@ -4881,6 +4921,12 @@ const ProductForm = () => {
                 }
             });
 
+            if (Array.isArray(formData.category_ids) && formData.category_ids.length > 0) {
+                submitData.set('category_id', formData.category_ids[0]);
+            } else if (isEdit || isDuplicate) {
+                submitData.append('clear_category_ids', '1');
+            }
+
             if (shouldAutoSumCompositePrice) {
                 submitData.set('price', String(compositeSumPrice));
             }
@@ -5316,24 +5362,22 @@ const ProductForm = () => {
 
                                     <div>
                                         <Field label="Danh mục">
-                                            <select
-                                                name="category_id"
-                                                value={formData.category_id}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    setFormData(prev => ({
-                                                        ...prev,
-                                                        category_id: val,
-                                                        category_ids: val ? [parseInt(val)] : []
-                                                    }));
-                                                }}
-                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px]"
-                                            >
-                                                <option value="">Chọn danh mục</option>
-                                                {categories.map(cat => (
-                                                    <option key={cat.id} value={cat.id}>{cat.name}</option>
-                                                ))}
-                                            </select>
+                                            <div className="space-y-2">
+                                                <AdminMultiSelect
+                                                    options={categories}
+                                                    value={formData.category_ids}
+                                                    onChange={applySelectedCategoryIds}
+                                                    placeholder="Chọn một hoặc nhiều danh mục"
+                                                />
+                                                <p className="text-[11px] text-primary/55">
+                                                    Đã chọn: <span className="font-bold text-primary/75">{selectedCategorySummary}</span>
+                                                </p>
+                                                {formData.category_ids.length > 1 ? (
+                                                    <p className="text-[10px] font-semibold text-primary/45">
+                                                        Danh mục đầu tiên sẽ được dùng làm danh mục chính tương thích cho các phần còn dùng trường cũ.
+                                                    </p>
+                                                ) : null}
+                                            </div>
                                         </Field>
                                     </div>
 

@@ -130,6 +130,100 @@ class ProductExcelImportExportTest extends TestCase
         $this->assertStringContainsString('CODE:mau-sac', (string) $rows[1][5]);
     }
 
+    public function test_product_export_and_selective_import_support_multiple_categories(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        $primaryCategory = Category::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Đồ thờ',
+            'code' => 'do-tho',
+            'slug' => 'do-tho',
+            'status' => true,
+            'order' => 0,
+        ]);
+        $secondaryCategory = Category::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Phong thủy',
+            'code' => 'phong-thuy',
+            'slug' => 'phong-thuy',
+            'status' => true,
+            'order' => 1,
+        ]);
+        $replacementCategory = Category::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Quà tặng',
+            'code' => 'qua-tang',
+            'slug' => 'qua-tang',
+            'status' => true,
+            'order' => 2,
+        ]);
+
+        $product = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bộ đồ thờ xuất nhập nhiều danh mục',
+            'slug' => 'bo-do-tho-xuat-nhap-nhieu-danh-muc',
+            'sku' => 'MULTI-CAT-001',
+            'price' => 1450000,
+            'category_id' => $primaryCategory->id,
+            'status' => true,
+        ]);
+        $product->categories()->sync([
+            $primaryCategory->id => ['sort_order' => 0, 'item_type' => 'product'],
+            $secondaryCategory->id => ['sort_order' => 0, 'item_type' => 'product'],
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $exportResponse = $this
+            ->withHeaders($headers)
+            ->get('/api/products/export?columns=sku,category')
+            ->assertOk();
+
+        $tempPath = tempnam(sys_get_temp_dir(), 'product_export_multi_category_');
+        file_put_contents($tempPath, $exportResponse->getContent());
+        $rows = SimpleXlsx::readRows($tempPath);
+        @unlink($tempPath);
+
+        $this->assertSame('MULTI-CAT-001', $rows[1][0]);
+        $this->assertStringContainsString('CODE:do-tho', (string) $rows[1][1]);
+        $this->assertStringContainsString('CODE:phong-thuy', (string) $rows[1][1]);
+
+        $binary = SimpleXlsx::buildWorkbook([[
+            'name' => 'SanPham',
+            'rows' => [
+                ['ID', 'SKU', 'Slug', 'Link sản phẩm', 'Tên sản phẩm', 'Loại sản phẩm', 'Danh mục'],
+                ['', 'MULTI-CAT-001', '', '', '', '', 'CODE:phong-thuy | CODE:qua-tang'],
+            ],
+        ]]);
+
+        $file = UploadedFile::fake()->createWithContent('products-update-multi-category.xlsx', $binary);
+
+        $importResponse = $this
+            ->withHeaders($headers)
+            ->post('/api/products/import', [
+                'file' => $file,
+                'mode' => 'update_selected_fields',
+                'missing_product_action' => 'skip',
+                'update_fields' => ['category'],
+            ])
+            ->assertOk()
+            ->json();
+
+        $this->assertSame(1, (int) ($importResponse['summary']['updated'] ?? 0));
+        $this->assertSame(0, (int) ($importResponse['summary']['failed'] ?? 0));
+
+        $product->refresh()->load('categories');
+
+        $this->assertSame($secondaryCategory->id, (int) $product->category_id);
+        $this->assertEqualsCanonicalizing(
+            [$secondaryCategory->id, $replacementCategory->id],
+            $product->categories->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+    }
+
     public function test_product_export_excel_supports_child_skus_for_configurable_products(): void
     {
         $account = $this->createAccount();

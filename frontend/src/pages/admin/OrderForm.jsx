@@ -667,6 +667,37 @@ const resolveMoneyValue = (...candidates) => {
 
     return 0;
 };
+const calculateQuoteItemsSubtotal = (items = []) => (
+    (Array.isArray(items) ? items : []).reduce((sum, item) => (
+        sum
+        + ((parseMoneyNumber(item?.price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0))
+    ), 0)
+);
+const buildQuotePricingSummary = (formData = {}) => {
+    const subtotal = calculateQuoteItemsSubtotal(formData?.items);
+    const shippingFee = parseMoneyNumber(formData?.shipping_fee, 0) || 0;
+    const discountAmount = parseMoneyNumber(formData?.discount, 0) || 0;
+    const totalPayment = subtotal + shippingFee - discountAmount;
+    const hasDiscount = discountAmount > 0;
+    const extraRows = hasDiscount
+        ? [
+            ...(shippingFee > 0
+                ? [{ key: 'shipping_fee', label: 'Phí vận chuyển', value: shippingFee }]
+                : []),
+            { key: 'discount', label: 'Chiết khấu/Giảm', value: discountAmount, isDeduction: true },
+            { key: 'total_payment', label: 'Tổng thanh toán', value: totalPayment, isEmphasis: true },
+        ]
+        : [];
+
+    return {
+        subtotal,
+        shippingFee,
+        discountAmount,
+        totalPayment,
+        hasDiscount,
+        extraRows,
+    };
+};
 const resolveInventorySnapshot = (source, fallbackSource = null) => {
     const fallbackComputedStock = parseQuantityNumber(
         fallbackSource?.computed_stock,
@@ -1678,12 +1709,15 @@ const drawImageContain = (ctx, image, x, y, width, height) => {
     ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
 };
 
-const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orderId, totalQuantity, subtotal }) => {
+const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orderId, totalQuantity, pricingSummary }) => {
     const headerAddress = [quoteSettings.quote_store_address, quoteSettings.quote_store_phone ? `Điện thoại: ${quoteSettings.quote_store_phone}` : '']
         .filter(Boolean)
         .join('\n');
     const hasLogo = Boolean(quoteSettings.quote_logo_url);
     const sheetTitle = orderId ? `Báo giá đơn #${orderId}` : 'Báo giá sản phẩm';
+    const resolvedPricingSummary = pricingSummary || buildQuotePricingSummary(formData);
+    const quoteSubtotal = resolvedPricingSummary.subtotal;
+    const quoteExtraRows = resolvedPricingSummary.extraRows;
 
     return (
         <div ref={captureRef} className="w-[1125px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: 'var(--font-roboto)' }}>
@@ -1757,8 +1791,17 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                             <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">{totalQuantity}</td>
                             <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">&nbsp;</td>
                             <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">Tổng tiền</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right">{formatQuoteMoney(subtotal)}</td>
+                            <td className="border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right">{formatQuoteMoney(quoteSubtotal)}</td>
                         </tr>
+                        {quoteExtraRows.map((row) => (
+                            <tr key={row.key} className={row.isEmphasis ? 'bg-[#F5E7BF]' : 'bg-[#FCF8F3]'}>
+                                <td className="border border-[#2F1A14] px-4 py-3" colSpan={4}>&nbsp;</td>
+                                <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-right">{row.label}</td>
+                                <td className={`border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right ${row.isDeduction ? 'text-[#8E0B0B]' : 'text-slate-900'}`}>
+                                    {row.isDeduction ? '-' : ''}{formatQuoteMoney(row.value)}
+                                </td>
+                            </tr>
+                        ))}
                     </tbody>
                 </table>
             </div>
@@ -4382,21 +4425,12 @@ const OrderForm = () => {
         showTransientNotification('success', `Đã xác nhận nhanh ${pendingOrderAiItems.length} dòng AI.`);
     }, [pendingOrderAiItems.length, showTransientNotification]);
 
-    const calculateSubtotal = () => {
-        return formData.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    };
-
-    const calculateTotal = () => {
-        return calculateSubtotal()
-            + (parseMoneyNumber(formData.shipping_fee, 0) || 0)
-            - (parseMoneyNumber(formData.discount, 0) || 0);
-    };
-
     const normalizedOrderType = normalizeOrderType(formData.order_type);
     const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
     const specialOrderType = isSpecialOrderType(normalizedOrderType);
-    const subtotalAmount = calculateSubtotal();
-    const totalPaymentAmount = calculateTotal();
+    const quotePricingSummary = buildQuotePricingSummary(formData);
+    const subtotalAmount = quotePricingSummary.subtotal;
+    const totalPaymentAmount = quotePricingSummary.totalPayment;
     const costTotalAmount = parseMoneyNumber(formData.cost_total, 0) || 0;
     const grossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
     const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
@@ -4454,7 +4488,6 @@ const OrderForm = () => {
             const pageWidth = quoteCanvasPageWidth;
             const headerHeight = 248;
             const tableHeaderHeight = 52;
-            const footerHeight = 56;
             const imageColWidth = 260;
             const qtyColWidth = 92;
             const unitColWidth = 108;
@@ -4489,6 +4522,10 @@ const OrderForm = () => {
             });
 
             const itemsHeight = rowHeights.reduce((sum, height) => sum + height, 0);
+            const quoteFooterRows = quotePricingSummary.extraRows;
+            const footerRowHeight = 34;
+            const footerPaddingY = 10;
+            const footerHeight = (footerPaddingY * 2) + ((1 + quoteFooterRows.length) * footerRowHeight);
             const pageHeight = headerHeight + tableHeaderHeight + itemsHeight + footerHeight;
 
             canvas.width = pageWidth * 2;
@@ -4732,6 +4769,46 @@ const OrderForm = () => {
             ctx.fillText(normalizeCanvasText('\u0054\u1ed5ng ti\u1ec1n'), xPrice + (priceColWidth / 2), bodyStartY + itemsHeight + 18);
             ctx.textAlign = 'right';
             ctx.fillText(formatQuoteMoney(quoteSubtotal), pageWidth - 18, bodyStartY + itemsHeight + 18);
+
+            ctx.fillStyle = footerBg;
+            ctx.fillRect(0, bodyStartY + itemsHeight, pageWidth, footerHeight);
+            ctx.strokeStyle = borderStrong;
+            ctx.strokeRect(0.5, bodyStartY + itemsHeight + 0.5, pageWidth - 1, footerHeight - 1);
+            [xQty, xUnit, xPrice, xTotal].forEach((x) => {
+                ctx.beginPath();
+                ctx.moveTo(x, bodyStartY + itemsHeight);
+                ctx.lineTo(x, pageHeight);
+                ctx.stroke();
+            });
+
+            const footerFirstRowY = bodyStartY + itemsHeight + footerPaddingY + (footerRowHeight / 2);
+            ctx.fillStyle = textPrimary;
+            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'left';
+            ctx.fillText(normalizeCanvasText('Tổng món'), 18, footerFirstRowY);
+            ctx.textAlign = 'center';
+            ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), footerFirstRowY);
+            ctx.fillText(normalizeCanvasText('Tổng tiền'), xPrice + (priceColWidth / 2), footerFirstRowY);
+            ctx.textAlign = 'right';
+            ctx.fillText(formatQuoteMoney(subtotalAmount), pageWidth - 18, footerFirstRowY);
+
+            quoteFooterRows.forEach((row, index) => {
+                const dividerY = bodyStartY + itemsHeight + footerPaddingY + ((index + 1) * footerRowHeight);
+                ctx.beginPath();
+                ctx.moveTo(0, dividerY);
+                ctx.lineTo(pageWidth, dividerY);
+                ctx.stroke();
+
+                const rowY = dividerY + (footerRowHeight / 2);
+                ctx.fillStyle = row.isDeduction ? '#8E0B0B' : textPrimary;
+                ctx.font = `${row.isEmphasis ? '700' : '600'} 14px ${quoteCanvasFontFamily}`;
+                ctx.textAlign = 'center';
+                ctx.fillText(normalizeCanvasText(row.label), xPrice + (priceColWidth / 2), rowY);
+                ctx.textAlign = 'right';
+                ctx.fillText(`${row.isDeduction ? '-' : ''}${formatQuoteMoney(row.value)}`, pageWidth - 18, rowY);
+            });
+            ctx.textBaseline = 'top';
 
             const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
 
@@ -5059,7 +5136,7 @@ const OrderForm = () => {
         !normalizedQuoteTemplateSearch || normalizeCanvasText(template.name).toLowerCase().includes(normalizedQuoteTemplateSearch)
     ));
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const quoteSubtotal = calculateSubtotal();
+    const quoteSubtotal = quotePricingSummary.subtotal;
     const leadConversionCard = leadConversionSummary ? (
         <div className="w-full rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
             <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
@@ -6680,7 +6757,7 @@ const OrderForm = () => {
                         formData={formData}
                         orderId={id}
                         totalQuantity={quoteTotalQuantity}
-                        subtotal={quoteSubtotal}
+                        pricingSummary={quotePricingSummary}
                     />
                 </div>
             )}

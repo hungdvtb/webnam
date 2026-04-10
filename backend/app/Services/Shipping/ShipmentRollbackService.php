@@ -11,6 +11,7 @@ use App\Models\ShipmentStatusLog;
 use App\Services\Inventory\InventoryService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -153,8 +154,13 @@ class ShipmentRollbackService
                 'reason' => $this->buildOrderRollbackReason($activeShipments, $automaticExportDocuments),
             ]);
 
+            $resetState = self::SHIPPING_RESET_STATE;
+            if (Schema::hasColumn('orders', 'external_delivery_meta')) {
+                $resetState['external_delivery_meta'] = null;
+            }
+
             $lockedOrder->forceFill(array_merge(
-                self::SHIPPING_RESET_STATE,
+                $resetState,
                 [
                     'status' => $targetOrderStatus,
                 ]
@@ -276,6 +282,10 @@ class ShipmentRollbackService
         }
 
         if ($order->shipping_dispatched_at || filled($order->shipping_status)) {
+            return true;
+        }
+
+        if (Schema::hasColumn('orders', 'external_delivery_meta') && !empty($order->external_delivery_meta)) {
             return true;
         }
 

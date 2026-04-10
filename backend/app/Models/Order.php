@@ -39,6 +39,7 @@ class Order extends Model
         'shipping_status', 'shipping_synced_at', 'shipping_status_source',
         'shipping_carrier_code', 'shipping_carrier_name', 'shipping_tracking_code',
         'shipping_dispatched_at', 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
+        'external_delivery_meta',
     ];
 
     protected $casts = [
@@ -47,6 +48,7 @@ class Order extends Model
         'shipping_synced_at' => 'datetime',
         'shipping_dispatched_at' => 'datetime',
         'shipping_issue_detected_at' => 'datetime',
+        'external_delivery_meta' => 'json',
         'settlement_delta' => 'decimal:2',
         'cost_total' => 'decimal:2',
         'profit_total' => 'decimal:2',

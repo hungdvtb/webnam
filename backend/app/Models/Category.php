@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Utf8Sanitizer;
 use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
@@ -63,7 +64,72 @@ class Category extends Model
             }
         });
     }
-    
+
+    public function getNameAttribute($value): string
+    {
+        return $this->normalizeUtf8TextValue($value, false) ?? '';
+    }
+
+    public function setNameAttribute($value): void
+    {
+        $this->attributes['name'] = $this->normalizeUtf8TextValue($value, false) ?? '';
+    }
+
+    public function getDescriptionAttribute($value): ?string
+    {
+        return $this->normalizeUtf8TextValue($value);
+    }
+
+    public function setDescriptionAttribute($value): void
+    {
+        $this->attributes['description'] = $this->normalizeUtf8TextValue($value);
+    }
+
+    public function getMetaTitleAttribute($value): ?string
+    {
+        return $this->normalizeUtf8TextValue($value);
+    }
+
+    public function setMetaTitleAttribute($value): void
+    {
+        $this->attributes['meta_title'] = $this->normalizeUtf8TextValue($value);
+    }
+
+    public function getMetaDescriptionAttribute($value): ?string
+    {
+        return $this->normalizeUtf8TextValue($value);
+    }
+
+    public function setMetaDescriptionAttribute($value): void
+    {
+        $this->attributes['meta_description'] = $this->normalizeUtf8TextValue($value);
+    }
+
+    public function getMetaKeywordsAttribute($value): ?string
+    {
+        return $this->normalizeUtf8TextValue($value);
+    }
+
+    public function setMetaKeywordsAttribute($value): void
+    {
+        $this->attributes['meta_keywords'] = $this->normalizeUtf8TextValue($value);
+    }
+
+    private function normalizeUtf8TextValue($value, bool $nullable = true): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalized = trim(Utf8Sanitizer::normalizeString((string) $value));
+
+        if ($normalized === '' && $nullable) {
+            return null;
+        }
+
+        return $normalized;
+    }
+     
     public function parent()
     {
         return $this->belongsTo(Category::class, 'parent_id');

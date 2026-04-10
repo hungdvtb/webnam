@@ -78,6 +78,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
     Route::post('/products/refresh-order-items', [ProductController::class , 'refreshOrderItems']);
     Route::get('/products/sort-items', [ProductController::class , 'sortItems']);
+    Route::get('/products/seo-bulk/runs', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'index']);
+    Route::post('/products/seo-bulk/runs', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'store']);
+    Route::get('/products/seo-bulk/runs/{runId}', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'show'])->whereNumber('runId');
+    Route::post('/products/seo-bulk/runs/{runId}/cancel', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'cancel'])->whereNumber('runId');
     Route::post('/products/reorder', [ProductController::class , 'reorder']);
     Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
     Route::post('/products/{id}/convert-to-configurable', [ProductController::class , 'convertToConfigurable'])->where('id', '[0-9]+');

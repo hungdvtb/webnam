@@ -359,6 +359,18 @@ const CANCEL_DISPATCH_STATUS_LABELS = {
     returned: 'Đã hoàn',
     canceled: 'Đã hủy',
 };
+const QUICK_DISPATCH_MODE_MANUAL = 'manual_shipment';
+const QUICK_DISPATCH_MODE_OUTSIDE = 'outside_delivery';
+const OUTSIDE_DELIVERY_TYPE_OPTIONS = [
+    { value: 'xe_om', label: 'Xe ôm' },
+    { value: 'xe_khach', label: 'Xe khách' },
+    { value: 'tu_giao', label: 'Tự giao' },
+    { value: 'khac', label: 'Khác' },
+];
+const OUTSIDE_DELIVERY_TYPE_LABELS = OUTSIDE_DELIVERY_TYPE_OPTIONS.reduce((accumulator, option) => {
+    accumulator[option.value] = option.label;
+    return accumulator;
+}, {});
 
 const isDraftOrder = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'main');
@@ -421,6 +433,95 @@ const buildOrderSearchTerms = (filters = {}) => (
     buildActiveKeywordTokens(filters?.search_terms, filters?.search_input)
 );
 
+const normalizeQuickDispatchMode = (value) => (
+    value === QUICK_DISPATCH_MODE_OUTSIDE ? QUICK_DISPATCH_MODE_OUTSIDE : QUICK_DISPATCH_MODE_MANUAL
+);
+
+const normalizeOutsideDeliveryMeta = (value) => {
+    if (!value) {
+        return null;
+    }
+
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    return typeof value === 'object' ? value : null;
+};
+
+const formatOutsideDeliveryTypeLabel = (value) => (
+    OUTSIDE_DELIVERY_TYPE_LABELS[String(value || '').trim()] || 'Khác'
+);
+
+const formatOutsideDeliverySummary = (value) => {
+    const meta = normalizeOutsideDeliveryMeta(value);
+    if (!meta) {
+        return '';
+    }
+
+    const parts = ['Gửi ngoài'];
+    if (meta.delivery_type) {
+        parts.push(formatOutsideDeliveryTypeLabel(meta.delivery_type));
+    }
+    if (meta.contact_name) {
+        parts.push(String(meta.contact_name).trim());
+    }
+
+    return parts.join(' · ');
+};
+
+const hasLegacyQuickDispatchMarker = (order) => Boolean(
+    order?.shipping_tracking_code
+    || order?.shipping_carrier_code
+    || order?.shipping_carrier_name
+    || order?.shipping_dispatched_at
+    || order?.shipping_status
+    || normalizeOutsideDeliveryMeta(order?.external_delivery_meta)
+);
+
+const buildQuickDispatchLockedMessage = (order) => {
+    const activeShipment = order?.active_shipment || null;
+    if (activeShipment) {
+        return `Đã có vận đơn ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || activeShipment.tracking_number || ''}`.trim();
+    }
+
+    const outsideSummary = formatOutsideDeliverySummary(order?.external_delivery_meta);
+    if (outsideSummary) {
+        return `Đã ghi nhận ${outsideSummary}.`;
+    }
+
+    if (order?.shipping_tracking_code) {
+        return `Đã có mã vận đơn ${order.shipping_tracking_code}.`;
+    }
+
+    if (order?.shipping_carrier_name) {
+        return `Đã ghi nhận gửi hàng qua ${order.shipping_carrier_name}.`;
+    }
+
+    return 'Đơn này đã được ghi nhận gửi hàng trước đó.';
+};
+
+const isQuickDispatchRowValid = (row) => {
+    const shippingCost = Number(row.shipping_cost);
+    if (row.shipping_cost === '' || Number.isNaN(shippingCost) || shippingCost < 0) {
+        return false;
+    }
+
+    if (normalizeQuickDispatchMode(row.mode) === QUICK_DISPATCH_MODE_OUTSIDE) {
+        return Boolean(String(row.outside_delivery_type || '').trim());
+    }
+
+    return Boolean(
+        String(row.tracking_number || '').trim()
+        && String(row.carrier_name || '').trim()
+    );
+};
+
 const buildOrderListRequestParams = ({
     filters,
     sortConfig,
@@ -429,16 +530,25 @@ const buildOrderListRequestParams = ({
     isDraftView = false,
     isTrashView = false,
     scopedOrderIds = null,
+    selectedOnlyIds = [],
 }) => {
-    const effectiveScopedIds = Array.isArray(scopedOrderIds)
+    const baseScopedIds = Array.isArray(scopedOrderIds)
         ? parseOrderIdList(scopedOrderIds)
         : parseOrderIdList(filters?.order_ids);
+    const parsedSelectedOnlyIds = parseOrderIdList(selectedOnlyIds);
+    const effectiveScopedIds = parsedSelectedOnlyIds.length > 0
+        ? (
+            baseScopedIds.length > 0
+                ? parsedSelectedOnlyIds.filter((id) => baseScopedIds.includes(id))
+                : parsedSelectedOnlyIds
+        )
+        : baseScopedIds;
     const searchTerms = buildOrderSearchTerms(filters);
 
     const params = {
         page,
         per_page: effectiveScopedIds.length
-            ? Math.max(perPage, Math.min(effectiveScopedIds.length, 100))
+            ? Math.max(perPage, effectiveScopedIds.length)
             : perPage,
         trashed: isTrashView ? 1 : 0,
         sort_by: sortConfig.direction === 'none' ? 'created_at' : sortConfig.key,
@@ -521,15 +631,7 @@ const getCancelDispatchEligibility = (order) => {
         return { eligible: true, reason: '' };
     }
 
-    const hasLegacyDispatchMarker = Boolean(
-        order.shipping_tracking_code
-        || order.shipping_carrier_code
-        || order.shipping_carrier_name
-        || order.shipping_dispatched_at
-        || order.shipping_status
-    );
-
-    if (hasLegacyDispatchMarker) {
+    if (hasLegacyQuickDispatchMarker(order)) {
         return { eligible: true, reason: '' };
     }
 
@@ -841,12 +943,7 @@ const QuickShipmentModal = ({
     if (!open) return null;
 
     const editableRows = rows.filter((row) => !row.locked);
-    const hasInvalidRow = editableRows.some((row) => (
-        !row.tracking_number?.trim()
-        || !row.carrier_name?.trim()
-        || row.shipping_cost === ''
-        || Number(row.shipping_cost) < 0
-    ));
+    const hasInvalidRow = editableRows.some((row) => !isQuickDispatchRowValid(row));
 
     return createPortal(
         <div className="fixed inset-0 z-[130] flex items-center justify-center p-6">
@@ -878,21 +975,22 @@ const QuickShipmentModal = ({
                             <p className="text-[20px] font-black text-green-700 mt-1">{editableRows.length}</p>
                         </div>
                         <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-3">
-                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Đã có vận đơn</p>
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-red-700/60">Đã có luồng gửi</p>
                             <p className="text-[20px] font-black text-red-700 mt-1">{blockedOrders.length}</p>
                         </div>
                     </div>
 
                     <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
-                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-700/80">Luồng tạm thời</p>
-                        <p className="text-[12px] text-amber-800 font-semibold mt-1">
-                            Tính năng này chỉ lưu tay mã vận đơn, đơn vị vận chuyển và tiền ship để tạo vận đơn nội bộ, không gửi đơn sang API hãng vận chuyển.
-                        </p>
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-amber-700/80">2 luồng gửi nhanh</p>
+                        <div className="mt-1 space-y-1.5 text-[12px] font-semibold text-amber-800">
+                            <p><span className="font-black">Qua đơn vị vận chuyển</span>: lưu tay vận đơn nội bộ, có mã vận đơn nhưng không gọi API hãng vận chuyển.</p>
+                            <p><span className="font-black">Gửi ngoài</span>: ghi nhận tự giao, xe ôm, xe khách hoặc cách gửi khác; không tạo mã vận đơn và không ép logic của đơn vị vận chuyển.</p>
+                        </div>
                     </div>
 
                     {blockedOrders.length > 0 && (
                         <div className="rounded-sm border border-red-200 bg-red-50 px-4 py-4">
-                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-700/70">Đơn đã có vận đơn nên bị khóa</p>
+                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-red-700/70">Đơn đã có luồng gửi nên bị khóa</p>
                             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {blockedOrders.map((row) => (
                                     <div key={row.id} className="rounded-sm border border-red-200 bg-white px-3 py-3">
@@ -911,7 +1009,7 @@ const QuickShipmentModal = ({
                         <div className="px-4 py-3 border-b border-primary/10 bg-[#fcfcfa] flex items-center justify-between gap-3">
                             <div>
                                 <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/40">Danh sách nhập liệu</p>
-                                <p className="text-[12px] text-primary/55 mt-1">Nếu chọn nhiều đơn, mỗi đơn nhập mã vận đơn riêng. Đơn vị vận chuyển và phí ship có thể giống nhau hoặc khác nhau.</p>
+                                <p className="text-[12px] text-primary/55 mt-1">Mỗi đơn có thể chọn luồng gửi riêng. Luồng Gửi ngoài không cần mã vận đơn.</p>
                             </div>
                             <div className="text-[11px] font-bold text-primary/40 whitespace-nowrap">
                                 {editableRows.length} dòng cần nhập
@@ -924,51 +1022,140 @@ const QuickShipmentModal = ({
                             </div>
                         ) : (
                             <div className="divide-y divide-primary/10">
-                                {editableRows.map((row) => (
-                                    <div key={row.id} className="px-4 py-4 grid grid-cols-1 xl:grid-cols-[220px,1fr,240px,180px] gap-4 items-start">
+                                {editableRows.map((row) => {
+                                    const rowMode = normalizeQuickDispatchMode(row.mode);
+
+                                    return (
+                                        <div key={row.id} className="px-4 py-4 grid grid-cols-1 xl:grid-cols-[220px,1fr] gap-4 items-start">
                                         <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3">
                                             <p className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/35">Đơn hàng</p>
                                             <p className="text-[14px] font-black text-primary mt-1">{row.order_number}</p>
                                             <p className="text-[12px] text-primary/60 mt-1">{row.customer_name || 'Chưa có tên khách'}</p>
                                         </div>
 
-                                        <div>
-                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Mã vận đơn</label>
-                                            <input
-                                                type="text"
-                                                value={row.tracking_number}
-                                                onChange={(event) => onFieldChange(row.id, 'tracking_number', event.target.value)}
-                                                placeholder="Nhập mã vận đơn"
-                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
-                                            />
-                                        </div>
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Luồng gửi</label>
+                                                    <div className="inline-flex rounded-sm border border-primary/15 bg-[#fcfcfa] p-1 gap-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onFieldChange(row.id, 'mode', QUICK_DISPATCH_MODE_MANUAL)}
+                                                            className={`h-10 px-4 rounded-sm text-[12px] font-black transition-all ${
+                                                                rowMode === QUICK_DISPATCH_MODE_MANUAL
+                                                                    ? 'bg-primary text-white shadow-sm'
+                                                                    : 'text-primary/55 hover:bg-primary/5'
+                                                            }`}
+                                                        >
+                                                            Qua đơn vị VC
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => onFieldChange(row.id, 'mode', QUICK_DISPATCH_MODE_OUTSIDE)}
+                                                            className={`h-10 px-4 rounded-sm text-[12px] font-black transition-all ${
+                                                                rowMode === QUICK_DISPATCH_MODE_OUTSIDE
+                                                                    ? 'bg-primary text-white shadow-sm'
+                                                                    : 'text-primary/55 hover:bg-primary/5'
+                                                            }`}
+                                                        >
+                                                            Gửi ngoài
+                                                        </button>
+                                                    </div>
+                                                </div>
 
-                                        <div>
-                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
-                                            <input
-                                                type="text"
-                                                list="quick-dispatch-carriers"
-                                                value={row.carrier_name}
-                                                onChange={(event) => onFieldChange(row.id, 'carrier_name', event.target.value)}
-                                                placeholder="Ví dụ: Giao Hàng Nhanh"
-                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
-                                            />
-                                        </div>
+                                                {rowMode === QUICK_DISPATCH_MODE_OUTSIDE ? (
+                                                    <div className="grid grid-cols-1 xl:grid-cols-[220px,1fr,180px] gap-4">
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Hình thức gửi ngoài</label>
+                                                            <select
+                                                                value={row.outside_delivery_type || ''}
+                                                                onChange={(event) => onFieldChange(row.id, 'outside_delivery_type', event.target.value)}
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            >
+                                                                <option value="">Chọn hình thức</option>
+                                                                {OUTSIDE_DELIVERY_TYPE_OPTIONS.map((option) => (
+                                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
 
-                                        <div>
-                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Tiền ship</label>
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                step="1000"
-                                                value={row.shipping_cost}
-                                                onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
-                                                placeholder="0"
-                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
-                                            />
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Người giao / nhà xe</label>
+                                                            <input
+                                                                type="text"
+                                                                value={row.outside_contact_name || ''}
+                                                                onChange={(event) => onFieldChange(row.id, 'outside_contact_name', event.target.value)}
+                                                                placeholder="Ví dụ: Anh Nam, Nhà xe Phương Trang"
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            />
+                                                        </div>
+
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Phí ship</label>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="1000"
+                                                                value={row.shipping_cost}
+                                                                onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
+                                                                placeholder="0"
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            />
+                                                        </div>
+
+                                                        <div className="xl:col-span-3">
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Ghi chú</label>
+                                                            <textarea
+                                                                rows={3}
+                                                                value={row.outside_note || ''}
+                                                                onChange={(event) => onFieldChange(row.id, 'outside_note', event.target.value)}
+                                                                placeholder="Thông tin thêm về người giao, điểm hẹn, tuyến xe..."
+                                                                className="w-full rounded-sm border border-primary/20 bg-white px-3 py-3 text-[13px] font-semibold text-primary focus:outline-none focus:border-primary resize-y"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="grid grid-cols-1 xl:grid-cols-[1fr,240px,180px] gap-4">
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Mã vận đơn</label>
+                                                            <input
+                                                                type="text"
+                                                                value={row.tracking_number}
+                                                                onChange={(event) => onFieldChange(row.id, 'tracking_number', event.target.value)}
+                                                                placeholder="Nhập mã vận đơn"
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            />
+                                                        </div>
+
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Đơn vị vận chuyển</label>
+                                                            <input
+                                                                type="text"
+                                                                list="quick-dispatch-carriers"
+                                                                value={row.carrier_name}
+                                                                onChange={(event) => onFieldChange(row.id, 'carrier_name', event.target.value)}
+                                                                placeholder="Ví dụ: Giao Hàng Nhanh"
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            />
+                                                        </div>
+
+                                                        <div>
+                                                            <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Tiền ship</label>
+                                                            <input
+                                                                type="number"
+                                                                min="0"
+                                                                step="1000"
+                                                                value={row.shipping_cost}
+                                                                onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
+                                                                placeholder="0"
+                                                                className="w-full h-11 rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -982,7 +1169,7 @@ const QuickShipmentModal = ({
 
                 <div className="px-6 py-4 border-t border-primary/10 bg-white flex items-center justify-between gap-3">
                     <p className="text-[11px] text-primary/45 font-bold">
-                        Lưu xong hệ thống sẽ chuyển đơn sang trạng thái đang giao hàng và tạo vận đơn trong màn quản lý vận đơn.
+                        Qua đơn vị VC sẽ tạo vận đơn nội bộ. Gửi ngoài chỉ lưu thông tin giao hàng thủ công, không tạo mã vận đơn và không sinh shipment nội bộ.
                     </p>
                     <div className="flex items-center gap-3">
                         <button type="button" onClick={onClose} className="h-10 px-4 rounded-sm border border-primary/20 text-primary text-[12px] font-black uppercase tracking-wide hover:bg-primary/5">
@@ -1021,7 +1208,28 @@ const OrderList = () => {
     const [orders, setOrders] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedIds, setSelectedIds] = useState([]);
+    const [selectedIds, setSelectedIdsState] = useState([]);
+    const selectedIdsRef = useRef(selectedIds);
+    const setSelectedIds = useCallback((value) => {
+        const nextValue = typeof value === 'function'
+            ? value(selectedIdsRef.current)
+            : value;
+        const normalizedValue = parseOrderIdList(nextValue);
+        selectedIdsRef.current = normalizedValue;
+        setSelectedIdsState(normalizedValue);
+    }, []);
+    const [showSelectedOnly, setShowSelectedOnlyState] = useState(false);
+    const showSelectedOnlyRef = useRef(showSelectedOnly);
+    const setShowSelectedOnly = useCallback((value) => {
+        const nextValue = Boolean(
+            typeof value === 'function'
+                ? value(showSelectedOnlyRef.current)
+                : value
+        );
+        showSelectedOnlyRef.current = nextValue;
+        setShowSelectedOnlyState(nextValue);
+    }, []);
+    const selectedOnlyRestorePageRef = useRef(null);
     const [returnWorkbenchIds, setReturnWorkbenchIds] = useState(() => loadOrderReturnWorkbenchOrderIds());
     const [quickSelectPanelOpen, setQuickSelectPanelOpen] = useState(false);
     const [quickSelectInput, setQuickSelectInput] = useState('');
@@ -1189,16 +1397,28 @@ const OrderList = () => {
         setSelectedIds([]);
     }, [returnWorkbenchStorageScopeKey]);
 
+    useEffect(() => {
+        if (showSelectedOnly && selectedIds.length === 0) {
+            selectedOnlyRestorePageRef.current = null;
+            setShowSelectedOnly(false);
+        }
+    }, [selectedIds.length, setShowSelectedOnly, showSelectedOnly]);
+
     const buildQuickDispatchRows = useCallback((ids, existingRows = {}) => (
         ids.reduce((accumulator, id) => {
             const key = String(id);
             const order = selectedOrderMap.get(key);
             const previousRow = existingRows[key] || {};
+            const outsideMeta = normalizeOutsideDeliveryMeta(order?.external_delivery_meta);
 
             accumulator[key] = {
+                mode: normalizeQuickDispatchMode(previousRow.mode),
                 tracking_number: previousRow.tracking_number ?? '',
                 carrier_name: previousRow.carrier_name ?? order?.shipping_carrier_name ?? '',
                 shipping_cost: previousRow.shipping_cost ?? '',
+                outside_delivery_type: previousRow.outside_delivery_type ?? outsideMeta?.delivery_type ?? '',
+                outside_contact_name: previousRow.outside_contact_name ?? outsideMeta?.contact_name ?? '',
+                outside_note: previousRow.outside_note ?? outsideMeta?.note ?? '',
             };
 
             return accumulator;
@@ -1211,18 +1431,22 @@ const OrderList = () => {
             const order = selectedOrderMap.get(key);
             const row = quickDispatchRows[key] || {};
             const activeShipment = order?.active_shipment || null;
+            const hasLegacyMarker = hasLegacyQuickDispatchMarker(order);
+            const locked = Boolean(activeShipment) || hasLegacyMarker;
 
             return {
                 id,
                 order_number: order?.order_number || `Đơn #${id}`,
                 customer_name: order?.customer_name || '',
+                mode: normalizeQuickDispatchMode(row.mode),
                 tracking_number: row.tracking_number ?? '',
                 carrier_name: row.carrier_name ?? '',
                 shipping_cost: row.shipping_cost ?? '',
-                locked: Boolean(activeShipment),
-                locked_message: activeShipment
-                    ? `Đã có vận đơn ${activeShipment.shipment_number || activeShipment.carrier_tracking_code || ''}`.trim()
-                    : '',
+                outside_delivery_type: row.outside_delivery_type ?? '',
+                outside_contact_name: row.outside_contact_name ?? '',
+                outside_note: row.outside_note ?? '',
+                locked,
+                locked_message: locked ? buildQuickDispatchLockedMessage(order) : '',
             };
         }),
         [quickDispatchRows, selectedIds, selectedOrderMap]
@@ -1388,6 +1612,9 @@ const OrderList = () => {
         orderRequestAbortRef.current = controller;
         setLoading(true);
         try {
+            const selectedOnlyIds = showSelectedOnlyRef.current
+                ? parseOrderIdList(selectedIdsRef.current)
+                : [];
             const explicitScopedIds = parseOrderIdList(currentFilters.order_ids);
             const scopedOrderIds = isReturnWorkbenchView
                 ? (explicitScopedIds.length ? explicitScopedIds : returnWorkbenchIds)
@@ -1413,6 +1640,7 @@ const OrderList = () => {
                 isDraftView,
                 isTrashView,
                 scopedOrderIds,
+                selectedOnlyIds,
             });
 
             const response = await orderApi.getAll(params, controller.signal);
@@ -1990,8 +2218,8 @@ const OrderList = () => {
         }
 
         const confirmMessage = selectedCancelDispatchState.validCount === 1
-            ? 'Hủy gửi vận chuyển cho đơn đã chọn? Đơn sẽ về trạng thái "Đơn mới", xóa mã vận đơn và xóa liên kết vận chuyển hiện tại.'
-            : `Hủy gửi vận chuyển cho ${selectedCancelDispatchState.validCount} đơn đã chọn? Các đơn sẽ được đưa về trạng thái "Đơn mới" và xóa liên kết vận chuyển hiện tại.`;
+            ? 'Hủy gửi vận chuyển cho đơn đã chọn? Đơn sẽ về trạng thái "Đơn mới", xóa mã vận đơn hoặc thông tin gửi ngoài và gỡ liên kết vận chuyển hiện tại.'
+            : `Hủy gửi vận chuyển cho ${selectedCancelDispatchState.validCount} đơn đã chọn? Các đơn sẽ được đưa về trạng thái "Đơn mới" và xóa thông tin gửi hiện tại.`;
 
         if (!window.confirm(confirmMessage)) {
             return;
@@ -2080,22 +2308,21 @@ const OrderList = () => {
 
         const shipments = quickDispatchEditableRows.map((row) => ({
             order_id: row.id,
-            tracking_number: row.tracking_number.trim(),
-            carrier_name: row.carrier_name.trim(),
+            dispatch_mode: normalizeQuickDispatchMode(row.mode),
+            tracking_number: String(row.tracking_number || '').trim(),
+            carrier_name: String(row.carrier_name || '').trim(),
             shipping_cost: Number(row.shipping_cost),
+            external_delivery_type: String(row.outside_delivery_type || '').trim(),
+            external_delivery_contact: String(row.outside_contact_name || '').trim(),
+            external_note: String(row.outside_note || '').trim(),
         }));
 
-        const invalidRow = shipments.find((row) => (
-            !row.tracking_number
-            || !row.carrier_name
-            || Number.isNaN(row.shipping_cost)
-            || row.shipping_cost < 0
-        ));
+        const invalidRow = quickDispatchEditableRows.find((row) => !isQuickDispatchRowValid(row));
 
         if (invalidRow) {
             setNotification({
                 type: 'error',
-                message: 'Vui lòng nhập đầy đủ mã vận đơn, đơn vị vận chuyển và tiền ship hợp lệ cho từng đơn.',
+                message: 'Vui lòng nhập đủ thông tin gửi nhanh hợp lệ cho từng đơn. Luồng Gửi ngoài cần hình thức gửi và phí ship; luồng qua đơn vị VC cần mã vận đơn, đơn vị vận chuyển và phí ship.',
             });
             return;
         }
@@ -2115,7 +2342,7 @@ const OrderList = () => {
 
             setNotification({
                 type: failedCount > 0 ? 'error' : 'success',
-                message: `Đã gửi vận chuyển nhanh ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
+                message: `Đã lưu gửi nhanh ${successCount} đơn${failedCount > 0 ? `, ${failedCount} đơn lỗi` : ''}.${firstFailed ? ` ${firstFailed.order_number || `#${firstFailed.order_id}`}: ${firstFailed.message}` : ''}`,
             });
 
             if (successCount > 0) {
@@ -2438,12 +2665,82 @@ const OrderList = () => {
         return f ? { backgroundColor: `${f.color}15`, color: f.color, borderColor: `${f.color}30` } : {};
     };
 
+    const areAllVisibleOrdersSelected = orders.length > 0
+        && orders.every((order) => selectedIds.includes(order.id));
+
+    const handleExitSelectedOnlyMode = useCallback(() => {
+        const restorePage = selectedOnlyRestorePageRef.current ?? pagination.current_page ?? 1;
+        selectedOnlyRestorePageRef.current = null;
+        setShowSelectedOnly(false);
+        fetchOrders(restorePage, filters, pagination.per_page, sortConfig);
+    }, [fetchOrders, filters, pagination.current_page, pagination.per_page, sortConfig]);
+
+    const handleToggleSelectedOnly = useCallback(() => {
+        if (selectedIdsRef.current.length === 0) {
+            return;
+        }
+
+        if (showSelectedOnlyRef.current) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        selectedOnlyRestorePageRef.current = pagination.current_page ?? 1;
+        setShowSelectedOnly(true);
+        fetchOrders(1, filters, pagination.per_page, sortConfig);
+    }, [fetchOrders, filters, handleExitSelectedOnlyMode, pagination.current_page, pagination.per_page, sortConfig]);
+
+    const handleClearSelectedOrders = useCallback(() => {
+        setSelectedIds([]);
+
+        if (showSelectedOnlyRef.current) {
+            handleExitSelectedOnlyMode();
+        }
+    }, [handleExitSelectedOnlyMode]);
+
     const toggleSelectAll = () => {
-        if (selectedIds.length === orders.length && orders.length > 0) setSelectedIds([]);
-        else setSelectedIds(orders.map(o => o.id));
+        const visibleOrderIdMap = new Map(orders.map((order) => [String(order.id), order.id]));
+        const nextSelectedIds = areAllVisibleOrdersSelected
+            ? selectedIdsRef.current.filter((id) => !visibleOrderIdMap.has(String(id)))
+            : Array.from(
+                new Map([
+                    ...selectedIdsRef.current.map((id) => [String(id), id]),
+                    ...orders.map((order) => [String(order.id), order.id]),
+                ]).values(),
+            );
+
+        setSelectedIds(nextSelectedIds);
+
+        if (!showSelectedOnlyRef.current) {
+            return;
+        }
+
+        if (nextSelectedIds.length === 0) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        fetchOrders(1, filters, pagination.per_page, sortConfig);
     };
 
-    const toggleSelectOrder = (id) => setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+    const toggleSelectOrder = (id) => {
+        const nextSelectedIds = selectedIdsRef.current.includes(id)
+            ? selectedIdsRef.current.filter((item) => item !== id)
+            : [...selectedIdsRef.current, id];
+
+        setSelectedIds(nextSelectedIds);
+
+        if (!showSelectedOnlyRef.current) {
+            return;
+        }
+
+        if (nextSelectedIds.length === 0) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        fetchOrders(1, filters, pagination.per_page, sortConfig);
+    };
 
     const activeCount = () => {
         let c = 0;
@@ -2669,8 +2966,16 @@ const OrderList = () => {
 
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
-                                <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} {selectedLabel}</span>
-                                <button onClick={() => setSelectedIds([])} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
+                                <button
+                                    type="button"
+                                    onClick={handleToggleSelectedOnly}
+                                    className={`bg-transparent p-0 text-[11px] font-bold whitespace-nowrap transition-colors ${showSelectedOnly ? 'text-primary' : 'text-primary/40 hover:text-primary'}`}
+                                    title={showSelectedOnly ? 'Tắt chế độ chỉ xem đơn đã chọn' : 'Chỉ hiển thị các đơn đang chọn'}
+                                    aria-pressed={showSelectedOnly}
+                                >
+                                    {selectedIds.length} {selectedLabel}
+                                </button>
+                                <button onClick={handleClearSelectedOrders} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
                             </div>
                         )}
                     </div>
@@ -3143,7 +3448,7 @@ const OrderList = () => {
                         <tr>
                             <th className="p-3 w-12 admin-table-header border border-primary/20 sticky-col-0">
                                 <label className="flex items-center justify-center text-primary font-black">
-                                    <input aria-label="Chọn tất cả đơn hàng" type="checkbox" checked={orders.length > 0 && selectedIds.length === orders.length} onChange={toggleSelectAll} className="size-4 accent-primary" />
+                                    <input aria-label="Chọn tất cả đơn hàng" type="checkbox" checked={areAllVisibleOrdersSelected} onChange={toggleSelectAll} className="size-4 accent-primary" />
                                 </label>
                             </th>
                             {renderedColumns.map((c, i) => (

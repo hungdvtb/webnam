@@ -32,10 +32,10 @@ class Utf8Sanitizer
         $base = self::decodeUnicodeEscapes(self::ensureUtf8($value));
         $candidates = array_filter([
             $base,
-            self::decodeUnicodeEscapes(self::convert($base, 'Windows-1252')),
-            self::decodeUnicodeEscapes(self::convert($base, 'ISO-8859-1')),
-            self::decodeUnicodeEscapes(self::convert(self::convert($base, 'Windows-1252'), 'Windows-1252')),
-            self::decodeUnicodeEscapes(self::convert(self::convert($base, 'ISO-8859-1'), 'Windows-1252')),
+            self::decodeUnicodeEscapes(self::reinterpretAsUtf8($base, 'Windows-1252')),
+            self::decodeUnicodeEscapes(self::reinterpretAsUtf8($base, 'ISO-8859-1')),
+            self::decodeUnicodeEscapes(self::reinterpretAsUtf8(self::reinterpretAsUtf8($base, 'Windows-1252'), 'Windows-1252')),
+            self::decodeUnicodeEscapes(self::reinterpretAsUtf8(self::reinterpretAsUtf8($base, 'ISO-8859-1'), 'Windows-1252')),
         ], static fn ($candidate) => is_string($candidate) && $candidate !== '');
 
         $best = $base;
@@ -75,6 +75,17 @@ class Utf8Sanitizer
         $converted = @mb_convert_encoding($value, 'UTF-8', $sourceEncoding);
 
         return is_string($converted) ? $converted : $value;
+    }
+
+    private static function reinterpretAsUtf8(string $value, string $targetEncoding): string
+    {
+        $bytes = @mb_convert_encoding($value, $targetEncoding, 'UTF-8');
+
+        if (!is_string($bytes) || $bytes === '') {
+            return $value;
+        }
+
+        return self::isValidUtf8($bytes) ? $bytes : $value;
     }
 
     private static function decodeUnicodeEscapes(string $value): string

@@ -2,6 +2,7 @@ FROM php:8.4-fpm-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
+    ca-certificates \
     curl \
     libpng-dev \
     libxml2-dev \
@@ -14,7 +15,8 @@ RUN apk add --no-cache \
     libzip-dev \
     zlib-dev \
     freetype-dev \
-    libjpeg-turbo-dev
+    libjpeg-turbo-dev && \
+    update-ca-certificates
 
 # Configure and install PHP extensions
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg && \

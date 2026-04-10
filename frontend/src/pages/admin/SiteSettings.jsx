@@ -27,6 +27,7 @@ const defaultSettings = {
     tt_pixel_id: '',
     tt_pixel_active: false,
     ai_gemini_api_key: '',
+    ai_gemini_keys: [],
     ai_gemini_model: 'gemini-2.5-flash',
     ai_gemini_enabled: true,
     ai_gemini_has_api_key: false,
@@ -57,6 +58,36 @@ const defaultSettings = {
     footer_menu_groups: createDefaultFooterMenuGroups(),
     store_locations: [],
     order_quick_pick_groups: [],
+};
+
+const createGeminiKey = () => ({
+    id: `gemini-key-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    key: '',
+    note: '',
+    is_active: true,
+});
+
+const normalizeGeminiKeys = (value) => {
+    const parsed = Array.isArray(value)
+        ? value
+        : (() => {
+            if (typeof value !== 'string' || !value.trim()) return [];
+            try {
+                const decoded = JSON.parse(value);
+                return Array.isArray(decoded) ? decoded : [];
+            } catch {
+                return [];
+            }
+        })();
+
+    return parsed
+        .filter((item) => item && typeof item === 'object')
+        .map((item, index) => ({
+            id: String(item.id || `gemini-key-${index + 1}`),
+            key: String(item.key || '').trim(),
+            note: String(item.note || '').trim(),
+            is_active: item.is_active === undefined ? true : Boolean(item.is_active),
+        }));
 };
 
 const supportedOrderQuickPickAttributeTypes = new Set(['select', 'multiselect']);
@@ -515,6 +546,7 @@ const SiteSettings = () => {
             const normalizedFooterMenuGroups = normalizeFooterMenuGroups(normalizedSettings.footer_menu_groups);
             const normalizedStoreLocations = normalizeStoreLocations(normalizedSettings.store_locations);
             const normalizedOrderQuickPickGroups = normalizeOrderQuickPickGroups(normalizedSettings.order_quick_pick_groups);
+            const normalizedGeminiKeys = normalizeGeminiKeys(normalizedSettings.ai_gemini_keys);
 
             setHeaderMenus(normalizedHeaderMenus);
             setFooterMenuGroups(normalizedFooterMenuGroups);
@@ -523,6 +555,7 @@ const SiteSettings = () => {
                 ...prev,
                 ...normalizedSettings,
                 ai_gemini_api_key: '',
+                ai_gemini_keys: normalizedGeminiKeys,
                 ai_gemini_model: normalizedSettings.ai_gemini_model || prev.ai_gemini_model,
                 ai_gemini_enabled: normalizedSettings.ai_gemini_enabled ?? prev.ai_gemini_enabled,
                 ai_gemini_has_api_key: Boolean(normalizedSettings.ai_gemini_has_api_key),
@@ -569,6 +602,29 @@ const SiteSettings = () => {
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setSettings((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    };
+
+    const handleAddGeminiKey = () => {
+        setSettings((prev) => ({
+            ...prev,
+            ai_gemini_keys: [...(prev.ai_gemini_keys || []), createGeminiKey()],
+        }));
+    };
+
+    const handleUpdateGeminiKey = (keyId, patch) => {
+        setSettings((prev) => ({
+            ...prev,
+            ai_gemini_keys: (prev.ai_gemini_keys || []).map((item) => (
+                item.id === keyId ? { ...item, ...patch } : item
+            )),
+        }));
+    };
+
+    const handleRemoveGeminiKey = (keyId) => {
+        setSettings((prev) => ({
+            ...prev,
+            ai_gemini_keys: (prev.ai_gemini_keys || []).filter((item) => item.id !== keyId),
+        }));
     };
 
     const withHeaderMenuOrder = (menus) => menus
@@ -1680,20 +1736,96 @@ const SiteSettings = () => {
                             >
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div>
-                                            <label className={labelClasses}>API Key Gemini</label>
-                                            <input
-                                                type="password"
-                                                name="ai_gemini_api_key"
-                                                value={settings.ai_gemini_api_key}
-                                                onChange={handleChange}
-                                                className={inputClasses}
-                                                placeholder={settings.ai_gemini_has_api_key ? 'Đã có API key. Dán key mới nếu muốn thay thế.' : 'Dán API key Gemini vào đây'}
-                                            />
-                                            <p className="mt-2 text-[11px] text-primary/45 leading-5">
-                                                {settings.ai_gemini_has_api_key
-                                                    ? 'API key đang được lưu an toàn ở backend. Frontend không thể đọc lại giá trị thật.'
-                                                    : 'Chưa có API key. Khi chưa nhập khóa, toàn bộ tính năng AI sẽ tự động bị vô hiệu hóa.'}
+                                        <div className="md:col-span-2">
+                                            <div className="flex items-baseline justify-between mb-4">
+                                                <label className={labelClasses}>Danh sách API Token (Gemini)</label>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleAddGeminiKey}
+                                                    className="flex items-center gap-1 text-[11px] font-black uppercase text-secondary hover:text-gold transition-colors"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add_circle</span>
+                                                    Thêm Key mới
+                                                </button>
+                                            </div>
+
+                                            <div className="border border-primary/10 rounded-sm overflow-hidden bg-white">
+                                                <table className="w-full text-left border-collapse">
+                                                    <thead>
+                                                        <tr className="bg-primary/[0.02] border-b border-primary/5">
+                                                            <th className="px-4 py-3 text-[10px] font-black uppercase text-primary/40 tracking-wider">Tài khoản / Ghi chú</th>
+                                                            <th className="px-4 py-3 text-[10px] font-black uppercase text-primary/40 tracking-wider">API Key</th>
+                                                            <th className="px-4 py-3 text-[10px] font-black uppercase text-primary/40 tracking-wider text-center w-24">Cấu hình</th>
+                                                            <th className="px-4 py-3 text-[10px] font-black uppercase text-primary/40 tracking-wider text-center w-32">Thực tế</th>
+                                                            <th className="px-4 py-3 text-[10px] font-black uppercase text-primary/40 tracking-wider text-right w-16"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-primary/5">
+                                                        {(settings.ai_gemini_keys || []).length === 0 ? (
+                                                            <tr>
+                                                                <td colSpan="5" className="px-4 py-8 text-center text-primary/30 text-[12px] italic">
+                                                                    Chưa có API Key nào được thêm. Nhấn "Thêm Key mới" để bắt đầu.
+                                                                </td>
+                                                            </tr>
+                                                        ) : (settings.ai_gemini_keys || []).map((item) => (
+                                                            <tr key={item.id} className="hover:bg-primary/[0.01] transition-colors">
+                                                                <td className="px-4 py-3">
+                                                                    <input
+                                                                        type="text"
+                                                                        value={item.note || ''}
+                                                                        onChange={(e) => handleUpdateGeminiKey(item.id, { note: e.target.value })}
+                                                                        className="w-full bg-transparent border-none p-0 text-[13px] font-bold text-primary focus:ring-0 placeholder:text-primary/20"
+                                                                        placeholder="VD: Tài khoản 01 - Gmail A"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    <input
+                                                                        type={item.key?.includes('...') ? 'text' : 'password'}
+                                                                        value={item.key || ''}
+                                                                        onChange={(e) => handleUpdateGeminiKey(item.id, { key: e.target.value })}
+                                                                        className="w-full bg-transparent border-none p-0 text-[13px] font-mono text-primary/60 focus:ring-0 placeholder:text-primary/20"
+                                                                        placeholder="AIza..."
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleUpdateGeminiKey(item.id, { is_active: !item.is_active })}
+                                                                        className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border ${item.is_active ? 'border-green-200 bg-green-50 text-green-600' : 'border-primary/10 bg-stone-50 text-primary/30'}`}
+                                                                    >
+                                                                        {item.is_active ? 'Bật' : 'Tắt'}
+                                                                    </button>
+                                                                </td>
+                                                                <td className="px-4 py-3 text-center">
+                                                                    {!item.key ? (
+                                                                        <span className="text-[10px] font-black uppercase text-primary/20">Trống</span>
+                                                                    ) : item.status === 'exhausted' ? (
+                                                                        <div className="flex flex-col items-center">
+                                                                            <span className="text-[10px] font-black uppercase text-brick/70">Hết hạn mức</span>
+                                                                            {item.retry_after_seconds > 0 && (
+                                                                                <span className="text-[9px] font-bold text-brick/40">~ {item.retry_after_seconds}s</span>
+                                                                            )}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <span className="text-[10px] font-black uppercase text-green-500/70">Sẵn sàng</span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleRemoveGeminiKey(item.id)}
+                                                                        className="text-brick hover:text-brick/80"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <p className="mt-2 text-[11px] text-primary/45 leading-5 italic">
+                                                * Hệ thống sẽ tự động xoay vòng giữa các Key đang "Bật" để tối ưu băng thông. Bạn có thể nhập ghi chú để biết Key nào thuộc tài khoản nào.
                                             </p>
                                         </div>
 

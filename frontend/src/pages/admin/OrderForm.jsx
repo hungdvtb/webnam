@@ -61,12 +61,12 @@ const AdminField = ({ label, children, required = false, className = '' }) => (
     </div>
 );
 
-const Field = ({ label, children, className = '', labelClassName = '' }) => (
+const Field = ({ label, children, className = '', labelClassName = '', labelStyle }) => (
     React.Children.toArray(children).some((child) => React.isValidElement(child) && child.props?.readOnly && child.props?.name === 'shipping_address')
         ? null
         : (
             <div className={`space-y-1 ${className}`}>
-                <label className={`block text-[11px] font-bold uppercase tracking-widest text-primary/70 ${labelClassName}`}>{label}</label>
+                <label className={`block text-[11px] font-bold uppercase tracking-widest text-primary/70 ${labelClassName}`} style={labelStyle}>{label}</label>
                 {children}
             </div>
         )
@@ -77,6 +77,7 @@ const adminTextareaClassName = 'w-full min-h-[88px] bg-primary/5 border border-p
 const adminRegionFieldClassName = 'group relative min-w-0 min-h-[42px] rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white flex flex-col justify-center';
 const adminRegionLabelClassName = 'mb-1 block text-[8px] font-bold uppercase tracking-widest leading-none text-slate-400 transition-colors pointer-events-none group-focus-within:text-primary';
 const adminRegionClearButtonClassName = 'absolute right-1.5 top-1.5 z-[5] size-4 rounded-full border border-primary/10 bg-white/90 text-primary/35 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center shadow-sm';
+const adminCustomerLabelStyle = { color: '#d32f2f' };
 const defaultQuoteSettings = {
     quote_logo_url: '',
     quote_store_name: '',
@@ -6339,7 +6340,7 @@ const OrderForm = () => {
                                 <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                             </Field>
 
-                            <Field label="Tên khách hàng" labelClassName="text-brick">
+                            <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle}>
                                 <input
                                     type="text"
                                     name="customer_name"
@@ -6350,7 +6351,7 @@ const OrderForm = () => {
                                 />
                             </Field>
 
-                            <Field label="Số điện thoại" labelClassName="text-brick">
+                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
                                 <input
                                     type="text"
                                     name="customer_phone"
@@ -6453,7 +6454,7 @@ const OrderForm = () => {
 
                             <Field
                                 label="Địa chỉ giao hàng (Số nhà, tên đường...)"
-                                labelClassName="text-brick"
+                                labelStyle={adminCustomerLabelStyle}
                                 className="min-h-[100px] items-start pt-3"
                             >
                                 <textarea

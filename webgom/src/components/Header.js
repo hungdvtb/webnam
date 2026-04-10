@@ -1913,6 +1913,24 @@ export default function Header({
             font: inherit;
           }
 
+          .mobile-products-link-button .mobile-products-link__main {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+            column-gap: 10px;
+            min-width: 0;
+          }
+
+          .mobile-products-link-button .mobile-products-link__name {
+            flex: 1 1 auto;
+            min-width: 0;
+            color: #132544;
+            font-weight: 800;
+            line-height: 1.32;
+            white-space: normal;
+            overflow-wrap: anywhere;
+          }
+
           .mobile-products-children {
             display: flex;
             flex-direction: column;
@@ -1961,6 +1979,16 @@ export default function Header({
             flex: 0 0 auto;
             align-self: center;
             white-space: nowrap;
+          }
+
+          .mobile-products-link__meta-parent {
+            justify-content: center;
+            flex: 0 0 24px;
+            width: 24px;
+            min-width: 24px;
+            height: 24px;
+            gap: 0;
+            margin-left: auto;
           }
 
           .mobile-products-link__logo {
@@ -2021,16 +2049,19 @@ export default function Header({
           }
 
           .mobile-products-link__arrow {
-            width: 22px;
-            height: 22px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
+            width: 24px;
+            height: 24px;
+            display: grid;
+            place-items: center;
             border-radius: 999px;
             background: rgba(197, 160, 89, 0.12);
             color: #946d26;
             font-size: 15px !important;
             flex-shrink: 0;
+            padding: 0;
+            line-height: 1;
+            text-align: center;
+            overflow: hidden;
             transition: transform 180ms ease, background-color 180ms ease;
           }
 
@@ -2437,6 +2468,13 @@ export default function Header({
             width: 22px;
             height: 22px;
             font-size: 15px !important;
+          }
+
+          .mobile-products-link__meta-parent {
+            flex-basis: 22px;
+            width: 22px;
+            min-width: 22px;
+            height: 22px;
           }
 
           .mobile-bottom-nav {

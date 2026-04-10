@@ -238,33 +238,9 @@ class ProductController extends Controller
         return $fallback;
     }
 
-    private function resolveBundleOptionPrimaryImage(?Post $optionPost, ?Product $selectedVariant, Product $bundleItem)
+    private function resolveBundleOptionPrimaryImage(?Post $optionPost)
     {
-        $optionImage = $this->mapPostPrimaryImage($optionPost);
-        if ($optionImage) {
-            return $optionImage;
-        }
-
-        if ($selectedVariant instanceof Product && $selectedVariant->primary_image) {
-            return $selectedVariant->primary_image;
-        }
-
-        if ($bundleItem->primary_image) {
-            return $bundleItem->primary_image;
-        }
-
-        $fallbackMainImage = $selectedVariant instanceof Product ? $selectedVariant->main_image : null;
-        $fallbackMainImage = $fallbackMainImage ?: $bundleItem->main_image;
-
-        if (!$fallbackMainImage) {
-            return null;
-        }
-
-        return [
-            'url' => $fallbackMainImage,
-            'path' => $fallbackMainImage,
-            'image_url' => $fallbackMainImage,
-        ];
+        return $this->mapPostPrimaryImage($optionPost);
     }
 
     private function buildBundleOptionCatalog(Collection $bundleProducts, Collection $variantMap, Collection $optionPosts): array
@@ -301,7 +277,7 @@ class ProductController extends Controller
             $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
 
             if (!isset($catalog[$optionKey])) {
-                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost, $selectedVariant, $bundleItem);
+                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost);
                 $displayName = $optionTitle !== ''
                     ? $optionTitle
                     : (Str::squish((string) ($optionPost?->title ?? '')) ?: $bundleItem->name);
@@ -324,7 +300,7 @@ class ProductController extends Controller
             }
 
             if (!$catalog[$optionKey]['primary_image']) {
-                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost, $selectedVariant, $bundleItem);
+                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost);
                 $catalog[$optionKey]['primary_image'] = $displayImage;
                 $catalog[$optionKey]['main_image'] = $this->extractImageUrl($displayImage);
             }

@@ -5,6 +5,7 @@ PROJECT_ROOT="/root/www/webname"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 ADMIN_DIR="$PROJECT_ROOT/frontend"
 WEBSITE_DIR="$PROJECT_ROOT/webgom"
+WORKER_PM2_NAME="webnam-seo-worker"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -22,6 +23,20 @@ function deploy_backend() {
     chmod -R 775 storage bootstrap/cache
     php artisan optimize:clear
     echo -e "${GREEN}Backend deployment complete.${NC}"
+}
+
+function deploy_worker() {
+    echo -e "${BLUE}>>> Deploying SEO Bulk Worker...${NC}"
+    cd $BACKEND_DIR
+
+    if pm2 list | grep -q "$WORKER_PM2_NAME"; then
+        pm2 restart $WORKER_PM2_NAME
+        echo -e "${GREEN}SEO Worker restarted.${NC}"
+    else
+        pm2 start php --name "$WORKER_PM2_NAME" -- artisan product-seo-bulk:work
+        pm2 save
+        echo -e "${GREEN}SEO Worker started and saved.${NC}"
+    fi
 }
 
 function deploy_admin() {
@@ -58,6 +73,7 @@ case "$COMMAND" in
     full|rebuild)
         git pull origin master
         deploy_backend
+        deploy_worker
         deploy_admin
         deploy_website
         reload_nginx
@@ -65,6 +81,7 @@ case "$COMMAND" in
     backend)
         git pull origin master
         deploy_backend
+        deploy_worker
         ;;
     admin)
         git pull origin master
@@ -80,10 +97,16 @@ case "$COMMAND" in
     pm2)
         pm2 restart webnam-website
         ;;
+    worker)
+        deploy_worker
+        ;;
     logs)
         pm2 logs webnam-website
         ;;
+    worker-logs)
+        pm2 logs $WORKER_PM2_NAME
+        ;;
     *)
-        echo "Usage: $0 {full|rebuild|backend|admin|website|nginx|pm2|logs}"
+        echo "Usage: $0 {full|rebuild|backend|admin|website|nginx|pm2|worker|logs|worker-logs}"
         exit 1
 esac

@@ -6,30 +6,7 @@ const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 
 const resolveApiBaseUrl = (value) => {
-    const normalized = trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
-
-    if (typeof window === 'undefined' || normalized.startsWith('/')) {
-        return normalized;
-    }
-
-    try {
-        const parsed = new URL(normalized, window.location.origin);
-        const currentOrigin = window.location.origin;
-        const currentHost = window.location.hostname;
-        const normalizedPath = trimTrailingSlash(parsed.pathname) || '/';
-        const shouldPreferSameOriginProxy = ADMIN_HOST_PATTERN.test(currentHost)
-            && API_HOST_PATTERN.test(parsed.hostname)
-            && normalizedPath === '/api'
-            && parsed.origin !== currentOrigin;
-
-        if (shouldPreferSameOriginProxy) {
-            return DEFAULT_API_BASE_URL;
-        }
-    } catch (error) {
-        console.warn('Unable to normalize API base URL.', error);
-    }
-
-    return normalized;
+    return trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
 };
 
 export const API_BASE_URL = resolveApiBaseUrl(

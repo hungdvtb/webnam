@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { normalizeAdminPermissions } from '../utils/adminPermissions';
 
 const Login = () => {
     const [credentials, setCredentials] = useState({ email: '', password: '' });
@@ -49,7 +50,14 @@ const Login = () => {
             } else if (response.data.user.is_admin) {
                 navigate('/admin');
             } else {
-                navigate('/dashboard');
+                // Non-admin staff: if they have any admin permissions, redirect to admin panel.
+                // If they have zero permissions (empty array), fall back to user dashboard.
+                const staffPermissions = normalizeAdminPermissions(response.data.user);
+                if (staffPermissions.length > 0) {
+                    navigate('/admin');
+                } else {
+                    navigate('/dashboard');
+                }
             }
         } catch (err) {
             setError(resolveLoginError(err));

@@ -2591,22 +2591,41 @@ class ProductController extends Controller
 
     protected function syncProductCategories(Product $product, array $categoryIds, bool $detachMissing = true): void
     {
-        $syncPayload = Category::buildProductSyncPayload($product, $categoryIds);
+        $normalizedCategoryIds = collect($categoryIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $primaryCategoryId = $normalizedCategoryIds[0] ?? null;
+
+        if ((int) ($product->category_id ?? 0) !== (int) ($primaryCategoryId ?? 0)) {
+            $product->forceFill(['category_id' => $primaryCategoryId]);
+            $product->saveQuietly();
+        } else {
+            $product->setAttribute('category_id', $primaryCategoryId);
+        }
+
+        $syncPayload = Category::buildProductSyncPayload($product, $normalizedCategoryIds);
 
         if (empty($syncPayload)) {
             if ($detachMissing) {
                 $product->categories()->detach();
             }
 
+            $product->unsetRelation('categories');
+
             return;
         }
 
         if ($detachMissing) {
             $product->categories()->sync($syncPayload);
+            $product->unsetRelation('categories');
             return;
         }
 
         $product->categories()->syncWithoutDetaching($syncPayload);
+        $product->unsetRelation('categories');
     }
 
     protected function shouldAutoCalculateCompositePrice(Request $request, ?Product $product = null): bool
@@ -2716,15 +2735,29 @@ class ProductController extends Controller
             $product->loadMissing('suppliers:id,name,code');
         }
 
+        if (!$product->relationLoaded('categories')) {
+            $product->loadMissing('categories:id,name');
+        }
+
         $supplierIds = $product->suppliers
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+        $categoryIds = collect([$product->category_id])
+            ->merge($product->categories->pluck('id'))
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
             ->values()
             ->all();
 
         $product->setAttribute('supplier_ids', $supplierIds);
         $product->setAttribute('supplier_count', count($supplierIds));
         $product->setAttribute('has_multiple_suppliers', count($supplierIds) > 1);
+        $product->setAttribute('category_ids', $categoryIds);
+        $product->setAttribute('category_count', count($categoryIds));
+        $product->setAttribute('has_multiple_categories', count($categoryIds) > 1);
 
         return $this->appendBundleOptionPostMeta($product);
     }
@@ -3260,6 +3293,27 @@ class ProductController extends Controller
         }
 
         return collect($rawSupplierIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function normalizeCategoryIds(Request $request, array $validated = []): array
+    {
+        $rawCategoryIds = $validated['category_ids'] ?? $request->input('category_ids', []);
+        $legacyCategoryId = $validated['category_id'] ?? $request->input('category_id');
+
+        if (!is_array($rawCategoryIds)) {
+            $rawCategoryIds = is_string($rawCategoryIds) ? explode(',', $rawCategoryIds) : [$rawCategoryIds];
+        }
+
+        if ($legacyCategoryId !== null && $legacyCategoryId !== '') {
+            array_unshift($rawCategoryIds, $legacyCategoryId);
+        }
+
+        return collect($rawCategoryIds)
             ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
             ->filter()
             ->unique()
@@ -5313,6 +5367,28 @@ class ProductController extends Controller
                 $query->whereHas('images');
             } else {
                 $query->whereDoesntHave('images');
+            }
+        }
+
+        if ($request->filled('has_description')) {
+            $normalizedDescriptionSql = "NULLIF(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(COALESCE(products.description, ''), '<[^>]*>', '', 'g'), '&nbsp;|&#160;', '', 'gi'), '\\s+', '', 'g'), '')";
+
+            if ($request->boolean('has_description')) {
+                $query->whereRaw("{$normalizedDescriptionSql} IS NOT NULL");
+            } else {
+                $query->whereRaw("{$normalizedDescriptionSql} IS NULL");
+            }
+        }
+
+        if ($request->filled('has_seo')) {
+            if ($request->boolean('has_seo')) {
+                $query->whereNotNull('meta_description')
+                      ->where('meta_description', '!=', '');
+            } else {
+                $query->where(function ($q) {
+                    $q->whereNull('meta_description')
+                      ->orWhere('meta_description', '');
+                });
             }
         }
 
@@ -8262,6 +8338,7 @@ class ProductController extends Controller
             'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
+            'clear_category_ids' => 'nullable|boolean',
             'price' => $this->shouldAutoCalculateCompositePrice($request)
                 ? 'nullable|numeric|min:0'
                 : 'required|numeric|min:0',
@@ -8335,16 +8412,21 @@ class ProductController extends Controller
         );
         $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
 
+        $categoryIds = $request->boolean('clear_category_ids')
+            ? []
+            : $this->normalizeCategoryIds($request, $validated);
+        $validated['category_id'] = $categoryIds[0] ?? null;
+
         $supplierIds = $this->normalizeSupplierIds($request, $validated);
         $validated['supplier_id'] = $supplierIds[0] ?? null;
-        unset($validated['supplier_ids']);
+        unset($validated['category_ids'], $validated['clear_category_ids'], $validated['supplier_ids']);
 
         if (!empty($validated['grouped_items']) && in_array($validated['type'] ?? null, ['grouped', 'bundle'], true)) {
             $this->validateGroupedOrBundleItemVariants($validated['grouped_items']);
         }
 
         try {
-            $product = DB::transaction(function () use ($request, $validated, $supplierIds) {
+            $product = DB::transaction(function () use ($request, $validated, $categoryIds, $supplierIds) {
                 $accountId = $request->header('X-Account-Id');
                 $this->prepareProductSku($validated);
                 $preparedVariants = $validated['type'] === 'configurable'
@@ -8363,11 +8445,7 @@ class ProductController extends Controller
                     auth()->id()
                 );
 
-                if ($request->has('category_ids')) {
-                    $this->syncProductCategories($product, (array) $request->category_ids);
-                } elseif ($request->has('category_id') && !empty($request->category_id)) {
-                    $this->syncProductCategories($product, [(int) $request->category_id]);
-                }
+                $this->syncProductCategories($product, $categoryIds);
 
                 if ($request->hasFile('main_image')) {
                     $imageFile = $request->file('main_image');
@@ -8905,6 +8983,7 @@ class ProductController extends Controller
             'category_id' => 'nullable|exists:categories,id',
             'category_ids' => 'nullable|array',
             'category_ids.*' => 'exists:categories,id',
+            'clear_category_ids' => 'nullable|boolean',
             'price' => $this->shouldAutoCalculateCompositePrice($request, $product)
                 ? 'nullable|numeric|min:0'
                 : 'sometimes|required|numeric|min:0',
@@ -8972,6 +9051,21 @@ class ProductController extends Controller
         $this->applyCompositeAutoPrice($request, $validated, $product);
         $this->prepareAdditionalInfoForPersistence($request, $validated);
 
+        $incomingCategoryIds = $request->has('category_ids') || $request->has('category_id') || $request->boolean('clear_category_ids');
+        $categoryIds = $incomingCategoryIds
+            ? ($request->boolean('clear_category_ids') ? [] : $this->normalizeCategoryIds($request, $validated))
+            : collect([$product->category_id])
+                ->merge($product->categories()->pluck('categories.id'))
+                ->map(fn ($value) => is_numeric($value) ? (int) $value : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+        if ($incomingCategoryIds) {
+            $validated['category_id'] = $categoryIds[0] ?? null;
+        }
+
         $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
         $supplierIds = $incomingSupplierIds
             ? ($request->boolean('clear_supplier_ids') ? [] : $this->normalizeSupplierIds($request, $validated))
@@ -8983,7 +9077,7 @@ class ProductController extends Controller
                 : ($supplierIds[0] ?? null);
         }
 
-        unset($validated['supplier_ids'], $validated['clear_supplier_ids']);
+        unset($validated['category_ids'], $validated['clear_category_ids'], $validated['supplier_ids'], $validated['clear_supplier_ids']);
 
         if (isset($validated['slug'])) {
             $validated['slug'] = $this->productSkuService->generateUniqueSlug(
@@ -9008,7 +9102,7 @@ class ProductController extends Controller
         }
 
         try {
-            $product = DB::transaction(function () use ($request, $validated, $product, $incomingSupplierIds, $supplierIds) {
+            $product = DB::transaction(function () use ($request, $validated, $product, $incomingCategoryIds, $categoryIds, $incomingSupplierIds, $supplierIds) {
                 $this->prepareProductSku($validated, $product);
                 $resolvedType = $validated['type'] ?? $product->type;
                 $preparedVariants = ($request->has('variants') && $resolvedType === 'configurable')
@@ -9063,17 +9157,8 @@ class ProductController extends Controller
         }
         // ────────────────────────────────────────────────────────────────────────
         // Sync categories
-        if ($request->has('category_ids')) {
-            $this->syncProductCategories($product, (array) $request->category_ids);
-        }
-        elseif ($request->has('category_id') && !empty($request->category_id)) {
-            // If only primary category changed, sync it as well
-            $this->syncProductCategories($product, [(int) $request->category_id], false);
-        }
-        elseif ($request->has('category_id') && empty($request->category_id)) {
-            // If primary category was explicitly cleared
-            $product->categories()->detach();
-            $product->update(['category_id' => null]);
+        if ($incomingCategoryIds) {
+            $this->syncProductCategories($product, $categoryIds);
         }
         // Sync EAV custom attributes
         if ($request->has('custom_attributes')) {
@@ -9728,6 +9813,10 @@ class ProductController extends Controller
             'basic_info.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'basic_info.specifications' => 'nullable|string',
             'basic_info.additional_info' => 'nullable',
+            'basic_info.category_id' => 'nullable|exists:categories,id',
+            'basic_info.category_ids' => 'nullable|array',
+            'basic_info.category_ids.*' => 'exists:categories,id',
+            'basic_info.clear_category_ids' => 'nullable|boolean',
             'basic_info.supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'basic_info.supplier_ids' => 'nullable|array',
             'basic_info.supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
@@ -9775,6 +9864,15 @@ class ProductController extends Controller
 
         if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
             $basicInfo['expected_cost'] = $basicInfo['cost_price'];
+        }
+        $hasCategorySelectionUpdate = array_key_exists('category_ids', $basicInfo)
+            || array_key_exists('category_id', $basicInfo)
+            || $request->boolean('basic_info.clear_category_ids');
+        if ($hasCategorySelectionUpdate) {
+            $basicInfo['category_ids'] = $request->boolean('basic_info.clear_category_ids')
+                ? []
+                : $this->normalizeCategoryIds($request, $basicInfo);
+            $basicInfo['category_id'] = $basicInfo['category_ids'][0] ?? null;
         }
         if (array_key_exists('supplier_ids', $basicInfo) || array_key_exists('supplier_id', $basicInfo)) {
             $normalizedSupplierIds = $this->normalizeSupplierIds($request, $basicInfo);
@@ -9862,8 +9960,8 @@ class ProductController extends Controller
                 if (!empty($toUpdate)) {
                     $product->update($toUpdate);
                 }
-                if (isset($basicInfo['category_ids']) && is_array($basicInfo['category_ids']) && !empty($basicInfo['category_ids'])) {
-                    $this->syncProductCategories($product, $basicInfo['category_ids']);
+                if ($hasCategorySelectionUpdate) {
+                    $this->syncProductCategories($product, $basicInfo['category_ids'] ?? []);
                 }
 
                 if (array_key_exists('supplier_ids', $basicInfo) && is_array($basicInfo['supplier_ids'])) {

@@ -4,6 +4,25 @@ const DEFAULT_API_BASE_URL = '/api';
 const ADMIN_HOST_PATTERN = /(^|\.)admin\.gomdaithanh\.com$/i;
 const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_ERROR_CODES = new Set([
+    'ECONNABORTED',
+    'ERR_CONNECTION_ABORTED',
+    'ERR_CONNECTION_CLOSED',
+    'ERR_CONNECTION_RESET',
+    'ERR_INTERNET_DISCONNECTED',
+    'ERR_NETWORK',
+    'ERR_NETWORK_CHANGED',
+    'ETIMEDOUT',
+]);
+const RETRYABLE_NETWORK_MESSAGE_FRAGMENTS = [
+    'network changed',
+    'network error',
+    'failed to fetch',
+    'load failed',
+    'timeout',
+];
+const IDEMPOTENT_HTTP_METHODS = new Set(['get', 'head', 'options']);
 
 const resolveApiBaseUrl = (value) => {
     return trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
@@ -25,6 +44,107 @@ const api = axios.create({
         'Accept': 'application/json',
     },
 });
+
+const sleep = (ms) => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+});
+
+const normalizeRequestMethod = (method) => String(method || 'get').trim().toLowerCase();
+
+const resolveRetryLimit = (config = {}) => {
+    const resolvedLimit = Number(config.maxRetries);
+
+    if (Number.isFinite(resolvedLimit)) {
+        return Math.max(Math.trunc(resolvedLimit), 0);
+    }
+
+    return 3;
+};
+
+const requestAllowsRetry = (config = {}) => {
+    if (config.retryPolicy === 'never') {
+        return false;
+    }
+
+    if (config.retryPolicy === 'idempotent') {
+        return true;
+    }
+
+    return IDEMPOTENT_HTTP_METHODS.has(normalizeRequestMethod(config.method));
+};
+
+const parseRetryAfterMs = (value) => {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue) && numericValue >= 0) {
+        return numericValue * 1000;
+    }
+
+    const retryDate = Date.parse(String(value));
+    if (Number.isNaN(retryDate)) {
+        return null;
+    }
+
+    return Math.max(retryDate - Date.now(), 0);
+};
+
+const resolveRetryDelayMs = (error, retryCount) => {
+    const retryAfterHeader = parseRetryAfterMs(error?.response?.headers?.['retry-after']);
+
+    if (retryAfterHeader !== null) {
+        return Math.min(retryAfterHeader, 15000);
+    }
+
+    const normalizedRetryCount = Math.max(Number(retryCount) || 1, 1);
+    const baseDelayMs = Math.min(500 * (2 ** (normalizedRetryCount - 1)), 6000);
+    const jitterMs = Math.min(Math.round(baseDelayMs * 0.25), 500);
+
+    return baseDelayMs + jitterMs;
+};
+
+export const isRetryableNetworkError = (error) => {
+    if (!error || axios.isCancel(error) || error?.code === 'ERR_CANCELED') {
+        return false;
+    }
+
+    if (error?.response) {
+        return false;
+    }
+
+    const normalizedCode = String(error?.code || '').trim().toUpperCase();
+    if (RETRYABLE_NETWORK_ERROR_CODES.has(normalizedCode)) {
+        return true;
+    }
+
+    const normalizedMessage = String(error?.message || '').trim().toLowerCase();
+    return RETRYABLE_NETWORK_MESSAGE_FRAGMENTS.some((fragment) => normalizedMessage.includes(fragment));
+};
+
+export const isRetryableResponseError = (error) => {
+    const status = Number(error?.response?.status || 0);
+    return RETRYABLE_STATUS_CODES.has(status);
+};
+
+export const isRetryableRequestError = (error) => (
+    isRetryableNetworkError(error) || isRetryableResponseError(error)
+);
+
+const shouldRetryRequest = (error) => {
+    const config = error?.config;
+    if (!config || config.signal?.aborted || !requestAllowsRetry(config)) {
+        return false;
+    }
+
+    const retryCount = Number(config.__retryCount || 0);
+    if (retryCount >= resolveRetryLimit(config)) {
+        return false;
+    }
+
+    return isRetryableRequestError(error);
+};
 
 // Interceptor to add Bearer token if present
 api.interceptors.request.use((config) => {
@@ -84,7 +204,16 @@ const handleUnauthorizedApiResponse = (error) => {
 
 api.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
+        const config = error?.config;
+
+        if (config && shouldRetryRequest(error)) {
+            config.__retryCount = Number(config.__retryCount || 0) + 1;
+            await sleep(resolveRetryDelayMs(error, config.__retryCount));
+
+            return api(config);
+        }
+
         handleUnauthorizedApiResponse(error);
         return Promise.reject(error);
     }
@@ -187,6 +316,16 @@ export const productApi = {
     bulkUpdateUndo: (logId) => api.post('/products/bulk-update-undo', { log_id: logId }),
     getSortItems: () => api.get('/products/sort-items'),
     reorder: (productIds) => api.post('/products/reorder', { product_ids: productIds }),
+};
+
+export const productSeoBulkApi = {
+    listRuns: (params) => api.get('/products/seo-bulk/runs', { params }),
+    createRun: (data, config = {}) => api.post('/products/seo-bulk/runs', data, {
+        retryPolicy: 'idempotent',
+        ...config,
+    }),
+    getRun: (runId, params) => api.get(`/products/seo-bulk/runs/${runId}`, { params }),
+    cancelRun: (runId) => api.post(`/products/seo-bulk/runs/${runId}/cancel`),
 };
 
 export const productImageApi = {

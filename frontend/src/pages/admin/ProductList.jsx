@@ -13,6 +13,7 @@ import SortIndicator from '../../components/SortIndicator';
 import ProductSortModal from '../../components/admin/ProductSortModal';
 import ProductImageBulkAppendModal from '../../components/admin/ProductImageBulkAppendModal';
 import ProductImageRefreshModal from '../../components/admin/ProductImageRefreshModal';
+import ProductSeoBulkModal from '../../components/admin/ProductSeoBulkModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
     formatWholeMoneyInput,
@@ -190,6 +191,7 @@ const DEFAULT_COLUMNS = [
     { id: 'is_featured', label: 'Nổi bật', minWidth: '80px', align: 'center' },
     { id: 'is_new', label: 'Mới', minWidth: '80px', align: 'center' },
     { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
+    { id: 'seo_status', label: 'Mô tả SEO', minWidth: '100px', align: 'center', sortable: false },
     { id: 'actions', label: 'Thao tác', minWidth: '100px', align: 'right', fixed: true },
     { id: 'product_link', label: 'Link SP', minWidth: '150px' },
 ];
@@ -463,6 +465,8 @@ function getDefaultProductFilters() {
         supplier_ids: [],
         inventory_unit_filter: '',
         has_images: '',
+        has_seo: '',
+        has_description: '',
         missing_purchase_price: '',
         multiple_suppliers: '',
         is_featured: '',
@@ -478,19 +482,17 @@ function getDefaultProductFilters() {
 }
 
 function sanitizeProductFilters(rawFilters) {
-    const normalizedHasImages = rawFilters?.has_images === true
-        || rawFilters?.has_images === 1
-        || rawFilters?.has_images === '1'
-        ? '1'
-        : (rawFilters?.has_images === false
-            || rawFilters?.has_images === 0
-            || rawFilters?.has_images === '0'
-            ? '0'
-            : '');
+    const normalizeBinary = (value) => (value === true || value === 1 || value === '1') ? '1' : ((value === false || value === 0 || value === '0') ? '0' : '');
+    
+    const normalizedHasImages = normalizeBinary(rawFilters?.has_images);
+    const normalizedHasSeo = normalizeBinary(rawFilters?.has_seo);
+    const normalizedHasDescription = normalizeBinary(rawFilters?.has_description);
 
     return {
         ...rawFilters,
         has_images: normalizedHasImages,
+        has_seo: normalizedHasSeo,
+        has_description: normalizedHasDescription,
         inventory_unit_filter: normalizeInventoryUnitFilterValue(rawFilters?.inventory_unit_filter),
         type: sanitizeActiveProductTypeValues(rawFilters?.type),
     };
@@ -876,6 +878,8 @@ const ProductList = () => {
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
     const [showBulkImageAppendModal, setShowBulkImageAppendModal] = useState(false);
     const [showBulkImageRefreshModal, setShowBulkImageRefreshModal] = useState(false);
+    const [showBulkSeoModal, setShowBulkSeoModal] = useState(false);
+    const [bulkSeoAutoStartToken, setBulkSeoAutoStartToken] = useState(null);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
     const [lastBulkUpdateLogId, setLastBulkUpdateLogId] = useState(null);
     const [openAttrId, setOpenAttrId] = useState(null);
@@ -2140,7 +2144,7 @@ const ProductList = () => {
             params.multiple_suppliers = 1;
         }
 
-        ['has_images', 'is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
+        ['has_images', 'has_seo', 'has_description', 'is_featured', 'is_new', 'min_price', 'max_price', 'min_stock', 'max_stock', 'start_date', 'end_date'].forEach((key) => {
             if (normalizedFilters[key] !== '' && normalizedFilters[key] !== null && normalizedFilters[key] !== undefined) {
                 params[key] = normalizedFilters[key];
             }
@@ -4479,17 +4483,21 @@ const ProductList = () => {
                             </button>
                             <button
                                 type="button"
-                                disabled={selectedIds.length === 0 || isTrashView || bulkSeoGenerating || !aiAvailable}
-                                onClick={handleBulkGenerateSeo}
+                                disabled={selectedIds.length === 0 || isTrashView || !aiAvailable}
+                                onClick={() => {
+                                    const token = `seo-${Date.now()}`;
+                                    setBulkSeoAutoStartToken(token);
+                                    setShowBulkSeoModal(true);
+                                }}
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
-                                    selectedIds.length > 0 && !isTrashView && aiAvailable && !bulkSeoGenerating
+                                    selectedIds.length > 0 && !isTrashView && aiAvailable
                                         ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
-                                title={!aiAvailable ? disabledReason : (bulkSeoGenerating ? 'AI đang tạo SEO hàng loạt' : 'Tạo SEO AI cho các sản phẩm đã chọn')}
+                                title={!aiAvailable ? disabledReason : 'Tạo SEO AI hàng loạt (Background Worker)'}
                                 aria-label="Tạo SEO AI cho các sản phẩm đã chọn"
                             >
-                                <span className={`material-symbols-outlined text-[18px] ${bulkSeoGenerating ? 'animate-spin' : ''}`}>auto_awesome</span>
+                                <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
                             </button>
                             <button 
                                 disabled={selectedIds.length === 0} 
@@ -4895,6 +4903,32 @@ const ProductList = () => {
                             </select>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Nội dung chuẩn SEO</label>
+                            <select
+                                name="has_seo"
+                                value={tempFilters.has_seo || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Tất cả trạng thái SEO</option>
+                                <option value="1">Đã có Meta Description</option>
+                                <option value="0">Chưa có Meta Description</option>
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Mô tả sản phẩm</label>
+                            <select
+                                name="has_description"
+                                value={tempFilters.has_description || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary shadow-sm"
+                            >
+                                <option value="">Tất cả trạng thái mô tả</option>
+                                <option value="1">Đã có mô tả</option>
+                                <option value="0">Chưa có mô tả</option>
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Tồn kho</label>
                             <div className="flex items-center gap-2 h-10">
                                 <input type="number" name="min_stock" placeholder="Từ" className="w-1/2 h-full bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary" value={tempFilters.min_stock} onChange={handleTempFilterChange} />
@@ -4997,6 +5031,10 @@ const ProductList = () => {
                 || Boolean(filters.multiple_suppliers)
                 || filters.has_images === '0'
                 || filters.has_images === '1'
+                || filters.has_seo === '0'
+                || filters.has_seo === '1'
+                || filters.has_description === '0'
+                || filters.has_description === '1'
                 || Boolean(filters.min_stock)
                 || Boolean(filters.max_stock)
                 || Boolean(filters.start_date)
@@ -5056,9 +5094,25 @@ const ProductList = () => {
 
                     {(filters.has_images === '0' || filters.has_images === '1') && (
                         <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Anh:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.has_images === '1' ? 'Da co anh' : 'Chua co anh'}</span>
+                            <span className="text-[11px] text-primary/40">Ảnh:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.has_images === '1' ? 'Đã có ảnh' : 'Chưa có ảnh'}</span>
                             <button onClick={() => removeFilter('has_images')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+
+                    {(filters.has_seo === '0' || filters.has_seo === '1') && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">SEO:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.has_seo === '1' ? 'Đã có SEO' : 'Chưa có SEO'}</span>
+                            <button onClick={() => removeFilter('has_seo')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+
+                    {(filters.has_description === '0' || filters.has_description === '1') && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">Mô tả:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.has_description === '1' ? 'Đã có mô tả' : 'Chưa có mô tả'}</span>
+                            <button onClick={() => removeFilter('has_description')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                         </div>
                     )}
 
@@ -5456,7 +5510,7 @@ const ProductList = () => {
                                                     return (
                                                         <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 group/cell">
                                                             <div className="flex items-center justify-between">
-                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${typeClass}`}>{typeLabel}</span>
+                                                                 <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${typeClass}`}>{typeLabel}</span>
                                                                 <button onClick={(e) => handleCopy(typeLabel, 'loại sản phẩm', e, `${p.id}-type`)} className={`${copiedText === `${p.id}-type` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép loại sản phẩm">
                                                                     <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-type` ? 'check' : 'content_copy'}</span>
                                                                 </button>
@@ -5501,6 +5555,18 @@ const ProductList = () => {
                                                                 <button onClick={(e) => handleCopy(text, label, e, copyId)} className={`${copiedText === copyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title={`Sao chép ${label}`}>
                                                                     <span className="material-symbols-outlined text-[14px]">{copiedText === copyId ? 'check' : 'content_copy'}</span>
                                                                 </button>
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
+                                                if (col.id === 'seo_status') {
+                                                    const hasSeo = Boolean(p.meta_description && String(p.meta_description).trim() !== '');
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center group/cell">
+                                                            <div className="flex items-center justify-center gap-2">
+                                                                <span className={`px-2 py-0.5 rounded-sm text-[10px] font-bold ${hasSeo ? 'bg-indigo-100 text-indigo-700' : 'bg-stone-100 text-stone-500'}`}>
+                                                                    {hasSeo ? 'Có rồi' : 'Chưa'}
+                                                                </span>
                                                             </div>
                                                         </td>
                                                     );
@@ -5984,6 +6050,19 @@ const ProductList = () => {
                 onClose={() => setShowBulkImageRefreshModal(false)}
                 onApplied={handleBulkImageRefreshApplied}
             />
+
+            {showBulkSeoModal && (
+                <ProductSeoBulkModal
+                    open={showBulkSeoModal}
+                    initialSelectedIds={selectedIds}
+                    autoStartToken={bulkSeoAutoStartToken}
+                    onClose={() => {
+                        setShowBulkSeoModal(false);
+                        setBulkSeoAutoStartToken(null);
+                        fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+                    }}
+                />
+            )}
 
             {showBulkUpdateModal && (
                 <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4">

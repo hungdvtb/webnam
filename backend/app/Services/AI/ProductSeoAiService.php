@@ -35,6 +35,47 @@ class ProductSeoAiService
         return $normalized;
     }
 
+    public function generateBatch(array $payloads, ?int $accountId = null, ?string $model = null): array
+    {
+        if (count($payloads) === 0) {
+            return [];
+        }
+
+        $contexts = array_map(fn($payload) => $this->buildContext($payload, $accountId), $payloads);
+        $customInstruction = trim((string) ($payloads[0]['custom_instruction'] ?? ''));
+
+        $prompt = $this->buildBatchPrompt($contexts, $customInstruction);
+
+        $result = $this->geminiService->generateText($prompt, $contexts[0]['account_id'], $model);
+        $structuredArray = $this->decodeStructuredBatchResponse($result['text'], count($contexts), $contexts[0]['account_id'], $model);
+
+        $normalizedResults = [];
+        foreach ($contexts as $index => $context) {
+            // Cố gắng tìm object có item_index tương ứng, nếu không lấy theo thứ tự mảng
+            $data = null;
+            foreach ($structuredArray as $item) {
+                if (isset($item['item_index']) && (int) $item['item_index'] === $index) {
+                    $data = $item;
+                    break;
+                }
+            }
+            if (!$data) {
+                $data = $structuredArray[$index] ?? [];
+            }
+
+            if (empty($data) || !is_array($data)) {
+                $normalizedResults[] = null;
+                continue;
+            }
+
+            $normalized = $this->normalizeStructuredResponse($data, $context);
+            $normalized['model'] = $result['model'];
+            $normalizedResults[] = $normalized;
+        }
+
+        return $normalizedResults;
+    }
+
     public function persist(Product $product, array $generated): Product
     {
         $product->forceFill([
@@ -194,6 +235,113 @@ class ProductSeoAiService
         }
     }
 
+    private function buildBatchPrompt(array $contexts, string $customInstruction): string
+    {
+        $snapshots = [];
+        foreach ($contexts as $index => $context) {
+            $snapshots[] = [
+                'item_index' => $index,
+                'name' => $context['name'],
+                'sku' => $context['sku'],
+                'type' => $context['type_label'],
+                'category' => $context['category'],
+                'categories' => $context['categories'],
+                'price' => $context['price'],
+                'weight' => $context['weight'],
+                'unit' => $context['unit'],
+                'attributes' => $context['attributes'],
+                'variations' => $context['variations'],
+                'related_items' => $context['related_items'],
+                'has_main_image' => $context['main_image'] !== null,
+                'gallery_image_count' => count($context['gallery_images']),
+                'has_team_photo' => $context['team_image'] !== null,
+            ];
+        }
+
+        $instructionBlock = $customInstruction !== ''
+            ? "User extra instruction (follow when it does not conflict with the rules):\n{$customInstruction}\n\n"
+            : '';
+
+        $expectedCount = count($contexts);
+
+        return "You are a Vietnamese SEO editor specializing in Bat Trang ceramics and worship items.\n"
+            . "Write the content in Vietnamese.\n"
+            . "Use only the provided product data. Do not invent material, dimensions, origin, included accessories, or spiritual meaning unless they are clearly implied by the data.\n"
+            . "If some data is missing, infer carefully from the product name, category, attributes, variants, and bundle parts only.\n"
+            . "Avoid repetitive machine-like wording and avoid keyword stuffing.\n"
+            . "The final HTML will be built later by the system, so every field below must be plain text only.\n\n"
+            . $instructionBlock
+            . "Hard rules:\n"
+            . "1. specifications must contain 3 to 7 items for each product.\n"
+            . "2. Each specification item must be an object with label and value, both short and natural.\n"
+            . "3. intro_paragraphs should have 1 to 2 paragraphs.\n"
+            . "4. highlight_items should have 3 to 5 short bullet points.\n"
+            . "5. detail_paragraphs should have 2 to 4 paragraphs.\n"
+            . "6. usage_items should have 2 to 4 short bullet points.\n"
+            . "7. seo_title must be concise and contain the main keyword.\n"
+            . "8. seo_description must be concise, attractive, and specific.\n"
+            . "9. seo_keywords must contain 4 to 8 directly relevant keywords.\n"
+            . "10. MUST Return valid JSON ARRAY only. Array must contain exactly {$expectedCount} objects, corresponding to the items provided. No markdown, no fences.\n\n"
+            . "JSON schema (Array of objects):\n"
+            . "[\n"
+            . "  {\n"
+            . "    \"item_index\": 0,\n"
+            . "    \"specifications\": [{\"label\": \"...\", \"value\": \"...\"}],\n"
+            . "    \"intro_heading\": \"...\",\n"
+            . "    \"intro_paragraphs\": [\"...\"],\n"
+            . "    \"highlight_heading\": \"...\",\n"
+            . "    \"highlight_items\": [\"...\"],\n"
+            . "    \"detail_heading\": \"...\",\n"
+            . "    \"detail_paragraphs\": [\"...\"],\n"
+            . "    \"usage_heading\": \"...\",\n"
+            . "    \"usage_items\": [\"...\"],\n"
+            . "    \"closing_paragraphs\": [\"...\"],\n"
+            . "    \"seo_title\": \"...\",\n"
+            . "    \"seo_description\": \"...\",\n"
+            . "    \"seo_keywords\": [\"...\"]\n"
+            . "  }\n"
+            . "]\n\n"
+            . "Batch Product data:\n"
+            . json_encode($snapshots, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+    }
+
+    private function decodeStructuredBatchResponse(string $rawText, int $expectedCount, ?int $accountId, ?string $model): array
+    {
+        $candidate = $this->extractJsonCandidate($rawText);
+        if ($candidate !== null) {
+            try {
+                $arr = json_decode($candidate, true, 512, JSON_THROW_ON_ERROR);
+                if (is_array($arr) && count($arr) > 0) {
+                    return $arr;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        $repairPrompt = "Convert the following content into valid JSON ARRAY only.\n"
+            . "Keep the Vietnamese wording. It must be an array of {$expectedCount} objects.\n"
+            . "Do not add markdown or explanation.\n"
+            . "Each object must have: item_index, specifications, intro_heading, intro_paragraphs, highlight_heading, highlight_items, detail_heading, detail_paragraphs, usage_heading, usage_items, closing_paragraphs, seo_title, seo_description, seo_keywords.\n\n"
+            . "Content:\n{$rawText}";
+
+        $repaired = $this->geminiService->generateText($repairPrompt, $accountId, $model);
+        $repairedCandidate = $this->extractJsonCandidate($repaired['text']);
+
+        if ($repairedCandidate === null) {
+            throw new RuntimeException('AI tra ve noi dung khong dung dinh dang JSON ARRAY cho goi SEO san pham.');
+        }
+
+        try {
+            $arr = json_decode($repairedCandidate, true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($arr)) {
+                return [];
+            }
+            return $arr;
+        } catch (\Throwable $exception) {
+            throw new RuntimeException('AI tra ve JSON ARRAY khong hop le cho goi SEO san pham: ' . $exception->getMessage());
+        }
+    }
+
     private function extractJsonCandidate(string $value): ?string
     {
         $trimmed = trim($value);
@@ -205,8 +353,29 @@ class ProductSeoAiService
             return null;
         }
 
-        $start = strpos($trimmed, '{');
-        $end = strrpos($trimmed, '}');
+        $startBrace = strpos($trimmed, '{');
+        $startBracket = strpos($trimmed, '[');
+        $start = false;
+
+        if ($startBrace !== false && $startBracket !== false) {
+            $start = min($startBrace, $startBracket);
+        } elseif ($startBrace !== false) {
+            $start = $startBrace;
+        } elseif ($startBracket !== false) {
+            $start = $startBracket;
+        }
+
+        $endBrace = strrpos($trimmed, '}');
+        $endBracket = strrpos($trimmed, ']');
+        $end = false;
+
+        if ($endBrace !== false && $endBracket !== false) {
+            $end = max($endBrace, $endBracket);
+        } elseif ($endBrace !== false) {
+            $end = $endBrace;
+        } elseif ($endBracket !== false) {
+            $end = $endBracket;
+        }
 
         if ($start === false || $end === false || $end <= $start) {
             return null;

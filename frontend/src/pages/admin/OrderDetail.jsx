@@ -5,6 +5,13 @@ import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionC
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
 import { printCurrentPage } from '../../utils/orderPrint';
+import {
+    getOrderItemDisplayName,
+    getOrderItemDisplaySku,
+    getOrderItemSnapshotName,
+    getOrderItemSnapshotSku,
+    hasOrderItemSnapshotMismatch,
+} from '../../utils/orderItemDisplay';
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
@@ -198,16 +205,28 @@ const OrderDetail = () => {
                                 </tr>
                             </thead>
                             <tbody className="font-body">
-                                {order.items?.map(item => (
-                                    <tr key={item.id} className="border-b border-primary/5">
+                                {order.items?.map(item => {
+                                    const itemName = getOrderItemDisplayName(item);
+                                    const itemSku = getOrderItemDisplaySku(item, 'N/A');
+                                    const snapshotName = getOrderItemSnapshotName(item);
+                                    const snapshotSku = getOrderItemSnapshotSku(item);
+                                    const showSnapshotMeta = hasOrderItemSnapshotMismatch(item);
+
+                                    return (
+                                        <tr key={item.id} className="border-b border-primary/5">
                                         <td className="p-4">
                                             <div className="flex items-center gap-4">
                                                 <div className="size-12 bg-primary/5 flex-shrink-0">
-                                                    {item.product?.image_url && <img src={item.product.image_url} alt={item.product.name} className="size-full object-cover" />}
+                                                    {item.product?.image_url && <img src={item.product.image_url} alt={itemName} className="size-full object-cover" />}
                                                 </div>
                                                 <div className="flex flex-col">
-                                                    <span className="font-bold text-primary">{item.product?.name}</span>
-                                                    <span className="text-[10px] text-primary/40 uppercase font-ui font-black">SKU: {item.product?.sku}</span>
+                                                    <span className="font-bold text-primary">{itemName}</span>
+                                                    <span className="text-[10px] text-primary/40 uppercase font-ui font-black">SKU: {itemSku}</span>
+                                                    {showSnapshotMeta && snapshotName && (
+                                                        <span className="mt-1 text-[10px] text-primary/45">
+                                                            Snapshot lúc tạo đơn: {snapshotName}{snapshotSku ? ` / ${snapshotSku}` : ''}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </div>
                                         </td>
@@ -215,7 +234,8 @@ const OrderDetail = () => {
                                         <td className="p-4 text-center font-bold text-sm">x{item.quantity}</td>
                                         <td className="p-4 text-right font-bold text-brick">{new Intl.NumberFormat('vi-VN').format(item.price * item.quantity)}đ</td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                             <tfoot className="bg-primary/5 font-ui">
                                 <tr>

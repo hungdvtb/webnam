@@ -1480,7 +1480,7 @@ const ProductForm = () => {
     const currentCostLabel = isCreateFlow ? 'Giá nhập thực tế' : 'Giá vốn hiện tại';
     const returnContext = location.state?.returnContext || null;
 
-    const { showModal, showToast } = useUI();
+    const { showModal, hideModal, showToast } = useUI();
     const { available: aiAvailable, disabledReason } = useAiAvailability();
     const [isSaving, setIsSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -3104,6 +3104,23 @@ const ProductForm = () => {
     }, [formData.sku]);
 
     const handleResetVariants = () => {
+        if (variants.length > 0) {
+            showModal({
+                title: 'CẢNH BÁO: XÓA BIẾN THỂ',
+                content: `<b>Bạn đang thực hiện xóa toàn bộ biến thể hiện có.</b>\n\n- Mã SKU và Tốn kho hiện tại sẽ bị xóa sạch.\n- Dữ liệu lịch sử đơn hàng có thể bị ảnh hưởng.\n\n<span style="color: #c2410c; font-weight: 800; text-transform: uppercase; font-size: 11px;">Lưu ý: Nếu bạn chỉ muốn MỞ RỘNG (thêm Màu/Size...), hãy dùng nút "HƯỚNG DẪN MỞ RỘNG" thay vì xóa!</span>`,
+                type: 'warning',
+                onAction: () => {
+                    setVariants([]);
+                    setSelectedVariantIds([]);
+                    setSelectedSuperAttributes([]);
+                    setShowVariantConfig(true);
+                    clearServerValidationErrors(['variants.']);
+                    hideModal();
+                },
+                actionText: 'TÔI CHẮC CHẮN XÓA'
+            });
+            return;
+        }
         setVariants([]);
         setSelectedVariantIds([]);
         setSelectedSuperAttributes([]);
@@ -4089,15 +4106,22 @@ const ProductForm = () => {
 
             const matchIndex = availableOldVariants.findIndex(oldVar => {
                 if (!oldVar.attributes) return false;
-                
                 let isMatch = true;
-                for (const key of Object.keys(oldVar.attributes)) {
+                const oldAttributeKeys = Object.keys(oldVar.attributes);
+                for (const key of oldAttributeKeys) {
                     if (combo[key] !== undefined && combo[key] !== oldVar.attributes[key]) {
-                        isMatch = false;
-                        break;
+                        isMatch = false; break;
                     }
                 }
-                return isMatch;
+                if (!isMatch) return false;
+                const newKeys = Object.keys(combo).filter(k => !oldAttributeKeys.includes(k));
+                for (const key of newKeys) {
+                    const attrConfig = selectedSuperAttributes.find(a => String(a.id) === String(key));
+                    if (attrConfig && attrConfig.default_value) {
+                        if (combo[key] !== attrConfig.default_value) return false;
+                    }
+                }
+                return true;
             });
 
             let matchedVariant = null;
@@ -4171,6 +4195,11 @@ const ProductForm = () => {
     };
 
     const removeVariant = (index) => {
+        if (variants[index]?.id && !String(variants[index].id).startsWith('new_')) {
+            if (!window.confirm("BẠN CÓ CHẮC MUỐN XÓA BIẾN THỂ NÀY? SKU và Tồn kho của mã này sẽ bị mất khỏi hệ thống sau khi Lưu.")) {
+                return;
+            }
+        }
         setVariants(variants.filter((_, i) => i !== index));
         clearServerValidationErrors(['variants.']);
     };
@@ -5916,65 +5945,51 @@ const ProductForm = () => {
                                         <span className="material-symbols-outlined text-purple-600/40 p-1.5 bg-purple-50 rounded-full text-base">account_tree</span>
                                         <h3 className="font-sans text-[15px] font-bold text-purple-900 uppercase tracking-tight">Quản lý biến thể</h3>
                                     </div>
-                                    <div className="flex items-center gap-2">
+<div className="flex items-center gap-2">
                                         <button
                                             type="button"
                                             onClick={() => setShowVariantExpansionGuide(true)}
-                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-500 text-white rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-teal-600 transition-all shadow-sm"
+                                            className="flex items-center gap-1.5 px-3 py-1 bg-teal-500 text-white rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-teal-600 transition-all shadow-sm min-h-[38px]"
                                         >
                                             <span className="material-symbols-outlined text-[16px]">library_add</span>
-                                            Hướng dẫn mở rộng
+                                            <div className="flex flex-col items-start leading-[1.1] text-left uppercase"><span>Hướng dẫn</span><span>mở rộng</span></div>
                                         </button>
-                                        {variants.length === 0 && (
-                                            <button
-                                                type="button"
-                                                onClick={handleAddManualVariant}
-                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
-                                                title="Tạo một biến thể mới mà không cần chọn thuộc tính trước"
-                                            >
-                                                <span className="material-symbols-outlined text-[16px]">add_box</span>
-                                                Tạo biến thể mới
-                                            </button>
-                                        )}
-                                        {variants.length > 0 && (
-                                            <>
-                                                <button
-                                                    type="button"
-                                                    onClick={handleAddManualVariant}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm"
-                                                    title="Thêm một biến thể mới thủ công"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">add_box</span>
-                                                    Thêm biến thể
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={handleResetVariants}
-                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-brick/20 text-brick rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-brick/5 transition-all shadow-sm"
-                                                    title="Xóa toàn bộ biến thể để tạo lại"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
-                                                    Xóa hết & Reset
-                                                </button>
-                                            </>
-                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => window.open('/admin/attributes', '_blank')}
+                                            className="flex items-center gap-1.5 px-3 py-1 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm min-h-[38px]"
+                                            title="Đi tới trang quản lý thuộc tính"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">display_settings</span>
+                                            <div className="flex flex-col items-start leading-[1.1] text-left uppercase"><span>Quản lý</span><span>thuộc tính</span></div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={openVariantQuickUpdateModal}
+                                            className="flex items-center gap-1.5 px-3 py-1 bg-white border border-purple-200 text-purple-700 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm min-h-[38px]"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">tune</span>
+                                            <div className="flex flex-col items-start leading-[1.1] text-left uppercase"><span>Cập nhật</span><span>nhanh</span></div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleResetVariants}
+                                            className="flex items-center gap-1.5 px-3 py-1 bg-white border border-brick/20 text-brick rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-brick/5 transition-all shadow-sm min-h-[38px]"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                            <div className="flex flex-col items-start leading-[1.1] text-left uppercase"><span>Xóa hết</span><span>& Reset</span></div>
+                                        </button>
                                         <button
                                             type="button"
                                             onClick={handleRefreshAttributes}
                                             disabled={refreshingAttributes}
-                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-purple-200 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm disabled:opacity-50"
-                                            title="Tải lại danh sách thuộc tính"
+                                            className="flex items-center gap-1.5 px-3 py-1 bg-white border border-purple-100 text-purple-600 rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-50 transition-all shadow-sm disabled:opacity-50 min-h-[38px]"
                                         >
-                                            <span className={`material-symbols-outlined text-[16px] ${refreshingAttributes ? 'animate-spin' : ''}`}>sync</span>
-                                            {refreshingAttributes ? 'Đang làm mới...' : 'Làm mới thuộc tính'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowVariantConfig(!showVariantConfig)}
-                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 text-white rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-purple-700 transition-all shadow-sm"
-                                        >
-                                            <span className="material-symbols-outlined text-[16px]">{showVariantConfig ? 'close' : 'settings'}</span>
-                                            {showVariantConfig ? 'Đóng cấu hình' : 'Cấu hình biến thể'}
+                                            <span className="material-symbols-outlined text-[16px]">sync</span>
+                                            <div className="flex flex-col items-start leading-[1.1] text-left uppercase">
+                                                <span>{refreshingAttributes ? "Đang làm" : "Làm mới"}</span>
+                                                <span>{refreshingAttributes ? "mới..." : "thuộc tính"}</span>
+                                            </div>
                                         </button>
                                     </div>
                                 </div>
@@ -6046,22 +6061,37 @@ const ProductForm = () => {
                                                                 <div className="flex flex-wrap gap-2">
                                                                     {(attr.options || []).map(opt => {
                                                                         const isValSelected = attr.selected_values?.includes(opt.value);
+                                                                        const isDefault = attr.default_value === opt.value;
                                                                         return (
-                                                                            <button
-                                                                                key={opt.id}
-                                                                                type="button"
-                                                                                onClick={() => {
-                                                                                    const updated = [...selectedSuperAttributes];
-                                                                                    const vals = updated[idx].selected_values || [];
-                                                                                    updated[idx].selected_values = isValSelected
-                                                                                        ? vals.filter(v => v !== opt.value)
-                                                                                        : [...vals, opt.value];
-                                                                                    setSelectedSuperAttributes(updated);
-                                                                                }}
-                                                                                className={`px-3 py-1 text-[11px] font-bold rounded-full border transition-all ${isValSelected ? 'bg-purple-100 border-purple-400 text-purple-800' : 'bg-stone/5 border-transparent text-stone/60 hover:bg-stone/10'}`}
-                                                                            >
-                                                                                {opt.value}
-                                                                            </button>
+                                                                            <div key={opt.id} className="relative group/opt">
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => {
+                                                                                        const updated = [...selectedSuperAttributes];
+                                                                                        if (isValSelected) {
+                                                                                            updated[idx].default_value = isDefault ? null : opt.value;
+                                                                                        } else {
+                                                                                            updated[idx].selected_values = [...(updated[idx].selected_values || []), opt.value];
+                                                                                        }
+                                                                                        setSelectedSuperAttributes(updated);
+                                                                                    }}
+                                                                                    className={"px-3 py-1 text-[11px] font-bold rounded-full border transition-all flex items-center gap-1.5 " + (isValSelected
+                                                                                        ? (isDefault ? 'bg-purple-600 border-purple-700 text-white shadow-md' : 'bg-purple-100 border-purple-400 text-purple-800')
+                                                                                        : 'bg-stone/5 border-transparent text-stone/60 hover:bg-stone/10')}
+                                                                                >
+                                                                                    {isDefault && <span className="material-symbols-outlined text-[13px]">anchor</span>}
+                                                                                    {opt.value}
+                                                                                    {isValSelected && !isDefault && (
+                                                                                        <span className="material-symbols-outlined text-[14px] opacity-40 hover:opacity-100" onClick={(e) => {
+                                                                                            e.stopPropagation();
+                                                                                            const updated = [...selectedSuperAttributes];
+                                                                                            updated[idx].selected_values = updated[idx].selected_values.filter(v => v !== opt.value);
+                                                                                            if (updated[idx].default_value === opt.value) updated[idx].default_value = null;
+                                                                                            setSelectedSuperAttributes(updated);
+                                                                                        }}>close</span>
+                                                                                    )}
+                                                                                </button>
+                                                                            </div>
                                                                         );
                                                                     })}
                                                                 </div>

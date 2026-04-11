@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class OrderSupplementItem extends Model
 {
+    use Concerns\HasOrderItemProductDisplay;
     use \App\Traits\BelongsToAccount;
 
     protected $fillable = [
@@ -36,6 +37,6 @@ class OrderSupplementItem extends Model
 
     public function product()
     {
-        return $this->belongsTo(Product::class);
+        return $this->belongsTo(Product::class)->withTrashed();
     }
 }

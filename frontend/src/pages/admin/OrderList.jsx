@@ -31,6 +31,10 @@ import {
     parseQuickSelectCodes,
     removeOrderIdsFromReturnWorkbench,
 } from '../../utils/orderReturnWorkbench';
+import {
+    getOrderItemDisplayName,
+    getOrderItemDisplaySku,
+} from '../../utils/orderItemDisplay';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -168,8 +172,8 @@ const OrderProductsPortal = ({
                 {/* Items List */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1 bg-[#FCFDFF]">
                     {items.map((item, idx) => {
-                        const name = item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`;
-                        const sku = item.product?.sku || item.product_sku_snapshot || null;
+                        const name = getOrderItemDisplayName(item);
+                        const sku = getOrderItemDisplaySku(item) || null;
                         const price = item.price ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(item.price) : null;
 
                         return (
@@ -3580,13 +3584,13 @@ const OrderList = () => {
                                             let itemsToShow = [...rawItems];
                                             if (normalizedActiveSearchTerms.length > 0) {
                                                 const matches = itemsToShow.filter(item => {
-                                                    const name = (item.product?.name || item.product_name_snapshot || '').toLowerCase();
-                                                    const sku = (item.product?.sku || item.product_sku_snapshot || '').toLowerCase();
+                                                    const name = getOrderItemDisplayName(item, '').toLowerCase();
+                                                    const sku = getOrderItemDisplaySku(item, '').toLowerCase();
                                                     return normalizedActiveSearchTerms.some((term) => name.includes(term) || sku.includes(term));
                                                 });
                                                 const nonMatches = itemsToShow.filter(item => {
-                                                    const name = (item.product?.name || item.product_name_snapshot || '').toLowerCase();
-                                                    const sku = (item.product?.sku || item.product_sku_snapshot || '').toLowerCase();
+                                                    const name = getOrderItemDisplayName(item, '').toLowerCase();
+                                                    const sku = getOrderItemDisplaySku(item, '').toLowerCase();
                                                     return !normalizedActiveSearchTerms.some((term) => name.includes(term) || sku.includes(term));
                                                 });
                                                 itemsToShow = [...matches, ...nonMatches];
@@ -3597,8 +3601,8 @@ const OrderList = () => {
                                                     <div className="flex flex-col h-full">
                                                         <div className={`max-h-[110px] overflow-y-auto custom-scrollbar space-y-3 flex-1 ${hasMany ? 'pr-8' : 'pr-1'}`}>
                                                             {itemsToShow.map((item, idx) => {
-                                                                const itemName = item.product?.name || item.product_name_snapshot || '...';
-                                                                const itemSku = item.product?.sku || item.product_sku_snapshot || '';
+                                                                const itemName = getOrderItemDisplayName(item, '...');
+                                                                const itemSku = getOrderItemDisplaySku(item, '');
 
                                                                 // Check if this item is a match to highlight
                                                                 const isMatch = matchesAnySearchKeyword(itemName, itemSku);

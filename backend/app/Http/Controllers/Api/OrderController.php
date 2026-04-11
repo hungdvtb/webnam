@@ -2497,7 +2497,24 @@ class OrderController extends Controller
 
         // Eager load only what is needed for the table
         $query->with([
-            'items:id,order_id,account_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price',
+            'items' => fn ($itemQuery) => $itemQuery
+                ->select([
+                    'id',
+                    'order_id',
+                    'account_id',
+                    'product_id',
+                    'product_name_snapshot',
+                    'product_sku_snapshot',
+                    'sort_order',
+                    'quantity',
+                    'price',
+                ])
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->with([
+                    'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku']),
+                ]),
             'attributeValues:id,order_id,attribute_id,value',
             'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at'
         ]);
@@ -3375,7 +3392,10 @@ class OrderController extends Controller
                 $oldStatus = $order->status;
 
                 if ($newStatus === $oldStatus) {
-                    return response()->json($order->load(['items', 'customer', 'attributeValues.attribute', 'shipments']));
+                    return response()->json($order->load(array_merge(
+                        $this->orderDetailRelations(),
+                        ['customer', 'shipments']
+                    )));
                 }
 
                 // Validate that the status exists in order_statuses for this account
@@ -3415,7 +3435,10 @@ class OrderController extends Controller
 
                 $order->update(['status' => $newStatus]);
                 
-                return response()->json($order->load(['items', 'customer', 'attributeValues.attribute', 'shipments']));
+                return response()->json($order->load(array_merge(
+                    $this->orderDetailRelations(),
+                    ['customer', 'shipments']
+                )));
             });
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json(['errors' => $e->errors(), 'message' => 'Dữ liệu không hợp lệ'], 422);

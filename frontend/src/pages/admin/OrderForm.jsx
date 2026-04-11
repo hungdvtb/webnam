@@ -22,6 +22,12 @@ import {
     SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
 } from '../../config/orderTypes';
 import { writeLeadListReturnHint } from '../../utils/leadListViewState';
+import {
+    getOrderItemDisplayName,
+    getOrderItemDisplaySku,
+    getOrderItemSnapshotName,
+    getOrderItemSnapshotSku,
+} from '../../utils/orderItemDisplay';
 import { VN_REGIONS } from '../../data/regions';
 import {
     buildRegionPath,
@@ -1077,6 +1083,8 @@ const createOrderLineItem = (payload = {}) => {
         product_id,
         name,
         sku,
+        snapshot_name,
+        snapshot_sku,
         unit_name,
         sort_order,
         quantity = 1,
@@ -1095,12 +1103,22 @@ const createOrderLineItem = (payload = {}) => {
         available_to_sell,
     });
     const normalizedAiMeta = normalizeOrderAiItemMeta(ai_meta);
+    const resolvedName = resolveOrderLineItemDisplayName({ name, options: normalizedOptions });
+    const resolvedSku = normalizeCanvasText(sku) || 'N/A';
+    const resolvedSnapshotName = resolveOrderLineItemDisplayName({
+        name: snapshot_name ?? name,
+        options: normalizedOptions,
+        fallbackName: resolvedName,
+    });
+    const resolvedSnapshotSku = normalizeCanvasText(snapshot_sku ?? sku) || resolvedSku;
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
         product_id: Number(product_id) || 0,
-        name: resolveOrderLineItemDisplayName({ name, options: normalizedOptions }),
-        sku: normalizeCanvasText(sku) || 'N/A',
+        name: resolvedName,
+        sku: resolvedSku,
+        snapshot_name: resolvedSnapshotName,
+        snapshot_sku: resolvedSnapshotSku,
         unit_name: resolveOrderUnitLabel(payload, { unit_name }),
         sort_order: Math.max(1, Number(sort_order) || 1),
         quantity: Math.max(1, Number(quantity) || 1),
@@ -4000,6 +4018,37 @@ const OrderForm = () => {
                 options: item.options || {},
             })) || [];
             void mappedItems;
+            void normalizedMappedItems;
+            const resolvedLoadedItems = order.items?.map((item, index) => {
+                const fallbackName = `San pham #${item.product_id}`;
+                const displayName = resolveOrderLineItemDisplayName({
+                    name: getOrderItemDisplayName(item, fallbackName),
+                    options: item.options || {},
+                    fallbackName,
+                });
+                const displaySku = getOrderItemDisplaySku(item, 'N/A');
+                const snapshotName = resolveOrderLineItemDisplayName({
+                    name: getOrderItemSnapshotName(item) || displayName,
+                    options: item.options || {},
+                    fallbackName: displayName,
+                });
+                const snapshotSku = getOrderItemSnapshotSku(item) || displaySku;
+
+                return createOrderLineItem({
+                    line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
+                    product_id: item.product_id,
+                    name: displayName,
+                    sku: displaySku,
+                    snapshot_name: snapshotName,
+                    snapshot_sku: snapshotSku,
+                    unit_name: resolveOrderUnitLabel(item, item?.product),
+                    sort_order: Number(item.sort_order) || index + 1,
+                    quantity: parseMoneyNumber(item.quantity, 0) || 0,
+                    price: parseMoneyNumber(item.price, 0) || 0,
+                    cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
+                    options: item.options || {},
+                });
+            }) || [];
             const mappedSupplementItems = (order.supplement_items || order.supplementItems || []).map((item) => ({
                 product_id: item.product_id,
                 name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
@@ -4009,7 +4058,16 @@ const OrderForm = () => {
                 cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
                 notes: item.notes || '',
             }));
-            const mappedCostTotal = calculateItemsCostTotal(normalizedMappedItems);
+            const resolvedSupplementItems = mappedSupplementItems.map((item, index) => {
+                const sourceItem = (order.supplement_items || order.supplementItems || [])[index] || {};
+
+                return {
+                    ...item,
+                    snapshot_name: getOrderItemSnapshotName(sourceItem) || item.name,
+                    snapshot_sku: getOrderItemSnapshotSku(sourceItem) || item.sku,
+                };
+            });
+            const mappedCostTotal = calculateItemsCostTotal(resolvedLoadedItems);
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
@@ -4029,7 +4087,7 @@ const OrderForm = () => {
                 return_status: isDuplicating
                     ? SUPPLEMENT_RETURN_STATUS_NOT_RETURNED
                     : normalizeSupplementReturnStatus(order.return_status || order.returnStatus),
-                items: normalizedMappedItems, /*
+                items: resolvedLoadedItems, /*
                     product_id: item.product_id,
                     name: item.product?.name || item.product_name_snapshot || `Sản phẩm #${item.product_id}`,
                     sku: item.product?.sku || item.product_sku_snapshot || `N/A`,
@@ -4037,7 +4095,7 @@ const OrderForm = () => {
                     price: item.price,
                     cost_price: resolveOrderItemCostPrice(item)
                 })) || [], */
-                supplement_items: mappedSupplementItems,
+                supplement_items: resolvedSupplementItems,
                 custom_attributes: customAttrValues,
                 shipping_fee: order.shipping_fee || 0,
                 discount: order.discount || 0,
@@ -5024,8 +5082,8 @@ const OrderForm = () => {
                     quantity: Math.max(0, Number(item.quantity) || 0),
                     price: Math.max(0, Number(item.price) || 0),
                     cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
-                    name: item.name || '',
-                    sku: item.sku || '',
+                    name: item.snapshot_name || item.name || '',
+                    sku: item.snapshot_sku || item.sku || '',
                     notes: item.notes || '',
                 })).filter((item) => item.product_id && item.quantity > 0)
                 : [];
@@ -5036,8 +5094,8 @@ const OrderForm = () => {
                     quantity: Math.max(0, Number(item.quantity) || 0),
                     price: Math.max(0, Number(item.price) || 0),
                     cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
-                    name: item.name || '',
-                    sku: item.sku || '',
+                    name: item.snapshot_name || item.name || '',
+                    sku: item.snapshot_sku || item.sku || '',
                     options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
                         ? item.options
                         : undefined,

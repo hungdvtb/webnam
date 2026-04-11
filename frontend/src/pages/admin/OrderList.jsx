@@ -2550,17 +2550,35 @@ const OrderList = () => {
         navigate(buildOrderListUrl('main'));
     }, [navigate]);
 
-    const handleCreateOrder = useCallback(() => {
-        orderApi.preloadBootstrap({ mode: 'form' });
+    const buildNewOrderUrl = useCallback((targetKind = null) => {
         const params = new URLSearchParams();
         params.set('return_to', currentListUrl);
 
-        if (isDraftView) {
+        const normalizedTargetKind = isDraftOrder(targetKind)
+            ? DRAFT_ORDER_KIND
+            : (targetKind ? MAIN_ORDER_KIND : (isDraftView ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND));
+
+        if (isDraftOrder(normalizedTargetKind)) {
             params.set('kind', DRAFT_ORDER_KIND);
         }
 
-        navigate(`/admin/orders/new?${params.toString()}`);
-    }, [currentListUrl, isDraftView, navigate]);
+        return `/admin/orders/new?${params.toString()}`;
+    }, [currentListUrl, isDraftView]);
+
+    const handleCreateOrder = useCallback(() => {
+        orderApi.preloadBootstrap({ mode: 'form' });
+        navigate(buildNewOrderUrl());
+    }, [buildNewOrderUrl, navigate]);
+
+    const handleCreateDraftOrder = useCallback(() => {
+        orderApi.preloadBootstrap({ mode: 'form' });
+        navigate(buildNewOrderUrl(DRAFT_ORDER_KIND));
+    }, [buildNewOrderUrl, navigate]);
+
+    const handleCreateMainOrder = useCallback(() => {
+        orderApi.preloadBootstrap({ mode: 'form' });
+        navigate(buildNewOrderUrl(MAIN_ORDER_KIND));
+    }, [buildNewOrderUrl, navigate]);
 
     const warmOrderEditor = useCallback((orderId) => {
         orderApi.preloadBootstrap({ mode: 'form' });
@@ -2783,7 +2801,7 @@ const OrderList = () => {
     const { listTitle, emptyTitle, emptyDescription, selectedLabel, createTitle } = currentViewMeta;
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
+        <div className="absolute inset-0 z-10 flex h-full w-full flex-col bg-[#fcfcfa] p-3 pb-24 animate-fade-in lg:p-6 lg:pb-6">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
@@ -2809,13 +2827,86 @@ const OrderList = () => {
             )}
 
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex justify-between items-center">
+                <div className="flex items-center justify-between gap-3">
                     <h1 className="admin-header-title italic">{listTitle}</h1>
                     <AccountSelector user={user} />
                 </div>
 
-                <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex items-center gap-2">
-                    <div className="flex gap-2 items-center flex-wrap">
+                <div className="flex flex-col gap-3 rounded-[22px] border border-primary/10 bg-white p-3 shadow-sm lg:flex-row lg:items-center lg:gap-2 lg:rounded-sm lg:p-2">
+                    <div className="grid grid-cols-2 gap-2 lg:hidden">
+                        {!isTrashView && (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={handleCreateDraftOrder}
+                                    className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-[18px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white shadow-[0_18px_36px_-24px_rgba(27,54,93,0.7)] transition-all hover:bg-brick"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                                    Đơn nháp mới
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleCreateMainOrder}
+                                    className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-[18px] border border-primary/10 bg-primary/[0.04] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08]"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                                    Tạo đơn
+                                </button>
+                            </>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-2 lg:hidden">
+                        <button type="button" onClick={() => navigateToListView('main')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isMainView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">receipt_long</span>
+                            Đơn
+                        </button>
+                        <button type="button" onClick={() => navigateToListView('draft')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isDraftView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                            Nháp
+                        </button>
+                        <button type="button" onClick={() => navigateToListView(RETURN_WORKBENCH_VIEW)} className={`relative inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isReturnWorkbenchView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">inbox</span>
+                            Tạm hoàn
+                            {workbenchOrderCount > 0 && (
+                                <span className={`absolute right-1.5 top-1.5 min-w-[18px] rounded-full px-1 py-0.5 text-[9px] font-black ${isReturnWorkbenchView ? 'bg-white text-primary' : 'bg-primary text-white'}`}>
+                                    {workbenchOrderCount > 99 ? '99+' : workbenchOrderCount}
+                                </span>
+                            )}
+                        </button>
+                        <button type="button" onClick={() => navigateToListView('trash')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isTrashView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                            Rác
+                        </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 lg:hidden">
+                        <button
+                            type="button"
+                            data-filter-btn
+                            onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }}
+                            className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${showFilters || activeCount() > 0 ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">filter_alt</span>
+                            Lọc
+                        </button>
+                        {canQuickSelect && (
+                            <button
+                                type="button"
+                                onClick={() => setQuickSelectPanelOpen((current) => !current)}
+                                className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${quickSelectPanelOpen || quickSelectResult ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
+                                Chọn nhanh
+                            </button>
+                        )}
+                        <button onClick={handleRefresh} disabled={loading} className="ml-auto inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
+                            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span>
+                            Làm mới
+                        </button>
+                    </div>
+
+                    <div className="hidden flex-wrap items-center gap-2 lg:flex">
                         {!isTrashView && (
                             <button type="button" onClick={handleCreateOrder} title={createTitle} className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber">
                                 <span className="material-symbols-outlined text-[18px]">add</span>
@@ -3462,7 +3553,200 @@ const OrderList = () => {
 
             {showColumnSettings && <div ref={columnSettingsRef}><TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey="order_list" /></div>}
 
-            <div className="flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-sm">
+            <div className="relative flex-1 space-y-3 lg:hidden">
+                {orders.length === 0 && !loading ? (
+                    <div className="rounded-[24px] border border-dashed border-primary/15 bg-white px-5 py-12 text-center shadow-sm">
+                        <div className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/35">{emptyTitle}</div>
+                        <div className="mt-2 text-[14px] font-semibold text-primary/55">{emptyDescription}</div>
+                    </div>
+                ) : (
+                    orders.map((o) => {
+                        const isDraftRow = isDraftOrder(o.order_kind);
+                        const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
+                        const dateDisplay = formatDateTimeParts(o.created_at);
+                        const isFocusedRouteRow = Number(o.id) === Number(routeOrderScope.focusOrderId);
+                        const itemPreview = Array.isArray(o.items) ? o.items.slice(0, 2) : [];
+                        const remainingItemCount = Math.max((o.items?.length || 0) - itemPreview.length, 0);
+                        const addressText = String(o.shipping_address || [o.ward, o.province].filter(Boolean).join(', ') || '').trim();
+                        const trackingCode = o.shipping_tracking_code || o.active_shipment?.carrier_tracking_code || '';
+
+                        return (
+                            <div
+                                key={o.id}
+                                data-order-row-id={o.id}
+                                onClick={() => { if (!isTrashView) openOrderEditor(o.id); }}
+                                className={`rounded-[24px] border px-4 py-4 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.38)] transition-all ${
+                                    isFocusedRouteRow
+                                        ? 'border-amber-200 bg-amber-50'
+                                        : selectedIds.includes(o.id)
+                                            ? 'border-primary/20 bg-primary/[0.05]'
+                                            : 'border-primary/10 bg-white'
+                                }`}
+                            >
+                                <div className="flex items-start gap-3">
+                                    <label className="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white" onClick={(event) => event.stopPropagation()}>
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedIds.includes(o.id)}
+                                            onClick={(event) => event.stopPropagation()}
+                                            onChange={() => toggleSelectOrder(o.id)}
+                                            className="size-4 accent-primary"
+                                            aria-label={`Chọn đơn ${o.order_number}`}
+                                        />
+                                    </label>
+
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="truncate text-[15px] font-black text-primary">{o.order_number}</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(event) => handleCopy(o.order_number, event)}
+                                                        className="inline-flex size-7 items-center justify-center rounded-full border border-primary/10 bg-white text-primary/55 transition-all hover:border-primary/25 hover:text-primary"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[15px]">{copiedText === o.order_number ? 'check' : 'content_copy'}</span>
+                                                    </button>
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
+                                                        {getOrderTypeMeta(o.order_type).shortLabel}
+                                                    </span>
+                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
+                                                        {statusName}
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="shrink-0 text-right">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Tổng tiền</div>
+                                                <div className="mt-1 text-[18px] font-black leading-none text-brick">{formatMoney(o.total_price || 0)}</div>
+                                                <div className="mt-1 text-[11px] font-semibold text-primary/45">{dateDisplay.date}</div>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 rounded-[18px] bg-[#f8fbff] px-3 py-3">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-[14px] font-black text-primary">{o.customer_name || 'Khách lẻ'}</div>
+                                                    <div className={`mt-1 truncate text-[13px] font-black ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone || 'Chưa có số điện thoại'}</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => handleCopy(o.customer_phone || o.customer_name || '', event)}
+                                                    disabled={!(o.customer_phone || o.customer_name)}
+                                                    className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">{copiedText === (o.customer_phone || o.customer_name || '') ? 'check' : 'content_copy'}</span>
+                                                    Copy KH
+                                                </button>
+                                            </div>
+                                            {addressText && (
+                                                <div className="mt-2 flex items-start justify-between gap-2">
+                                                    <div className="min-w-0 text-[12px] font-semibold leading-relaxed text-primary/60">{addressText}</div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={(event) => handleCopy(addressText, event)}
+                                                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary/50 transition-all hover:border-primary/25 hover:text-primary"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[15px]">{copiedText === addressText ? 'check' : 'content_copy'}</span>
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="mt-3 rounded-[18px] border border-primary/10 bg-white px-3 py-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/40">Sản phẩm trong đơn</div>
+                                                <div className="text-[11px] font-black text-primary/55">{formatNumber(o.items?.length || 0)} dòng</div>
+                                            </div>
+                                            <div className="mt-2 space-y-2">
+                                                {itemPreview.map((item, itemIndex) => {
+                                                    const itemName = getOrderItemDisplayName(item, 'Sản phẩm');
+                                                    const itemSku = getOrderItemDisplaySku(item, '');
+                                                    return (
+                                                        <div key={`${o.id}-mobile-item-${itemIndex}`} className="flex items-start gap-2">
+                                                            <span className="inline-flex min-w-[34px] items-center justify-center rounded-full bg-orange-50 px-2 py-1 text-[10px] font-black text-orange-700">
+                                                                {item.quantity}x
+                                                            </span>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className={`truncate text-[13px] font-bold ${matchesAnySearchKeyword(itemName, itemSku) ? 'text-primary' : 'text-primary/75'}`}>{itemName}</div>
+                                                                {itemSku && <div className="mt-0.5 truncate text-[11px] font-black text-orange-700/70">{itemSku}</div>}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                                {remainingItemCount > 0 && (
+                                                    <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">
+                                                        +{remainingItemCount} sản phẩm khác
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {(trackingCode || o.shipping_carrier_name || o.active_shipment?.carrier_name) && (
+                                            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-[18px] border border-primary/10 bg-primary/[0.03] px-3 py-2">
+                                                {(o.shipping_carrier_name || o.active_shipment?.carrier_name) && (
+                                                    <span className="text-[11px] font-black text-primary/60">{o.shipping_carrier_name || o.active_shipment?.carrier_name}</span>
+                                                )}
+                                                {trackingCode && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={(event) => handleCopy(trackingCode, event)}
+                                                        className="inline-flex items-center gap-2 rounded-full border border-primary/10 bg-white px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[15px]">{copiedText === trackingCode ? 'check' : 'content_copy'}</span>
+                                                        {trackingCode}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        <div className="mt-4 flex items-center gap-2">
+                                            {!isTrashView && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        openOrderEditor(o.id);
+                                                    }}
+                                                    className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-[16px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-primary/90"
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">{isDraftRow ? 'edit_note' : 'open_in_new'}</span>
+                                                    {isDraftRow ? 'Mở nháp' : 'Mở đơn'}
+                                                </button>
+                                            )}
+                                            <button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    toggleSelectOrder(o.id);
+                                                }}
+                                                className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${
+                                                    selectedIds.includes(o.id)
+                                                        ? 'border-primary bg-primary text-white'
+                                                        : 'border-primary/10 bg-white text-primary'
+                                                }`}
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">{selectedIds.includes(o.id) ? 'check_circle' : 'radio_button_unchecked'}</span>
+                                                {selectedIds.includes(o.id) ? 'Đã chọn' : 'Chọn'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+
+                {loading && (
+                    <div className="absolute inset-0 flex items-center justify-center rounded-[24px] bg-white/65">
+                        <div className="h-9 w-9 rounded-full border-4 border-primary/10 border-t-primary animate-refresh-spin"></div>
+                    </div>
+                )}
+            </div>
+
+            <div className="relative hidden flex-1 overflow-auto rounded-sm border border-primary/10 bg-white shadow-xl table-scrollbar lg:flex">
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
@@ -3858,10 +4142,70 @@ const OrderList = () => {
                 {loading && <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-50"><div className="w-8 h-8 border-4 border-gold/10 border-t-gold rounded-full animate-refresh-spin"></div></div>}
             </div>
 
-            <div className="flex-none mt-4 flex justify-between items-center text-[13px] font-bold text-primary/40 border-t border-primary/10 pt-4">
-                <div className="flex items-center gap-4"><span>Hiển thị {orders.length} / {pagination.total}</span><div className="flex items-center gap-2"><span>Số dòng:</span><select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">{[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}</select></div></div>
+            <div className="mt-4 flex-none border-t border-primary/10 pt-4 text-[13px] font-bold text-primary/40 lg:flex lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-4"><span>Hiển thị {orders.length} / {pagination.total}</span><div className="flex items-center gap-2"><span>Số dòng:</span><select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">{[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}</select></div></div>
                 <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
             </div>
+
+            {selectedIds.length > 0 && (
+                <div className="fixed inset-x-0 bottom-0 z-[90] border-t border-primary/10 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3 shadow-[0_-18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur lg:hidden">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Đang chọn</div>
+                            <div className="mt-1 text-[16px] font-black text-primary">{selectedIds.length} {selectedLabel}</div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleClearSelectedOrders}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                        >
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                            Bỏ chọn
+                        </button>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                        {isTrashView ? (
+                            <>
+                                <button type="button" onClick={handleBulkRestore} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-emerald-200 bg-emerald-50 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700 transition-all hover:bg-emerald-600 hover:text-white">
+                                    <span className="material-symbols-outlined text-[18px]">restore_from_trash</span>
+                                    Khôi phục
+                                </button>
+                                <button type="button" onClick={handleBulkDuplicate} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
+                                    <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                    Nhân bản
+                                </button>
+                                <button type="button" onClick={handleBulkForceDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
+                                    <span className="material-symbols-outlined text-[18px]">delete_forever</span>
+                                    Xóa hẳn
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <button type="button" onClick={handleBulkDuplicate} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
+                                    <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                    Nhân bản
+                                </button>
+                                {isDraftView ? (
+                                    <button type="button" onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08]">
+                                        <span className="material-symbols-outlined text-[18px]">published_with_changes</span>
+                                        Chốt đơn
+                                    </button>
+                                ) : (
+                                    <button type="button" onClick={handleBulkDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
+                                        <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
+                                        Bỏ vào rác
+                                    </button>
+                                )}
+                                <button type="button" onClick={handleToggleSelectedOnly} className={`inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border text-[10px] font-black uppercase tracking-[0.12em] transition-all ${showSelectedOnly ? 'border-primary bg-primary text-white' : 'border-primary/10 bg-white text-primary'}`}>
+                                    <span className="material-symbols-outlined text-[18px]">{showSelectedOnly ? 'filter_alt_off' : 'filter_alt'}</span>
+                                    {showSelectedOnly ? 'Tắt lọc' : 'Lọc chọn'}
+                                </button>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
 
             <PrintCompletionConfirmModal
                 open={printConfirmState.open}

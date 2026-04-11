@@ -2244,6 +2244,7 @@ const OrderForm = () => {
     const copyFeedbackTimeoutRef = useRef(null);
     const copyNotificationTimeoutRef = useRef(null);
     const productSearchContainerRef = useRef(null);
+    const productSearchInputRef = useRef(null);
     const productSearchAbortRef = useRef(null);
     const productSearchCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
@@ -2791,6 +2792,17 @@ const OrderForm = () => {
         setSearchTerm('');
         setDebouncedSearchTerm('');
         setShowSearchHistory(false);
+    }, []);
+
+    const focusProductSearch = useCallback(() => {
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+
+        window.requestAnimationFrame(() => {
+            productSearchContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            productSearchInputRef.current?.focus();
+        });
     }, []);
 
     useEffect(() => {
@@ -5195,6 +5207,17 @@ const OrderForm = () => {
     ));
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = quotePricingSummary.subtotal;
+    const mobileCustomerSummaryText = [formData.customer_name, formData.customer_phone].filter(Boolean).join(' - ');
+    const mobileAddressSummaryText = String(
+        formData.shipping_address
+        || buildShippingAddress({
+            addressDetail: formData.address_detail,
+            ward: formData.ward,
+            district: formData.district,
+            province: formData.province,
+            regionType,
+        })
+    ).trim();
     const leadConversionCard = leadConversionSummary ? (
         <div className="w-full rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
             <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
@@ -5256,7 +5279,7 @@ const OrderForm = () => {
     if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="relative flex min-h-full flex-col bg-[#fcfcfa] animate-fade-in p-0 md:p-6">
+        <div className="relative flex min-h-full flex-col bg-[#fcfcfa] animate-fade-in p-0 pb-32 md:p-6 md:pb-6">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
@@ -5299,7 +5322,7 @@ const OrderForm = () => {
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <div className="hidden flex-wrap items-center gap-2 justify-end lg:flex">
                         {specialOrderType && (
                             <button
                                 type="button"
@@ -5346,6 +5369,97 @@ const OrderForm = () => {
                         </button>
                     </div>
                 </div>
+                <div className="lg:hidden rounded-[22px] border border-primary/10 bg-white/95 p-4 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.45)]">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/45">Báo giá nhanh ngoài đường</div>
+                            <div className="mt-1 text-[20px] font-black leading-tight text-primary">
+                                {quoteTotalQuantity > 0 ? formatQuoteMoney(totalPaymentAmount) : 'Chưa có sản phẩm'}
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/65">
+                                    {formData.items.length} dòng
+                                </span>
+                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/65">
+                                    {quoteTotalQuantity} món
+                                </span>
+                                <span className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700">
+                                    {isDraftOrderKind(orderKind) ? 'Đang là nháp' : 'Có thể lưu nháp nhanh'}
+                                </span>
+                            </div>
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={handleScreenshot}
+                            disabled={formData.items.length === 0 || isCapturing}
+                            className="inline-flex min-h-[52px] min-w-[124px] items-center justify-center gap-2 rounded-[18px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white shadow-[0_18px_36px_-22px_rgba(27,54,93,0.7)] transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
+                                {isCapturing ? 'progress_activity' : 'download'}
+                            </span>
+                            Tải ảnh gửi khách
+                        </button>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3">
+                        <input
+                            type="text"
+                            name="customer_name"
+                            value={formData.customer_name}
+                            onChange={handleInputChange}
+                            className={`${adminInputClassName} h-12 rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 text-[15px] font-semibold`}
+                            placeholder="Tên khách hàng"
+                        />
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
+                            <input
+                                type="text"
+                                name="customer_phone"
+                                value={formData.customer_phone}
+                                onChange={handleInputChange}
+                                className={`${adminInputClassName} h-12 rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 text-[15px] font-semibold ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
+                                placeholder="SĐT khách"
+                            />
+                            <button
+                                type="button"
+                                onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'mobile-customer-summary')}
+                                disabled={!mobileCustomerSummaryText}
+                                className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                Copy KH
+                            </button>
+                        </div>
+                        <textarea
+                            name="notes"
+                            value={formData.notes}
+                            onChange={handleInputChange}
+                            rows="2"
+                            className={`${adminTextareaClassName} min-h-[84px] rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 py-3 text-[14px]`}
+                            placeholder="Ghi chú nhanh cho khách hoặc đơn nháp"
+                        />
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3">
+                        <button
+                            type="button"
+                            onClick={focusProductSearch}
+                            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-primary/[0.04] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08]"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                            Thêm sản phẩm
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
+                            disabled={saving}
+                            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-sky-200 bg-sky-50 px-4 text-[12px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                            Lưu nháp nhanh
+                        </button>
+                    </div>
+                </div>
             </div>
 
             <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 gap-[10px] xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)] xl:items-start">
@@ -5373,6 +5487,7 @@ const OrderForm = () => {
                                         <div className="flex items-center bg-primary/5 border border-primary/10 rounded-sm px-3 h-10 focus-within:border-primary/30 focus-within:bg-white transition-all shadow-sm">
                                             <span className="material-symbols-outlined text-[16px] text-primary/40 mr-2">search</span>
                                             <input
+                                                ref={productSearchInputRef}
                                                 type="text"
                                                 placeholder="Gõ mã hoặc tên sản phẩm..."
                                                 className="bg-transparent text-[14px] placeholder:text-primary/30 focus:outline-none flex-1 font-medium text-[#0F172A] tracking-tight"
@@ -5835,8 +5950,244 @@ const OrderForm = () => {
                             </div>
                         </div>
 
+                        <div className="mt-[10px] space-y-3 lg:hidden">
+                            {formData.items.length === 0 ? (
+                                <div className="rounded-[22px] border border-dashed border-primary/15 bg-white px-5 py-10 text-center shadow-sm">
+                                    <div className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/35">Chưa có sản phẩm</div>
+                                    <div className="mt-2 text-[14px] font-semibold text-primary/60">Bấm "Thêm sản phẩm" rồi chọn nhanh để tạo báo giá.</div>
+                                </div>
+                            ) : (
+                                formData.items.map((item, index) => {
+                                    const availableToSell = parseQuantityNumber(item.available_to_sell);
+                                    const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
+                                    const skuCopyId = `${item.line_id || item.product_id}-mobile-sku-${index}`;
+                                    const nameCopyId = `${item.line_id || item.product_id}-mobile-name-${index}`;
+                                    const canReplaceItem = Boolean(item.line_id);
+
+                                    return (
+                                        <div
+                                            key={item.line_id || `${item.product_id}-${index}`}
+                                            className={`rounded-[24px] border px-4 py-4 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.4)] ${
+                                                isPendingOrderAiItem(item)
+                                                    ? 'border-amber-200 bg-amber-50/70'
+                                                    : isOrderAiItem(item)
+                                                        ? 'border-sky-200 bg-sky-50/70'
+                                                        : 'border-primary/10 bg-white'
+                                            }`}
+                                        >
+                                            <div className="flex items-start gap-3">
+                                                <div className="inline-flex h-9 min-w-[36px] items-center justify-center rounded-full bg-primary/[0.05] px-3 text-[11px] font-black text-primary/55">
+                                                    #{index + 1}
+                                                </div>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="text-[15px] font-black leading-tight text-primary">{item.name || 'Sản phẩm'}</div>
+                                                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                                                                <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-orange-700">
+                                                                    {item.sku || 'N/A'}
+                                                                </span>
+                                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black ${availableToSell === null ? 'border-primary/10 bg-primary/[0.04] text-primary/45' : `${getAvailableToSellTextClass(availableToSell)} border-current/10 bg-white`}`}>
+                                                                    Bán được: {availableToSell === null ? '...' : formatOrderFormQuantity(availableToSell)}
+                                                                </span>
+                                                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black text-primary/55">
+                                                                    {getOrderUnitDisplay(item)}
+                                                                </span>
+                                                            </div>
+                                                            {isOrderAiItem(item) && (
+                                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-white text-amber-700' : 'border-sky-200 bg-white text-sky-700'}`}>
+                                                                        {isPendingOrderAiItem(item) ? 'AI chờ duyệt' : 'AI đã ghép'}
+                                                                    </span>
+                                                                    {item.ai_meta?.confidence_label && (
+                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[10px] font-black text-primary/55">
+                                                                            {item.ai_meta.confidence_label}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="shrink-0 text-right">
+                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Thành tiền</div>
+                                                            <div className="mt-1 text-[18px] font-black leading-none text-brick">
+                                                                {formatQuoteMoney(itemTotal)}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="mt-4 grid grid-cols-2 gap-3">
+                                                        <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
+                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Số lượng</div>
+                                                            <div className="mt-2 flex items-center gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 1) - 1))}
+                                                                    className="inline-flex size-10 items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[18px]">remove</span>
+                                                                </button>
+                                                                <input
+                                                                    type="number"
+                                                                    inputMode="numeric"
+                                                                    value={item.quantity}
+                                                                    onChange={(event) => updateItem(index, 'quantity', Math.max(1, parseInt(event.target.value, 10) || 1))}
+                                                                    className="h-10 w-full rounded-[14px] border border-primary/10 bg-white px-3 text-center text-[16px] font-black text-primary focus:border-primary/25 focus:outline-none"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 0) + 1))}
+                                                                    className="inline-flex size-10 items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[18px]">add</span>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
+                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Đơn giá</div>
+                                                            <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
+                                                                <input
+                                                                    type="text"
+                                                                    inputMode="numeric"
+                                                                    value={new Intl.NumberFormat('vi-VN').format(item.price)}
+                                                                    onChange={(event) => {
+                                                                        const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                                                        updateItem(index, 'price', parseInt(nextValue, 10) || 0);
+                                                                    }}
+                                                                    className="h-10 w-full bg-transparent text-[15px] font-black text-primary focus:outline-none"
+                                                                />
+                                                                <span className="text-[12px] font-black text-primary/35">đ</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => handleCopyCellValue(item.sku, 'mã sản phẩm', event, skuCopyId)}
+                                                            disabled={!item.sku}
+                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">{copiedText === skuCopyId ? 'check' : 'content_copy'}</span>
+                                                            Copy mã
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => handleCopyCellValue(item.name, 'tên sản phẩm', event, nameCopyId)}
+                                                            disabled={!item.name}
+                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
+                                                            Copy tên
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => canReplaceItem && handleOpenOrderAiReplacePicker(
+                                                                item.line_id,
+                                                                item.ai_meta?.source_phrase || item.name || item.sku || '',
+                                                                event.currentTarget
+                                                            )}
+                                                            disabled={!canReplaceItem}
+                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-sky-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
+                                                            Đổi SP
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeItem(item.line_id)}
+                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-rose-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-50"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[16px]">delete_outline</span>
+                                                            Xóa
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+
+                            <div className="rounded-[24px] border border-primary/10 bg-white px-4 py-4 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.35)]">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Tổng tiền xem nhanh</div>
+                                        <div className="mt-1 text-[26px] font-black leading-none text-brick">{formatQuoteMoney(totalPaymentAmount)}</div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={(event) => handleCopyCellValue(formatQuoteMoney(totalPaymentAmount), 'tổng tiền', event, 'mobile-total-payment')}
+                                        className="inline-flex h-11 items-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">{copiedText === 'mobile-total-payment' ? 'check' : 'content_copy'}</span>
+                                        Copy tổng
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-2 gap-3">
+                                    <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Phí ship</div>
+                                        <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.shipping_fee)}
+                                                onChange={(event) => {
+                                                    const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                                    setFormData((prev) => ({ ...prev, shipping_fee: parseInt(nextValue, 10) || 0 }));
+                                                }}
+                                                className="h-10 w-full bg-transparent text-[15px] font-black text-primary focus:outline-none"
+                                            />
+                                            <span className="text-[12px] font-black text-primary/35">đ</span>
+                                        </div>
+                                    </div>
+                                    <div className="rounded-[18px] bg-[#fff7f2] px-3 py-3">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Giảm giá</div>
+                                        <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.discount)}
+                                                onChange={(event) => {
+                                                    const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
+                                                    setFormData((prev) => ({ ...prev, discount: parseInt(nextValue, 10) || 0 }));
+                                                }}
+                                                className="h-10 w-full bg-transparent text-[15px] font-black text-brick focus:outline-none"
+                                            />
+                                            <span className="text-[12px] font-black text-brick/60">đ</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="mt-4 flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleScreenshot}
+                                        disabled={formData.items.length === 0 || isCapturing}
+                                        className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[16px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
+                                            {isCapturing ? 'progress_activity' : 'download'}
+                                        </span>
+                                        Tải ảnh báo giá
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(event) => handleCopyCellValue(mobileAddressSummaryText, 'địa chỉ giao hàng', event, 'mobile-address-summary')}
+                                        disabled={!mobileAddressSummaryText}
+                                        className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">{copiedText === 'mobile-address-summary' ? 'check' : 'content_copy'}</span>
+                                        Copy địa chỉ
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
                         {/* Captured Area for Screenshot */}
-                        <div ref={captureRef} className="bg-white mt-[10px] rounded-sm shadow-xl border border-primary/10 overflow-hidden">
+                        <div ref={captureRef} className="mt-[10px] hidden overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl lg:block">
                             <div className="relative min-h-[400px] overflow-auto order-form-table">
                                 <table className="w-full text-left border-collapse table-fixed lg:table-auto">
                                     <thead className="admin-table-header sticky top-0 z-30 shadow-sm border-b border-primary/10">
@@ -6475,7 +6826,7 @@ const OrderForm = () => {
                                 <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                             </Field>
 
-                            <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle}>
+                            <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle} className="hidden lg:block">
                                 <input
                                     type="text"
                                     name="customer_name"
@@ -6486,7 +6837,7 @@ const OrderForm = () => {
                                 />
                             </Field>
 
-                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
+                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle} className="hidden lg:block">
                                 <input
                                     type="text"
                                     name="customer_phone"
@@ -6604,7 +6955,7 @@ const OrderForm = () => {
                                 />
                             </Field>
 
-                            <Field label="Ghi chú đơn hàng" className="min-h-[100px] items-start pt-3">
+                            <Field label="Ghi chú đơn hàng" className="hidden min-h-[100px] items-start pt-3 lg:block">
                                 <textarea
                                     name="notes"
                                     value={formData.notes}
@@ -6651,6 +7002,65 @@ const OrderForm = () => {
                     {leadConversionCard}
                 </div>
             </form>
+
+            <div className="fixed inset-x-0 bottom-0 z-[180] border-t border-primary/10 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3 shadow-[0_-18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur lg:hidden">
+                <div className="flex items-end justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Tổng tiền hiện tại</div>
+                        <div className="mt-1 truncate text-[22px] font-black leading-none text-brick">
+                            {quoteTotalQuantity > 0 ? formatQuoteMoney(totalPaymentAmount) : 'Chưa có sản phẩm'}
+                        </div>
+                    </div>
+                    <div className="text-right">
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Khách / món</div>
+                        <div className="mt-1 text-[12px] font-bold text-primary/65">
+                            {(formData.customer_name || 'Khách lẻ')} · {quoteTotalQuantity} món
+                        </div>
+                    </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-4 gap-2">
+                    <button
+                        type="button"
+                        onClick={focusProductSearch}
+                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">add</span>
+                        Thêm SP
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
+                        disabled={saving}
+                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-sky-200 bg-sky-50 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                        Lưu nháp
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleScreenshot}
+                        disabled={formData.items.length === 0 || isCapturing}
+                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] bg-primary text-[10px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
+                            {isCapturing ? 'progress_activity' : 'download'}
+                        </span>
+                        Tải ảnh
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleSubmit(null)}
+                        disabled={saving}
+                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
+                            {saving ? 'progress_activity' : 'save'}
+                        </span>
+                        {isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn'}
+                    </button>
+                </div>
+            </div>
 
             <OrderAiLineReplacePanel
                 show={Boolean(orderAiReplaceLineId)}

@@ -61,6 +61,8 @@ class ShipmentRollbackService
         'canceled' => 'Đã hủy',
     ];
 
+    private const QUICK_DISPATCH_EXPORT_META_SOURCE = 'quick_dispatch';
+
     public function __construct(
         private readonly InventoryService $inventoryService,
     ) {
@@ -315,12 +317,20 @@ class ShipmentRollbackService
             ->whereIn('status', ['draft', 'completed'])
             ->with(['items.allocations.batch'])
             ->get()
-            ->filter(fn (InventoryDocument $document) => $this->isAutomaticExportDocument($document, $markers))
+            ->filter(fn (InventoryDocument $document) => $this->isAutomaticExportDocument($document, $markers, $order))
             ->values();
     }
 
-    private function isAutomaticExportDocument(InventoryDocument $document, Collection $markers): bool
+    private function isAutomaticExportDocument(InventoryDocument $document, Collection $markers, Order $order): bool
     {
+        $meta = is_array($document->meta) ? $document->meta : [];
+        if (
+            ($meta['source'] ?? null) === self::QUICK_DISPATCH_EXPORT_META_SOURCE
+            && (int) ($meta['order_id'] ?? 0) === (int) $order->id
+        ) {
+            return true;
+        }
+
         $documentNumber = trim((string) $document->document_number);
         if ($documentNumber !== '' && $markers->contains($documentNumber)) {
             return true;

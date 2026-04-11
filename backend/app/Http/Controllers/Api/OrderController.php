@@ -95,6 +95,9 @@ class OrderController extends Controller
         'khac' => 'Khác',
     ];
 
+    private const QUICK_DISPATCH_EXPORT_NOTE_PREFIX = 'Tu tao tu van chuyen';
+    private const QUICK_DISPATCH_EXPORT_META_SOURCE = 'quick_dispatch';
+
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
         protected OrderInventorySlipService $orderInventorySlipService,
@@ -1604,6 +1607,149 @@ class OrderController extends Controller
         return implode(' · ', $parts);
     }
 
+    private function buildQuickDispatchExportItems(Order $order): array
+    {
+        $order->loadMissing(['items.product:id,sku,name,price']);
+
+        $invalidItem = $order->items->first(function (OrderItem $item) {
+            return (int) ($item->quantity ?? 0) > 0 && (int) ($item->product_id ?? 0) <= 0;
+        });
+
+        if ($invalidItem instanceof OrderItem) {
+            $productName = trim((string) ($invalidItem->product_name_snapshot ?: 'dÃ²ng sáº£n pháº©m khÃ´ng xÃ¡c Ä‘á»‹nh'));
+
+            throw ValidationException::withMessages([
+                'order' => ["ÄÆ¡n {$order->order_number} cÃ³ {$productName} chÆ°a liÃªn káº¿t sáº£n pháº©m kho nÃªn khÃ´ng thá»ƒ tá»± táº¡o phiáº¿u xuáº¥t."],
+            ]);
+        }
+
+        $items = $order->items
+            ->filter(function (OrderItem $item) {
+                return (int) ($item->product_id ?? 0) > 0 && (int) ($item->quantity ?? 0) > 0;
+            })
+            ->groupBy(fn (OrderItem $item) => (int) $item->product_id)
+            ->map(function (Collection $groupedItems, int $productId) {
+                /** @var OrderItem|null $firstItem */
+                $firstItem = $groupedItems->first();
+                $quantity = (int) $groupedItems->sum(fn (OrderItem $item) => (int) ($item->quantity ?? 0));
+                $lineTotal = (float) $groupedItems->sum(function (OrderItem $item) {
+                    return round((float) ($item->price ?? 0) * (int) ($item->quantity ?? 0), 2);
+                });
+                $fallbackPrice = (float) ($firstItem?->price ?? $firstItem?->product?->price ?? 0);
+                $unitPrice = $quantity > 0
+                    ? round($lineTotal / $quantity, 2)
+                    : round($fallbackPrice, 2);
+
+                return [
+                    'product_id' => $productId,
+                    'quantity' => $quantity,
+                    'unit_price' => $unitPrice,
+                ];
+            })
+            ->filter(fn (array $item) => (int) ($item['quantity'] ?? 0) > 0)
+            ->values()
+            ->all();
+
+        if (empty($items)) {
+            throw ValidationException::withMessages([
+                'order' => ["ÄÆ¡n {$order->order_number} khÃ´ng cÃ³ sáº£n pháº©m há»£p lá»‡ Ä‘á»ƒ tá»± táº¡o phiáº¿u xuáº¥t."],
+            ]);
+        }
+
+        return $items;
+    }
+
+    private function buildQuickDispatchExportNote(
+        string $dispatchMode,
+        ?string $carrierName = null,
+        ?string $trackingNumber = null,
+        array $outsideMeta = []
+    ): ?string {
+        $parts = [self::QUICK_DISPATCH_EXPORT_NOTE_PREFIX];
+        $carrierName = trim((string) $carrierName);
+        $trackingNumber = trim((string) $trackingNumber);
+
+        if ($dispatchMode === self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY) {
+            $outsideSummary = $this->buildOutsideDeliverySummary($outsideMeta);
+            if ($outsideSummary !== '') {
+                $parts[] = $outsideSummary;
+            }
+        } else {
+            if ($trackingNumber !== '') {
+                $parts[] = 'MÃ£ váº­n Ä‘Æ¡n: ' . $trackingNumber;
+            }
+
+            if ($carrierName !== '') {
+                $parts[] = 'ÄÆ¡n vá»‹: ' . $carrierName;
+            }
+        }
+
+        $parts = array_values(array_filter($parts, fn ($value) => trim((string) $value) !== ''));
+
+        return empty($parts) ? null : implode(' • ', $parts);
+    }
+
+    private function buildQuickDispatchExportMeta(
+        Order $order,
+        string $dispatchMode,
+        ?string $carrierName = null,
+        ?string $trackingNumber = null,
+        array $outsideMeta = []
+    ): array {
+        $meta = [
+            'source' => self::QUICK_DISPATCH_EXPORT_META_SOURCE,
+            'dispatch_mode' => $dispatchMode,
+            'order_id' => (int) $order->id,
+            'order_number' => $order->order_number,
+            'carrier_name' => trim((string) $carrierName) ?: null,
+            'tracking_number' => trim((string) $trackingNumber) ?: null,
+        ];
+
+        if ($dispatchMode === self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY) {
+            $meta['outside_delivery_type'] = $outsideMeta['delivery_type'] ?? null;
+            $meta['outside_delivery_type_label'] = $outsideMeta['delivery_type_label'] ?? null;
+            $meta['outside_delivery_contact'] = $outsideMeta['contact_name'] ?? null;
+            $meta['outside_delivery_note'] = $outsideMeta['note'] ?? null;
+        }
+
+        return array_filter($meta, fn ($value) => $value !== null && $value !== '');
+    }
+
+    private function createQuickDispatchExportDocument(
+        Order $order,
+        string $dispatchMode,
+        ?string $carrierName = null,
+        ?string $trackingNumber = null,
+        array $outsideMeta = [],
+        ?\Illuminate\Support\Carbon $dispatchedAt = null
+    ): InventoryDocument {
+        return app(InventoryService::class)->createDocument(
+            'export',
+            [
+                'document_date' => ($dispatchedAt ?: now())->toDateString(),
+                'reference_type' => 'order',
+                'reference_id' => (int) $order->id,
+                'notes' => $this->buildQuickDispatchExportNote(
+                    $dispatchMode,
+                    $carrierName,
+                    $trackingNumber,
+                    $outsideMeta
+                ),
+                'meta' => $this->buildQuickDispatchExportMeta(
+                    $order,
+                    $dispatchMode,
+                    $carrierName,
+                    $trackingNumber,
+                    $outsideMeta
+                ),
+                'allow_oversold' => true,
+                'items' => $this->buildQuickDispatchExportItems($order),
+            ],
+            (int) $order->account_id,
+            auth()->id()
+        );
+    }
+
     private function assertOrderCanQuickDispatch(Order $order): void
     {
         $activeShipment = Shipment::query()
@@ -1675,6 +1821,15 @@ class OrderController extends Controller
                 'shipping_issue_detected_at' => null,
                 'external_delivery_meta' => $meta,
             ]))->save();
+
+            $this->createQuickDispatchExportDocument(
+                $lockedOrder,
+                self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
+                $carrierSummary,
+                null,
+                $meta,
+                $now
+            );
 
             return $lockedOrder->fresh(['activeShipment']);
         });

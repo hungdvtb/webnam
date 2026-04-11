@@ -1,6 +1,9 @@
 const PRINT_DIALOG_FALLBACK_MS = 3 * 60 * 1000;
 const PRINT_DIALOG_CLOSE_SETTLE_MS = 400;
 const PRINT_DIALOG_BLOCKING_THRESHOLD_MS = 350;
+const PRINT_WINDOW_CLOSE_DELAY_MS = 1500;
+const PRINT_DOCUMENT_READY_DELAY_MS = 120;
+const PRINT_RESOURCE_TIMEOUT_MS = 10000;
 
 const formatCurrency = (value) => new Intl.NumberFormat('vi-VN', {
     style: 'currency',
@@ -25,6 +28,322 @@ const escapeHtml = (value) => String(value ?? '')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+const getTimerWindow = (candidateWindow) => {
+    if (candidateWindow && !candidateWindow.closed && typeof candidateWindow.setTimeout === 'function') {
+        return candidateWindow;
+    }
+
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+        return window;
+    }
+
+    return globalThis;
+};
+
+const delay = (candidateWindow, timeoutMs) => new Promise((resolve) => {
+    getTimerWindow(candidateWindow).setTimeout(resolve, timeoutMs);
+});
+
+const withTimeout = (promise, candidateWindow, timeoutMs) => Promise.race([
+    Promise.resolve(promise).catch(() => undefined),
+    delay(candidateWindow, timeoutMs),
+]);
+
+const writeHtmlDocument = (targetWindow, html) => {
+    if (!targetWindow || targetWindow.closed || !targetWindow.document) {
+        throw new Error('Không thể khởi tạo tài liệu in.');
+    }
+
+    targetWindow.document.open();
+    targetWindow.document.write(html);
+    targetWindow.document.close();
+};
+
+const buildLoadingPrintDocument = (title = 'Chuẩn bị bản in') => `<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+        :root {
+            color-scheme: light;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            margin: 0;
+            min-height: 100%;
+            font-family: Roboto, "Segoe UI", Arial, sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+        }
+
+        .print-loader {
+            width: min(420px, 100%);
+            border: 1px solid #dbe2ea;
+            background: #ffffff;
+            box-shadow: 0 24px 60px -36px rgba(15, 23, 42, 0.35);
+            padding: 28px 30px;
+        }
+
+        .print-loader__kicker {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: #64748b;
+            margin-bottom: 8px;
+        }
+
+        .print-loader__title {
+            margin: 0;
+            font-size: 24px;
+            line-height: 1.2;
+            font-weight: 800;
+        }
+
+        .print-loader__text {
+            margin: 12px 0 0;
+            font-size: 14px;
+            line-height: 1.7;
+            color: #475569;
+        }
+    </style>
+</head>
+<body>
+    <section class="print-loader">
+        <div class="print-loader__kicker">Hệ thống đang chuẩn bị</div>
+        <h1 class="print-loader__title">${escapeHtml(title)}</h1>
+        <p class="print-loader__text">Vui lòng chờ trong giây lát, nội dung in sẽ tự động hiển thị ngay sau khi dữ liệu và bố cục sẵn sàng.</p>
+    </section>
+</body>
+</html>`;
+
+const closePrintWindow = (targetWindow) => {
+    if (!targetWindow || targetWindow.closed || typeof targetWindow.close !== 'function') {
+        return;
+    }
+
+    targetWindow.close();
+};
+
+const waitForWindowLoad = async (targetWindow) => {
+    const targetDocument = targetWindow?.document;
+
+    if (!targetWindow || !targetDocument || targetDocument.readyState === 'complete') {
+        return;
+    }
+
+    await new Promise((resolve) => {
+        let settled = false;
+        let timeoutId = null;
+
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+
+            if (timeoutId !== null) {
+                getTimerWindow(targetWindow).clearTimeout(timeoutId);
+            }
+
+            targetWindow.removeEventListener('load', handleLoad);
+            targetDocument.removeEventListener('readystatechange', handleReadyStateChange);
+            resolve();
+        };
+
+        const handleLoad = () => {
+            finish();
+        };
+
+        const handleReadyStateChange = () => {
+            if (targetDocument.readyState === 'complete') {
+                finish();
+            }
+        };
+
+        timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+        targetWindow.addEventListener('load', handleLoad, { once: true });
+        targetDocument.addEventListener('readystatechange', handleReadyStateChange);
+    });
+};
+
+const waitForImageReady = (image, targetWindow) => new Promise((resolve) => {
+    if (!image) {
+        resolve();
+        return;
+    }
+
+    if (typeof image.decode === 'function') {
+        const decodePromise = image.decode();
+        withTimeout(decodePromise, targetWindow, PRINT_RESOURCE_TIMEOUT_MS).then(() => resolve());
+        return;
+    }
+
+    if (image.complete) {
+        resolve();
+        return;
+    }
+
+    let settled = false;
+    let timeoutId = null;
+
+    const finish = () => {
+        if (settled) return;
+        settled = true;
+
+        if (timeoutId !== null) {
+            getTimerWindow(targetWindow).clearTimeout(timeoutId);
+        }
+
+        image.removeEventListener('load', handleLoad);
+        image.removeEventListener('error', handleError);
+        resolve();
+    };
+
+    const handleLoad = () => {
+        finish();
+    };
+
+    const handleError = () => {
+        finish();
+    };
+
+    timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+    image.addEventListener('load', handleLoad, { once: true });
+    image.addEventListener('error', handleError, { once: true });
+});
+
+const waitForImagesReady = async (targetWindow) => {
+    const images = Array.from(targetWindow?.document?.images || []);
+
+    if (!images.length) {
+        return;
+    }
+
+    await Promise.all(images.map((image) => waitForImageReady(image, targetWindow)));
+};
+
+const waitForFontsReady = async (targetWindow) => {
+    const fontSet = targetWindow?.document?.fonts;
+
+    if (!fontSet?.ready) {
+        return;
+    }
+
+    await withTimeout(fontSet.ready, targetWindow, PRINT_RESOURCE_TIMEOUT_MS);
+};
+
+const waitForNextPaint = async (targetWindow) => {
+    const raf = targetWindow?.requestAnimationFrame?.bind(targetWindow);
+
+    if (typeof raf !== 'function') {
+        await delay(targetWindow, 32);
+        return;
+    }
+
+    await new Promise((resolve) => {
+        raf(() => {
+            raf(resolve);
+        });
+    });
+};
+
+const waitForPrintableDocument = async (targetWindow) => {
+    await waitForWindowLoad(targetWindow);
+    await Promise.all([
+        waitForFontsReady(targetWindow),
+        waitForImagesReady(targetWindow),
+    ]);
+    await waitForNextPaint(targetWindow);
+    await delay(targetWindow, PRINT_DOCUMENT_READY_DELAY_MS);
+};
+
+const copyLiveFormValuesIntoClone = (sourceDocument, clonedRoot) => {
+    const sourceFields = Array.from(sourceDocument.querySelectorAll('input, textarea, select'));
+    const clonedFields = Array.from(clonedRoot.querySelectorAll('input, textarea, select'));
+
+    sourceFields.forEach((field, index) => {
+        const clonedField = clonedFields[index];
+
+        if (!clonedField) return;
+
+        const tagName = field.tagName.toLowerCase();
+
+        if (tagName === 'textarea') {
+            clonedField.textContent = field.value;
+            return;
+        }
+
+        if (tagName === 'select') {
+            Array.from(clonedField.options || []).forEach((option, optionIndex) => {
+                option.selected = optionIndex === field.selectedIndex;
+            });
+            return;
+        }
+
+        clonedField.setAttribute('value', field.value ?? '');
+
+        if (field.type === 'checkbox' || field.type === 'radio') {
+            if (field.checked) {
+                clonedField.setAttribute('checked', 'checked');
+            } else {
+                clonedField.removeAttribute('checked');
+            }
+        }
+    });
+};
+
+const buildCurrentPagePrintDocument = (sourceWindow = window) => {
+    const sourceDocument = sourceWindow?.document;
+
+    if (!sourceDocument?.documentElement) {
+        throw new Error('Môi trường hiện tại không hỗ trợ in.');
+    }
+
+    const clonedRoot = sourceDocument.documentElement.cloneNode(true);
+
+    clonedRoot.querySelectorAll('script, noscript').forEach((node) => node.remove());
+    copyLiveFormValuesIntoClone(sourceDocument, clonedRoot);
+
+    const head = clonedRoot.querySelector('head');
+
+    if (head && !head.querySelector('base')) {
+        head.insertAdjacentHTML('afterbegin', `<base href="${escapeHtml(sourceWindow.location.href)}" />`);
+    }
+
+    return `<!DOCTYPE html>\n${clonedRoot.outerHTML}`;
+};
+
+export const preparePrintPopupWindow = (ownerWindow = window, options = {}) => {
+    if (typeof ownerWindow?.open !== 'function') {
+        return null;
+    }
+
+    const title = options.title || 'Chuẩn bị bản in';
+    const windowName = `order-print-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const popup = ownerWindow.open('', windowName, 'popup=yes,width=1280,height=900,left=120,top=80,scrollbars=yes,resizable=yes');
+
+    if (!popup) {
+        return null;
+    }
+
+    writeHtmlDocument(popup, buildLoadingPrintDocument(title));
+
+    return popup;
+};
 
 const renderOrderRows = (items = []) => {
     if (!items.length) {
@@ -350,6 +669,7 @@ const waitForPrintDialogToClose = ({
     printWindow = ownerWindow,
     triggerPrint,
     cleanup = () => {},
+    cleanupDelayMs = 0,
 }) => new Promise((resolve, reject) => {
     let settled = false;
     let timeoutId = null;
@@ -357,10 +677,20 @@ const waitForPrintDialogToClose = ({
     let didTriggerPrint = false;
     let didLoseFocus = false;
     let mediaQueryList = null;
+    let cleanupScheduled = false;
+
+    const scheduleCleanup = () => {
+        if (cleanupScheduled) return;
+        cleanupScheduled = true;
+
+        getTimerWindow(ownerWindow).setTimeout(() => {
+            cleanup();
+        }, cleanupDelayMs);
+    };
 
     const teardown = () => {
-        ownerWindow.clearTimeout(timeoutId);
-        ownerWindow.clearTimeout(focusTimerId);
+        getTimerWindow(ownerWindow).clearTimeout(timeoutId);
+        getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
         ownerWindow.removeEventListener('afterprint', handleAfterPrint);
         ownerWindow.removeEventListener('focus', handleFocus);
         ownerWindow.removeEventListener('blur', handleBlur);
@@ -377,14 +707,13 @@ const waitForPrintDialogToClose = ({
                 mediaQueryList.removeListener(handleMediaQueryChange);
             }
         }
-
-        cleanup();
     };
 
     const finish = (reason = 'closed') => {
         if (settled) return;
         settled = true;
         teardown();
+        scheduleCleanup();
         resolve({
             dialogClosed: true,
             reason,
@@ -395,7 +724,8 @@ const waitForPrintDialogToClose = ({
         if (settled) return;
         settled = true;
         teardown();
-        reject(error instanceof Error ? error : new Error('KhÃ´ng thá»ƒ má»Ÿ há»™p thoáº¡i in.'));
+        scheduleCleanup();
+        reject(error instanceof Error ? error : new Error('Không thể mở hộp thoại in.'));
     };
 
     const handleAfterPrint = () => {
@@ -410,8 +740,8 @@ const waitForPrintDialogToClose = ({
     const handleFocus = () => {
         if (!didTriggerPrint) return;
 
-        ownerWindow.clearTimeout(focusTimerId);
-        focusTimerId = ownerWindow.setTimeout(() => {
+        getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
+        focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
             if (didLoseFocus) {
                 finish('focus');
             }
@@ -427,8 +757,8 @@ const waitForPrintDialogToClose = ({
         }
 
         if (didLoseFocus) {
-            ownerWindow.clearTimeout(focusTimerId);
-            focusTimerId = ownerWindow.setTimeout(() => {
+            getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
+            focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
                 finish('visibilitychange');
             }, PRINT_DIALOG_CLOSE_SETTLE_MS);
         }
@@ -456,6 +786,7 @@ const waitForPrintDialogToClose = ({
 
     if (typeof ownerWindow.matchMedia === 'function') {
         mediaQueryList = ownerWindow.matchMedia('print');
+
         if (typeof mediaQueryList.addEventListener === 'function') {
             mediaQueryList.addEventListener('change', handleMediaQueryChange);
         } else if (typeof mediaQueryList.addListener === 'function') {
@@ -463,7 +794,7 @@ const waitForPrintDialogToClose = ({
         }
     }
 
-    timeoutId = ownerWindow.setTimeout(() => {
+    timeoutId = getTimerWindow(ownerWindow).setTimeout(() => {
         finish('timeout');
     }, PRINT_DIALOG_FALLBACK_MS);
 
@@ -474,8 +805,8 @@ const waitForPrintDialogToClose = ({
         const triggerDurationMs = Date.now() - triggerStartedAt;
 
         if (triggerDurationMs >= PRINT_DIALOG_BLOCKING_THRESHOLD_MS) {
-            ownerWindow.clearTimeout(focusTimerId);
-            focusTimerId = ownerWindow.setTimeout(() => {
+            getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
+            focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
                 finish('blocking-return');
             }, PRINT_DIALOG_CLOSE_SETTLE_MS);
         }
@@ -484,14 +815,30 @@ const waitForPrintDialogToClose = ({
     }
 });
 
-export const printCurrentPage = (targetWindow = window) => {
-    if (typeof targetWindow === 'undefined' || typeof targetWindow?.print !== 'function') {
-        return Promise.reject(new Error('MÃ´i trÆ°á»ng hiá»‡n táº¡i khÃ´ng há»— trá»£ in.'));
+const printHtmlDocument = async ({
+    sourceWindow = window,
+    printWindow,
+    html,
+    title = 'In đơn hàng',
+}) => {
+    if (!sourceWindow?.document) {
+        throw new Error('Môi trường hiện tại không hỗ trợ in.');
     }
+
+    const targetWindow = printWindow || preparePrintPopupWindow(sourceWindow, { title });
+
+    if (!targetWindow || targetWindow.closed) {
+        throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
+    }
+
+    writeHtmlDocument(targetWindow, html);
+    await waitForPrintableDocument(targetWindow);
 
     return waitForPrintDialogToClose({
         ownerWindow: targetWindow,
         printWindow: targetWindow,
+        cleanup: () => closePrintWindow(targetWindow),
+        cleanupDelayMs: PRINT_WINDOW_CLOSE_DELAY_MS,
         triggerPrint: () => {
             targetWindow.focus?.();
             targetWindow.print();
@@ -499,65 +846,40 @@ export const printCurrentPage = (targetWindow = window) => {
     });
 };
 
-export const printOrders = (orders = []) => new Promise((resolve, reject) => {
+export const printCurrentPage = async (sourceWindow = window, options = {}) => {
+    if (typeof sourceWindow === 'undefined' || typeof sourceWindow?.document === 'undefined') {
+        throw new Error('Môi trường hiện tại không hỗ trợ in.');
+    }
+
+    const title = sourceWindow.document?.title || 'In đơn hàng';
+    const html = buildCurrentPagePrintDocument(sourceWindow);
+
+    return printHtmlDocument({
+        sourceWindow,
+        printWindow: options.printWindow,
+        html,
+        title,
+    });
+};
+
+export const printOrders = async (orders = [], options = {}) => {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
-        reject(new Error('Môi trường hiện tại không hỗ trợ in.'));
-        return;
+        throw new Error('Môi trường hiện tại không hỗ trợ in.');
     }
 
     if (!Array.isArray(orders) || orders.length === 0) {
-        reject(new Error('Không có dữ liệu đơn hàng để in.'));
-        return;
+        throw new Error('Không có dữ liệu đơn hàng để in.');
     }
 
-    const iframe = document.createElement('iframe');
-    iframe.setAttribute('aria-hidden', 'true');
-    iframe.style.position = 'fixed';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
+    const primaryOrder = orders[0] || {};
+    const title = orders.length > 1
+        ? `In ${orders.length} đơn hàng`
+        : `In đơn #${primaryOrder.order_number || ''}`.trim();
 
-    const cleanup = () => {
-        window.setTimeout(() => {
-            iframe.remove();
-        }, 0);
-    };
-
-    const fail = (error) => {
-        cleanup();
-        reject(error instanceof Error ? error : new Error('Không thể mở hộp thoại in.'));
-    };
-
-    document.body.appendChild(iframe);
-
-    const frameWindow = iframe.contentWindow;
-    const frameDocument = frameWindow?.document;
-
-    if (!frameWindow || !frameDocument) {
-        fail(new Error('Không thể khởi tạo tài liệu in.'));
-        return;
-    }
-
-    try {
-        frameDocument.open();
-        frameDocument.write(buildOrderPrintDocument(orders));
-        frameDocument.close();
-    } catch (error) {
-        fail(error);
-        return;
-    }
-
-    window.setTimeout(() => {
-        waitForPrintDialogToClose({
-            ownerWindow: window,
-            printWindow: frameWindow,
-            cleanup,
-            triggerPrint: () => {
-                frameWindow.focus();
-                frameWindow.print();
-            },
-        }).then(resolve, reject);
-    }, 150);
-});
+    return printHtmlDocument({
+        sourceWindow: options.ownerWindow || window,
+        printWindow: options.printWindow,
+        html: buildOrderPrintDocument(orders),
+        title,
+    });
+};

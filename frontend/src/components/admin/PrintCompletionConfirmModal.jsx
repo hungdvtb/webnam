@@ -42,23 +42,23 @@ const PrintCompletionConfirmModal = ({
             <div className="relative w-full max-w-lg overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl">
                 <div className="border-b border-primary/10 bg-primary/[0.03] px-6 py-4">
                     <div className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/45">
-                        Xac nhan hoan tat in
+                        Xác nhận hoàn tất in
                     </div>
                     <h3 className="mt-1 text-[20px] font-black text-primary">
-                        {isMultipleOrders ? 'Da in xong cac don da chon?' : 'Da in xong don hang nay?'}
+                        {isMultipleOrders ? 'Bạn đã in xong các đơn đã chọn?' : 'Bạn đã in xong đơn hàng này?'}
                     </h3>
                 </div>
 
                 <div className="space-y-4 px-6 py-5 text-[14px] leading-relaxed text-primary/75">
                     <p>
-                        Trinh duyet khong the xac nhan chac chan viec in hay luu PDF da hoan tat.
+                        Trình duyệt không thể tự xác nhận chắc chắn việc in hoặc lưu PDF đã hoàn tất.
                     </p>
                     <p>
-                        Chi bam xac nhan neu ban da thuc su in xong hoac da luu PDF thanh cong.
-                        {isMultipleOrders ? ` He thong se ghi nhan ${orderCount} don la da in.` : ' He thong se ghi nhan don nay la da in.'}
+                        Chỉ xác nhận khi bạn đã thực sự in xong hoặc đã lưu PDF thành công.
+                        {isMultipleOrders ? ` Hệ thống sẽ ghi nhận ${orderCount} đơn là đã in.` : ' Hệ thống sẽ ghi nhận đơn này là đã in.'}
                     </p>
                     <p className="text-[12px] font-semibold text-primary/55">
-                        Neu ban vua bam Huy, dong cua so print, hoac chua hoan tat in, hay chon "Chua in xong".
+                        Nếu bạn vừa bấm Hủy, đóng cửa sổ in hoặc chưa hoàn tất thao tác, hãy chọn "Chưa in xong".
                     </p>
                 </div>
 
@@ -69,7 +69,7 @@ const PrintCompletionConfirmModal = ({
                         disabled={confirming}
                         className="h-10 rounded-sm border border-primary/15 bg-white px-4 text-[11px] font-black uppercase tracking-[0.14em] text-primary/60 transition hover:text-brick disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Chua in xong
+                        Chưa in xong
                     </button>
                     <button
                         type="button"
@@ -80,7 +80,7 @@ const PrintCompletionConfirmModal = ({
                         <span className={`material-symbols-outlined text-[18px] ${confirming ? 'animate-refresh-spin' : ''}`}>
                             {confirming ? 'progress_activity' : 'verified'}
                         </span>
-                        {confirming ? 'Dang ghi nhan' : 'Da in / luu PDF xong'}
+                        {confirming ? 'Đang ghi nhận' : 'Đã in / lưu PDF xong'}
                     </button>
                 </div>
             </div>

@@ -23,7 +23,7 @@ import MultiKeywordSearchInput, {
     parseKeywordTokens,
     serializeKeywordTokens,
 } from '../../components/admin/MultiKeywordSearchInput';
-import { printOrders } from '../../utils/orderPrint';
+import { preparePrintPopupWindow, printOrders } from '../../utils/orderPrint';
 import {
     addOrderIdsToReturnWorkbench,
     clearOrderReturnWorkbench,
@@ -2413,8 +2413,17 @@ const OrderList = () => {
         if (!selectedIds.length || printingOrders || printConfirmState.open) return;
 
         const ids = [...selectedIds];
+        let printWindow = null;
 
         try {
+            printWindow = preparePrintPopupWindow(window, {
+                title: 'Đang chuẩn bị bản in đơn hàng',
+            });
+
+            if (!printWindow) {
+                throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
+            }
+
             setPrintingOrders(true);
 
             const response = await orderApi.getPrintData(ids);
@@ -2427,7 +2436,11 @@ const OrderList = () => {
                 throw new Error('Không có đơn hàng hợp lệ để in.');
             }
 
-            await printOrders(printableOrders);
+            await printOrders(printableOrders, {
+                ownerWindow: window,
+                printWindow,
+            });
+            printWindow = null;
             setPrintConfirmState({
                 open: true,
                 ids: printableIds,
@@ -2435,6 +2448,9 @@ const OrderList = () => {
                 submitting: false,
             });
         } catch (error) {
+            if (printWindow && !printWindow.closed) {
+                printWindow.close();
+            }
             console.error('Print orders error', error);
             setNotification({
                 type: 'error',

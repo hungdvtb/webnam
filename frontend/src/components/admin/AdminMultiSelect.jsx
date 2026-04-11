@@ -116,24 +116,13 @@ function AdminMultiSelect({
         updateValues([...normalizedValues, targetValue]);
     };
 
-    const summaryText = (() => {
-        if (selectedLabels.length === 0) {
-            return placeholder;
-        }
-
-        if (selectedLabels.length <= 2) {
-            return selectedLabels.join(', ');
-        }
-
-        return `${selectedLabels.slice(0, 2).join(', ')} +${selectedLabels.length - 2}`;
-    })();
-
     const controlClassName = compact
-        ? 'min-h-[40px] rounded-sm border border-primary/15 bg-white px-3 py-2 text-[12px] font-semibold text-primary'
-        : 'min-h-[44px] rounded-sm border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[13px] font-semibold text-primary';
+        ? 'h-[40px] rounded-sm border border-primary/15 bg-white px-3 py-2 text-[12px] font-semibold text-primary'
+        : 'h-[40px] rounded-sm border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[13px] font-semibold text-primary';
     const dropdownClassName = compact
         ? 'absolute left-0 right-0 top-full z-[160] mt-1 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl'
         : 'absolute left-0 right-0 top-full z-[160] mt-2 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl';
+    const summaryText = selectedLabels.length > 0 ? selectedLabels.join(', ') : placeholder;
 
     return (
         <div ref={containerRef} className={`relative ${className}`}>
@@ -144,16 +133,19 @@ function AdminMultiSelect({
                 className={`flex w-full items-center justify-between gap-3 text-left transition-all ${controlClassName} ${disabled ? 'cursor-not-allowed opacity-50' : isOpen ? 'border-primary/35 ring-1 ring-primary/10' : 'hover:border-primary/30'}`}
             >
                 <div className="min-w-0 flex-1">
-                    <div className={`truncate leading-tight ${selectedLabels.length === 0 ? 'text-primary/35' : 'text-primary'}`} title={selectedLabels.length > 0 ? selectedLabels.join(', ') : placeholder}>
+                    <div
+                        className={`block truncate whitespace-nowrap leading-tight ${selectedLabels.length > 0 ? 'text-primary' : 'text-primary/35'}`}
+                        title={summaryText}
+                    >
                         {summaryText}
                     </div>
                     {selectedLabels.length > 0 ? (
-                        <div className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary/45">
+                        <div className="sr-only">
                             {selectedLabels.length} đã chọn
                         </div>
                     ) : null}
                 </div>
-                <span className={`material-symbols-outlined shrink-0 text-[18px] text-primary/45 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
+                <span className={`material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-primary/45 transition-transform ${isOpen ? 'rotate-180' : ''}`}>
                     expand_more
                 </span>
             </button>
@@ -205,7 +197,7 @@ function AdminMultiSelect({
                                         onChange={() => toggleValue(entry.value)}
                                         className="mt-0.5 size-4 shrink-0 accent-primary"
                                     />
-                                    <span className="min-w-0 flex-1 text-[13px] font-medium text-primary">
+                                    <span className="min-w-0 flex-1 text-[13px] font-medium leading-snug text-primary" title={entry.label}>
                                         {entry.label}
                                     </span>
                                 </label>

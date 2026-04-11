@@ -19,6 +19,11 @@ class GeminiService
     public const SETTING_ENABLED = 'ai_gemini_enabled';
     public const DEFAULT_MODEL = 'gemini-2.5-flash';
     private const TRANSIENT_RETRY_DELAYS_MS = [1200, 2500];
+    private const FALLBACK_MODELS = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+    ];
 
     private const LEGACY_MODEL_ALIASES = [
         'gemini-1.5-flash' => self::DEFAULT_MODEL,
@@ -179,30 +184,29 @@ class GeminiService
         $allApiKeys = $config['all_api_keys'] ?: [$config['api_key']];
         $lastException = null;
 
-        foreach ($this->resolveModelCandidates($config['model']) as $model) {
-            
-            // Lọc ra các key chưa bị khóa (exhausted)
-            $availableKeys = [];
-            $exhaustedCount = 0;
-            foreach ($allApiKeys as $key) {
-                $cacheKey = 'gemini_key_exhausted_' . md5($key);
-                if (!\Illuminate\Support\Facades\Cache::has($cacheKey)) {
-                    $availableKeys[] = $key;
-                } else {
-                    $exhaustedCount++;
+        $requestedModels = preg_split('/[\s,;]+/', $config['model'], -1, PREG_SPLIT_NO_EMPTY);
+        $modelCandidates = array_values(array_unique(array_merge(
+            array_map(fn($m) => $this->normalizeModelName($m), $requestedModels),
+            self::FALLBACK_MODELS
+        )));
+
+        $brokenKeys = [];
+
+        foreach ($allApiKeys as $keyIndex => $apiKey) {
+            // Kiểm tra cache xem key này có đang bị rate limit không
+            $keyHash = md5($apiKey);
+            $cacheKey = 'gemini_key_exhausted_' . $keyHash;
+            if (\Illuminate\Support\Facades\Cache::has($cacheKey)) {
+                continue;
+            }
+
+            foreach ($modelCandidates as $model) {
+                // Kiểm tra xem tổ hợp Key + Model này có bị exhausted không
+                $modelKeyCacheKey = 'gemini_quota_exhausted_' . $keyHash . '_' . md5($model);
+                if (\Illuminate\Support\Facades\Cache::has($modelKeyCacheKey)) {
+                    continue;
                 }
-            }
 
-            // Nếu tất cả các key đều bị khóa, ném ra lỗi rõ ràng bằng tiếng Việt
-            if (empty($availableKeys) && $exhaustedCount > 0) {
-                throw new RuntimeException('Tính năng xoay tua báo cáo: Toàn bộ ' . count($allApiKeys) . ' API Keys hiện tại đều đã hết hạn mức chờ (Rate Limit). Vui lòng thêm nhiều API Key hơn, hoặc hệ thống sẽ tự động chờ và thử lại sau ít phút.');
-            }
-
-            if (empty($availableKeys)) {
-                $availableKeys = $allApiKeys; // Dự phòng rủi ro không có key nào nhưng cũng ko ai bị exhausted
-            }
-
-            foreach ($availableKeys as $index => $apiKey) {
                 $attemptCount = count(self::TRANSIENT_RETRY_DELAYS_MS) + 1;
 
                 for ($attempt = 0; $attempt < $attemptCount; $attempt++) {
@@ -218,43 +222,49 @@ class GeminiService
                         ];
                     } catch (\Throwable $exception) {
                         $lastException = $exception;
+                        $message = strtolower($exception->getMessage());
 
-                        // Check if it's a rate limit error (Resource Exhausted)
-                        if ($this->isRateLimitFailure($exception)) {
-                            // Mark this key as exhausted for 60 seconds in cache
-                            $cacheKey = 'gemini_key_exhausted_' . md5($apiKey);
-                            \Illuminate\Support\Facades\Cache::put($cacheKey, now()->addSeconds(60)->timestamp, 60);
-
-                            // If we have more keys in the available pool, try the next one
-                            if (isset($availableKeys[$index + 1])) {
-                                continue 2; // Move to the next API key in the inner loop
-                            }
-                            
-                            // Nếu đã là key cuối cùng trong danh sách xoay vòng
-                            throw new RuntimeException('Tính năng xoay tua báo cáo: Toàn bộ ' . count($allApiKeys) . ' API Keys đều đã chạm ngưỡng giới hạn (Rate Limit) của Google. Hệ thống sẽ tạm dừng và tự động thử lại sau ít phút.');
+                        // 1. Nếu khóa bị EXPIRED hoặc INVALID -> Đánh dấu hỏng và bỏ qua luôn khóa này
+                        if (str_contains($message, 'expired') || str_contains($message, 'invalid') || str_contains($message, 'key not found')) {
+                            $brokenKeys[] = $apiKey;
+                            \Illuminate\Support\Facades\Log::warning("Gemini API Key hỏng/hết hạn: " . substr($apiKey, 0, 8) . "...");
+                            continue 3; // Thử sang khóa tiếp theo (thoát cả vòng lặp Model)
                         }
 
+                        // 2. Nếu Model bị lỗi (không tồn tại) -> Thử Model tiếp theo
+                        if ($this->shouldRetryWithFallbackModel($exception, $model)) {
+                            continue 2; 
+                        }
+
+                        // 3. Nếu bị Rate Limit (429) -> Đánh dấu tổ hợp này tạm nghỉ 65 giây (để reset giới hạn 5 API/phút của bản Free)
+                        if ($this->isRateLimitFailure($exception)) {
+                            \Illuminate\Support\Facades\Cache::put($modelKeyCacheKey, now()->addSeconds(65)->timestamp, 65);
+                            continue 2; // Thử Model tiếp theo của cùng một khóa
+                        }
+
+                        // 4. Nếu lỗi tạm thời (Mạng, Demand cao) -> Thử lại chính khóa + model này
                         $delayMs = self::TRANSIENT_RETRY_DELAYS_MS[$attempt] ?? null;
                         if ($delayMs !== null && $this->shouldRetryTransientFailure($exception)) {
                             usleep($delayMs * 1000);
                             continue;
                         }
 
-                        if (!$this->shouldRetryWithFallbackModel($exception, $model)) {
-                            throw $exception;
-                        }
-
-                        break;
+                        // Nếu là lỗi không thể xử lý được bằng cách thử lại, ném ra
+                        throw $exception;
                     }
                 }
             }
+
+            // Nếu đi đến đây nghĩa là khóa này đã thử hết mọi Model mà vẫn fail Quota
+            // Đánh dấu exhausted cho toàn bộ khóa trong 60 giây
+            \Illuminate\Support\Facades\Cache::put($cacheKey, now()->addSeconds(60)->timestamp, 60);
         }
 
         if ($lastException !== null) {
             throw $lastException;
         }
 
-        throw new RuntimeException('Khong the ket noi Gemini sau khi thu tat ca API keys.');
+        throw new RuntimeException('Đã thử tất cả API Keys và các Model dự phòng nhưng không thành công. Vui lòng kiểm tra lại tài khoản Google AI Studio.');
     }
 
     private function isRateLimitFailure(\Throwable $exception): bool

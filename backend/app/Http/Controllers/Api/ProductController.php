@@ -9144,6 +9144,7 @@ class ProductController extends Controller
                 $snapshotName = $this->buildOrderItemDisplayName($product, $parentProduct);
             }
 
+            // Cập nhật snapshot cho chính sản phẩm này
             \App\Models\OrderItem::where('product_id', $product->id)
                 ->update([
                     'product_name_snapshot' => $snapshotName,
@@ -9154,6 +9155,23 @@ class ProductController extends Controller
                     'product_name_snapshot' => $snapshotName,
                     'product_sku_snapshot' => $product->sku,
                 ]);
+
+            // Nếu là sản phẩm cha, cần cập nhật lại snapshot cho tất cả con (vì tên con phụ thuộc tên cha)
+            if ($product->type === 'configurable') {
+                $product->variations()->chunk(100, function ($variants) use ($product) {
+                    foreach ($variants as $v) {
+                        $vSnapshotName = $this->buildOrderItemDisplayName($v, $product);
+                        \App\Models\OrderItem::where('product_id', $v->id)->update([
+                            'product_name_snapshot' => $vSnapshotName,
+                            'product_sku_snapshot' => $v->sku,
+                        ]);
+                        \App\Models\OrderSupplementItem::where('product_id', $v->id)->update([
+                            'product_name_snapshot' => $vSnapshotName,
+                            'product_sku_snapshot' => $v->sku,
+                        ]);
+                    }
+                });
+            }
         }
         // ────────────────────────────────────────────────────────────────────────
         // Sync categories
@@ -9324,6 +9342,10 @@ class ProductController extends Controller
                                 ['value' => $val]
                             );
                         }
+                        // Xóa các thuộc tính cũ không còn trong tổ hợp mới
+                        \App\Models\ProductAttributeValue::where('product_id', $variant->id)
+                            ->whereNotIn('attribute_id', $vValidAttrIds)
+                            ->delete();
                     }
 
                     DB::table('product_links')
@@ -9334,6 +9356,19 @@ class ProductController extends Controller
                             'position' => $idx,
                             'updated_at' => now(),
                         ]);
+
+                    // Sync OrderItem snapshots if variant was changed
+                    if ($variant->wasChanged('name') || $variant->wasChanged('sku')) {
+                        $vSnapshotName = $this->buildOrderItemDisplayName($variant, $product);
+                        \App\Models\OrderItem::where('product_id', $variant->id)->update([
+                            'product_name_snapshot' => $vSnapshotName,
+                            'product_sku_snapshot' => $variant->sku,
+                        ]);
+                        \App\Models\OrderSupplementItem::where('product_id', $variant->id)->update([
+                            'product_name_snapshot' => $vSnapshotName,
+                            'product_sku_snapshot' => $variant->sku,
+                        ]);
+                    }
                 }
                 else {
                     // It's a "new" variant from frontend's perspective.

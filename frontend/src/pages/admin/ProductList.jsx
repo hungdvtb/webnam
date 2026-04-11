@@ -838,7 +838,28 @@ const ProductList = () => {
     const [domains, setDomains] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [selectedIds, setSelectedIds] = useState(() => sanitizeStoredIdList(savedWorkingState?.selectedIds));
+    const [selectedIds, setSelectedIdsState] = useState(() => sanitizeStoredIdList(savedWorkingState?.selectedIds));
+    const selectedIdsRef = useRef(selectedIds);
+    const setSelectedIds = useCallback((value) => {
+        const nextValue = typeof value === 'function'
+            ? value(selectedIdsRef.current)
+            : value;
+        const normalizedValue = sanitizeStoredIdList(nextValue);
+        selectedIdsRef.current = normalizedValue;
+        setSelectedIdsState(normalizedValue);
+    }, []);
+    const [showSelectedOnly, setShowSelectedOnlyState] = useState(false);
+    const showSelectedOnlyRef = useRef(showSelectedOnly);
+    const setShowSelectedOnly = useCallback((value) => {
+        const nextValue = Boolean(
+            typeof value === 'function'
+                ? value(showSelectedOnlyRef.current)
+                : value
+        );
+        showSelectedOnlyRef.current = nextValue;
+        setShowSelectedOnlyState(nextValue);
+    }, []);
+    const selectedOnlyRestorePageRef = useRef(null);
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const [showExportModal, setShowExportModal] = useState(false);
@@ -2108,13 +2129,23 @@ const ProductList = () => {
 
     const buildQueryParams = (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
         const normalizedFilters = sanitizeProductFilters(currentFilters);
+        const selectedOnlyIds = showSelectedOnlyRef.current
+            ? sanitizeStoredIdList(selectedIdsRef.current)
+            : [];
+        const effectivePerPage = selectedOnlyIds.length > 0
+            ? Math.max(limit, selectedOnlyIds.length)
+            : limit;
         const params = {
             page,
-            per_page: limit,
+            per_page: effectivePerPage,
             is_trash: isTrashView ? 1 : 0,
             sort_by: currentSort.direction === 'none' ? 'id' : currentSort.key,
             sort_order: currentSort.direction === 'none' ? 'desc' : currentSort.direction
         };
+
+        if (selectedOnlyIds.length > 0) {
+            params.selected_ids = selectedOnlyIds.join(',');
+        }
 
         if (normalizedFilters.search) {
             params.search = normalizedFilters.search;
@@ -2662,24 +2693,82 @@ const ProductList = () => {
     const areAllVisibleProductsSelected = products.length > 0
         && products.every((product) => selectedIds.includes(product.id));
 
-    const toggleSelectAll = () => {
-        const visibleProductIdMap = new Map(products.map((product) => [String(product.id), product.id]));
+    const handleExitSelectedOnlyMode = useCallback(() => {
+        const restorePage = selectedOnlyRestorePageRef.current ?? pagination.current_page ?? 1;
+        selectedOnlyRestorePageRef.current = null;
+        setShowSelectedOnly(false);
+        fetchProducts(restorePage, filters, sortConfig, pagination.per_page);
+    }, [filters, pagination.current_page, pagination.per_page, sortConfig]);
 
-        if (areAllVisibleProductsSelected) {
-            setSelectedIds((prev) => prev.filter((id) => !visibleProductIdMap.has(String(id))));
+    const handleToggleSelectedOnly = useCallback(() => {
+        if (selectedIdsRef.current.length === 0) {
             return;
         }
 
-        setSelectedIds((prev) => Array.from(
-            new Map([
-                ...prev.map((id) => [String(id), id]),
-                ...products.map((product) => [String(product.id), product.id]),
-            ]).values(),
-        ));
+        if (showSelectedOnlyRef.current) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        selectedOnlyRestorePageRef.current = pagination.current_page ?? 1;
+        setShowSelectedOnly(true);
+        fetchProducts(1, filters, sortConfig, pagination.per_page);
+    }, [filters, handleExitSelectedOnlyMode, pagination.current_page, pagination.per_page, sortConfig]);
+
+    const handleClearSelectedProducts = useCallback(() => {
+        setSelectedIds([]);
+
+        if (showSelectedOnlyRef.current) {
+            handleExitSelectedOnlyMode();
+        }
+    }, [handleExitSelectedOnlyMode]);
+
+    const toggleSelectAll = () => {
+        const visibleProductIdMap = new Map(products.map((product) => [String(product.id), product.id]));
+        let nextSelectedIds = [];
+
+        if (areAllVisibleProductsSelected) {
+            nextSelectedIds = selectedIdsRef.current.filter((id) => !visibleProductIdMap.has(String(id)));
+        } else {
+            nextSelectedIds = Array.from(
+                new Map([
+                    ...selectedIdsRef.current.map((id) => [String(id), id]),
+                    ...products.map((product) => [String(product.id), product.id]),
+                ]).values(),
+            );
+        }
+
+        setSelectedIds(nextSelectedIds);
+
+        if (!showSelectedOnlyRef.current) {
+            return;
+        }
+
+        if (nextSelectedIds.length === 0) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        fetchProducts(1, filters, sortConfig, pagination.per_page);
     };
 
     const toggleSelectProduct = (id) => {
-        setSelectedIds(prev => prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]);
+        const nextSelectedIds = selectedIdsRef.current.includes(id)
+            ? selectedIdsRef.current.filter((item) => item !== id)
+            : [...selectedIdsRef.current, id];
+
+        setSelectedIds(nextSelectedIds);
+
+        if (!showSelectedOnlyRef.current) {
+            return;
+        }
+
+        if (nextSelectedIds.length === 0) {
+            handleExitSelectedOnlyMode();
+            return;
+        }
+
+        fetchProducts(1, filters, sortConfig, pagination.per_page);
     };
 
     const handleRowSelectionClick = (id, event) => {
@@ -2712,6 +2801,13 @@ const ProductList = () => {
 
         fetchProducts(1);
     }, [isTrashView]);
+
+    useEffect(() => {
+        if (showSelectedOnly && selectedIds.length === 0) {
+            selectedOnlyRestorePageRef.current = null;
+            setShowSelectedOnly(false);
+        }
+    }, [selectedIds.length, setShowSelectedOnly, showSelectedOnly]);
 
     const handleDelete = async (id) => {
         if (!window.confirm(isTrashView ? "Bạn có chắc muốn xóa VĨNH VIỄN sản phẩm này? Hành động này không thể hoàn tác." : "Chuyển sản phẩm này vào thùng rác?")) return;
@@ -4563,13 +4659,24 @@ const ProductList = () => {
                             )}
                             {selectedIds.length > 0 && (
                                 <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleSelectedOnly}
+                                        className={`bg-transparent p-0 text-[11px] font-bold whitespace-nowrap transition-colors ${showSelectedOnly ? 'text-primary' : 'text-primary/40 hover:text-primary'}`}
+                                        title={showSelectedOnly ? 'Tắt chế độ chỉ xem sản phẩm đã chọn' : 'Chỉ hiển thị các sản phẩm đang chọn'}
+                                        aria-pressed={showSelectedOnly}
+                                    >
+                                        {selectedIds.length} chọn
+                                    </button>
+                                    {false && (
                                     <span className="text-[11px] font-bold text-primary/40 whitespace-nowrap">{selectedIds.length} chọn</span>
+                                    )}
                                     {bulkSeoGenerating && (
                                         <span className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">
                                             AI {bulkSeoProgress.current}/{bulkSeoProgress.total}
                                         </span>
                                     )}
-                                    <button onClick={() => setSelectedIds([])} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
+                                    <button onClick={handleClearSelectedProducts} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
                                 </div>
                             )}
                         </div>

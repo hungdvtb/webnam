@@ -3,11 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryBatch;
+use App\Models\InventoryDocument;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\Shipment;
 use App\Models\User;
+use App\Services\Inventory\InventoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -25,6 +28,7 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             'sku' => 'OUTSIDE-DELIVERY-001',
             'price' => 280000,
         ]);
+        $batch = $this->createBatch($account, $product, 2, 120000, 'outside-delivery');
         $order = $this->createOfficialOrder($account, $user, $product);
 
         $response = $this
@@ -50,6 +54,14 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             ->assertJsonPath('results.0.tracking_number', null);
 
         $order->refresh();
+        $batch->refresh();
+        $product->refresh();
+        $document = InventoryDocument::query()
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->where('type', 'export')
+            ->latest('id')
+            ->first();
 
         $this->assertSame('shipping', (string) $order->status);
         $this->assertSame('shipped', (string) $order->shipment_status);
@@ -64,6 +76,15 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertSame(45000.0, (float) data_get($order->external_delivery_meta, 'shipping_cost'));
         $this->assertSame('Giao hang tai ben xe', data_get($order->external_delivery_meta, 'note'));
         $this->assertSame(0, Shipment::query()->where('order_id', $order->id)->count());
+        $this->assertNotNull($document);
+        $this->assertSame('export', (string) $document->type);
+        $this->assertSame('order', (string) $document->reference_type);
+        $this->assertSame($order->id, (int) $document->reference_id);
+        $this->assertSame('quick_dispatch', data_get($document->meta, 'source'));
+        $this->assertSame('outside_delivery', data_get($document->meta, 'dispatch_mode'));
+        $this->assertSame('xe_khach', data_get($document->meta, 'outside_delivery_type'));
+        $this->assertSame(1, (int) $batch->remaining_quantity);
+        $this->assertSame(1, (int) $product->stock_quantity);
         $this->assertDatabaseHas('order_status_logs', [
             'order_id' => $order->id,
             'source' => 'manual_outside_dispatch',
@@ -78,7 +99,9 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $product = $this->createProduct($account, [
             'name' => 'San pham rollback gui ngoai',
             'sku' => 'OUTSIDE-ROLLBACK-001',
+            'price' => 220000,
         ]);
+        $batch = $this->createBatch($account, $product, 2, 110000, 'outside-rollback');
         $order = $this->createOfficialOrder($account, $user, $product, [
             'order_number' => 'OR99001A0',
         ]);
@@ -97,6 +120,17 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('success_count', 1);
 
+        $document = InventoryDocument::query()
+            ->where('reference_type', 'order')
+            ->where('reference_id', $order->id)
+            ->where('type', 'export')
+            ->latest('id')
+            ->first();
+
+        $this->assertNotNull($document);
+        $this->assertSame(1, (int) $batch->fresh()->remaining_quantity);
+        $this->assertSame(1, (int) $product->fresh()->stock_quantity);
+
         $response = $this
             ->withHeaders($this->headers($account))
             ->postJson('/api/orders/dispatch/cancel', [
@@ -110,6 +144,8 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             ->assertJsonPath('results.0.success', true);
 
         $order->refresh();
+        $batch->refresh();
+        $product->refresh();
 
         $this->assertSame('new', (string) $order->status);
         $this->assertNull($order->shipment_status);
@@ -120,6 +156,11 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertNull($order->shipping_dispatched_at);
         $this->assertNull($order->external_delivery_meta);
         $this->assertSame(0, Shipment::query()->where('order_id', $order->id)->count());
+        $this->assertDatabaseMissing('inventory_documents', [
+            'id' => $document->id,
+        ]);
+        $this->assertSame(2, (int) $batch->remaining_quantity);
+        $this->assertSame(2, (int) $product->stock_quantity);
         $this->assertDatabaseHas('order_status_logs', [
             'order_id' => $order->id,
             'source' => 'dispatch_cancel',
@@ -172,6 +213,25 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             'stock_quantity' => 0,
             'status' => true,
         ], $overrides));
+    }
+
+    private function createBatch(Account $account, Product $product, int $quantity, float $unitCost, string $suffix): InventoryBatch
+    {
+        $batch = InventoryBatch::query()->create([
+            'account_id' => $account->id,
+            'product_id' => $product->id,
+            'batch_number' => 'BATCH-' . strtoupper($suffix) . '-' . Str::upper(Str::random(4)),
+            'received_at' => now(),
+            'quantity' => $quantity,
+            'remaining_quantity' => $quantity,
+            'unit_cost' => $unitCost,
+            'status' => 'open',
+            'meta' => ['source' => 'test'],
+        ]);
+
+        app(InventoryService::class)->refreshProducts([$product->id]);
+
+        return $batch;
     }
 
     private function createOfficialOrder(Account $account, User $user, Product $product, array $overrides = []): Order

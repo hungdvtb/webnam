@@ -1487,6 +1487,7 @@ const ProductForm = () => {
     const [aiGeneratingSeo, setAiGeneratingSeo] = useState(false);
     const [aiRewriting, setAiRewriting] = useState(false);
     const [typeConfirmed, setTypeConfirmed] = useState(true);
+    const [showVariantExpansionGuide, setShowVariantExpansionGuide] = useState(false);
     const [categories, setCategories] = useState([]);
     const [suppliers, setSuppliers] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
@@ -4081,8 +4082,37 @@ const ProductForm = () => {
             return results;
         }, []);
 
+                let availableOldVariants = [...variants];
+
         const newVariants = combinations.map((combo, index) => {
             const attrLabel = selectedSuperAttributes.map(attr => combo[attr.id]).join(' / ');
+
+            const matchIndex = availableOldVariants.findIndex(oldVar => {
+                if (!oldVar.attributes) return false;
+                
+                let isMatch = true;
+                for (const key of Object.keys(oldVar.attributes)) {
+                    if (combo[key] !== undefined && combo[key] !== oldVar.attributes[key]) {
+                        isMatch = false;
+                        break;
+                    }
+                }
+                return isMatch;
+            });
+
+            let matchedVariant = null;
+            if (matchIndex !== -1) {
+                matchedVariant = availableOldVariants[matchIndex];
+                availableOldVariants.splice(matchIndex, 1);
+            }
+
+            if (matchedVariant) {
+                return {
+                    ...matchedVariant,
+                    attributes: combo,
+                    label: `${formData.name} - ${attrLabel}`
+                };
+            }
 
             return {
                 id: `new_${Date.now()}_${index}`,
@@ -5268,8 +5298,8 @@ const ProductForm = () => {
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
 
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
-                                    <div>
+                                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,0.85fr)]">
+                                    <div className="min-w-0 self-start">
                                         <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className={`group/sku ${parentSkuError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}`}>
                                             <OverflowPreviewInput
                                                 name="sku"
@@ -5294,7 +5324,7 @@ const ProductForm = () => {
                                         {parentSkuError ? <p className="mt-2 text-[12px] font-semibold text-brick">{parentSkuError}</p> : null}
                                     </div>
 
-                                    <div>
+                                    <div className="min-w-0 self-start lg:col-span-2 xl:col-span-1">
                                         <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
                                             <OverflowPreviewInput
                                                 name="name"
@@ -5332,7 +5362,7 @@ const ProductForm = () => {
                                         </div>
                                     ) : null}
 
-                                    <div>
+                                    <div className="min-w-0 self-start">
                                         <Field label={<>Loại sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
                                             <div className="flex items-center gap-2">
                                                 <select
@@ -5360,28 +5390,20 @@ const ProductForm = () => {
                                         ) : null}
                                     </div>
 
-                                    <div>
+                                    <div className="min-w-0 self-start lg:col-span-2 xl:col-span-1">
                                         <Field label="Danh mục">
-                                            <div className="space-y-2">
+                                            <div className="w-full">
                                                 <AdminMultiSelect
                                                     options={categories}
                                                     value={formData.category_ids}
                                                     onChange={applySelectedCategoryIds}
-                                                    placeholder="Chọn một hoặc nhiều danh mục"
+                                                    placeholder="Chọn danh mục"
                                                 />
-                                                <p className="text-[11px] text-primary/55">
-                                                    Đã chọn: <span className="font-bold text-primary/75">{selectedCategorySummary}</span>
-                                                </p>
-                                                {formData.category_ids.length > 1 ? (
-                                                    <p className="text-[10px] font-semibold text-primary/45">
-                                                        Danh mục đầu tiên sẽ được dùng làm danh mục chính tương thích cho các phần còn dùng trường cũ.
-                                                    </p>
-                                                ) : null}
                                             </div>
                                         </Field>
                                     </div>
 
-                                    <div>
+                                    <div className="min-w-0 self-start lg:col-span-2 xl:col-span-1">
                                         <Field label="ĐVT" className="border-primary/20 bg-stone/5">
                                             <div className="flex items-center gap-2 w-full">
                                                 <select
@@ -5895,6 +5917,14 @@ const ProductForm = () => {
                                         <h3 className="font-sans text-[15px] font-bold text-purple-900 uppercase tracking-tight">Quản lý biến thể</h3>
                                     </div>
                                     <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowVariantExpansionGuide(true)}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-500 text-white rounded-sm font-bold text-[10px] uppercase tracking-widest hover:bg-teal-600 transition-all shadow-sm"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">library_add</span>
+                                            Hướng dẫn mở rộng
+                                        </button>
                                         {variants.length === 0 && (
                                             <button
                                                 type="button"
@@ -7545,6 +7575,60 @@ const ProductForm = () => {
                 </form>
             </div>
             <AnimatePresence>
+                {showVariantExpansionGuide && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-200">
+                        <div className="w-full max-w-lg rounded-md bg-white p-6 shadow-2xl flex flex-col gap-4 animate-in zoom-in-95 duration-200">
+                            <div className="flex items-center gap-3 border-b border-stone/10 pb-4">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal-100 text-teal-600">
+                                    <span className="material-symbols-outlined">library_add</span>
+                                </div>
+                                <h3 className="text-lg font-black uppercase text-secondary">
+                                    Hu?ng d?n th�m chi?u bi?n th?
+                                </h3>
+                            </div>
+                            
+                            <div className="space-y-4 text-[13px] text-stone leading-relaxed">
+                                <p className="font-bold text-[14px]">
+                                    �? m? r?ng th�m thu?c t�nh (VD: �ang c� K�ch Thu?c, mu?n th�m Lo?i Men) m� KH�NG L�M M?T d? li?u bi?n th? cu, vui l�ng l�m chu?n 3 bu?c:
+                                </p>
+                                <div className="flex flex-col gap-3 rounded-sm bg-[#f7f4ec] p-4 border border-stone/10">
+                                    <div className="flex gap-3">
+                                        <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gold text-white flex items-center justify-center font-bold text-[11px]">1</div>
+                                        <div>
+                                            <p className="font-bold text-secondary">Gi? & ch?n Thu?c t�nh m?i</p>
+                                            <p className="opacity-80">Ph?i d?m b?o Thu?c t�nh CU (v� d? K�ch thu?c) v?n dang du?c t�ch trong danh s�ch. Sau d� b?n t�ch ch?n th�m thu?c t�nh M?I (ch?ng h?n Lo?i men).</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gold text-white flex items-center justify-center font-bold text-[11px]">2</div>
+                                        <div>
+                                            <p className="font-bold text-secondary">T�ch l?i To�n b? Gi� tr?</p>
+                                            <p className="opacity-80">? c?t b�n ph?i, ph?i t�ch d?y d? nh�n gi� tr? CU d? h? th?ng nh?n di?n. V� d? ph?i d�nh d?u l?i Phi 12, Phi 14.. r?i sau d� d�nh d?u th�m Men Lam, Men R?n..</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <div className="flex-shrink-0 w-6 h-6 rounded-full bg-gold text-white flex items-center justify-center font-bold text-[11px]">3</div>
+                                        <div>
+                                            <p className="font-bold text-secondary">B?m "T?o t? h?p bi?n th?"</p>
+                                            <p className="opacity-80">B?m n�t m�u t�m s?m ? du?i c�ng. H? th?ng s? t? d?ng d?i chi?u th�ng minh: K? th?a T?N KHO & M� SKU cu cho c?m k?t h?p d?u ti�n, d?ng th?i sinh c�c d�ng m?i cho c�c men (ho?c k�ch thu?c) m?i!</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-2 flex justify-end gap-3 pt-4 border-t border-stone/10">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowVariantExpansionGuide(false)}
+                                    className="rounded-sm bg-primary px-6 py-2 text-[12px] font-bold uppercase text-white hover:bg-hover active:bg-pressed transition-all"
+                                >
+                                    �� hi?u & L�m ngay
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {showConvertToConfigurableModal && (
                     <div className="fixed inset-0 z-[106] flex items-center justify-center p-4">
                         <motion.div

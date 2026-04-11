@@ -1737,12 +1737,38 @@ const SiteSettings = () => {
                                 <div className="space-y-6">
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         <div className="md:col-span-2">
-                                            <div className="flex items-baseline justify-between mb-4">
-                                                <label className={labelClasses}>Danh sách API Token (Gemini)</label>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className="flex items-center gap-3 relative top-1">
+                                                    <label className="text-[11px] font-black uppercase text-primary/80 tracking-wider">Danh sách API Token (Gemini)</label>
+                                                    <div className="flex items-center gap-2">
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => setSettings(prev => ({...prev, ai_gemini_keys: (prev.ai_gemini_keys || []).map(k => ({...k, is_active: true}))}))}
+                                                            className="text-[9px] font-black uppercase text-green-600 bg-green-50 border border-green-200 px-2 py-1 rounded-sm hover:bg-green-100 transition-colors"
+                                                        >
+                                                            Bật Tất Cả
+                                                        </button>
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => setSettings(prev => ({...prev, ai_gemini_keys: (prev.ai_gemini_keys || []).map(k => ({...k, is_active: false}))}))}
+                                                            className="text-[9px] font-black uppercase text-primary/50 bg-stone-50 border border-primary/20 px-2 py-1 rounded-sm hover:bg-stone-100 transition-colors"
+                                                        >
+                                                            Tắt Tất Cả
+                                                        </button>
+                                                        <button 
+                                                            type="button"
+                                                            onClick={() => setSettings(prev => ({...prev, ai_gemini_keys: (prev.ai_gemini_keys || []).map(k => ({...k, is_active: k.status !== 'exhausted'}))}))}
+                                                            className="text-[9px] font-black uppercase text-secondary bg-secondary/5 border border-secondary/20 px-2 py-1 rounded-sm hover:bg-secondary/10 transition-colors"
+                                                            title="Chỉ bật các khóa chưa bị hết hạn hoặc không bị lỗi"
+                                                        >
+                                                            Chỉ Bật Key Sẵn Sàng
+                                                        </button>
+                                                    </div>
+                                                </div>
                                                 <button
                                                     type="button"
                                                     onClick={handleAddGeminiKey}
-                                                    className="flex items-center gap-1 text-[11px] font-black uppercase text-secondary hover:text-gold transition-colors"
+                                                    className="flex items-center gap-1 text-[11px] font-black uppercase text-secondary hover:text-gold transition-colors relative top-1"
                                                 >
                                                     <span className="material-symbols-outlined text-[16px]">add_circle</span>
                                                     Thêm Key mới

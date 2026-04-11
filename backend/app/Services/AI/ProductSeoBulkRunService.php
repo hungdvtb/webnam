@@ -190,10 +190,10 @@ class ProductSeoBulkRunService
                             });
                     });
             })
-            ->orderBy('product_seo_bulk_runs.id')
-            ->orderByRaw("CASE WHEN product_seo_bulk_run_items.status = 'retrying' THEN 0 ELSE 1 END")
-            ->orderBy('product_seo_bulk_run_items.position')
-            ->orderBy('product_seo_bulk_run_items.id')
+            ->orderBy('product_seo_bulk_runs.id', 'asc')
+            ->orderByRaw("CASE WHEN product_seo_bulk_run_items.status = ? THEN 0 ELSE 1 END", [ProductSeoBulkRunItem::STATUS_RETRYING])
+            ->orderBy('product_seo_bulk_run_items.position', 'asc')
+            ->orderBy('product_seo_bulk_run_items.id', 'asc')
             ->first();
 
         if (! $nextItem) {

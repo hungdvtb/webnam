@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 
 class ProductSeoBulkWorkerCommand extends Command
 {
-    protected $signature = 'product-seo-bulk:work';
+    protected $signature = 'product-seo-bulk:work {--stop-when-empty : Dung worker khi khoang cho trong}';
 
     protected $description = 'Run the product SEO bulk queue worker loop';
 
@@ -36,6 +36,14 @@ class ProductSeoBulkWorkerCommand extends Command
 
                 if ($processed) {
                     $this->info('[' . now()->format('Y-m-d H:i:s') . '] Da xu ly xong 1 tien trinh. Dang quet tiep...');
+                } else {
+                    if ($this->option('stop-when-empty')) {
+                        $this->info('[' . now()->format('Y-m-d H:i:s') . '] Khong con san pham nao trong hang doi. Tu dong dung (theo --stop-when-empty).');
+                        $workerService->recordHeartbeat([
+                            'status' => 'idle',
+                        ]);
+                        return 0;
+                    }
                 }
 
                 $workerService->recordHeartbeat([

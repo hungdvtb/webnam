@@ -100,6 +100,7 @@ const ProductSeoBulkModal = ({
     const [creatingRun, setCreatingRun] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [transientMessage, setTransientMessage] = useState('');
+    const [lastProcessedCount, setLastProcessedCount] = useState(0);
     const [statusFilter, setStatusFilter] = useState('');
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -123,6 +124,14 @@ const ProductSeoBulkModal = ({
     const notifyRunChange = useCallback((run) => {
         setCurrentRun(run);
 
+        const processed = Number(run?.completed_items || 0) + Number(run?.failed_items || 0);
+
+        if (processed > lastProcessedCount) {
+            setLastProcessedCount(processed);
+            setErrorMessage('');
+            setTransientMessage('');
+        }
+
         if (run?.request_key) {
             createRequestKeyRef.current = run.request_key;
         }
@@ -136,7 +145,7 @@ const ProductSeoBulkModal = ({
             completedRunIdRef.current = run.id;
             onCompleted?.(run);
         }
-    }, [onCompleted, onRunChange]);
+    }, [onCompleted, onRunChange, lastProcessedCount]);
 
     const recoverRunByRequestKey = useCallback(async (requestKey) => {
         if (!requestKey) {
@@ -319,7 +328,7 @@ const ProductSeoBulkModal = ({
         }, delayMs);
 
         return clearPollingTimeout;
-    }, [clearPollingTimeout, currentRun?.status, effectiveRunId, loadRun, open, pollRetryCount]);
+    }, [clearPollingTimeout, currentRun, effectiveRunId, loadRun, open, pollRetryCount]);
 
     useEffect(() => () => {
         clearPollingTimeout();

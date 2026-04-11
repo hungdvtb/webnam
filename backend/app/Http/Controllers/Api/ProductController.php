@@ -4838,7 +4838,7 @@ class ProductController extends Controller
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
                 'supplier_id', 'inventory_unit_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id'
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description'
             ])
             ->withCount('suppliers')
             ->with([

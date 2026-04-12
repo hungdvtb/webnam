@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const devApiProxyTarget = String(env.VITE_DEV_API_PROXY_TARGET || 'http://127.0.0.1:8003').trim().replace(/\/+$/, '')
+  const ignoredTempArtifacts = ['**/.tmp-*', '**/.chrome-*']
 
   return {
     plugins: [react()],
@@ -18,6 +19,11 @@ export default defineConfig(({ mode }) => {
       host: true,
       port: 3003,
       strictPort: true,
+      // Ignore Codex/browser automation artifacts so temporary HTML or screenshots
+      // do not trigger full-page reloads while long-running uploads are in flight.
+      watch: {
+        ignored: ignoredTempArtifacts,
+      },
       proxy: {
         '/api': {
           target: devApiProxyTarget,

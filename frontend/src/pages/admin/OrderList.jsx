@@ -23,7 +23,7 @@ import MultiKeywordSearchInput, {
     parseKeywordTokens,
     serializeKeywordTokens,
 } from '../../components/admin/MultiKeywordSearchInput';
-import { preparePrintPopupWindow, printOrders } from '../../utils/orderPrint';
+import { closePrintSession, preparePrintPopupWindow, printOrders } from '../../utils/orderPrint';
 import {
     addOrderIdsToReturnWorkbench,
     clearOrderReturnWorkbench,
@@ -1270,10 +1270,15 @@ const OrderList = () => {
         ids: [],
         printableCount: 0,
         submitting: false,
+        session: null,
     });
     const [shippingAlerts, setShippingAlerts] = useState([]);
     const [showShippingAlerts, setShowShippingAlerts] = useState(false);
     const [shippingAlertUnread, setShippingAlertUnread] = useState([]);
+
+    useEffect(() => () => {
+        closePrintSession(printConfirmState.session);
+    }, [printConfirmState.session]);
     const [shippingSoundSettings, setShippingSoundSettings] = useState(() => {
         const saved = localStorage.getItem(SHIPPING_SOUND_STORAGE_KEY);
         return saved ? JSON.parse(saved) : defaultSoundSettings;
@@ -2440,7 +2445,7 @@ const OrderList = () => {
                 throw new Error('Không có đơn hàng hợp lệ để in.');
             }
 
-            await printOrders(printableOrders, {
+            const printSession = await printOrders(printableOrders, {
                 ownerWindow: window,
                 printWindow,
             });
@@ -2450,6 +2455,7 @@ const OrderList = () => {
                 ids: printableIds,
                 printableCount: printableOrders.length,
                 submitting: false,
+                session: printSession,
             });
         } catch (error) {
             if (printWindow && !printWindow.closed) {
@@ -2466,14 +2472,16 @@ const OrderList = () => {
     };
 
     const closePrintConfirmation = useCallback(() => {
+        closePrintSession(printConfirmState.session);
         setPrintConfirmState((prev) => ({
             ...prev,
             open: false,
             ids: [],
             printableCount: 0,
             submitting: false,
+            session: null,
         }));
-    }, []);
+    }, [printConfirmState.session]);
 
     const handleConfirmPrinted = useCallback(async () => {
         const ids = [...printConfirmState.ids];

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ import SortIndicator from '../../components/SortIndicator';
 import ProductSortModal from '../../components/admin/ProductSortModal';
 import ProductImageBulkAppendModal from '../../components/admin/ProductImageBulkAppendModal';
 import ProductImageRefreshModal from '../../components/admin/ProductImageRefreshModal';
+import ProductCategoryImageManagerModal from '../../components/admin/ProductCategoryImageManagerModal';
 import ProductSeoBulkModal from '../../components/admin/ProductSeoBulkModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
@@ -899,6 +900,7 @@ const ProductList = () => {
     const [showBulkUpdateModal, setShowBulkUpdateModal] = useState(false);
     const [showBulkImageAppendModal, setShowBulkImageAppendModal] = useState(false);
     const [showBulkImageRefreshModal, setShowBulkImageRefreshModal] = useState(false);
+    const [showCategoryImageManagerModal, setShowCategoryImageManagerModal] = useState(false);
     const [showBulkSeoModal, setShowBulkSeoModal] = useState(false);
     const [bulkSeoAutoStartToken, setBulkSeoAutoStartToken] = useState(null);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
@@ -914,6 +916,7 @@ const ProductList = () => {
     const [bulkCopySourceItemsError, setBulkCopySourceItemsError] = useState('');
     const [submittingBulkCopy, setSubmittingBulkCopy] = useState(false);
     const bulkCopySourceRequestRef = useRef(0);
+    const categoryImageManagerDirtyRef = useRef(false);
     const [duplicateConfirm, setDuplicateConfirm] = useState(null);
     const [submittingDuplicate, setSubmittingDuplicate] = useState(false);
     const [showQuickEditModal, setShowQuickEditModal] = useState(false);
@@ -2127,7 +2130,7 @@ const ProductList = () => {
         } catch (error) { console.error("Error fetching initial data", error); }
     };
 
-    const buildQueryParams = (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
+    const buildQueryParams = useCallback((page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
         const normalizedFilters = sanitizeProductFilters(currentFilters);
         const selectedOnlyIds = showSelectedOnlyRef.current
             ? sanitizeStoredIdList(selectedIdsRef.current)
@@ -2190,7 +2193,34 @@ const ProductList = () => {
         }
 
         return params;
-    };
+    }, [filters, isTrashView, pagination.per_page, sortConfig]);
+
+    const imageManagerScopeLabel = selectedIds.length > 0
+        ? `${selectedIds.length} sản phẩm đã chọn`
+        : 'toàn bộ sản phẩm theo bộ lọc hiện tại';
+
+    const imageManagerScopeQueryParams = useMemo(() => {
+        if (selectedIds.length > 0) {
+            return {
+                page: 1,
+                per_page: 100,
+                is_trash: 0,
+                selected_ids: sanitizeStoredIdList(selectedIds).join(','),
+                sort_by: sortConfig.direction === 'none' ? 'id' : sortConfig.key,
+                sort_order: sortConfig.direction === 'none' ? 'desc' : sortConfig.direction,
+            };
+        }
+
+        const params = {
+            ...buildQueryParams(1, filters, sortConfig, 100),
+            page: 1,
+            per_page: 100,
+            is_trash: 0,
+        };
+
+        delete params.selected_ids;
+        return params;
+    }, [buildQueryParams, filters, selectedIds, sortConfig]);
 
     const fetchTrashCount = async () => {
         try {
@@ -3301,6 +3331,24 @@ const ProductList = () => {
                 : `Đã thêm ${createdRecords} ảnh vào ${appliedProducts} sản phẩm.`,
         });
         setTimeout(() => setNotification(null), 5000);
+    };
+
+    const handleOpenCategoryImageManager = () => {
+        categoryImageManagerDirtyRef.current = false;
+        setShowCategoryImageManagerModal(true);
+    };
+
+    const handleCategoryImageManagerChanged = () => {
+        categoryImageManagerDirtyRef.current = true;
+    };
+
+    const handleCloseCategoryImageManager = async () => {
+        setShowCategoryImageManagerModal(false);
+
+        if (categoryImageManagerDirtyRef.current) {
+            categoryImageManagerDirtyRef.current = false;
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+        }
     };
 
     const handleCopy = (text, message, e, copyId) => {
@@ -4622,6 +4670,21 @@ const ProductList = () => {
                             {!isTrashView && (
                                 <button
                                     type="button"
+                                    onClick={handleOpenCategoryImageManager}
+                                    className="p-1.5 rounded-sm w-9 h-9 transition-all bg-amber-50 text-amber-700 shadow-sm hover:bg-amber-600 hover:text-white"
+                                    title={selectedIds.length > 0
+                                        ? `Quản lí ảnh cho ${selectedIds.length} sản phẩm đã chọn`
+                                        : 'Quản lí ảnh cho toàn bộ sản phẩm theo bộ lọc hiện tại'}
+                                    aria-label={selectedIds.length > 0
+                                        ? `Quản lí ảnh cho ${selectedIds.length} sản phẩm đã chọn`
+                                        : 'Quản lí ảnh cho toàn bộ sản phẩm theo bộ lọc hiện tại'}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">photo_library</span>
+                                </button>
+                            )}
+                            {!isTrashView && (
+                                <button
+                                    type="button"
                                     onClick={() => setShowBulkImageAppendModal(true)}
                                     className="p-1.5 rounded-sm w-9 h-9 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary hover:text-white"
                                     title="ThÃªm áº£nh hÃ ng loáº¡t"
@@ -5339,6 +5402,13 @@ const ProductList = () => {
                                     let displayCostPrice = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price);
                                     let displayPrice = p.price;
                                     const pVariants = p.variations || [];
+                                    const useVariantNameTextStyle = pIsParent || (!isSubRow && !pUsesChildRowStyle);
+                                    const productNameRowClassName = useVariantNameTextStyle
+                                        ? 'flex min-h-5 min-w-0 items-center gap-2'
+                                        : 'flex min-h-[18px] min-w-0 items-center gap-2';
+                                    const productNameTextClassName = useVariantNameTextStyle
+                                        ? 'truncate text-[14px] leading-5 font-black tracking-tight text-primary'
+                                        : 'truncate text-[13px] leading-[18px] font-bold text-[#111]';
                                     
                                     if (pIsParent && !isSubRow) {
                                         if (p.type === 'grouped') {
@@ -5422,13 +5492,13 @@ const ProductList = () => {
                                                     <td key={col.id} style={cellStyle} className={`px-3 py-2 border border-primary/20 sticky-col-2 font-bold group/cell ${pIsParent ? 'text-primary' : 'text-[#111]'} ${pUsesChildRowStyle ? 'child-indent' : ''}`}>
                                                         <div className="flex items-center gap-2 overflow-hidden">
                                                             <div className="flex flex-col gap-1 flex-1 overflow-hidden">
-                                                                 <div className="flex items-center gap-2">
+                                                                <div className={productNameRowClassName}>
                                                                     {pUsesChildRowStyle && (
                                                                         <span className="material-symbols-outlined shrink-0 text-[16px] text-slate-400">
                                                                             subdirectory_arrow_right
                                                                         </span>
                                                                     )}
-                                                                    <span className={`truncate ${pIsParent ? 'text-[14px] font-black tracking-tight' : 'text-[13px] font-bold'}`}>{p.name}</span>
+                                                                    <span className={productNameTextClassName}>{p.name}</span>
                                                                     {isSubRow && product.type === 'grouped' && p.pivot && (
                                                                         <div className="flex items-center gap-1 shrink-0">
                                                                             <span className="bg-primary/10 text-primary px-1.5 py-0.5 rounded-sm text-[10px] font-black">x{p.pivot.quantity}</span>
@@ -6156,6 +6226,14 @@ const ProductList = () => {
                 selectedIds={selectedIds}
                 onClose={() => setShowBulkImageRefreshModal(false)}
                 onApplied={handleBulkImageRefreshApplied}
+            />
+
+            <ProductCategoryImageManagerModal
+                open={showCategoryImageManagerModal}
+                scopeLabel={imageManagerScopeLabel}
+                listQueryParams={imageManagerScopeQueryParams}
+                onClose={handleCloseCategoryImageManager}
+                onChanged={handleCategoryImageManagerChanged}
             />
 
             {showBulkSeoModal && (

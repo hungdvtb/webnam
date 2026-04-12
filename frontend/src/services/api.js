@@ -28,13 +28,17 @@ const resolveApiBaseUrl = (value) => {
     return trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
 };
 
-export const API_BASE_URL = resolveApiBaseUrl(
-    import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL
-);
-export const STORAGE_BASE_URL = (
-    import.meta.env.VITE_STORAGE_BASE_URL
-    || API_BASE_URL.replace(/\/api$/, '')
-).replace(/\/$/, '');
+const configuredApiBaseUrl = trimTrailingSlash(import.meta.env.VITE_API_BASE_URL);
+
+// Respect an explicit API origin in env so local dev can bypass the Vite proxy when needed.
+export const API_BASE_URL = resolveApiBaseUrl(configuredApiBaseUrl || DEFAULT_API_BASE_URL);
+
+const configuredStorageBaseUrl = trimTrailingSlash(import.meta.env.VITE_STORAGE_BASE_URL);
+const resolvedStorageBaseUrl = configuredStorageBaseUrl
+    ? configuredStorageBaseUrl
+    : API_BASE_URL.replace(/\/api$/, '');
+
+export const STORAGE_BASE_URL = resolvedStorageBaseUrl.replace(/\/$/, '');
 
 const api = axios.create({
     baseURL: API_BASE_URL,

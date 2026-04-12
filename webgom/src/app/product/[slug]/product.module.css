@@ -1727,9 +1727,14 @@
 }
 
 .descBody {
-  font-size: 1.125rem;
+  font-size: 16px;
   line-height: 1.6;
-  color: rgba(27, 54, 93, 0.8);
+  color: rgba(27, 54, 93, 0.92);
+}
+
+.descBody :where(h1, h2, h3, h4, h5, h6) {
+  margin-bottom: 1rem;
+  font-weight: 800;
 }
 
 .descBody p {
@@ -3558,8 +3563,9 @@
   }
 
   .descBody {
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.65;
+    color: rgba(27, 54, 93, 0.92);
     overflow-wrap: anywhere;
   }
 
@@ -3594,6 +3600,11 @@
   ) {
     font-size: inherit;
     line-height: inherit;
+  }
+
+  .descBody :where(h1, h2, h3, h4, h5, h6) {
+    margin-bottom: 1rem;
+    font-weight: 800;
   }
 
   .descBody p:last-child {

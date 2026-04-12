@@ -53,11 +53,21 @@ const AdminLayout = () => {
 
         return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
     });
+    const [isCompactSidebarMode, setIsCompactSidebarMode] = React.useState(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+            return false;
+        }
+
+        return window.matchMedia('(max-width: 1023px)').matches;
+    });
     const [isSidebarHovered, setIsSidebarHovered] = React.useState(false);
     const [isSidebarFocused, setIsSidebarFocused] = React.useState(false);
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = React.useState(false);
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
-    const isSidebarExpanded = !canHoverSidebar || isSidebarHovered || isSidebarFocused;
+    const shouldShowSidebar = !isOrderForm;
+    const isSidebarDrawerMode = shouldShowSidebar && isCompactSidebarMode;
+    const isSidebarExpanded = isSidebarDrawerMode || !canHoverSidebar || isSidebarHovered || isSidebarFocused;
 
     React.useEffect(() => {
         if (isSettingsRoute) setIsSettingsOpen(true);
@@ -87,8 +97,87 @@ const AdminLayout = () => {
         return () => mediaQuery.removeListener(syncHoverCapability);
     }, []);
 
+    React.useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+            return undefined;
+        }
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const syncCompactMode = (event) => {
+            setIsCompactSidebarMode(event.matches);
+        };
+
+        syncCompactMode(mediaQuery);
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', syncCompactMode);
+            return () => mediaQuery.removeEventListener('change', syncCompactMode);
+        }
+
+        mediaQuery.addListener(syncCompactMode);
+        return () => mediaQuery.removeListener(syncCompactMode);
+    }, []);
+
+    React.useEffect(() => {
+        if (!isSidebarDrawerMode && isMobileSidebarOpen) {
+            setIsMobileSidebarOpen(false);
+        }
+    }, [isMobileSidebarOpen, isSidebarDrawerMode]);
+
+    React.useEffect(() => {
+        if (isMobileSidebarOpen) {
+            setIsMobileSidebarOpen(false);
+        }
+    }, [location.pathname]);
+
+    React.useEffect(() => {
+        if (!isSidebarDrawerMode || !isMobileSidebarOpen || typeof document === 'undefined') {
+            return undefined;
+        }
+
+        const { overflow } = document.body.style;
+        document.body.style.overflow = 'hidden';
+
+        return () => {
+            document.body.style.overflow = overflow;
+        };
+    }, [isMobileSidebarOpen, isSidebarDrawerMode]);
+
+    React.useEffect(() => {
+        if (!isSidebarDrawerMode || !isMobileSidebarOpen || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setIsMobileSidebarOpen(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isMobileSidebarOpen, isSidebarDrawerMode]);
+
+    const closeMobileSidebar = () => {
+        setIsMobileSidebarOpen(false);
+    };
+
+    const toggleMobileSidebar = () => {
+        setIsMobileSidebarOpen((previous) => !previous);
+    };
+
+    const handleSidebarNavClickCapture = (event) => {
+        if (!isSidebarDrawerMode || !(event.target instanceof Element)) {
+            return;
+        }
+
+        if (event.target.closest('a[href]')) {
+            setIsMobileSidebarOpen(false);
+        }
+    };
 
     const handleLogout = async () => {
+        closeMobileSidebar();
         await logout();
         navigate('/login');
     };
@@ -127,7 +216,8 @@ const AdminLayout = () => {
     const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
     const sidebarCollapsedWidth = '5.75rem';
     const sidebarExpandedWidth = '19rem';
-    const shouldShowSidebar = !isOrderForm;
+    const mobileSidebarWidth = 'min(19rem, calc(100vw - 1rem))';
+    const shouldReserveSidebarSpace = shouldShowSidebar && !isSidebarDrawerMode;
     const sidebarReservedWidth = canHoverSidebar ? sidebarCollapsedWidth : sidebarExpandedWidth;
     const sidebarWidth = isSidebarExpanded ? sidebarExpandedWidth : sidebarCollapsedWidth;
 
@@ -163,18 +253,50 @@ const AdminLayout = () => {
     const chevronClass = `material-symbols-outlined overflow-hidden text-xs transition-all duration-300 ease-out ${isSidebarExpanded ? 'ml-3 max-w-6 opacity-100' : 'ml-0 max-w-0 opacity-0'}`;
     const brandTextClass = `flex flex-col overflow-hidden text-left transition-all duration-300 ease-out ${isSidebarExpanded ? 'max-w-[9rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`;
     const userInfoClass = `flex flex-col overflow-hidden text-left items-start transition-all duration-300 ease-out ${isSidebarExpanded ? 'max-w-[12rem] opacity-100 translate-x-0' : 'max-w-0 opacity-0 -translate-x-2'}`;
+    const sidebarHeaderClass = isSidebarDrawerMode
+        ? 'justify-between gap-3 px-5 py-4 pr-4'
+        : isSidebarExpanded
+            ? 'justify-start gap-4 p-8'
+            : 'justify-center px-4 py-6';
+    const sidebarBrandWrapClass = isSidebarDrawerMode ? 'flex min-w-0 items-center gap-4' : 'flex min-w-0 items-center gap-4';
+    const sidebarNavPaddingClass = isSidebarDrawerMode ? 'px-4 py-6' : isSidebarExpanded ? 'p-4 py-8' : 'px-3 py-6';
 
     return (
         <div
-            className={`${shouldShowSidebar ? 'relative grid' : 'relative'} h-screen overflow-hidden bg-background-light font-sans`}
-            style={shouldShowSidebar ? { gridTemplateColumns: `${sidebarReservedWidth} minmax(0, 1fr)` } : undefined}
+            className={`${shouldReserveSidebarSpace ? 'relative grid' : 'relative'} h-screen overflow-hidden bg-background-light font-sans`}
+            style={shouldReserveSidebarSpace ? { gridTemplateColumns: `${sidebarReservedWidth} minmax(0, 1fr)` } : undefined}
         >
+            {isSidebarDrawerMode && (
+                <button
+                    type="button"
+                    aria-label="Đóng menu quản trị"
+                    aria-hidden={!isMobileSidebarOpen}
+                    tabIndex={isMobileSidebarOpen ? 0 : -1}
+                    onClick={closeMobileSidebar}
+                    className={`fixed inset-0 z-[60] bg-slate-950/45 backdrop-blur-[2px] transition-opacity duration-300 ease-out ${isMobileSidebarOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+                />
+            )}
             {shouldShowSidebar && (
                 <aside
-                    className="absolute inset-y-0 left-0 z-30 flex flex-col overflow-hidden bg-primary text-white shadow-2xl transition-[width] duration-300 ease-out"
-                    style={{ width: sidebarWidth, willChange: 'width' }}
-                    onMouseEnter={() => setIsSidebarHovered(true)}
-                    onMouseLeave={() => setIsSidebarHovered(false)}
+                    id={isSidebarDrawerMode ? 'admin-mobile-sidebar' : undefined}
+                    role={isSidebarDrawerMode ? 'dialog' : undefined}
+                    aria-modal={isSidebarDrawerMode ? true : undefined}
+                    aria-label={isSidebarDrawerMode ? 'Menu quản trị' : undefined}
+                    className={`${isSidebarDrawerMode
+                        ? `fixed inset-y-0 left-0 z-[70] flex max-w-[calc(100vw-1rem)] flex-col overflow-hidden bg-primary text-white shadow-[0_30px_80px_rgba(15,23,42,0.28)] transition-transform duration-300 ease-out ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-[110%] pointer-events-none'}`
+                        : 'absolute inset-y-0 left-0 z-30 flex flex-col overflow-hidden bg-primary text-white shadow-2xl transition-[width] duration-300 ease-out'
+                    }`}
+                    style={isSidebarDrawerMode ? { width: mobileSidebarWidth, willChange: 'transform' } : { width: sidebarWidth, willChange: 'width' }}
+                    onMouseEnter={() => {
+                        if (!isSidebarDrawerMode) {
+                            setIsSidebarHovered(true);
+                        }
+                    }}
+                    onMouseLeave={() => {
+                        if (!isSidebarDrawerMode) {
+                            setIsSidebarHovered(false);
+                        }
+                    }}
                     onFocusCapture={() => setIsSidebarFocused(true)}
                     onBlurCapture={(event) => {
                         if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -182,16 +304,31 @@ const AdminLayout = () => {
                         }
                     }}
                 >
-                    <div className={`flex items-center overflow-hidden border-b border-white/10 transition-all duration-300 ease-out ${isSidebarExpanded ? 'justify-start gap-4 p-8' : 'justify-center px-4 py-6'}`}>
-                        <div className="flex size-11 shrink-0 items-center justify-center rounded-sm bg-white">
-                            <img src="/logo-brand.jpg" alt="Logo" className="h-full w-full object-contain" />
+                    <div className={`flex items-center overflow-hidden border-b border-white/10 transition-all duration-300 ease-out ${sidebarHeaderClass}`}>
+                        <div className={sidebarBrandWrapClass}>
+                            <div className="flex size-11 shrink-0 items-center justify-center rounded-sm bg-white">
+                                <img src="/logo-brand.jpg" alt="Logo" className="h-full w-full object-contain" />
+                            </div>
+                            <div className={brandTextClass}>
+                                <h1 className="font-sans text-lg font-bold leading-tight tracking-tight text-white uppercase">GỐM <br /> ĐẠI THÀNH</h1>
+                            </div>
                         </div>
-                        <div className={brandTextClass}>
-                            <h1 className="font-sans text-lg font-bold leading-tight tracking-tight text-white uppercase">GỐM <br /> ĐẠI THÀNH</h1>
-                        </div>
+                        {isSidebarDrawerMode && (
+                            <button
+                                type="button"
+                                aria-label="Đóng menu"
+                                onClick={closeMobileSidebar}
+                                className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-full border border-white/12 bg-white/10 text-white transition-colors hover:bg-white/16"
+                            >
+                                <span className="material-symbols-outlined text-[20px] leading-none">close</span>
+                            </button>
+                        )}
                     </div>
 
-                    <nav className={`custom-scrollbar-thin flex-grow space-y-2 overflow-y-auto transition-all duration-300 ease-out ${isSidebarExpanded ? 'p-4 py-8' : 'px-3 py-6'}`}>
+                    <nav
+                        className={`custom-scrollbar-thin flex-grow space-y-2 overflow-y-auto transition-all duration-300 ease-out ${sidebarNavPaddingClass}`}
+                        onClickCapture={handleSidebarNavClickCapture}
+                    >
                         <Link
                             to="/admin/accounts"
                             aria-label="Danh sách cửa hàng"
@@ -568,7 +705,21 @@ const AdminLayout = () => {
             </aside>
             )}
 
-            <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldShowSidebar ? 'col-start-2' : 'h-full w-full'}`}>
+            <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldReserveSidebarSpace ? 'col-start-2' : 'h-full w-full'}`}>
+                {isSidebarDrawerMode && (
+                    <div className="relative z-[80] shrink-0 border-b border-primary/10 bg-background-light/95 px-3 py-3 backdrop-blur">
+                        <button
+                            type="button"
+                            onClick={toggleMobileSidebar}
+                            aria-expanded={isMobileSidebarOpen}
+                            aria-controls="admin-mobile-sidebar"
+                            className="inline-flex min-h-11 items-center gap-2 rounded-full border border-primary/10 bg-white px-4 py-2.5 text-primary shadow-[0_10px_28px_rgba(27,54,93,0.08)] transition-all duration-200 hover:border-primary/20 hover:bg-primary hover:text-white"
+                        >
+                            <span className="material-symbols-outlined text-[20px] leading-none">{isMobileSidebarOpen ? 'close' : 'menu'}</span>
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Menu</span>
+                        </button>
+                    </div>
+                )}
                 <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();

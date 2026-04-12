@@ -4,7 +4,7 @@ import { orderApi, orderStatusApi } from '../../services/api';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
-import { printCurrentPage } from '../../utils/orderPrint';
+import { closePrintSession, preparePrintPopupWindow, printOrders } from '../../utils/orderPrint';
 import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
@@ -35,6 +35,7 @@ const OrderDetail = () => {
     const [printing, setPrinting] = useState(false);
     const [printConfirmOpen, setPrintConfirmOpen] = useState(false);
     const [confirmingPrinted, setConfirmingPrinted] = useState(false);
+    const [printSession, setPrintSession] = useState(null);
 
     const [orderStatuses, setOrderStatuses] = useState([]);
 
@@ -56,6 +57,10 @@ const OrderDetail = () => {
 
         fetchInitialData();
     }, [id]);
+
+    useEffect(() => () => {
+        closePrintSession(printSession);
+    }, [printSession]);
 
     const handleUpdateStatus = async (newStatus) => {
         setUpdating(true);
@@ -84,12 +89,38 @@ const OrderDetail = () => {
     const handlePrintOrder = async () => {
         if (printing || printConfirmOpen) return;
 
+        let printWindow = null;
+
         setPrinting(true);
         try {
-            await printCurrentPage(window);
+            printWindow = preparePrintPopupWindow(window, {
+                title: 'Đang chuẩn bị bản in đơn hàng',
+            });
+
+            if (!printWindow) {
+                throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
+            }
+
+            const response = await orderApi.getPrintData([Number(id)]);
+            const printableOrders = response?.data?.data || [];
+
+            if (!printableOrders.length) {
+                throw new Error('Không có dữ liệu đơn hàng hợp lệ để in.');
+            }
+
+            const session = await printOrders(printableOrders, {
+                ownerWindow: window,
+                printWindow,
+            });
+
+            printWindow = null;
+            setPrintSession(session);
             setPrintConfirmOpen(true);
         } catch (error) {
             console.error('Error recording order print', error);
+            if (printWindow && !printWindow.closed) {
+                printWindow.close();
+            }
         } finally {
             setPrinting(false);
         }
@@ -103,12 +134,20 @@ const OrderDetail = () => {
             await orderApi.markPrinted([Number(id)]);
             const response = await orderApi.getOne(id);
             setOrder(response.data);
+            closePrintSession(printSession);
+            setPrintSession(null);
             setPrintConfirmOpen(false);
         } catch (error) {
             console.error('Error recording order print', error);
         } finally {
             setConfirmingPrinted(false);
         }
+    };
+
+    const handleCancelPrintConfirmation = () => {
+        closePrintSession(printSession);
+        setPrintSession(null);
+        setPrintConfirmOpen(false);
     };
 
     const orderTypeMeta = getOrderTypeMeta(order?.order_type);
@@ -165,26 +204,6 @@ const OrderDetail = () => {
                         ))}
                     </select>
                 </div>
-
-                <style dangerouslySetInnerHTML={{
-                    __html: `
-                    @media print {
-                        body { background: white !important; padding: 0 !important; margin: 0 !important; }
-                        header, nav, .sidebar, .print\\:hidden, button, select { display: none !important; }
-                        .p-6 { padding: 0 !important; }
-                        .max-w-6xl { max-width: 100% !important; margin: 0 !important; }
-                        .shadow-xl, .shadow-2xl { shadow: none !important; border: 1px solid #eee !important; }
-                        .bg-primary { color: black !important; background: transparent !important; border: 1px solid #eee !important; }
-                        .text-white { color: black !important; }
-                        .md\\:grid-cols-3 { grid-template-cols: 1fr !important; }
-                        .md\\:col-span-2 { grid-column: span 1 / span 1 !important; }
-                        .animate-fade-in { animation: none !important; }
-                        .bg-background-light { background: #f9f9f9 !important; }
-                        img { max-width: 100px !important; }
-                        .material-symbols-outlined { display: none !important; }
-                        .customer-info-box { background: white !important; border: 1px solid #eee !important; color: black !important; }
-                    }
-                `}} />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -411,7 +430,7 @@ const OrderDetail = () => {
                 open={printConfirmOpen}
                 orderCount={1}
                 confirming={confirmingPrinted}
-                onCancel={() => setPrintConfirmOpen(false)}
+                onCancel={handleCancelPrintConfirmation}
                 onConfirm={handleConfirmPrinted}
             />
         </div>

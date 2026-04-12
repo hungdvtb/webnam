@@ -1,7 +1,6 @@
 const PRINT_DIALOG_FALLBACK_MS = 3 * 60 * 1000;
 const PRINT_DIALOG_CLOSE_SETTLE_MS = 400;
 const PRINT_DIALOG_BLOCKING_THRESHOLD_MS = 350;
-const PRINT_WINDOW_CLOSE_DELAY_MS = 1500;
 const PRINT_DOCUMENT_READY_DELAY_MS = 120;
 const PRINT_RESOURCE_TIMEOUT_MS = 10000;
 
@@ -373,7 +372,8 @@ export const buildOrderPrintDocument = (orders = []) => {
 
     const sections = orders.map((order, orderIndex) => `
         <section class="order-sheet ${orderIndex === orders.length - 1 ? 'order-sheet-last' : ''}">
-            <header class="sheet-header">
+            <div class="order-sheet__inner">
+                <header class="sheet-header">
                 <div>
                     <div class="sheet-kicker">In đơn hàng</div>
                     <h1 class="sheet-title">Đơn #${escapeHtml(order.order_number || '-')}</h1>
@@ -428,6 +428,7 @@ export const buildOrderPrintDocument = (orders = []) => {
                     <div class="summary-value">${escapeHtml(formatCurrency(order.total_payment))}</div>
                 </div>
             </div>
+            </div>
         </section>
     `).join('');
 
@@ -437,13 +438,9 @@ export const buildOrderPrintDocument = (orders = []) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>In đơn hàng</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap&subset=vietnamese" rel="stylesheet" />
     <style>
-        @page {
-            size: A4 landscape;
-            margin: 10mm;
+        :root {
+            color-scheme: light;
         }
 
         * {
@@ -454,19 +451,14 @@ export const buildOrderPrintDocument = (orders = []) => {
         body {
             margin: 0;
             padding: 0;
-            font-family: 'Roboto', sans-serif;
+            font-family: "Segoe UI", Arial, sans-serif;
             color: #111827;
             background: #ffffff;
             font-size: 12px;
-        }
-
-        body {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
+            line-height: 1.5;
         }
 
         .order-sheet {
-            padding: 2mm 0;
             page-break-after: always;
             break-after: page;
         }
@@ -476,14 +468,19 @@ export const buildOrderPrintDocument = (orders = []) => {
             break-after: auto;
         }
 
+        .order-sheet__inner {
+            padding: 0;
+        }
+
         .sheet-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            gap: 12px;
-            margin-bottom: 10px;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
             border-bottom: 2px solid #111827;
-            padding-bottom: 8px;
+            padding-bottom: 10px;
         }
 
         .sheet-kicker {
@@ -509,7 +506,7 @@ export const buildOrderPrintDocument = (orders = []) => {
             min-width: 220px;
             text-align: right;
             font-size: 11px;
-            line-height: 1.4;
+            line-height: 1.45;
         }
 
         .sheet-meta span {
@@ -521,7 +518,7 @@ export const buildOrderPrintDocument = (orders = []) => {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
         }
 
         .info-card {
@@ -552,11 +549,12 @@ export const buildOrderPrintDocument = (orders = []) => {
             font-size: 13px;
             font-weight: 700;
             line-height: 1.45;
+            overflow-wrap: anywhere;
         }
 
         .info-value-wrap {
             white-space: pre-wrap;
-            word-break: break-word;
+            overflow-wrap: anywhere;
         }
 
         .items-table {
@@ -582,7 +580,7 @@ export const buildOrderPrintDocument = (orders = []) => {
         }
 
         .items-table th {
-            background: #f3f4f6;
+            background: #f8fafc;
             font-size: 10px;
             font-weight: 700;
             text-transform: uppercase;
@@ -591,21 +589,21 @@ export const buildOrderPrintDocument = (orders = []) => {
         }
 
         .col-index {
-            width: 44px;
+            width: 7%;
             text-align: center;
         }
 
         .col-name {
-            width: auto;
+            width: 49%;
         }
 
         .col-qty {
-            width: 78px;
+            width: 12%;
             text-align: center;
         }
 
         .col-money {
-            width: 130px;
+            width: 16%;
             text-align: right;
             white-space: nowrap;
         }
@@ -613,7 +611,7 @@ export const buildOrderPrintDocument = (orders = []) => {
         .product-name {
             font-weight: 700;
             line-height: 1.45;
-            word-break: break-word;
+            overflow-wrap: anywhere;
         }
 
         .product-sku {
@@ -632,13 +630,14 @@ export const buildOrderPrintDocument = (orders = []) => {
         .summary-row {
             display: flex;
             justify-content: flex-end;
-            margin-top: 10px;
+            margin-top: 12px;
         }
 
         .summary-box {
-            min-width: 280px;
+            width: min(100%, 320px);
             border: 2px solid #111827;
             padding: 10px 12px;
+            margin-left: auto;
         }
 
         .summary-label {
@@ -655,6 +654,90 @@ export const buildOrderPrintDocument = (orders = []) => {
             font-weight: 800;
             text-align: right;
             line-height: 1.2;
+        }
+
+        @media screen {
+            html,
+            body {
+                background: #eef2f7;
+            }
+
+            body {
+                padding: 16px;
+            }
+
+            .order-sheet {
+                max-width: 1180px;
+                margin: 0 auto 16px;
+                border: 1px solid #d1d5db;
+                background: #ffffff;
+                box-shadow: 0 24px 60px -40px rgba(15, 23, 42, 0.35);
+            }
+
+            .order-sheet__inner {
+                padding: 16px 18px 18px;
+            }
+        }
+
+        @media print {
+            html,
+            body {
+                background: #ffffff;
+            }
+
+            body {
+                padding: 0;
+            }
+
+            .order-sheet {
+                margin: 0;
+                border: none;
+                box-shadow: none;
+                background: transparent;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .sheet-meta {
+                min-width: 0;
+                width: 100%;
+                text-align: left;
+            }
+
+            .info-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .info-card-wide,
+            .info-card-full {
+                grid-column: span 2;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .info-card-wide,
+            .info-card-full {
+                grid-column: auto;
+            }
+
+            .items-table {
+                table-layout: auto;
+            }
+
+            .col-index,
+            .col-name,
+            .col-qty,
+            .col-money {
+                width: auto;
+            }
+
+            .summary-box {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -834,16 +917,31 @@ const printHtmlDocument = async ({
     writeHtmlDocument(targetWindow, html);
     await waitForPrintableDocument(targetWindow);
 
-    return waitForPrintDialogToClose({
+    const printResult = await waitForPrintDialogToClose({
         ownerWindow: targetWindow,
         printWindow: targetWindow,
-        cleanup: () => closePrintWindow(targetWindow),
-        cleanupDelayMs: PRINT_WINDOW_CLOSE_DELAY_MS,
         triggerPrint: () => {
             targetWindow.focus?.();
             targetWindow.print();
         },
     });
+
+    return {
+        ...printResult,
+        close: () => closePrintWindow(targetWindow),
+        targetWindow,
+    };
+};
+
+export const closePrintSession = (session) => {
+    if (!session) return;
+
+    if (typeof session.close === 'function') {
+        session.close();
+        return;
+    }
+
+    closePrintWindow(session?.targetWindow);
 };
 
 export const printCurrentPage = async (sourceWindow = window, options = {}) => {

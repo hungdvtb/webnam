@@ -119,6 +119,24 @@
         background: #9B7B4F;
     }
 
+    .custom-scrollbar-lg::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .custom-scrollbar-lg::-webkit-scrollbar-track {
+        background: rgba(197, 160, 101, 0.05);
+    }
+
+    .custom-scrollbar-lg::-webkit-scrollbar-thumb {
+        background: #C5A065;
+        border-radius: 10px;
+    }
+
+    .custom-scrollbar-lg::-webkit-scrollbar-thumb:hover {
+        background: #9B7B4F;
+    }
+
     .custom-scrollbar-thin::-webkit-scrollbar {
         width: 3px;
     }

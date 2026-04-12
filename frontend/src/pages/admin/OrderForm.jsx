@@ -51,7 +51,7 @@ const AdminSection = ({ icon, title, children, className = '', bodyClassName = '
     <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
         <div className="flex items-center gap-2 px-4 py-3 border-b border-primary/10 bg-primary/[0.02]">
             <span className="material-symbols-outlined text-[18px] text-primary/50">{icon}</span>
-            <h3 className="text-[13px] font-black uppercase tracking-[0.1em] text-primary">{title}</h3>
+            <h3 className="text-[16px] font-bold leading-[1.45] text-primary">{title}</h3>
         </div>
         <div className={`p-4 space-y-[10px] ${bodyClassName}`}>{children}</div>
     </section>
@@ -59,7 +59,7 @@ const AdminSection = ({ icon, title, children, className = '', bodyClassName = '
 
 const AdminField = ({ label, children, required = false, className = '' }) => (
     <div className={`space-y-1 ${className}`}>
-        <label className="block text-[11px] font-bold uppercase tracking-widest text-primary/70">
+        <label className="block text-[14px] font-semibold leading-[1.45] text-primary/72">
             {label}
             {required && <span className="text-brick"> *</span>}
         </label>
@@ -72,17 +72,17 @@ const Field = ({ label, children, className = '', labelClassName = '', labelStyl
         ? null
         : (
             <div className={`space-y-1 ${className}`}>
-                <label className={`block text-[11px] font-bold uppercase tracking-widest text-primary/70 ${labelClassName}`} style={labelStyle}>{label}</label>
+                <label className={`block text-[14px] font-semibold leading-[1.45] text-primary/72 ${labelClassName}`} style={labelStyle}>{label}</label>
                 {children}
             </div>
         )
 );
 
-const adminInputClassName = 'w-full h-10 bg-primary/5 border border-primary/10 px-3 rounded-sm text-[14px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
-const adminTextareaClassName = 'w-full min-h-[88px] bg-primary/5 border border-primary/10 px-3 py-2 rounded-sm text-[14px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all resize-none';
-const adminRegionFieldClassName = 'group relative min-w-0 min-h-[42px] rounded-sm border border-primary/10 bg-primary/5 px-2 py-1 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white flex flex-col justify-center';
-const adminRegionLabelClassName = 'mb-1 block text-[8px] font-bold uppercase tracking-widest leading-none text-slate-400 transition-colors pointer-events-none group-focus-within:text-primary';
-const adminRegionClearButtonClassName = 'absolute right-1.5 top-1.5 z-[5] size-4 rounded-full border border-primary/10 bg-white/90 text-primary/35 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center shadow-sm';
+const adminInputClassName = 'w-full min-h-[44px] bg-primary/5 border border-primary/10 px-3 rounded-sm text-[14px] leading-[1.55] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
+const adminTextareaClassName = 'w-full min-h-[96px] bg-primary/5 border border-primary/10 px-3 py-2.5 rounded-sm text-[14px] leading-[1.55] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all resize-none';
+const adminRegionFieldClassName = 'group relative min-w-0 min-h-[58px] rounded-sm border border-primary/10 bg-primary/5 px-3 py-2 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white flex flex-col justify-center';
+const adminRegionLabelClassName = 'mb-1 block text-[14px] font-semibold leading-[1.35] text-primary/55 transition-colors pointer-events-none group-focus-within:text-primary';
+const adminRegionClearButtonClassName = 'absolute right-2 top-2 z-[5] size-5 rounded-full border border-primary/10 bg-white/90 text-primary/35 hover:text-brick hover:border-brick/20 transition-all flex items-center justify-center shadow-sm';
 const adminCustomerLabelStyle = { color: '#d32f2f' };
 const defaultQuoteSettings = {
     quote_logo_url: '',
@@ -2227,6 +2227,11 @@ const OrderForm = () => {
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [isCapturing, setIsCapturing] = useState(false);
     const [isRefreshingItems, setIsRefreshingItems] = useState(false);
+    const [isCompactOrderMobileLayout, setIsCompactOrderMobileLayout] = useState(() => {
+        if (typeof window === 'undefined') return false;
+
+        return window.matchMedia('(max-width: 1023px)').matches;
+    });
     const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
     const [quoteTemplates, setQuoteTemplates] = useState([]);
     const [showSupplementItemsModal, setShowSupplementItemsModal] = useState(false);
@@ -2245,6 +2250,10 @@ const OrderForm = () => {
     const copyNotificationTimeoutRef = useRef(null);
     const productSearchContainerRef = useRef(null);
     const productSearchInputRef = useRef(null);
+    const mobileProductSearchToggleButtonRef = useRef(null);
+    const mobileProductSearchHistoryStateActiveRef = useRef(false);
+    const ignoreNextMobileProductSearchPopRef = useRef(false);
+    const previousShowSearchDropdownRef = useRef(false);
     const productSearchAbortRef = useRef(null);
     const productSearchCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
@@ -2264,6 +2273,25 @@ const OrderForm = () => {
         () => orderAiQuickRuleOptions.find((option) => option.value === orderAiSelectedRuleKey) || null,
         [orderAiQuickRuleOptions, orderAiSelectedRuleKey]
     );
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const mediaQuery = window.matchMedia('(max-width: 1023px)');
+        const handleChange = (event) => {
+            setIsCompactOrderMobileLayout(event.matches);
+        };
+
+        setIsCompactOrderMobileLayout(mediaQuery.matches);
+
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', handleChange);
+            return () => mediaQuery.removeEventListener('change', handleChange);
+        }
+
+        mediaQuery.addListener(handleChange);
+        return () => mediaQuery.removeListener(handleChange);
+    }, []);
     const activeProductQuickFilterAttribute = useMemo(
         () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId)) || null,
         [productQuickFilterAttributeId, productQuickFilterAttributes]
@@ -2786,6 +2814,8 @@ const OrderForm = () => {
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
         setShowProductQuickFilterPanel(false);
+        setShowProductQuickSetupPanel(false);
+        productSearchInputRef.current?.blur?.();
     }, []);
 
     const clearProductSearchInput = useCallback(() => {
@@ -2805,14 +2835,24 @@ const OrderForm = () => {
         });
     }, []);
 
+    const toggleProductSearchPanel = useCallback(() => {
+        if (showSearchDropdown) {
+            closeProductSearchDropdown();
+            return;
+        }
+
+        focusProductSearch();
+    }, [closeProductSearchDropdown, focusProductSearch, showSearchDropdown]);
+
     useEffect(() => {
         if (!showSearchDropdown) return undefined;
 
         const handlePointerDownOutsideSearch = (event) => {
             const container = productSearchContainerRef.current;
+            const toggleButton = mobileProductSearchToggleButtonRef.current;
             const target = event.target;
 
-            if (!container || !target || container.contains(target)) {
+            if (!container || !target || container.contains(target) || toggleButton?.contains?.(target)) {
                 return;
             }
 
@@ -2824,6 +2864,57 @@ const OrderForm = () => {
             document.removeEventListener('pointerdown', handlePointerDownOutsideSearch, true);
         };
     }, [closeProductSearchDropdown, showSearchDropdown]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            previousShowSearchDropdownRef.current = showSearchDropdown;
+            return undefined;
+        }
+
+        const wasOpen = previousShowSearchDropdownRef.current;
+
+        if (isCompactOrderMobileLayout && !wasOpen && showSearchDropdown && !mobileProductSearchHistoryStateActiveRef.current) {
+            const currentState = window.history.state && typeof window.history.state === 'object'
+                ? window.history.state
+                : {};
+            window.history.pushState({ ...currentState, __orderMobileProductSearchOpen: true }, '', window.location.href);
+            mobileProductSearchHistoryStateActiveRef.current = true;
+        }
+
+        if (isCompactOrderMobileLayout && wasOpen && !showSearchDropdown && mobileProductSearchHistoryStateActiveRef.current) {
+            ignoreNextMobileProductSearchPopRef.current = true;
+            mobileProductSearchHistoryStateActiveRef.current = false;
+            window.history.back();
+        }
+
+        previousShowSearchDropdownRef.current = showSearchDropdown;
+        return undefined;
+    }, [isCompactOrderMobileLayout, showSearchDropdown]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !isCompactOrderMobileLayout) return undefined;
+
+        const handlePopState = () => {
+            if (ignoreNextMobileProductSearchPopRef.current) {
+                ignoreNextMobileProductSearchPopRef.current = false;
+                return;
+            }
+
+            if (!mobileProductSearchHistoryStateActiveRef.current) {
+                return;
+            }
+
+            mobileProductSearchHistoryStateActiveRef.current = false;
+            previousShowSearchDropdownRef.current = false;
+            setShowSearchDropdown(false);
+            setShowSearchHistory(false);
+            setShowProductQuickFilterPanel(false);
+            setShowProductQuickSetupPanel(false);
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, [isCompactOrderMobileLayout]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -5208,16 +5299,6 @@ const OrderForm = () => {
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = quotePricingSummary.subtotal;
     const mobileCustomerSummaryText = [formData.customer_name, formData.customer_phone].filter(Boolean).join(' - ');
-    const mobileAddressSummaryText = String(
-        formData.shipping_address
-        || buildShippingAddress({
-            addressDetail: formData.address_detail,
-            ward: formData.ward,
-            district: formData.district,
-            province: formData.province,
-            regionType,
-        })
-    ).trim();
     const leadConversionCard = leadConversionSummary ? (
         <div className="w-full rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
             <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
@@ -5276,15 +5357,593 @@ const OrderForm = () => {
         </div>
     ) : null;
 
-    if (loading) return <div className="p-8 text-center italic text-primary">Đang tải dữ liệu...</div>;
+    const orderAiSummaryBanner = shouldShowOrderAiSummary ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-sky-200 bg-sky-50 px-4 py-3">
+            <div className="min-w-0">
+                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-700">
+                    AI đã đổ vào bảng sản phẩm
+                </div>
+                <div className="mt-1 text-[12px] font-semibold text-slate-700">
+                    {orderAiLastRun
+                        ? `Lần gần nhất: thêm/cập nhật ${orderAiLastRun.touchedCount || 0} dòng${orderAiLastRun.reviewCount ? `, ${orderAiLastRun.reviewCount} dòng cần rà nhanh` : ''}${orderAiLastRun.unresolvedCount ? `, ${orderAiLastRun.unresolvedCount} dòng chưa ghép` : ''}.`
+                        : `Có ${pendingOrderAiItems.length} dòng AI đang chờ duyệt nhanh.`}
+                </div>
+                {orderAiLastRun?.unresolvedCount > 0 && (
+                    <div className="mt-1 text-[11px] font-semibold text-slate-500">
+                        {`Chưa ghép: ${(orderAiLastRun.unresolvedLabels || []).join(', ')}`}
+                    </div>
+                )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+                {confirmedOrderAiItems.length > 0 && (
+                    <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700">
+                        {confirmedOrderAiItems.length} dòng AI đã xác nhận
+                    </span>
+                )}
+                {hasLatestOrderAiInput && (
+                    <button
+                        type="button"
+                        onClick={() => setShowOrderAiInputReviewModal((prev) => !prev)}
+                        className="inline-flex h-9 items-center gap-2 rounded-sm border border-sky-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100/70"
+                    >
+                        <span className="material-symbols-outlined text-[14px]">history</span>
+                        Xem input AI
+                    </button>
+                )}
+                {canClearLatestOrderAiRun && (
+                    <button
+                        type="button"
+                        onClick={handleClearLatestOrderAiRun}
+                        className="inline-flex h-9 items-center gap-2 rounded-sm border border-rose-200 bg-white px-4 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:border-rose-300 hover:bg-rose-50"
+                    >
+                        <span className="material-symbols-outlined text-[14px]">delete_sweep</span>
+                        Xóa toàn bộ kết quả AI
+                    </button>
+                )}
+                {pendingOrderAiItems.length > 0 && (
+                    <button
+                        type="button"
+                        onClick={handleConfirmPendingOrderAiItems}
+                        className="inline-flex h-9 items-center gap-2 rounded-sm bg-sky-700 px-4 text-[10px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-sky-800"
+                    >
+                        <span className="material-symbols-outlined text-[14px]">verified</span>
+                        {`Xác nhận nhanh ${pendingOrderAiItems.length} dòng AI`}
+                    </button>
+                )}
+            </div>
+        </div>
+    ) : null;
+
+    const renderProductSearchToolbar = ({ mobile = false } = {}) => {
+        const searchBoxClassName = mobile
+            ? 'flex min-h-[46px] w-full items-center rounded-[14px] border border-primary/10 bg-white px-3 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white'
+            : 'flex h-10 items-center rounded-sm border border-primary/10 bg-primary/5 px-3 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white';
+        return (
+            <div ref={productSearchContainerRef} className={`relative w-full min-w-0 ${mobile ? 'z-[150]' : 'z-[110]'}`}>
+                {mobile ? (
+                    <div className="space-y-2">
+                        {productQuickFilterAttributes.length > 0 && activeProductQuickFilterAttribute && (
+                            <div className="rounded-[14px] border border-primary/10 bg-white px-2.5 py-2 shadow-sm">
+                                <div className="flex items-center gap-2">
+                                    <div className="inline-flex shrink-0 items-center gap-1.5 text-[14px] font-semibold text-primary/55">
+                                        <span className="material-symbols-outlined text-[16px]">tune</span>
+                                        <span>Lọc nhanh</span>
+                                    </div>
+                                    <select
+                                        value={productQuickFilterAttributeId || ''}
+                                        onChange={(event) => handleProductQuickFilterAttributeChange(event.target.value)}
+                                        className="h-9 min-w-0 flex-1 rounded-[12px] border border-primary/15 bg-white px-3 text-[14px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                    >
+                                        {productQuickFilterAttributes.map((attribute) => (
+                                            <option key={attribute.id} value={attribute.id}>
+                                                {attribute.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    {hasActiveProductQuickFilter && (
+                                        <button
+                                            type="button"
+                                            onClick={clearProductQuickFilterValues}
+                                            className="inline-flex h-9 shrink-0 items-center gap-1 rounded-[12px] border border-primary/10 bg-primary/[0.04] px-2.5 text-[14px] font-semibold text-primary/65 transition-all hover:border-brick/20 hover:text-brick"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">close</span>
+                                            <span>Xóa lọc</span>
+                                        </button>
+                                    )}
+                                </div>
+
+                                {activeProductQuickFilterAttribute.options?.length > 0 ? (
+                                    <div className="custom-scrollbar mt-2 flex items-center gap-1.5 overflow-x-auto pb-1">
+                                        {activeProductQuickFilterAttribute.options.map((option) => {
+                                            const isSelected = normalizedProductQuickFilterValues.includes(option.value);
+
+                                            return (
+                                                <button
+                                                    key={`${activeProductQuickFilterAttribute.id}-${option.id || option.value}`}
+                                                    type="button"
+                                                    onClick={() => toggleProductQuickFilterValue(option.value)}
+                                                    className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[14px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-primary/[0.03] text-primary/70 hover:border-primary/25 hover:bg-white'}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">{isSelected ? 'check' : 'add'}</span>
+                                                    <span>{option.value}</span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="mt-3 text-[14px] italic leading-[1.45] text-primary/35">
+                                        Thuộc tính này chưa có giá trị để lọc nhanh.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {hasActiveProductQuickFilter && activeProductQuickFilterSummary && (
+                            <div className="rounded-[14px] border border-primary/10 bg-white shadow-sm">
+                                <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <span className="material-symbols-outlined text-[14px] text-primary/40">bolt</span>
+                                        <span className="truncate text-[12px] font-semibold text-primary/45">
+                                            {activeProductQuickFilterSummary || 'Lọc nhanh hơn'}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/55">
+                                            {`${activeProductQuickSetupItems.length} SP`}
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={toggleProductQuickMode}
+                                        disabled={activeProductQuickSetupItems.length === 0}
+                                        className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-full border px-3 text-[12px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
+                                        {isProductQuickModeActive ? 'Đang bật' : 'Đang tắt'}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className={searchBoxClassName}>
+                            <span className="material-symbols-outlined mr-2 text-[18px] text-primary/40">search</span>
+                            <input
+                                ref={productSearchInputRef}
+                                type="text"
+                                placeholder="Gõ mã hoặc tên sản phẩm..."
+                                className="min-w-0 flex-1 bg-transparent text-[14px] font-semibold leading-[1.35] text-[#0F172A] placeholder:text-primary/30 focus:outline-none"
+                                value={searchTerm}
+                                onChange={(e) => {
+                                    setSearchTerm(e.target.value);
+                                    setShowProductQuickSetupPanel(false);
+                                    setShowSearchDropdown(true);
+                                    setShowSearchHistory(false);
+                                }}
+                                onFocus={() => {
+                                    setShowProductQuickSetupPanel(false);
+                                    setShowSearchDropdown(true);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Escape' && searchTerm !== '') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        clearProductSearchInput();
+                                    }
+                                }}
+                            />
+                            {searchTerm && (
+                                <button
+                                    type="button"
+                                    onClick={clearProductSearchInput}
+                                    className="ml-2 text-primary/30 transition-colors hover:text-brick"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                ) : (
+                    <div className={searchBoxClassName}>
+                        <span className="material-symbols-outlined mr-2 text-[16px] text-primary/40">search</span>
+                        <input
+                            ref={productSearchInputRef}
+                            type="text"
+                            placeholder="Gõ mã hoặc tên sản phẩm..."
+                            className="flex-1 bg-transparent text-[14px] font-medium tracking-tight text-[#0F172A] placeholder:text-primary/30 focus:outline-none"
+                            value={searchTerm}
+                            onChange={(e) => {
+                                setSearchTerm(e.target.value);
+                                setShowProductQuickSetupPanel(false);
+                                setShowSearchDropdown(true);
+                                setShowSearchHistory(false);
+                            }}
+                            onFocus={() => {
+                                setShowProductQuickSetupPanel(false);
+                                setShowSearchDropdown(true);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Escape' && searchTerm !== '') {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    clearProductSearchInput();
+                                }
+                            }}
+                        />
+                        {searchTerm && (
+                            <button
+                                type="button"
+                                onClick={clearProductSearchInput}
+                                className="ml-2 text-primary/30 hover:text-brick"
+                            >
+                                <span className="material-symbols-outlined text-[14px]">close</span>
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setShowProductQuickSetupPanel(false);
+                                setShowSearchDropdown(true);
+                                setShowProductQuickFilterPanel(false);
+                                setShowSearchHistory((prev) => !prev);
+                            }}
+                            className="ml-3 border-l border-primary/10 pl-3 text-primary/30 transition-all hover:text-primary"
+                            title="Hiển thị lịch sử tìm kiếm"
+                        >
+                            <span className="material-symbols-outlined text-[15px]">history</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleRefreshOrderItems}
+                            className="ml-3 border-l border-primary/10 pl-3 text-primary/30 transition-all hover:text-primary"
+                            title="Làm mới sản phẩm trong đơn hiện tại"
+                        >
+                            <span className={`material-symbols-outlined text-xs ${isRefreshingItems ? 'animate-refresh-spin' : ''}`}>refresh</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={toggleOrderAiPanel}
+                            className={`ml-3 border-l border-primary/10 pl-3 transition-all ${showOrderAiPanel ? 'text-primary' : 'text-primary/30 hover:text-primary'}`}
+                            title="Tìm nhanh bằng AI"
+                        >
+                            <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
+                        </button>
+                        {productQuickFilterAttributes.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={openProductQuickFilterPanel}
+                                className={`relative ml-3 border-l border-primary/10 pl-3 transition-all ${hasActiveProductQuickFilter ? 'text-primary' : 'text-primary/30 hover:text-primary'}`}
+                                title="Lọc nhanh theo thuộc tính"
+                            >
+                                <span className="material-symbols-outlined text-[15px]">tune</span>
+                                {hasActiveProductQuickFilter && (
+                                    <span className="absolute -right-1.5 -top-1.5 min-w-[16px] rounded-full bg-primary px-1 text-center text-[9px] font-black leading-4 text-white">
+                                        {normalizedProductQuickFilterValues.length}
+                                    </span>
+                                )}
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                <OrderAiSearchPanel
+                    show={showOrderAiPanel}
+                    fileInputRef={orderAiFileInputRef}
+                    trainingRuleOptions={orderAiQuickRuleOptions}
+                    trainingRulesLoading={orderAiTrainingRulesLoading}
+                    selectedTrainingRuleValue={orderAiSelectedRuleKey}
+                    selectedTrainingRule={selectedOrderAiQuickRule}
+                    onTrainingRuleChange={handleOrderAiSelectedRuleChange}
+                    inputValue={orderAiInput}
+                    onInputChange={setOrderAiInput}
+                    onPaste={handleOrderAiPaste}
+                    onOpenRules={() => navigate('/admin/ai-training')}
+                    onReset={() => {
+                        setOrderAiSelectedRuleKey('');
+                        setOrderAiInput('');
+                        clearOrderAiFile();
+                        resetOrderAiPreviewState();
+                    }}
+                    onFileChange={handleOrderAiFileChange}
+                    file={orderAiFile}
+                    filePreviewUrl={orderAiFilePreviewUrl}
+                    onClearFile={clearOrderAiFile}
+                    onRun={handleRunOrderAiPreview}
+                    loading={orderAiLoading}
+                    lastRun={orderAiLastRun}
+                    preview={orderAiPreview}
+                    onUpdateItem={updateOrderAiPreviewItem}
+                    onOpenManualPicker={handleOpenOrderAiManualPicker}
+                    manualPickerLineId={orderAiManualPickerLineId}
+                    manualSearchTerm={orderAiManualSearchTerm}
+                    onManualSearchTermChange={setOrderAiManualSearchTerm}
+                    manualSearchResults={orderAiManualSearchResults}
+                    manualSearchLoading={orderAiManualSearchLoading}
+                    onSelectSuggestion={handleSelectOrderAiSuggestion}
+                    onResetPreview={resetOrderAiPreviewState}
+                    onApplyPreview={handleApplyOrderAiPreview}
+                    applying={orderAiApplying}
+                    currencyFormatter={quoteCurrencyFormatter}
+                />
+
+                {!mobile && hasActiveProductQuickFilter && activeProductQuickFilterSummary && (
+                    <div className={`mt-2 ${mobile ? 'space-y-0' : 'grid items-start gap-2 lg:grid-cols-[max-content_minmax(0,1fr)_max-content]'}`}>
+                        {!mobile && (
+                            <button
+                                type="button"
+                                onClick={openProductQuickFilterPanel}
+                                className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/15 bg-primary/[0.03] px-2.5 py-1.5 shadow-sm transition-all hover:border-primary/30 hover:bg-white"
+                                title="Mở lại bộ lọc nhanh"
+                            >
+                                <span className="material-symbols-outlined shrink-0 text-[12px] text-primary/35">tune</span>
+                                <span className="min-w-0 truncate text-[11px] font-semibold leading-none text-primary/70">
+                                    {activeProductQuickFilterSummary}
+                                </span>
+                            </button>
+                        )}
+                        <div className={`relative min-w-0 ${mobile ? 'w-full' : 'w-full max-w-[880px] justify-self-start lg:min-w-[760px]'}`}>
+                            <div className={`border border-primary/10 bg-white shadow-sm ${mobile ? 'rounded-[14px]' : 'rounded-sm'}`}>
+                                <div className={`flex items-center justify-between gap-2 ${mobile ? 'px-2.5 py-2' : 'flex-wrap px-3 py-2'}`}>
+                                    <div className="flex min-w-0 items-center gap-2">
+                                        <span className="material-symbols-outlined text-[14px] text-primary/40">bolt</span>
+                                        <span className={`${mobile ? 'text-[12px] font-semibold' : 'text-[10px] font-black uppercase tracking-[0.14em]'} text-primary/45`}>
+                                            {mobile ? (activeProductQuickFilterSummary || 'Lọc nhanh hơn') : 'Lọc nhanh hơn'}
+                                        </span>
+                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/55">
+                                            {`${activeProductQuickSetupItems.length} SP`}
+                                        </span>
+                                    </div>
+                                    {mobile ? (
+                                        <button
+                                            type="button"
+                                            onClick={toggleProductQuickMode}
+                                            disabled={activeProductQuickSetupItems.length === 0}
+                                            className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-full border px-3 text-[12px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
+                                            {isProductQuickModeActive ? 'Đang bật' : 'Đang tắt'}
+                                        </button>
+                                    ) : (
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={toggleProductQuickSetupPanel}
+                                                className="inline-flex items-center gap-1 rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                            >
+                                                <span className="material-symbols-outlined text-[12px]">playlist_add</span>
+                                                {showProductQuickSetupPanel ? 'Đóng' : (activeProductQuickSetupItems.length > 0 ? 'Sửa DS' : 'Khai báo nhanh')}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={toggleProductQuickMode}
+                                                disabled={activeProductQuickSetupItems.length === 0}
+                                                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                                            >
+                                                <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
+                                                {isProductQuickModeActive ? 'Đang bật' : 'Đang tắt'}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {showProductQuickSetupPanel && !mobile && (
+                                <div className={`absolute left-0 top-full mt-2 w-full overflow-hidden border border-primary/10 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.18)] ${mobile ? 'z-[170] rounded-[18px]' : 'z-[115] rounded-sm'}`}>
+                                    <div className="px-3 py-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <div className="flex h-9 min-w-[180px] flex-1 items-center rounded-sm border border-primary/10 bg-white px-3 shadow-sm">
+                                                <span className="material-symbols-outlined mr-2 text-[15px] text-primary/35">search</span>
+                                                <input
+                                                    ref={productQuickSetupSearchInputRef}
+                                                    type="text"
+                                                    value={productQuickSetupSearchTerm}
+                                                    onChange={(event) => setProductQuickSetupSearchTerm(event.target.value)}
+                                                    placeholder={`Tìm SP trong ${normalizedProductQuickFilterValues[0]}...`}
+                                                    className="w-full bg-transparent text-[12px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
+                                                />
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowProductQuickSetupPanel(false)}
+                                                className="h-9 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                            >
+                                                Xong
+                                            </button>
+                                        </div>
+
+                                        <div className="mt-2 text-[10px] font-semibold text-primary/40">
+                                            {activeProductQuickSetupItems.length > 0
+                                                ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này. Các sản phẩm đã chọn sẽ tự ghim lên đầu danh sách để bạn kiểm tra nhanh.`
+                                                : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
+                                        </div>
+
+                                        <div ref={productQuickSetupListRef} className="custom-scrollbar mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                                            {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
+                                                const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
+                                                const isVariation = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_VARIATION;
+                                                const isSelected = selectedQuickSetupProductIds.has(targetProductId);
+
+                                                return (
+                                                    <button
+                                                        key={`setup-product-${product.entry_kind || SEARCH_ENTRY_PRODUCT}-${targetProductId}`}
+                                                        type="button"
+                                                        onMouseDown={(event) => event.preventDefault()}
+                                                        onClick={() => handleToggleProductQuickSetupSelection(product, targetProductId, isSelected)}
+                                                        className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
+                                                    >
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="truncate text-[12px] font-semibold text-[#0F172A]">
+                                                                    {product.display_name || product.name || '---'}
+                                                                </div>
+                                                                <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-primary/45">
+                                                                    {(product.display_sku || product.sku) && (
+                                                                        <span>{product.display_sku || product.sku}</span>
+                                                                    )}
+                                                                    {isVariation && product.option_label && (
+                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                            {product.option_label}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            <div className="shrink-0 text-right">
+                                                                <div className="text-[11px] font-black text-blue-600">
+                                                                    {quoteCurrencyFormatter.format(Number(product.price || 0))}đ
+                                                                </div>
+                                                                <div className="mt-1 text-[10px] font-black uppercase tracking-[0.12em]">
+                                                                    {isSelected ? 'Đã chọn' : 'Thêm'}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            }) : (
+                                                <div className="rounded-sm border border-dashed border-primary/10 bg-white px-3 py-6 text-center text-[11px] italic text-primary/35">
+                                                    Không có sản phẩm phù hợp với bộ lọc hiện tại.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        {!mobile && (
+                            <button
+                                type="button"
+                                onClick={disableProductQuickMode}
+                                disabled={!isProductQuickModeActive}
+                                className="inline-flex size-6 shrink-0 items-center justify-center self-center rounded-full border border-primary/10 bg-white text-primary/35 shadow-sm transition-all hover:border-brick/20 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40 lg:size-10"
+                                title="Tắt lọc nhanh hơn"
+                            >
+                                <span className="material-symbols-outlined text-[12px] lg:text-[18px]">close</span>
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {showSearchDropdown && (
+                    <div className={`custom-scrollbar absolute left-0 right-0 border border-primary/20 bg-white shadow-2xl ${mobile ? 'top-full z-[165] mt-2 max-h-[65vh] overflow-auto rounded-[20px]' : 'top-full z-[120] mt-1 max-h-[400px] overflow-auto rounded-sm'}`}>
+                        {shouldShowProductQuickFilterPanel && !mobile && (
+                            <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
+                                <div className="flex flex-col gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                            Lọc nhanh
+                                        </div>
+                                        <select
+                                            value={productQuickFilterAttributeId || ''}
+                                            onChange={(e) => handleProductQuickFilterAttributeChange(e.target.value)}
+                                            className="h-8 min-w-[180px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                        >
+                                            {productQuickFilterAttributes.map((attribute) => (
+                                                <option key={attribute.id} value={attribute.id}>
+                                                    {attribute.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {hasActiveProductQuickFilter && (
+                                            <button
+                                                type="button"
+                                                onClick={clearProductQuickFilterValues}
+                                                className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
+                                            >
+                                                Xóa lọc
+                                            </button>
+                                        )}
+                                    </div>
+                                    {activeProductQuickFilterAttribute?.options?.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                            {activeProductQuickFilterAttribute.options.map((option) => {
+                                                const isSelected = normalizedProductQuickFilterValues.includes(option.value);
+
+                                                return (
+                                                    <button
+                                                        key={`${activeProductQuickFilterAttribute.id}-${option.id || option.value}`}
+                                                        type="button"
+                                                        onClick={() => toggleProductQuickFilterValue(option.value)}
+                                                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                                        <span>{option.value}</span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] italic text-primary/30">
+                                            Thuộc tính này chưa có giá trị để lọc nhanh.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {showSearchHistory && (
+                            <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className={`${mobile ? 'text-[12px] font-semibold' : 'text-[10px] font-black uppercase tracking-[0.14em]'} text-primary/45`}>
+                                        Lịch sử tìm kiếm
+                                    </div>
+                                    {searchHistory.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={clearSearchHistory}
+                                            className={`${mobile ? 'text-[13px] font-semibold' : 'text-[10px] font-bold uppercase tracking-[0.12em]'} text-primary/35 transition-colors hover:text-brick`}
+                                        >
+                                            Xóa hết
+                                        </button>
+                                    )}
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {searchHistory.length > 0 ? searchHistory.map((term) => (
+                                        <button
+                                            key={term}
+                                            type="button"
+                                            onClick={() => {
+                                                setSearchTerm(term);
+                                                setShowSearchDropdown(true);
+                                                setShowSearchHistory(false);
+                                            }}
+                                            className={`inline-flex items-center gap-1 border border-primary/10 bg-white transition-all hover:border-primary/25 hover:bg-primary/5 ${mobile ? 'rounded-full px-3 py-2 text-[14px] font-semibold text-primary/80' : 'rounded-sm px-2.5 py-1.5 text-[11px] font-semibold text-primary'}`}
+                                        >
+                                            <span className={`material-symbols-outlined text-primary/35 ${mobile ? 'text-[16px]' : 'text-[13px]'}`}>history</span>
+                                            <span className="max-w-[220px] truncate">{term}</span>
+                                        </button>
+                                    )) : (
+                                        <div className={`${mobile ? 'py-3 text-[14px]' : 'py-2 text-[11px]'} italic text-primary/30`}>
+                                            Chưa có lịch sử tìm kiếm.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        {rankedSearchProducts.map((p) => (
+                            <ProductSearchOption
+                                key={p.entry_id || p.id}
+                                product={p}
+                                onSelect={addProductById}
+                                quickFilterAttribute={activeProductQuickFilterAttribute}
+                                isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
+                            />
+                        ))}
+                        {(searchTerm.trim() !== '' || hasActiveProductQuickFilter) && rankedSearchProducts.length === 0 && (
+                            <div className={`p-4 text-center italic text-primary/20 ${mobile ? 'text-[13px] font-semibold' : 'text-[11px] font-black uppercase tracking-widest'}`}>
+                                Không có kết quả khả dụng...
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    if (loading) return <div className="p-8 text-center text-[14px] italic leading-[1.55] text-primary">Đang tải dữ liệu...</div>;
 
     return (
-        <div className="relative flex min-h-full flex-col bg-[#fcfcfa] animate-fade-in p-0 pb-32 md:p-6 md:pb-6">
+        <div className="relative flex min-h-full flex-col bg-[#fcfcfa] animate-fade-in p-0 pb-32 text-[14px] leading-[1.55] text-[#0F172A] md:p-6 md:pb-6">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
-                .admin-header-title { font-size: 15px !important; font-weight: 800 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
-                .admin-table-header { font-size: 11px !important; font-weight: 900 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.15em !important; background-color: #F0F4F8 !important; }
+                .admin-header-title { font-size: 18px !important; font-weight: 800 !important; color: #1B365D !important; letter-spacing: -0.01em !important; line-height: 1.4 !important; }
+                .admin-table-header { font-size: 14px !important; font-weight: 700 !important; color: #1B365D !important; letter-spacing: 0 !important; background-color: #F0F4F8 !important; }
                 .order-form-table::-webkit-scrollbar { width: 10px; height: 10px; }
                 .order-form-table::-webkit-scrollbar-track { background: #F0F4F8; }
                 .order-form-table::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
@@ -5300,25 +5959,30 @@ const OrderForm = () => {
                     </button>
                 </div>
             )}
-            <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3">
+            <div className={`flex-none bg-[#F8FAFC] pb-4 space-y-2 ${isCompactOrderMobileLayout ? 'sticky top-0 z-[140] border-b border-primary/10 bg-[#F8FAFC]/95 pb-3 pt-2 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.45)] backdrop-blur supports-[backdrop-filter]:bg-[#F8FAFC]/88' : ''}`}>
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-start gap-2 lg:items-center lg:gap-3">
+                        {isCompactOrderMobileLayout ? (
+                            <div className="min-w-0 flex-1 lg:hidden">
+                                {renderProductSearchToolbar({ mobile: true })}
+                            </div>
+                        ) : null}
                         <button
                             onClick={handleCancel}
-                            className="size-9 flex items-center justify-center bg-white border border-primary/10 text-primary/50 hover:text-brick hover:border-brick/20 rounded-sm shadow-sm transition-all"
+                            className="hidden size-10 shrink-0 items-center justify-center rounded-[14px] border border-primary/10 bg-white text-primary/50 shadow-sm transition-all hover:border-brick/20 hover:text-brick lg:flex lg:size-9 lg:rounded-sm"
                             title="Quay lại"
                         >
                             <span className="material-symbols-outlined text-[18px]">arrow_back</span>
                         </button>
-                        <div>
+                        <div className="hidden lg:block">
                             <div className="flex items-center gap-2 mb-1.5">
                                 <h1 className="admin-header-title italic">{isEdit ? orderKindMeta.editTitle : orderKindMeta.createTitle}</h1>
-                                <span className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/70 shadow-sm">
+                                <span className="inline-flex items-center gap-1 rounded-full border border-primary/15 bg-white px-3 py-1.5 text-[14px] font-semibold leading-none text-primary/70 shadow-sm">
                                     <span className="material-symbols-outlined text-[12px]">{orderKindMeta.icon}</span>
                                     {orderKindMeta.shortLabel}
                                 </span>
                             </div>
-                            <p className="font-sans text-[12px] font-medium text-primary/40">Trang quản trị / Đơn hàng / {isEdit ? ('Chi tiết #' + id) : orderKindMeta.shortLabel}</p>
+                            <p className="font-sans text-[14px] leading-[1.55] text-primary/45">Trang quản trị / Đơn hàng / {isEdit ? ('Chi tiết #' + id) : orderKindMeta.shortLabel}</p>
                         </div>
                     </div>
 
@@ -5327,10 +5991,10 @@ const OrderForm = () => {
                             <button
                                 type="button"
                                 onClick={() => setShowSupplementItemsModal(true)}
-                                className="px-3 h-9 bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:border-amber-500 hover:text-white text-[12px] font-semibold rounded-sm transition-all shadow-sm flex items-center gap-2"
+                                className="px-3 h-10 bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:border-amber-500 hover:text-white text-[14px] font-semibold rounded-sm transition-all shadow-sm flex items-center gap-2"
                             >
                                 <span className="material-symbols-outlined text-[16px]">inventory_2</span>
-                                Khai báo sp đổi trả
+                                Khai báo sản phẩm đổi trả
                                 {supplementDeclarationCount > 0 && (
                                     <span className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] font-black leading-none text-amber-700">
                                         {supplementDeclarationCount}
@@ -5339,12 +6003,12 @@ const OrderForm = () => {
                             </button>
                         )}
                         {isEdit && isDraftOrderKind(orderKind) && (
-                            <button type="button" onClick={() => handleConvertCurrentOrder(MAIN_ORDER_KIND)} className="px-3 h-9 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                            <button type="button" onClick={() => handleConvertCurrentOrder(MAIN_ORDER_KIND)} className="px-3 h-10 bg-white border border-primary/10 text-primary hover:bg-primary hover:text-white text-[14px] font-semibold rounded-sm transition-all">
                                 Chốt thành đơn chính
                             </button>
                         )}
                         {isEdit && !isDraftOrderKind(orderKind) && (
-                            <button type="button" onClick={() => handleConvertCurrentOrder(DRAFT_ORDER_KIND)} className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all">
+                            <button type="button" onClick={() => handleConvertCurrentOrder(DRAFT_ORDER_KIND)} className="px-3 h-10 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[14px] font-semibold rounded-sm transition-all">
                                 Chuyển sang đơn nháp
                             </button>
                         )}
@@ -5353,110 +6017,19 @@ const OrderForm = () => {
                                 type="button"
                                 onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
                                 disabled={saving}
-                                className="px-3 h-9 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[12px] font-semibold rounded-sm transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                                className="px-3 h-10 bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-700 hover:text-white text-[14px] font-semibold rounded-sm transition-all disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 Chuyển sang đơn nháp
                             </button>
                         )}
-                        <button type="button" onClick={handleCancel} className="px-4 h-9 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[12px] font-semibold rounded-sm transition-all">
-                            Hủy thoát
+                        <button type="button" onClick={handleCancel} className="px-4 h-10 bg-white border border-primary/10 text-primary/60 hover:text-brick text-[14px] font-semibold rounded-sm transition-all">
+                            Hủy
                         </button>
-                        <button type="submit" form="order-form" disabled={saving} className="bg-primary text-white px-4 h-9 rounded-sm text-[12px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2">
+                        <button type="submit" form="order-form" disabled={saving} className="bg-primary text-white px-4 h-10 rounded-sm text-[14px] font-semibold hover:bg-brick transition-all shadow-sm flex items-center gap-2">
                             <span className={`material-symbols-outlined text-base ${saving ? 'animate-spin' : ''}`}>
                                 {saving ? 'progress_activity' : 'save'}
                             </span>
                             {saving ? 'Đang lưu' : orderKindMeta.submitLabel}
-                        </button>
-                    </div>
-                </div>
-                <div className="lg:hidden rounded-[22px] border border-primary/10 bg-white/95 p-4 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.45)]">
-                    <div className="flex items-start justify-between gap-3">
-                        <div>
-                            <div className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/45">Báo giá nhanh ngoài đường</div>
-                            <div className="mt-1 text-[20px] font-black leading-tight text-primary">
-                                {quoteTotalQuantity > 0 ? formatQuoteMoney(totalPaymentAmount) : 'Chưa có sản phẩm'}
-                            </div>
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/65">
-                                    {formData.items.length} dòng
-                                </span>
-                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-primary/65">
-                                    {quoteTotalQuantity} món
-                                </span>
-                                <span className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700">
-                                    {isDraftOrderKind(orderKind) ? 'Đang là nháp' : 'Có thể lưu nháp nhanh'}
-                                </span>
-                            </div>
-                        </div>
-
-                        <button
-                            type="button"
-                            onClick={handleScreenshot}
-                            disabled={formData.items.length === 0 || isCapturing}
-                            className="inline-flex min-h-[52px] min-w-[124px] items-center justify-center gap-2 rounded-[18px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white shadow-[0_18px_36px_-22px_rgba(27,54,93,0.7)] transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
-                                {isCapturing ? 'progress_activity' : 'download'}
-                            </span>
-                            Tải ảnh gửi khách
-                        </button>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-1 gap-3">
-                        <input
-                            type="text"
-                            name="customer_name"
-                            value={formData.customer_name}
-                            onChange={handleInputChange}
-                            className={`${adminInputClassName} h-12 rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 text-[15px] font-semibold`}
-                            placeholder="Tên khách hàng"
-                        />
-                        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
-                            <input
-                                type="text"
-                                name="customer_phone"
-                                value={formData.customer_phone}
-                                onChange={handleInputChange}
-                                className={`${adminInputClassName} h-12 rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 text-[15px] font-semibold ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
-                                placeholder="SĐT khách"
-                            />
-                            <button
-                                type="button"
-                                onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'mobile-customer-summary')}
-                                disabled={!mobileCustomerSummaryText}
-                                className="inline-flex h-12 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                                <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                                Copy KH
-                            </button>
-                        </div>
-                        <textarea
-                            name="notes"
-                            value={formData.notes}
-                            onChange={handleInputChange}
-                            rows="2"
-                            className={`${adminTextareaClassName} min-h-[84px] rounded-[16px] border-primary/15 bg-[#f8fbff] px-4 py-3 text-[14px]`}
-                            placeholder="Ghi chú nhanh cho khách hoặc đơn nháp"
-                        />
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3">
-                        <button
-                            type="button"
-                            onClick={focusProductSearch}
-                            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-primary/[0.04] px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08]"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">add_circle</span>
-                            Thêm sản phẩm
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
-                            disabled={saving}
-                            className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-sky-200 bg-sky-50 px-4 text-[12px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">draft_orders</span>
-                            Lưu nháp nhanh
                         </button>
                     </div>
                 </div>
@@ -5467,7 +6040,8 @@ const OrderForm = () => {
                 <div className="flex max-w-full min-w-0 flex-col gap-[10px]">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         {/* Title & Product Selector Tags */}
-                        <div className="flex flex-col xl:flex-row xl:items-start gap-[10px] border-b border-primary/10 pb-4">
+                        {!isCompactOrderMobileLayout && (
+                            <div className="flex flex-col gap-[10px] border-b border-primary/10 pb-4 xl:flex-row xl:items-start">
                             <div className="relative group">
                                 <span className="material-symbols-outlined text-primary/30 p-3 bg-primary/5 rounded-full">shopping_bag</span>
                                 <button
@@ -5949,25 +6523,29 @@ const OrderForm = () => {
                                 </div>
                             </div>
                         </div>
+                        )}
 
-                        <div className="mt-[10px] space-y-3 lg:hidden">
+                        {isCompactOrderMobileLayout && orderAiSummaryBanner ? (
+                            <div className="space-y-3 border-b border-primary/10 pb-4 lg:hidden">
+                                {orderAiSummaryBanner}
+                            </div>
+                        ) : null}
+
+                        <div className="mt-2 -mx-2 space-y-2 lg:hidden">
                             {formData.items.length === 0 ? (
                                 <div className="rounded-[22px] border border-dashed border-primary/15 bg-white px-5 py-10 text-center shadow-sm">
-                                    <div className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/35">Chưa có sản phẩm</div>
-                                    <div className="mt-2 text-[14px] font-semibold text-primary/60">Bấm "Thêm sản phẩm" rồi chọn nhanh để tạo báo giá.</div>
+                                    <div className="text-[14px] font-semibold leading-[1.45] text-primary/40">Chưa có sản phẩm</div>
+                                    <div className="mt-2 text-[14px] leading-[1.55] text-primary/60">Bấm “Thêm sản phẩm” rồi chọn nhanh để tạo báo giá.</div>
                                 </div>
                             ) : (
                                 formData.items.map((item, index) => {
-                                    const availableToSell = parseQuantityNumber(item.available_to_sell);
                                     const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
-                                    const skuCopyId = `${item.line_id || item.product_id}-mobile-sku-${index}`;
-                                    const nameCopyId = `${item.line_id || item.product_id}-mobile-name-${index}`;
                                     const canReplaceItem = Boolean(item.line_id);
 
                                     return (
                                         <div
                                             key={item.line_id || `${item.product_id}-${index}`}
-                                            className={`rounded-[24px] border px-4 py-4 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.4)] ${
+                                            className={`rounded-[18px] border px-2.5 py-2 shadow-[0_18px_45px_-38px_rgba(15,23,42,0.35)] ${
                                                 isPendingOrderAiItem(item)
                                                     ? 'border-amber-200 bg-amber-50/70'
                                                     : isOrderAiItem(item)
@@ -5975,32 +6553,26 @@ const OrderForm = () => {
                                                         : 'border-primary/10 bg-white'
                                             }`}
                                         >
-                                            <div className="flex items-start gap-3">
-                                                <div className="inline-flex h-9 min-w-[36px] items-center justify-center rounded-full bg-primary/[0.05] px-3 text-[11px] font-black text-primary/55">
+                                            <div className="flex items-start gap-2">
+                                                <div className="inline-flex h-8 min-w-[32px] items-center justify-center rounded-full bg-primary/[0.05] px-2 text-[12px] font-semibold text-primary/55">
                                                     #{index + 1}
                                                 </div>
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="min-w-0">
-                                                            <div className="text-[15px] font-black leading-tight text-primary">{item.name || 'Sản phẩm'}</div>
-                                                            <div className="mt-1 flex flex-wrap items-center gap-2">
-                                                                <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-orange-700">
+                                                    <div className="flex items-start gap-2">
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className="text-[14px] font-black leading-[1.35] text-primary">{item.name || 'Sản phẩm'}</div>
+                                                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                                                <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[12px] font-semibold leading-none text-orange-700">
                                                                     {item.sku || 'N/A'}
-                                                                </span>
-                                                                <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black ${availableToSell === null ? 'border-primary/10 bg-primary/[0.04] text-primary/45' : `${getAvailableToSellTextClass(availableToSell)} border-current/10 bg-white`}`}>
-                                                                    Bán được: {availableToSell === null ? '...' : formatOrderFormQuantity(availableToSell)}
-                                                                </span>
-                                                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2.5 py-1 text-[10px] font-black text-primary/55">
-                                                                    {getOrderUnitDisplay(item)}
                                                                 </span>
                                                             </div>
                                                             {isOrderAiItem(item) && (
-                                                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-white text-amber-700' : 'border-sky-200 bg-white text-sky-700'}`}>
-                                                                        {isPendingOrderAiItem(item) ? 'AI chờ duyệt' : 'AI đã ghép'}
+                                                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[12px] font-semibold leading-none ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-white text-amber-700' : 'border-sky-200 bg-white text-sky-700'}`}>
+                                                                        {isPendingOrderAiItem(item) ? 'Ai chờ duyệt' : 'Ai đã ghép'}
                                                                     </span>
                                                                     {item.ai_meta?.confidence_label && (
-                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[10px] font-black text-primary/55">
+                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[12px] font-semibold leading-none text-primary/55">
                                                                             {item.ai_meta.confidence_label}
                                                                         </span>
                                                                     )}
@@ -6009,44 +6581,41 @@ const OrderForm = () => {
                                                         </div>
 
                                                         <div className="shrink-0 text-right">
-                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Thành tiền</div>
-                                                            <div className="mt-1 text-[18px] font-black leading-none text-brick">
+                                                            <div className="text-[11px] font-semibold leading-none text-primary/40">Thành tiền</div>
+                                                            <div className="mt-1 text-[17px] font-black leading-none text-brick">
                                                                 {formatQuoteMoney(itemTotal)}
                                                             </div>
                                                         </div>
                                                     </div>
 
-                                                    <div className="mt-4 grid grid-cols-2 gap-3">
-                                                        <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
-                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Số lượng</div>
-                                                            <div className="mt-2 flex items-center gap-2">
+                                                    <div className="mt-1.5 grid grid-cols-[104px_minmax(0,1fr)_40px_40px] items-center gap-1.5">
+                                                        <div className="rounded-[13px] border border-primary/10 bg-[#f8fbff] px-1 py-1">
+                                                            <div className="flex items-center gap-1">
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 1) - 1))}
-                                                                    className="inline-flex size-10 items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                                                    className="inline-flex size-[30px] items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                                                                 >
-                                                                    <span className="material-symbols-outlined text-[18px]">remove</span>
+                                                                    <span className="material-symbols-outlined text-[15px]">remove</span>
                                                                 </button>
                                                                 <input
                                                                     type="number"
                                                                     inputMode="numeric"
                                                                     value={item.quantity}
                                                                     onChange={(event) => updateItem(index, 'quantity', Math.max(1, parseInt(event.target.value, 10) || 1))}
-                                                                    className="h-10 w-full rounded-[14px] border border-primary/10 bg-white px-3 text-center text-[16px] font-black text-primary focus:border-primary/25 focus:outline-none"
+                                                                    className="h-[30px] w-full rounded-[11px] border border-primary/10 bg-white px-1.5 text-center text-[13px] font-black text-primary focus:border-primary/25 focus:outline-none"
                                                                 />
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 0) + 1))}
-                                                                    className="inline-flex size-10 items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                                                    className="inline-flex size-[30px] items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                                                                 >
-                                                                    <span className="material-symbols-outlined text-[18px]">add</span>
+                                                                    <span className="material-symbols-outlined text-[15px]">add</span>
                                                                 </button>
                                                             </div>
                                                         </div>
 
-                                                        <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
-                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Đơn giá</div>
-                                                            <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
+                                                        <div className="flex h-10 items-center rounded-[13px] border border-primary/10 bg-[#f8fbff] px-2.5">
                                                                 <input
                                                                     type="text"
                                                                     inputMode="numeric"
@@ -6055,32 +6624,11 @@ const OrderForm = () => {
                                                                         const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                         updateItem(index, 'price', parseInt(nextValue, 10) || 0);
                                                                     }}
-                                                                    className="h-10 w-full bg-transparent text-[15px] font-black text-primary focus:outline-none"
+                                                                    className="h-full w-full bg-transparent text-[13px] font-semibold leading-[1.35] text-primary focus:outline-none"
                                                                 />
-                                                                <span className="text-[12px] font-black text-primary/35">đ</span>
-                                                            </div>
+                                                                <span className="text-[12px] font-semibold text-primary/35">đ</span>
                                                         </div>
-                                                    </div>
 
-                                                    <div className="mt-4 flex flex-wrap items-center gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={(event) => handleCopyCellValue(item.sku, 'mã sản phẩm', event, skuCopyId)}
-                                                            disabled={!item.sku}
-                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[16px]">{copiedText === skuCopyId ? 'check' : 'content_copy'}</span>
-                                                            Copy mã
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={(event) => handleCopyCellValue(item.name, 'tên sản phẩm', event, nameCopyId)}
-                                                            disabled={!item.name}
-                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[16px]">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
-                                                            Copy tên
-                                                        </button>
                                                         <button
                                                             type="button"
                                                             onClick={(event) => canReplaceItem && handleOpenOrderAiReplacePicker(
@@ -6089,18 +6637,18 @@ const OrderForm = () => {
                                                                 event.currentTarget
                                                             )}
                                                             disabled={!canReplaceItem}
-                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-sky-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                            className="inline-flex size-10 items-center justify-center rounded-[13px] border border-sky-200 bg-white text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                            title={isOrderAiItem(item) ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm'}
                                                         >
                                                             <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
-                                                            Đổi SP
                                                         </button>
                                                         <button
                                                             type="button"
                                                             onClick={() => removeItem(item.line_id)}
-                                                            className="inline-flex h-10 items-center gap-2 rounded-full border border-rose-200 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-50"
+                                                            className="inline-flex size-10 items-center justify-center rounded-[13px] border border-rose-200 bg-white text-rose-700 transition-all hover:bg-rose-50"
+                                                            title="Xóa"
                                                         >
                                                             <span className="material-symbols-outlined text-[16px]">delete_outline</span>
-                                                            Xóa
                                                         </button>
                                                     </div>
                                                 </div>
@@ -6110,80 +6658,6 @@ const OrderForm = () => {
                                 })
                             )}
 
-                            <div className="rounded-[24px] border border-primary/10 bg-white px-4 py-4 shadow-[0_18px_45px_-32px_rgba(15,23,42,0.35)]">
-                                <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Tổng tiền xem nhanh</div>
-                                        <div className="mt-1 text-[26px] font-black leading-none text-brick">{formatQuoteMoney(totalPaymentAmount)}</div>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={(event) => handleCopyCellValue(formatQuoteMoney(totalPaymentAmount), 'tổng tiền', event, 'mobile-total-payment')}
-                                        className="inline-flex h-11 items-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">{copiedText === 'mobile-total-payment' ? 'check' : 'content_copy'}</span>
-                                        Copy tổng
-                                    </button>
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-2 gap-3">
-                                    <div className="rounded-[18px] bg-[#f8fbff] px-3 py-3">
-                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Phí ship</div>
-                                        <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
-                                            <input
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.shipping_fee)}
-                                                onChange={(event) => {
-                                                    const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                                    setFormData((prev) => ({ ...prev, shipping_fee: parseInt(nextValue, 10) || 0 }));
-                                                }}
-                                                className="h-10 w-full bg-transparent text-[15px] font-black text-primary focus:outline-none"
-                                            />
-                                            <span className="text-[12px] font-black text-primary/35">đ</span>
-                                        </div>
-                                    </div>
-                                    <div className="rounded-[18px] bg-[#fff7f2] px-3 py-3">
-                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Giảm giá</div>
-                                        <div className="mt-2 flex items-center rounded-[14px] border border-primary/10 bg-white px-3">
-                                            <input
-                                                type="text"
-                                                inputMode="numeric"
-                                                value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.discount)}
-                                                onChange={(event) => {
-                                                    const nextValue = event.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                                    setFormData((prev) => ({ ...prev, discount: parseInt(nextValue, 10) || 0 }));
-                                                }}
-                                                className="h-10 w-full bg-transparent text-[15px] font-black text-brick focus:outline-none"
-                                            />
-                                            <span className="text-[12px] font-black text-brick/60">đ</span>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="mt-4 flex flex-wrap items-center gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={handleScreenshot}
-                                        disabled={formData.items.length === 0 || isCapturing}
-                                        className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-[16px] bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
-                                            {isCapturing ? 'progress_activity' : 'download'}
-                                        </span>
-                                        Tải ảnh báo giá
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={(event) => handleCopyCellValue(mobileAddressSummaryText, 'địa chỉ giao hàng', event, 'mobile-address-summary')}
-                                        disabled={!mobileAddressSummaryText}
-                                        className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">{copiedText === 'mobile-address-summary' ? 'check' : 'content_copy'}</span>
-                                        Copy địa chỉ
-                                    </button>
-                                </div>
-                            </div>
                         </div>
 
                         {/* Captured Area for Screenshot */}
@@ -6682,7 +7156,7 @@ const OrderForm = () => {
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
                         <div className="flex items-center gap-2.5 mb-[10px] border-b border-primary/10 pb-3">
                             <span className="material-symbols-outlined text-primary/40 text-[18px]">assignment</span>
-                            <h3 className="font-sans text-[15px] font-bold text-primary uppercase tracking-tight">Thông tin đơn hàng</h3>
+                            <h3 className="font-sans text-[16px] font-bold leading-[1.4] text-primary">Thông tin đơn hàng</h3>
                         </div>
 
                         <div className="space-y-[10px]">
@@ -6818,7 +7292,7 @@ const OrderForm = () => {
                                     readOnly
                                     rows="3"
                                     className={`${adminTextareaClassName} bg-slate-50`}
-                                    placeholder="..."
+                                    placeholder="Tự động ghép từ thông tin địa chỉ bên dưới"
                                 />
                             </Field>
 
@@ -6826,37 +7300,59 @@ const OrderForm = () => {
                                 <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                             </Field>
 
-                            <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle} className="hidden lg:block">
+                            <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle}>
                                 <input
                                     type="text"
                                     name="customer_name"
                                     value={formData.customer_name}
                                     onChange={handleInputChange}
                                     className={adminInputClassName}
-                                    placeholder="..."
+                                    placeholder="Nhập tên khách hàng"
                                 />
                             </Field>
 
-                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle} className="hidden lg:block">
-                                <input
-                                    type="text"
-                                    name="customer_phone"
-                                    value={formData.customer_phone}
+                            <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
+                                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
+                                    <input
+                                        type="text"
+                                        name="customer_phone"
+                                        value={formData.customer_phone}
+                                        onChange={handleInputChange}
+                                        className={`${adminInputClassName} ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
+                                        placeholder="Nhập số điện thoại"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'customer-summary')}
+                                        disabled={!mobileCustomerSummaryText}
+                                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-primary/10 bg-white px-4 text-[14px] font-semibold leading-none text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                                        Sao chép
+                                    </button>
+                                </div>
+                            </Field>
+
+                            <Field label="Ghi chú" className="min-h-[100px] items-start pt-3">
+                                <textarea
+                                    name="notes"
+                                    value={formData.notes}
                                     onChange={handleInputChange}
-                                    className={`${adminInputClassName} ${formData.customer_phone && !validateVietnamesePhone(formData.customer_phone) ? 'border-brick' : ''}`}
-                                    placeholder="..."
+                                    rows="3"
+                                    className={adminTextareaClassName}
+                                    placeholder="Nhập ghi chú cho khách hoặc đơn nháp"
                                 />
                             </Field>
 
                             {/* Administrative Selection */}
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-[11px] font-black text-primary/40 uppercase tracking-widest leading-none">Đơn vị hành chính</span>
+                                <span className="text-[14px] font-semibold leading-[1.45] text-primary/45">Đơn vị hành chính</span>
                                 <div
                                     className="flex items-center gap-1 cursor-pointer p-0.5 bg-primary/5 rounded-full border border-primary/10"
                                     onClick={() => setRegionType(useNewAddress ? 'old' : 'new')}
                                 >
-                                    <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${useNewAddress ? 'bg-primary text-white shadow-sm' : 'text-primary/40'}`}>Mới nhất</div>
-                                    <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase transition-all ${!useNewAddress ? 'bg-orange-600 text-white shadow-sm' : 'text-primary/40'}`}>Cũ</div>
+                                    <div className={`px-3 py-1.5 rounded-full text-[14px] font-semibold leading-none transition-all ${useNewAddress ? 'bg-primary text-white shadow-sm' : 'text-primary/40'}`}>Mới nhất</div>
+                                    <div className={`px-3 py-1.5 rounded-full text-[14px] font-semibold leading-none transition-all ${!useNewAddress ? 'bg-orange-600 text-white shadow-sm' : 'text-primary/40'}`}>Cũ</div>
                                 </div>
                             </div>
 
@@ -6951,23 +7447,12 @@ const OrderForm = () => {
                                     onBlur={handleShippingAddressBlur}
                                     rows="3"
                                     className={adminTextareaClassName}
-                                    placeholder="Dán hoặc nhập địa chỉ để tự nhận diện..."
-                                />
-                            </Field>
-
-                            <Field label="Ghi chú đơn hàng" className="hidden min-h-[100px] items-start pt-3 lg:block">
-                                <textarea
-                                    name="notes"
-                                    value={formData.notes}
-                                    onChange={handleInputChange}
-                                    rows="3"
-                                    className={adminTextareaClassName}
-                                    placeholder="..."
+                                    placeholder="Dán hoặc nhập địa chỉ để tự nhận diện"
                                 />
                             </Field>
 
                             <div className="pt-2 pb-2">
-                                <h4 className="font-sans text-[15px] font-bold text-primary mb-6 flex items-center justify-center gap-2 uppercase tracking-[0.1em]">
+                                <h4 className="font-sans text-[16px] font-bold leading-[1.45] text-primary mb-6 flex items-center justify-center gap-2">
                                     <span className="h-px bg-primary/10 flex-1"></span>
                                     Thông tin bổ sung
                                     <span className="h-px bg-primary/10 flex-1"></span>
@@ -6991,7 +7476,7 @@ const OrderForm = () => {
                                 <button
                                     type="button"
                                     onClick={handleCancel}
-                                    className="w-full bg-primary/5 text-primary/40 font-sans font-bold text-[12px] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm uppercase tracking-widest"
+                                    className="w-full bg-primary/5 text-primary/40 font-sans font-semibold text-[14px] leading-[1.45] py-4 hover:bg-primary/10 transition-all border border-primary/10 rounded-sm"
                                 >
                                     Quay về danh sách
                                 </button>
@@ -7006,14 +7491,14 @@ const OrderForm = () => {
             <div className="fixed inset-x-0 bottom-0 z-[180] border-t border-primary/10 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3 shadow-[0_-18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur lg:hidden">
                 <div className="flex items-end justify-between gap-3">
                     <div className="min-w-0">
-                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Tổng tiền hiện tại</div>
-                        <div className="mt-1 truncate text-[22px] font-black leading-none text-brick">
+                        <div className="text-[14px] font-semibold leading-[1.45] text-primary/45">Tổng tiền hiện tại</div>
+                        <div className="mt-1 truncate text-[24px] font-black leading-[1.3] text-brick">
                             {quoteTotalQuantity > 0 ? formatQuoteMoney(totalPaymentAmount) : 'Chưa có sản phẩm'}
                         </div>
                     </div>
                     <div className="text-right">
-                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Khách / món</div>
-                        <div className="mt-1 text-[12px] font-bold text-primary/65">
+                        <div className="text-[14px] font-semibold leading-[1.45] text-primary/45">Khách / món</div>
+                        <div className="mt-1 text-[14px] font-semibold leading-[1.45] text-primary/65">
                             {(formData.customer_name || 'Khách lẻ')} · {quoteTotalQuantity} món
                         </div>
                     </div>
@@ -7022,17 +7507,20 @@ const OrderForm = () => {
                 <div className="mt-3 grid grid-cols-4 gap-2">
                     <button
                         type="button"
-                        onClick={focusProductSearch}
-                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                        onClick={() => handleSubmit(null)}
+                        disabled={saving}
+                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] px-2 text-[14px] font-semibold leading-[1.25] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        <span className="material-symbols-outlined text-[18px]">add</span>
-                        Thêm SP
+                        <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
+                            {saving ? 'progress_activity' : 'save'}
+                        </span>
+                        {isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn'}
                     </button>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
                         disabled={saving}
-                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-sky-200 bg-sky-50 text-[10px] font-black uppercase tracking-[0.12em] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-sky-200 bg-sky-50 px-2 text-[14px] font-semibold leading-[1.25] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                         Lưu nháp
@@ -7041,7 +7529,7 @@ const OrderForm = () => {
                         type="button"
                         onClick={handleScreenshot}
                         disabled={formData.items.length === 0 || isCapturing}
-                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] bg-primary text-[10px] font-black uppercase tracking-[0.12em] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] bg-primary px-2 text-[14px] font-semibold leading-[1.25] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
                             {isCapturing ? 'progress_activity' : 'download'}
@@ -7049,15 +7537,13 @@ const OrderForm = () => {
                         Tải ảnh
                     </button>
                     <button
+                        ref={mobileProductSearchToggleButtonRef}
                         type="button"
-                        onClick={() => handleSubmit(null)}
-                        disabled={saving}
-                        className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={toggleProductSearchPanel}
+                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white px-2 text-[14px] font-semibold leading-[1.25] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                     >
-                        <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
-                            {saving ? 'progress_activity' : 'save'}
-                        </span>
-                        {isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn'}
+                        <span className="material-symbols-outlined text-[18px]">add</span>
+                        Thêm sản phẩm
                     </button>
                 </div>
             </div>

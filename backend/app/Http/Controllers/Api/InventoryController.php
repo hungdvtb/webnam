@@ -3859,7 +3859,7 @@ class InventoryController extends Controller
             'attachments.*.source_type' => 'nullable|string|max:30',
             'attachments.*.invoice_analysis_log_id' => 'nullable|integer|exists:inventory_invoice_analysis_logs,id',
             'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|integer|exists:products,id',
+            'items.*.product_id' => 'required|integer|distinct|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.received_quantity' => 'nullable|integer|min:0',
             'items.*.unit_cost' => 'required|numeric|min:0',
@@ -3868,6 +3868,8 @@ class InventoryController extends Controller
             'items.*.update_supplier_price' => 'nullable|boolean',
             'items.*.notes' => 'nullable|string|max:1000',
             'items.*.price_notes' => 'nullable|string|max:1000',
+        ], [
+            'items.*.product_id.distinct' => 'Sản phẩm đã tồn tại trong phiếu nhập. Mỗi sản phẩm chỉ được chọn 1 lần.',
         ])->validate();
     }
 

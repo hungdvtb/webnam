@@ -10,9 +10,19 @@ const FALLBACK_IMAGE = 'https://placehold.co/800x800?text=No+Image';
 
 const formatCurrency = (value) => `${Number(value || 0).toLocaleString('vi-VN')}đ`;
 
+const sortImagesByPrimary = (images = []) => (
+    [...images].sort((left, right) => {
+        if (Boolean(left?.is_primary) === Boolean(right?.is_primary)) {
+            return 0;
+        }
+
+        return left?.is_primary ? -1 : 1;
+    })
+);
+
 const normalizeImages = (entity) => {
     const images = Array.isArray(entity?.images)
-        ? entity.images
+        ? sortImagesByPrimary(entity.images)
             .map((image, index) => ({
                 id: image.id || `${entity?.id || 'image'}-${index}`,
                 url: resolveImageObjectUrl(image, 'large', entity?.main_image || FALLBACK_IMAGE),
@@ -55,7 +65,7 @@ const isRenderableMediaUrl = (value) => {
 
 const extractRenderableImages = (entity) => {
     const images = Array.isArray(entity?.images)
-        ? entity.images
+        ? sortImagesByPrimary(entity.images)
             .map((image, index) => ({
                 id: image.id || `${entity?.id || 'image'}-${index}`,
                 url: resolveImageObjectUrl(image, 'large', entity?.main_image || ''),

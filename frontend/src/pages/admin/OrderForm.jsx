@@ -647,6 +647,48 @@ const DRAFT_ORDER_KIND = 'draft';
 const isDraftOrderKind = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getNormalizedOrderKind = (orderKind) => (isDraftOrderKind(orderKind) ? DRAFT_ORDER_KIND : MAIN_ORDER_KIND);
 const buildOrderListUrl = (orderKind = MAIN_ORDER_KIND) => (isDraftOrderKind(orderKind) ? '/admin/orders?view=draft' : '/admin/orders');
+const hasNonEmptyText = (value) => String(value ?? '').trim() !== '';
+const formatDetectionFieldList = (fields = []) => {
+    const uniqueFields = [...new Set(fields.filter(Boolean))];
+    if (uniqueFields.length === 0) return '';
+    if (uniqueFields.length === 1) return uniqueFields[0];
+    if (uniqueFields.length === 2) return `${uniqueFields[0]} và ${uniqueFields[1]}`;
+    return `${uniqueFields.slice(0, -1).join(', ')} và ${uniqueFields[uniqueFields.length - 1]}`;
+};
+const buildAddressDetectionFeedback = (confidence, autoFilledFields = []) => {
+    const normalizedConfidence = String(confidence || 'none');
+    const fieldSummary = formatDetectionFieldList(autoFilledFields);
+
+    if (!fieldSummary) {
+        if (normalizedConfidence === 'exact') {
+            return {
+                type: 'success',
+                message: 'Đã nhận diện nhưng không tự điền vì các trường liên quan đã có dữ liệu.',
+            };
+        }
+
+        return {
+            type: 'warning',
+            message: normalizedConfidence === 'none'
+                ? 'Không tự nhận diện chắc chắn và không tự điền vì các trường liên quan đã có dữ liệu. Vui lòng kiểm tra lại đơn vị hành chính.'
+                : 'Đã nhận diện gần đúng nhưng không tự điền vì các trường liên quan đã có dữ liệu. Vui lòng kiểm tra lại trước khi lưu.',
+        };
+    }
+
+    if (normalizedConfidence === 'exact') {
+        return {
+            type: 'success',
+            message: `Đã tự điền ${fieldSummary}.`,
+        };
+    }
+
+    return {
+        type: 'warning',
+        message: normalizedConfidence === 'none'
+            ? `Chưa tự nhận diện chắc chắn đơn vị hành chính. Đã tự điền ${fieldSummary}. Vui lòng kiểm tra lại.`
+            : `Đã tự điền ${fieldSummary} từ nội dung nhận diện gần đúng. Vui lòng kiểm tra lại trước khi lưu.`,
+    };
+};
 const parseMoneyNumber = (value, fallback = null) => {
     if (value === null || value === undefined || value === '') {
         return fallback;
@@ -2768,43 +2810,57 @@ const OrderForm = () => {
 
         const parsed = parseAdministrativeAddress(trimmedAddress, VN_REGIONS);
         const extracted = extractCustomerInfoFromText(trimmedAddress);
+        const normalizedConfidence = parsed?.confidence || 'none';
+        const detectedCustomerName = String(parsed?.customerName || extracted.customerName || '').trim();
+        const detectedCustomerPhone = String(parsed?.customerPhone || extracted.customerPhone || '').trim();
+        const detectedAddressText = String(parsed?.addressText || extracted.addressText || trimmedAddress).trim();
+        const detectedAddressDetail = String(parsed?.addressDetail || extracted.addressText || trimmedAddress).trim();
+        const hasExistingShippingAddress = hasNonEmptyText(formData.shipping_address) || hasNonEmptyText(formData.address_detail);
+        const hasExistingAdministrativeInfo = Boolean(
+            hasNonEmptyText(formData.province)
+            || hasNonEmptyText(formData.district)
+            || hasNonEmptyText(formData.ward)
+        );
+        const hasDetectedAdministrativeInfo = Boolean(
+            hasNonEmptyText(parsed?.province)
+            || hasNonEmptyText(parsed?.district)
+            || hasNonEmptyText(parsed?.ward)
+        );
+        const autoFilledFields = [];
 
-        if (!parsed || parsed.confidence === 'none') {
-            setAddressDetection({
-                type: 'warning',
-                message: 'Không tự nhận diện chắc chắn. Vui lòng kiểm tra lại đơn vị hành chính.'
-            });
-            setFormData(prev => ({
-                ...prev,
-                customer_name: extracted.customerName || prev.customer_name,
-                customer_phone: extracted.customerPhone || prev.customer_phone,
-                province: '',
-                district: '',
-                ward: '',
-                shipping_address: extracted.addressText || trimmedAddress,
-                address_detail: extracted.addressText || trimmedAddress
-            }));
-            return;
+        if (!hasNonEmptyText(formData.customer_name) && detectedCustomerName) {
+            autoFilledFields.push('tên khách hàng');
         }
 
-        setRegionType(parsed.regionType);
-        setFormData(prev => syncShippingAddress({
+        if (!hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone) {
+            autoFilledFields.push('số điện thoại');
+        }
+
+        if (!hasExistingShippingAddress && detectedAddressText) {
+            autoFilledFields.push('địa chỉ giao hàng');
+        }
+
+        if (parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo) {
+            autoFilledFields.push('đơn vị hành chính');
+        }
+
+        setFormData(prev => ({
             ...prev,
-            customer_name: parsed.customerName || prev.customer_name,
-            customer_phone: parsed.customerPhone || prev.customer_phone,
-            shipping_address: parsed.addressText,
-            address_detail: parsed.addressDetail,
-            province: parsed.province,
-            district: parsed.district || '',
-            ward: parsed.ward || ''
-        }, parsed.regionType));
-        setAddressDetection({
-            type: parsed.confidence === 'exact' ? 'success' : 'warning',
-            message: parsed.confidence === 'exact'
-                ? 'Đã tự nhận diện địa chỉ và điền sẵn thông tin khách hàng.'
-                : 'Đã tự nhận diện gần đúng. Vui lòng kiểm tra lại trước khi lưu.'
-        });
-    }, [syncShippingAddress]);
+            customer_name: !hasNonEmptyText(formData.customer_name) && detectedCustomerName ? detectedCustomerName : prev.customer_name,
+            customer_phone: !hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone ? detectedCustomerPhone : prev.customer_phone,
+            shipping_address: !hasExistingShippingAddress && detectedAddressText ? detectedAddressText : prev.shipping_address,
+            address_detail: !hasExistingShippingAddress && detectedAddressText ? (detectedAddressDetail || detectedAddressText) : prev.address_detail,
+            province: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.province || '') : prev.province,
+            district: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.district || '') : prev.district,
+            ward: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.ward || '') : prev.ward,
+        }));
+
+        if (parsed?.regionType && parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo) {
+            setRegionType(parsed.regionType);
+        }
+
+        setAddressDetection(buildAddressDetectionFeedback(normalizedConfidence, autoFilledFields));
+    }, [formData]);
 
     const handleCancel = useCallback(() => {
         navigateBack();
@@ -5299,6 +5355,63 @@ const OrderForm = () => {
     const quoteTotalQuantity = formData.items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
     const quoteSubtotal = quotePricingSummary.subtotal;
     const mobileCustomerSummaryText = [formData.customer_name, formData.customer_phone].filter(Boolean).join(' - ');
+    const mobileFooterPrimaryActionTitle = isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn';
+    const mobileFooterSecondaryAction = isEdit
+        ? (
+            isDraftOrderKind(orderKind)
+                ? {
+                    title: 'Chốt thành đơn chính',
+                    icon: 'task_alt',
+                    onClick: () => handleConvertCurrentOrder(MAIN_ORDER_KIND),
+                    className: 'border border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-primary hover:text-white',
+                }
+                : {
+                    title: 'Chuyển sang đơn nháp',
+                    icon: 'draft_orders',
+                    onClick: () => handleConvertCurrentOrder(DRAFT_ORDER_KIND),
+                    className: 'border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-700 hover:text-white',
+                }
+        )
+        : (
+            isDraftOrderKind(orderKind)
+                ? null
+                : {
+                    title: 'Lưu nháp',
+                    icon: 'draft_orders',
+                    onClick: () => handleSubmit(null, DRAFT_ORDER_KIND),
+                    className: 'border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-700 hover:text-white',
+                }
+        );
+    const renderOrderNotesField = () => (
+        <Field label="Ghi chú" className="min-h-[100px] items-start pt-3">
+            <textarea
+                name="notes"
+                value={formData.notes}
+                onChange={handleInputChange}
+                rows="3"
+                className={adminTextareaClassName}
+                placeholder="Nhập ghi chú cho khách hoặc đơn nháp"
+            />
+        </Field>
+    );
+    const renderManualShippingAddressField = () => (
+        <Field
+            label="Địa chỉ giao hàng (Số nhà, tên đường...)"
+            labelStyle={adminCustomerLabelStyle}
+            className="min-h-[100px] items-start pt-3"
+        >
+            <textarea
+                name="shipping_address"
+                value={formData.shipping_address}
+                onChange={handleShippingAddressChange}
+                onPaste={handleShippingAddressPaste}
+                onBlur={handleShippingAddressBlur}
+                rows="3"
+                className={adminTextareaClassName}
+                placeholder="Dán hoặc nhập địa chỉ để tự nhận diện"
+            />
+        </Field>
+    );
     const leadConversionCard = leadConversionSummary ? (
         <div className="w-full rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
             <div className="mb-[10px] flex items-center gap-2.5 border-b border-primary/10 pb-3">
@@ -6561,11 +6674,6 @@ const OrderForm = () => {
                                                     <div className="flex items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <div className="text-[14px] font-black leading-[1.35] text-primary">{item.name || 'Sản phẩm'}</div>
-                                                            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                                                <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-2.5 py-1 text-[12px] font-semibold leading-none text-orange-700">
-                                                                    {item.sku || 'N/A'}
-                                                                </span>
-                                                            </div>
                                                             {isOrderAiItem(item) && (
                                                                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[12px] font-semibold leading-none ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-white text-amber-700' : 'border-sky-200 bg-white text-sky-700'}`}>
@@ -7312,7 +7420,7 @@ const OrderForm = () => {
                             </Field>
 
                             <Field label="Số điện thoại" labelStyle={adminCustomerLabelStyle}>
-                                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3">
+                                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 lg:block">
                                     <input
                                         type="text"
                                         name="customer_phone"
@@ -7325,7 +7433,7 @@ const OrderForm = () => {
                                         type="button"
                                         onClick={(event) => handleCopyCellValue(mobileCustomerSummaryText, 'thông tin khách', event, 'customer-summary')}
                                         disabled={!mobileCustomerSummaryText}
-                                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-primary/10 bg-white px-4 text-[14px] font-semibold leading-none text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40"
+                                        className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-sm border border-primary/10 bg-white px-4 text-[14px] font-semibold leading-none text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-40 lg:hidden"
                                     >
                                         <span className="material-symbols-outlined text-[18px]">content_copy</span>
                                         Sao chép
@@ -7333,16 +7441,13 @@ const OrderForm = () => {
                                 </div>
                             </Field>
 
-                            <Field label="Ghi chú" className="min-h-[100px] items-start pt-3">
-                                <textarea
-                                    name="notes"
-                                    value={formData.notes}
-                                    onChange={handleInputChange}
-                                    rows="3"
-                                    className={adminTextareaClassName}
-                                    placeholder="Nhập ghi chú cho khách hoặc đơn nháp"
-                                />
-                            </Field>
+                            <div className="hidden lg:block">
+                                {renderManualShippingAddressField()}
+                            </div>
+
+                            <div className="lg:hidden">
+                                {renderOrderNotesField()}
+                            </div>
 
                             {/* Administrative Selection */}
                             <div className="flex items-center justify-between mb-2">
@@ -7434,22 +7539,13 @@ const OrderForm = () => {
                                 </div>
                             </div>
 
-                            <Field
-                                label="Địa chỉ giao hàng (Số nhà, tên đường...)"
-                                labelStyle={adminCustomerLabelStyle}
-                                className="min-h-[100px] items-start pt-3"
-                            >
-                                <textarea
-                                    name="shipping_address"
-                                    value={formData.shipping_address}
-                                    onChange={handleShippingAddressChange}
-                                    onPaste={handleShippingAddressPaste}
-                                    onBlur={handleShippingAddressBlur}
-                                    rows="3"
-                                    className={adminTextareaClassName}
-                                    placeholder="Dán hoặc nhập địa chỉ để tự nhận diện"
-                                />
-                            </Field>
+                            <div className="hidden lg:block">
+                                {renderOrderNotesField()}
+                            </div>
+
+                            <div className="lg:hidden">
+                                {renderManualShippingAddressField()}
+                            </div>
 
                             <div className="pt-2 pb-2">
                                 <h4 className="font-sans text-[16px] font-bold leading-[1.45] text-primary mb-6 flex items-center justify-center gap-2">
@@ -7489,61 +7585,59 @@ const OrderForm = () => {
             </form>
 
             <div className="fixed inset-x-0 bottom-0 z-[180] border-t border-primary/10 bg-white/95 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3 shadow-[0_-18px_40px_-28px_rgba(15,23,42,0.45)] backdrop-blur lg:hidden">
-                <div className="flex items-end justify-between gap-3">
-                    <div className="min-w-0">
-                        <div className="text-[14px] font-semibold leading-[1.45] text-primary/45">Tổng tiền hiện tại</div>
-                        <div className="mt-1 truncate text-[24px] font-black leading-[1.3] text-brick">
+                <div className="flex min-w-0 items-baseline gap-2">
+                    <div className="shrink-0 text-[14px] font-semibold leading-none text-primary/45">Tổng tiền hiện tại</div>
+                    <div className="min-w-0 truncate text-[24px] font-black leading-none text-brick">
                             {quoteTotalQuantity > 0 ? formatQuoteMoney(totalPaymentAmount) : 'Chưa có sản phẩm'}
-                        </div>
-                    </div>
-                    <div className="text-right">
-                        <div className="text-[14px] font-semibold leading-[1.45] text-primary/45">Khách / món</div>
-                        <div className="mt-1 text-[14px] font-semibold leading-[1.45] text-primary/65">
-                            {(formData.customer_name || 'Khách lẻ')} · {quoteTotalQuantity} món
-                        </div>
                     </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-4 gap-2">
+                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-4' : 'grid-cols-3'}`}>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null)}
                         disabled={saving}
-                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] px-2 text-[14px] font-semibold leading-[1.25] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                        title={mobileFooterPrimaryActionTitle}
+                        aria-label={mobileFooterPrimaryActionTitle}
+                        className="inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-primary/10 bg-primary/[0.04] px-2 text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
                             {saving ? 'progress_activity' : 'save'}
                         </span>
-                        {isDraftOrderKind(orderKind) ? 'Lưu nháp' : 'Lưu đơn'}
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => handleSubmit(null, DRAFT_ORDER_KIND)}
-                        disabled={saving}
-                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-sky-200 bg-sky-50 px-2 text-[14px] font-semibold leading-[1.25] text-sky-700 transition-all hover:bg-sky-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        <span className="material-symbols-outlined text-[18px]">draft_orders</span>
-                        Lưu nháp
-                    </button>
+                    {mobileFooterSecondaryAction && (
+                        <button
+                            type="button"
+                            onClick={mobileFooterSecondaryAction.onClick}
+                            disabled={saving}
+                            title={mobileFooterSecondaryAction.title}
+                            aria-label={mobileFooterSecondaryAction.title}
+                            className={`inline-flex min-h-[52px] items-center justify-center rounded-[16px] px-2 transition-all disabled:cursor-not-allowed disabled:opacity-50 ${mobileFooterSecondaryAction.className}`}
+                        >
+                            <span className="material-symbols-outlined text-[18px]">{mobileFooterSecondaryAction.icon}</span>
+                        </button>
+                    )}
                     <button
                         type="button"
                         onClick={handleScreenshot}
                         disabled={formData.items.length === 0 || isCapturing}
-                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] bg-primary px-2 text-[14px] font-semibold leading-[1.25] text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Tải ảnh"
+                        aria-label="Tải ảnh"
+                        className="inline-flex min-h-[52px] items-center justify-center rounded-[16px] bg-primary px-2 text-white transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className={`material-symbols-outlined text-[18px] ${isCapturing ? 'animate-refresh-spin' : ''}`}>
                             {isCapturing ? 'progress_activity' : 'download'}
                         </span>
-                        Tải ảnh
                     </button>
                     <button
                         ref={mobileProductSearchToggleButtonRef}
                         type="button"
                         onClick={toggleProductSearchPanel}
-                        className="inline-flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white px-2 text-[14px] font-semibold leading-[1.25] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                        title="Thêm sản phẩm"
+                        aria-label="Thêm sản phẩm"
+                        className="inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-primary/10 bg-white px-2 text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                     >
                         <span className="material-symbols-outlined text-[18px]">add</span>
-                        Thêm sản phẩm
                     </button>
                 </div>
             </div>

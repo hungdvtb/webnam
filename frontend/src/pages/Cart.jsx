@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
+import { resolveProductPrimaryImageUrl } from '../utils/mediaUrl';
 
 const formatCurrency = (value) => new Intl.NumberFormat('vi-VN', {
     style: 'currency',
@@ -9,7 +10,10 @@ const formatCurrency = (value) => new Intl.NumberFormat('vi-VN', {
 
 const getItemLink = (item) => (item.product_id ? `/old/details/${item.product_id}` : '/old/shop');
 
-const getItemImage = (item) => item.product?.images?.[0]?.image_url || 'https://placehold.co/200x200?text=No+Image';
+const getItemImage = (item) => (
+    resolveProductPrimaryImageUrl(item.product, 'medium', 'https://placehold.co/200x200?text=No+Image')
+    || 'https://placehold.co/200x200?text=No+Image'
+);
 
 const getItemMeta = (item) => {
     const chips = [];

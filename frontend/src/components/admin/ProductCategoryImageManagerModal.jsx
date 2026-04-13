@@ -324,13 +324,10 @@ function normalizeDraftImages(images = []) {
 
     const primaryIndex = normalized.findIndex((image) => image.is_primary);
     const targetPrimaryIndex = primaryIndex >= 0 ? primaryIndex : 0;
-    const ordered = [...normalized];
-    const [primaryImage] = ordered.splice(targetPrimaryIndex, 1);
-    ordered.unshift(primaryImage);
 
-    return ordered.map((image, index) => ({
+    return normalized.map((image, index) => ({
         ...image,
-        is_primary: index === 0,
+        is_primary: index === targetPrimaryIndex,
         sort_order: index,
     }));
 }
@@ -1539,16 +1536,6 @@ function ProductCategoryImageManagerModal({
     const allVisibleSelected = visibleProductIds.length > 0
         && visibleProductIds.every((id) => selectedProductKeySet.has(id));
 
-    const totalImageCount = useMemo(
-        () => products.reduce((sum, product) => sum + getWorkingImages(product).length, 0),
-        [getWorkingImages, products],
-    );
-
-    const productsWithImagesCount = useMemo(
-        () => products.filter((product) => getWorkingImages(product).length > 0).length,
-        [getWorkingImages, products],
-    );
-
     const toggleSelectProduct = useCallback((productId) => {
         const normalizedId = String(productId);
 
@@ -1920,8 +1907,17 @@ function ProductCategoryImageManagerModal({
             });
 
             if (finalOrderedIds.length > 0) {
+                const preferredPrimaryIndex = draftImages.findIndex((image) => image.is_primary);
+                const preferredPrimaryId = preferredPrimaryIndex >= 0
+                    ? finalOrderedIds[preferredPrimaryIndex] || null
+                    : (finalOrderedIds[0] || null);
+
                 await productImageApi.reorder(finalOrderedIds);
-                await productImageApi.setPrimary(finalOrderedIds[0]);
+
+                if (preferredPrimaryId) {
+                    await productImageApi.setPrimary(preferredPrimaryId);
+                }
+
                 didMutateServer = true;
             }
 
@@ -2183,6 +2179,18 @@ function ProductCategoryImageManagerModal({
         return discardUploadedDraftImages();
     }, [discardUploadedDraftImages, hasUnsavedChanges]);
 
+    const confirmClosePopupAsync = useCallback(async () => {
+        if (!hasUnsavedChanges) {
+            return true;
+        }
+
+        if (!window.confirm('Bạn đang có ảnh hoặc dữ liệu nháp chưa lưu. Nếu đóng popup lúc này, toàn bộ thay đổi nháp sẽ mất. Bạn có chắc muốn đóng không?')) {
+            return false;
+        }
+
+        return discardUploadedDraftImages();
+    }, [discardUploadedDraftImages, hasUnsavedChanges]);
+
     const handleReloadAsync = useCallback(async () => {
         if (loading || bulkProgress.running) {
             return;
@@ -2208,92 +2216,93 @@ function ProductCategoryImageManagerModal({
         return (
             <div
                 key={product.id}
-                className={`rounded-sm border p-4 transition-all ${
+                className={`rounded-sm border p-2.5 transition-all ${
                     isSelected ? 'border-primary/35 bg-primary/[0.03]' : 'border-primary/10 bg-white'
                 }`}
             >
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
-                    <div className="xl:w-[360px] shrink-0">
-                        <div className="flex items-start gap-3">
-                            <label className="mt-1">
-                                <input
-                                    type="checkbox"
-                                    className="size-4 accent-primary"
-                                    checked={isSelected}
-                                    onChange={() => toggleSelectProduct(product.id)}
-                                />
-                            </label>
+                <div className="flex items-start gap-2">
+                    <label className="pt-1">
+                        <input
+                            type="checkbox"
+                            className="size-4 accent-primary"
+                            checked={isSelected}
+                            onChange={() => toggleSelectProduct(product.id)}
+                        />
+                    </label>
 
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-start gap-2">
                             <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-[14px] font-black text-[#0F172A]">{product.name || `Sản phẩm #${product.id}`}</p>
-                                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
+                                <p className="truncate text-[12px] font-black text-[#0F172A]" title={product.name || `Sản phẩm #${product.id}`}>
+                                    {product.name || `Sản phẩm #${product.id}`}
+                                </p>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[9px] text-primary/55">
+                                    <span className="font-mono">{product.sku || 'Chưa có SKU'}</span>
+                                    <span>ID {product.id}</span>
+                                    <span className="rounded-full bg-primary/10 px-2 py-0.5 font-bold uppercase tracking-[0.12em] text-primary">
                                         {workingImages.length} ảnh
                                     </span>
                                     {isDirty ? (
-                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-amber-700">
+                                        <span className="rounded-full bg-amber-100 px-2 py-0.5 font-bold uppercase tracking-[0.12em] text-amber-700">
                                             Chưa lưu
                                         </span>
-                                    ) : (
-                                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-700">
-                                            Đã đồng bộ
-                                        </span>
-                                    )}
-                                    {product.status === false ? (
-                                        <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-600">
-                                            Tạm ẩn
+                                    ) : null}
+                                    {(selectedImageKeysMap[productKey] || []).length > 0 ? (
+                                        <span className="rounded-full bg-primary/10 px-2 py-0.5 font-bold uppercase tracking-[0.12em] text-primary">
+                                            {(selectedImageKeysMap[productKey] || []).length} chọn
                                         </span>
                                     ) : null}
                                 </div>
+                            </div>
 
-                                <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-primary/60">
-                                    <span className="font-mono">{product.sku || 'Chưa có SKU'}</span>
-                                    <span>ID {product.id}</span>
-                                </div>
-
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={() => triggerAddProductImages(product.id)}
-                                        disabled={isBusy || bulkProgress.running || hasBusyProducts}
-                                        className="inline-flex items-center gap-2 rounded-sm border border-primary/20 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.14em] text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        <span className="material-symbols-outlined text-[16px]">add_photo_alternate</span>
-                                        Thêm ảnh
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleSaveProduct(product.id)}
-                                        disabled={!isDirty || isBusy || bulkProgress.running || hasBusyProducts}
-                                        className="inline-flex items-center gap-2 rounded-sm bg-emerald-600 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.14em] text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        <span className="material-symbols-outlined text-[16px]">save</span>
-                                        Lưu sản phẩm
-                                    </button>
-                                </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                    type="button"
+                                    onClick={() => triggerAddProductImages(product.id)}
+                                    disabled={isBusy || bulkProgress.running || hasBusyProducts}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-sm border border-primary/20 text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Thêm ảnh"
+                                    aria-label="Thêm ảnh"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => handleSaveProduct(product.id)}
+                                    disabled={!isDirty || isBusy || bulkProgress.running || hasBusyProducts}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Lưu sản phẩm"
+                                    aria-label="Lưu sản phẩm"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">save</span>
+                                </button>
                             </div>
                         </div>
-                    </div>
 
-                    <div className="min-w-0 flex-1">
-                        {workingImages.length === 0 ? (
-                            <button
-                                type="button"
-                                onClick={() => triggerAddProductImages(product.id)}
-                                disabled={isBusy || bulkProgress.running || hasBusyProducts}
-                                className="w-full rounded-sm border border-dashed border-primary/20 bg-primary/[0.02] px-4 py-10 text-center text-[13px] text-primary/60 hover:bg-primary/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                <span className="material-symbols-outlined text-[28px]">imagesmode</span>
-                                <div className="mt-2 font-bold text-primary">Sản phẩm này chưa có ảnh</div>
-                                <div className="mt-1">Bấm để thêm ảnh vào bản nháp.</div>
-                            </button>
-                        ) : (
-                            <div
-                                ref={(node) => registerImageViewport(product.id, node)}
-                                className="overflow-x-auto pb-2 custom-scrollbar-lg"
-                            >
-                                <div className="relative min-w-max">
-                                    <div className="flex min-w-max gap-3">
+                        {productUploadState?.message ? (
+                            <div className={`mt-2 rounded-sm border px-2.5 py-2 text-[11px] ${getNoticeClassName(productUploadState.type)}`}>
+                                {productUploadState.message}
+                            </div>
+                        ) : null}
+
+                        <div className="mt-3">
+                            {workingImages.length === 0 ? (
+                                <button
+                                    type="button"
+                                    onClick={() => triggerAddProductImages(product.id)}
+                                    disabled={isBusy || bulkProgress.running || hasBusyProducts}
+                                    className="w-full rounded-sm border border-dashed border-primary/20 bg-primary/[0.02] px-3 py-6 text-center text-[12px] text-primary/60 hover:bg-primary/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Thêm ảnh"
+                                >
+                                    <span className="material-symbols-outlined text-[24px]">imagesmode</span>
+                                    <div className="mt-2 font-bold text-primary">Chưa có ảnh</div>
+                                </button>
+                            ) : (
+                                <div
+                                    ref={(node) => registerImageViewport(product.id, node)}
+                                    className="relative"
+                                >
+                                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
                                     {workingImages.map((image, index) => {
                                         const imageKey = String(image.key);
                                         const fileLabel = getImageFileLabel(image, index);
@@ -2306,7 +2315,7 @@ function ProductCategoryImageManagerModal({
                                                 key={imageKey}
                                                 ref={(node) => registerImageCard(product.id, imageKey, node)}
                                                 onMouseDown={(event) => beginImageDragSelection(event, product.id, imageKey, workingImages)}
-                                                className={`w-[176px] rounded-sm border overflow-hidden shadow-sm select-none ${isImageSelected ? 'border-primary/40 ring-1 ring-primary/15 bg-primary/[0.02]' : 'border-primary/10 bg-white'} ${image.uploading ? 'opacity-85' : ''}`}
+                                                className={`min-w-0 rounded-sm border overflow-hidden shadow-sm select-none ${isImageSelected ? 'border-primary/40 ring-1 ring-primary/15 bg-primary/[0.02]' : 'border-primary/10 bg-white'} ${image.uploading ? 'opacity-85' : ''}`}
                                             >
                                                 <div
                                                     className="relative w-full aspect-[4/3] overflow-hidden bg-primary/[0.04]"
@@ -2332,17 +2341,17 @@ function ProductCategoryImageManagerModal({
 
                                                     {image.uploading ? (
                                                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-white/78 text-primary backdrop-blur-[1px]">
-                                                            <span className="material-symbols-outlined animate-spin text-[20px]">progress_activity</span>
-                                                            <span className="text-[10px] font-black uppercase tracking-[0.14em]">
+                                                            <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                                                            <span className="text-[9px] font-black uppercase tracking-[0.14em]">
                                                                 {image.upload_status_label || 'Đang xử lý ảnh'}
                                                             </span>
                                                         </div>
                                                     ) : null}
 
-                                                    <label className="absolute left-2 top-2 z-30 inline-flex items-center justify-center rounded-full bg-white/95 shadow px-1.5 py-1">
+                                                    <label className="absolute left-1.5 top-1.5 z-30 inline-flex items-center justify-center rounded-full bg-white/95 shadow px-1 py-0.5">
                                                         <input
                                                             type="checkbox"
-                                                            className="size-3.5 accent-primary"
+                                                            className="size-3 accent-primary"
                                                             checked={isImageSelected}
                                                             onClick={(event) => {
                                                                 event.preventDefault();
@@ -2352,28 +2361,28 @@ function ProductCategoryImageManagerModal({
                                                         />
                                                     </label>
 
-                                                    <span className="absolute left-10 top-2 rounded-full bg-black/65 px-2 py-0.5 text-[10px] font-bold text-white">
+                                                    <span className="absolute left-7 top-1.5 rounded-full bg-black/65 px-1.5 py-0.5 text-[8px] font-bold text-white">
                                                         #{index + 1}
                                                     </span>
 
                                                     {image.is_primary ? (
-                                                        <span className="absolute right-2 top-2 rounded-full bg-gold px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+                                                        <span className="absolute right-1.5 top-1.5 rounded-full bg-gold px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] text-white">
                                                             Chính
                                                         </span>
                                                     ) : null}
 
                                                     {!image.persistedId ? (
-                                                        <span className="absolute right-2 bottom-2 rounded-full bg-sky-600 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-white">
+                                                        <span className="absolute right-1.5 bottom-1.5 rounded-full bg-sky-600 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] text-white">
                                                             Mới
                                                         </span>
                                                     ) : null}
                                                 </div>
 
-                                                <div className="px-3 py-2 border-t border-primary/10">
-                                                    <p className="truncate text-[11px] font-bold text-primary" title={fileLabel}>
+                                                <div className="flex items-center gap-1.5 border-t border-primary/10 px-2 py-1.5">
+                                                    <p className="min-w-0 flex-1 truncate text-[9px] font-bold text-primary" title={fileLabel}>
                                                         {fileLabel}
                                                     </p>
-                                                    <p className="mt-1 text-[10px] uppercase tracking-[0.14em] text-primary/35">
+                                                    <p className="shrink-0 text-[8px] uppercase tracking-[0.12em] text-primary/35">
                                                         {image.file_size ? `${Math.round(image.file_size / 1024)} KB` : 'Không rõ dung lượng'}
                                                     </p>
                                                 </div>
@@ -2383,51 +2392,51 @@ function ProductCategoryImageManagerModal({
                                                         type="button"
                                                         disabled={isBusy || bulkProgress.running || hasBusyProducts || image.is_primary}
                                                         onClick={() => handleSetPrimaryImage(product.id, imageKey)}
-                                                        className="h-10 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                                                        className="h-7 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
                                                         title="Đặt làm ảnh chính"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px]">kid_star</span>
+                                                        <span className="material-symbols-outlined text-[14px]">kid_star</span>
                                                     </button>
                                                     <button
                                                         type="button"
                                                         disabled={isBusy || bulkProgress.running || hasBusyProducts || !canMoveLeft}
                                                         onClick={() => handleMoveImage(product.id, imageKey, 'left')}
-                                                        className="h-10 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                                                        className="h-7 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
                                                         title="Đẩy sang trái"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px]">west</span>
+                                                        <span className="material-symbols-outlined text-[14px]">west</span>
                                                     </button>
                                                     <button
                                                         type="button"
                                                         disabled={isBusy || bulkProgress.running || hasBusyProducts || !canMoveRight}
                                                         onClick={() => handleMoveImage(product.id, imageKey, 'right')}
-                                                        className="h-10 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
+                                                        className="h-7 border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-35"
                                                         title="Đẩy sang phải"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px]">east</span>
+                                                        <span className="material-symbols-outlined text-[14px]">east</span>
                                                     </button>
                                                     <button
                                                         type="button"
                                                         disabled={isBusy || bulkProgress.running || hasBusyProducts}
                                                         onClick={() => triggerReplaceImage(product.id, imageKey)}
-                                                        className="h-10 border-r border-primary/10 text-sky-700 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-35"
+                                                        className="h-7 border-r border-primary/10 text-sky-700 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-35"
                                                         title="Thay ảnh này"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px]">edit_square</span>
+                                                        <span className="material-symbols-outlined text-[14px]">edit_square</span>
                                                     </button>
                                                     <button
                                                         type="button"
                                                         disabled={isBusy || bulkProgress.running || hasBusyProducts}
                                                         onClick={() => handleDeleteImage(product.id, imageKey)}
-                                                        className="h-10 text-brick hover:bg-brick/5 disabled:cursor-not-allowed disabled:opacity-35"
+                                                        className="h-7 text-brick hover:bg-brick/5 disabled:cursor-not-allowed disabled:opacity-35"
                                                         title="Đưa ảnh này ra khỏi bản nháp"
                                                     >
-                                                        <span className="material-symbols-outlined text-[16px]">delete</span>
+                                                        <span className="material-symbols-outlined text-[14px]">delete</span>
                                                     </button>
                                                 </div>
                                             </div>
                                         );
-                                    })}
+                                            })}
                                     </div>
                                     {dragSelection?.productId === productKey ? (
                                         <div
@@ -2440,26 +2449,9 @@ function ProductCategoryImageManagerModal({
                                             }}
                                         />
                                     ) : null}
-                                </div>
-                            </div>
-                        )}
-
-                        <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px] text-primary/60">
-                            <span className="text-primary/45">Shift chọn dải, Ctrl/Cmd chọn lẻ, kéo chuột để quét chọn.</span>
-                            <span>{isDirty ? 'Sản phẩm đang có thay đổi ảnh chưa lưu.' : 'Sản phẩm này đang đồng bộ với máy chủ.'}</span>
-                            {(selectedImageKeysMap[productKey] || []).length > 0 ? (
-                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
-                                    {(selectedImageKeysMap[productKey] || []).length} ảnh đã chọn
-                                </span>
-                            ) : null}
+                                    </div>
+                            )}
                         </div>
-
-                        {isBusy ? (
-                            <div className={`mt-3 inline-flex items-center gap-2 rounded-sm px-3 py-2 text-[12px] ${getNoticeClassName(productUploadState?.type)}`}>
-                                <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
-                                {productUploadState?.message || 'Đang xử lí hình ảnh...'}
-                            </div>
-                        ) : null}
                     </div>
                 </div>
             </div>
@@ -2471,12 +2463,38 @@ function ProductCategoryImageManagerModal({
             return;
         }
 
-        if (!(await confirmDiscardUnsavedChangesAsync())) {
+        if (!(await confirmClosePopupAsync())) {
             return;
         }
 
         onClose?.();
-    }, [canClose, confirmDiscardUnsavedChangesAsync, onClose]);
+    }, [canClose, confirmClosePopupAsync, onClose]);
+
+    useEffect(() => {
+        if (!open) {
+            return undefined;
+        }
+
+        const handleWindowKeyDown = (event) => {
+            if (event.key !== 'Escape') {
+                return;
+            }
+
+            if (previewImage?.url) {
+                event.preventDefault();
+                setPreviewImage(null);
+                return;
+            }
+
+            event.preventDefault();
+            void handleRequestCloseAsync();
+        };
+
+        window.addEventListener('keydown', handleWindowKeyDown);
+        return () => {
+            window.removeEventListener('keydown', handleWindowKeyDown);
+        };
+    }, [handleRequestCloseAsync, open, previewImage?.url]);
 
     if (!open) {
         return null;
@@ -2485,9 +2503,6 @@ function ProductCategoryImageManagerModal({
     return (
         <div
             className="fixed inset-0 z-[118] bg-black/60 flex items-center justify-center p-4"
-            onClick={() => {
-                void handleRequestCloseAsync();
-            }}
         >
             <div
                 className="bg-white rounded p-6 w-full max-w-[1600px] max-h-[94vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
@@ -2541,9 +2556,9 @@ function ProductCategoryImageManagerModal({
                     </button>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-4">
-                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto_auto_auto_auto_auto_auto]">
-                        <div className="relative">
+                <div className="mt-4 flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative w-full sm:w-[260px] lg:w-[300px] xl:w-[340px]">
                             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-primary/35 text-[18px]">
                                 search
                             </span>
@@ -2551,111 +2566,98 @@ function ProductCategoryImageManagerModal({
                                 type="text"
                                 value={searchText}
                                 onChange={(event) => setSearchText(event.target.value)}
-                                placeholder="Tìm nhanh theo tên sản phẩm hoặc SKU..."
-                                className="w-full h-11 bg-primary/5 border border-primary/20 pl-10 pr-4 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                placeholder="Tìm tên hoặc SKU..."
+                                className="h-10 w-full rounded-sm border border-primary/20 bg-primary/5 pl-10 pr-4 text-[13px] focus:border-primary focus:outline-none"
                             />
                         </div>
 
-                        <label className="h-11 px-4 rounded-sm border border-primary/15 bg-white flex items-center gap-3 text-[12px] font-bold text-primary cursor-pointer">
+                        <label
+                            className={`flex h-10 w-10 items-center justify-center rounded-sm border cursor-pointer transition-colors ${
+                                showOnlyWithoutImages
+                                    ? 'border-primary bg-primary/10 text-primary'
+                                    : 'border-primary/15 bg-white text-primary/65 hover:bg-primary/5'
+                            }`}
+                            title={showOnlyWithoutImages ? 'Đang lọc sản phẩm chưa có ảnh' : 'Chỉ hiện sản phẩm chưa có ảnh'}
+                        >
                             <input
                                 type="checkbox"
-                                className="size-4 accent-primary"
+                                className="sr-only"
                                 checked={showOnlyWithoutImages}
                                 onChange={(event) => setShowOnlyWithoutImages(event.target.checked)}
                             />
-                            Chỉ hiện sản phẩm chưa có ảnh
+                            <span className="material-symbols-outlined text-[18px]">filter_alt</span>
                         </label>
 
-                        <label className="h-11 px-3 rounded-sm border border-primary/15 bg-white flex items-center gap-2 text-[12px] font-bold text-primary">
-                            <span className="whitespace-nowrap">Hiển thị</span>
+                        <label className="flex h-10 items-center gap-2 rounded-sm border border-primary/15 bg-white px-2 text-[12px] font-bold text-primary" title="Số sản phẩm mỗi trang">
                             <select
                                 value={pageSize}
                                 onChange={(event) => setPageSize(Number(event.target.value) || 10)}
-                                className="h-8 rounded-sm border border-primary/15 px-2 text-[12px] font-bold text-primary focus:outline-none focus:border-primary bg-white"
+                                className="h-7 rounded-sm border border-primary/15 bg-white px-2 text-[12px] font-bold text-primary focus:border-primary focus:outline-none"
                             >
                                 {PAGE_SIZE_OPTIONS.map((option) => (
                                     <option key={option} value={option}>{option}</option>
                                 ))}
                             </select>
-                            <span className="whitespace-nowrap">SP</span>
+                            <span className="text-[10px] uppercase tracking-[0.14em] text-primary/45">/trang</span>
                         </label>
 
-                        <button
-                            type="button"
-                            onClick={handleSelectAllVisible}
-                            disabled={visibleProductIds.length === 0}
-                            className="h-11 px-4 rounded-sm border border-primary/20 bg-white text-[12px] font-bold text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            {allVisibleSelected ? 'Bỏ chọn trang này' : 'Chọn hết trang này'}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+                            <button
+                                type="button"
+                                onClick={handleSelectAllVisible}
+                                disabled={visibleProductIds.length === 0}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/20 bg-white text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                title={allVisibleSelected ? 'Bỏ chọn trang này' : 'Chọn hết trang này'}
+                                aria-label={allVisibleSelected ? 'Bỏ chọn trang này' : 'Chọn hết trang này'}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">{allVisibleSelected ? 'deselect' : 'select_all'}</span>
+                            </button>
 
-                        <button
-                            type="button"
-                            onClick={triggerBulkUploadImages}
-                            disabled={selectedProductIds.length === 0 || bulkProgress.running || hasBusyProducts}
-                            className="h-11 px-4 rounded-sm bg-primary text-white text-[12px] font-bold uppercase tracking-[0.14em] hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
-                            Thêm ảnh hàng loạt
-                        </button>
+                            <button
+                                type="button"
+                                onClick={triggerBulkUploadImages}
+                                disabled={selectedProductIds.length === 0 || bulkProgress.running || hasBusyProducts}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-sm bg-primary text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Thêm ảnh cho các sản phẩm đã chọn"
+                                aria-label="Thêm ảnh cho các sản phẩm đã chọn"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
+                            </button>
 
-                        <button
-                            type="button"
-                            onClick={handleSaveAllDrafts}
-                            disabled={dirtyProductIds.length === 0 || loading || bulkProgress.running || hasBusyProducts}
-                            className="h-11 px-4 rounded-sm bg-emerald-600 text-white text-[12px] font-bold uppercase tracking-[0.14em] hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">save</span>
-                            Lưu tất cả
-                        </button>
+                            <button
+                                type="button"
+                                onClick={handleSaveAllDrafts}
+                                disabled={dirtyProductIds.length === 0 || loading || bulkProgress.running || hasBusyProducts}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-sm bg-emerald-600 text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Lưu tất cả sản phẩm đang có thay đổi"
+                                aria-label="Lưu tất cả sản phẩm đang có thay đổi"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">save</span>
+                            </button>
 
-                        <button
-                            type="button"
-                            onClick={handleDeleteSelectedImages}
-                            disabled={selectedImageCount === 0 || loading || bulkProgress.running || hasBusyProducts}
-                            className="h-11 px-4 rounded-sm border border-brick/20 bg-white text-[12px] font-bold text-brick hover:bg-brick/5 disabled:cursor-not-allowed disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                            Xóa ảnh đã chọn
-                        </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteSelectedImages}
+                                disabled={selectedImageCount === 0 || loading || bulkProgress.running || hasBusyProducts}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-brick/20 bg-white text-brick hover:bg-brick/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                title="Xóa các ảnh đang chọn"
+                                aria-label="Xóa các ảnh đang chọn"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                            </button>
 
-                        <button
-                            type="button"
-                            onClick={() => {
-                                void handleReloadAsync();
-                            }}
-                            disabled={loading || bulkProgress.running}
-                            className="h-11 px-4 rounded-sm border border-primary/20 bg-white text-[12px] font-bold text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                        >
-                            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
-                            Tải lại
-                        </button>
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-6">
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Tổng sản phẩm</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{products.length}</div>
-                        </div>
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Đang lọc</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{filteredProducts.length}</div>
-                        </div>
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Đã có ảnh</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{productsWithImagesCount}</div>
-                        </div>
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Tổng số ảnh</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{totalImageCount}</div>
-                        </div>
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">SP đã chọn</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{selectedProductIds.length}</div>
-                        </div>
-                        <div className="rounded-sm bg-primary/[0.04] px-4 py-3">
-                            <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/45">Chưa lưu</div>
-                            <div className="mt-2 text-2xl font-black text-primary">{dirtyProductIds.length}</div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleReloadAsync();
+                                }}
+                                disabled={loading || bulkProgress.running}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-sm border border-primary/20 bg-white text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
+                                title="Tải lại danh sách"
+                                aria-label="Tải lại danh sách"
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
+                            </button>
                         </div>
                     </div>
 
@@ -2684,7 +2686,7 @@ function ProductCategoryImageManagerModal({
                     ) : null}
                 </div>
 
-                <div className="mt-4 overflow-y-auto pr-2 custom-scrollbar-lg flex-1 space-y-4">
+                <div className="mt-3 overflow-y-auto pr-2 custom-scrollbar-lg flex-1">
                     {loading ? (
                         <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-12 text-center text-[13px] text-primary/70">
                             <div className="inline-flex items-center gap-2">
@@ -2701,20 +2703,13 @@ function ProductCategoryImageManagerModal({
                             Không có sản phẩm nào phù hợp với điều kiện đang lọc trong bảng quản lí ảnh.
                         </div>
                     ) : (
-                        paginatedProducts.map(renderProductCard)
+                        <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3">
+                            {paginatedProducts.map(renderProductCard)}
+                        </div>
                     )}
                 </div>
 
-                <div className="mt-4 border-t border-primary/10 pt-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="space-y-1 text-[12px] text-primary/60">
-                        <p>
-                            Mẹo thao tác nhanh: chọn nhiều ảnh rồi bấm <strong>Xóa ảnh đã chọn</strong>, hoặc chỉnh nhiều sản phẩm rồi bấm <strong>Lưu tất cả</strong>.
-                        </p>
-                        <p>
-                            Đang xem <strong>{paginatedProducts.length}</strong> / <strong>{filteredProducts.length}</strong> sản phẩm theo bộ lọc hiện tại.
-                        </p>
-                    </div>
-
+                <div className="mt-4 border-t border-primary/10 pt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex flex-col items-stretch gap-3 md:flex-row md:items-center">
                         <Pagination
                             pagination={paginationState}

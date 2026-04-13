@@ -46,12 +46,7 @@ const ProductSlider = ({ title, subtitle, products = [], loading = false }) => {
                                 whileHover={{ y: -10 }}
                                 transition={{ duration: 0.3 }}
                             >
-                                <ProductCard
-                                    product={{
-                                        ...product,
-                                        image: product.images?.[0]?.image_url || 'https://placehold.co/400'
-                                    }}
-                                />
+                                <ProductCard product={product} />
                             </motion.div>
                         ))}
                     </motion.div>

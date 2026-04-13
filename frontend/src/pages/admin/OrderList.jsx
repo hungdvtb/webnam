@@ -2464,7 +2464,7 @@ const OrderList = () => {
             console.error('Print orders error', error);
             setNotification({
                 type: 'error',
-                message: error.response?.data?.message || error.message || 'Không thể in đơn hàng.',
+                message: error.response?.data?.message || error.message || 'Không thể chuẩn bị bản in. Vui lòng thử lại.',
             });
         } finally {
             setPrintingOrders(false);

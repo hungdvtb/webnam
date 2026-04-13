@@ -10,6 +10,7 @@ use App\Services\MediaService;
 use App\Services\ProductImageRefreshService;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class ProductImageController extends Controller
@@ -59,6 +60,8 @@ class ProductImageController extends Controller
                 $nextSortOrder++;
             }
         }
+
+        $this->syncPrimaryImageForProduct((int) $productId);
 
         return response()->json($uploadedImages, 201);
     }
@@ -185,12 +188,16 @@ class ProductImageController extends Controller
     public function setPrimary($id)
     {
         $image = ProductImage::findOrFail($id);
-        
-        // Reset all other images for this product
-        ProductImage::where('product_id', $image->product_id)
-            ->update(['is_primary' => false]);
-            
-        $image->update(['is_primary' => true]);
+
+        DB::transaction(function () use ($image): void {
+            ProductImage::where('product_id', $image->product_id)
+                ->where('id', '!=', $image->id)
+                ->update(['is_primary' => false]);
+
+            $image->update(['is_primary' => true]);
+
+            $this->syncPrimaryImageForProduct((int) $image->product_id, (int) $image->id);
+        });
         
         return response()->json(['message' => 'Image set as primary.']);
     }
@@ -201,10 +208,17 @@ class ProductImageController extends Controller
     public function destroy($id)
     {
         $image = ProductImage::findOrFail($id);
+        $productId = (int) $image->product_id;
+        $wasPrimary = (bool) $image->is_primary;
         $image->delete();
+
+        if ($wasPrimary) {
+            $this->syncPrimaryImageForProduct($productId);
+        }
 
         return response()->json(['message' => 'Image deleted successfully.']);
     }
+
     public function reorder(Request $request)
     {
         $request->validate([
@@ -212,23 +226,66 @@ class ProductImageController extends Controller
             'ids.*' => 'exists:product_images,id'
         ]);
 
-        foreach ($request->ids as $index => $id) {
-            $isPrimary = $index === 0;
+        $orderedIds = collect($request->ids)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values();
+
+        $affectedProductIds = ProductImage::query()
+            ->whereIn('id', $orderedIds)
+            ->pluck('product_id')
+            ->map(fn ($productId) => (int) $productId)
+            ->unique()
+            ->values();
+
+        foreach ($orderedIds as $index => $id) {
             ProductImage::where('id', $id)->update([
                 'sort_order' => $index,
-                'is_primary' => $isPrimary
             ]);
-            
-            // If we just set a new primary, make sure others for that product are not primary
-            if ($isPrimary) {
-                $img = ProductImage::find($id);
-                ProductImage::where('product_id', $img->product_id)
-                    ->where('id', '!=', $id)
-                    ->update(['is_primary' => false]);
-            }
+        }
+
+        foreach ($affectedProductIds as $productId) {
+            $this->syncPrimaryImageForProduct($productId);
         }
 
         return response()->json(['message' => 'Images reordered successfully.']);
+    }
+
+    private function syncPrimaryImageForProduct(int $productId, ?int $preferredImageId = null): void
+    {
+        $images = ProductImage::query()
+            ->where('product_id', $productId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'is_primary']);
+
+        if ($images->isEmpty()) {
+            return;
+        }
+
+        $targetImage = $preferredImageId
+            ? $images->firstWhere('id', $preferredImageId)
+            : null;
+
+        if (!$targetImage) {
+            $targetImage = $images->firstWhere('is_primary', true) ?: $images->first();
+        }
+
+        if (!$targetImage) {
+            return;
+        }
+
+        ProductImage::query()
+            ->where('product_id', $productId)
+            ->where('id', '!=', $targetImage->id)
+            ->where('is_primary', true)
+            ->update(['is_primary' => false]);
+
+        if (!$targetImage->is_primary) {
+            ProductImage::query()
+                ->whereKey($targetImage->id)
+                ->update(['is_primary' => true]);
+        }
     }
 
     /**

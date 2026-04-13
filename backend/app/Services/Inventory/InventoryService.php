@@ -868,6 +868,29 @@ class InventoryService
             ]);
         }
 
+        $duplicateProductIds = $items
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->duplicates()
+            ->unique()
+            ->values();
+
+        if ($duplicateProductIds->isNotEmpty()) {
+            $duplicateNames = $duplicateProductIds
+                ->map(fn (int $productId) => trim((string) ($products->get($productId)?->name ?? '')))
+                ->filter()
+                ->values();
+
+            $message = 'San pham da ton tai trong phieu nhap. Moi san pham chi duoc chon 1 lan.';
+            if ($duplicateNames->isNotEmpty()) {
+                $message .= ' Trung: ' . $duplicateNames->take(3)->implode(', ') . ($duplicateNames->count() > 3 ? '...' : '') . '.';
+            }
+
+            throw ValidationException::withMessages([
+                'items' => $message,
+            ]);
+        }
+
         $supplierPrices = $supplier
             ? SupplierProductPrice::query()
                 ->where('supplier_id', $supplier->id)

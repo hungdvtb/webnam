@@ -241,18 +241,84 @@ class OrderController extends Controller
             'full name',
             'full_name',
             'fullname',
+            'ho ten',
+            'ho_ten',
+            'ho va ten',
+            'ho_va_ten',
             'nguoi nhan',
             'nguoi_nhan',
             'nguoi nhan hang',
             'nguoi_nhan_hang',
+            'nguoi mua',
+            'nguoi_mua',
+            'ten nguoi mua',
+            'ten_nguoi_mua',
             'receiver',
             'receiver_name',
             'recipient',
             'recipient_name',
+            'buyer',
+            'buyer_name',
+            'billing_name',
+            'shipping_full_name',
             'shipping_name',
             'ten khach',
             'ten khach hang',
             'ten nguoi nhan',
+        ];
+
+        $cache[$accountId] = Attribute::query()
+            ->where('account_id', $accountId)
+            ->where('entity_type', 'order')
+            ->get(['id', 'code', 'name'])
+            ->filter(function (Attribute $attribute) use ($needleList) {
+                $haystack = $this->normalizeSearchText(
+                    trim((string) ($attribute->code ?? '') . ' ' . (string) ($attribute->name ?? ''))
+                );
+
+                return $haystack !== '' && Str::contains($haystack, $needleList);
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        return $cache[$accountId];
+    }
+
+    private function candidateOrderPhoneAttributeIds(int $accountId): array
+    {
+        static $cache = [];
+
+        if ($accountId <= 0) {
+            return [];
+        }
+
+        if (array_key_exists($accountId, $cache)) {
+            return $cache[$accountId];
+        }
+
+        $needleList = [
+            'phone',
+            'phone_number',
+            'customer_phone',
+            'contact_phone',
+            'receiver_phone',
+            'recipient_phone',
+            'shipping_phone',
+            'buyer_phone',
+            'billing_phone',
+            'mobile',
+            'mobile_phone',
+            'telephone',
+            'tel',
+            'dien thoai',
+            'so dien thoai',
+            'so_dien_thoai',
+            'so dt',
+            'so_dt',
+            'sdt',
+            'zalo',
         ];
 
         $cache[$accountId] = Attribute::query()
@@ -357,6 +423,40 @@ class OrderController extends Controller
         });
     }
 
+    private function applyOrderPhoneSearch(
+        $query,
+        string $term,
+        int $accountId,
+        bool $or = false,
+        bool $prefixOnly = false
+    ): void {
+        $like = $prefixOnly
+            ? $this->prefixLike($term)
+            : $this->containsLike($term);
+
+        if ($like === null) {
+            return;
+        }
+
+        $phoneAttributeIds = $this->candidateOrderPhoneAttributeIds($accountId);
+        $method = $or ? 'orWhere' : 'where';
+
+        $query->{$method}(function ($phoneQuery) use ($like, $phoneAttributeIds) {
+            $this->applyInsensitiveLike($phoneQuery, 'customer_phone', $like);
+
+            $phoneQuery->orWhereHas('shipments', function ($shipmentQuery) use ($like) {
+                $this->applyInsensitiveLike($shipmentQuery, 'customer_phone', $like);
+            });
+
+            if (!empty($phoneAttributeIds)) {
+                $phoneQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($phoneAttributeIds, $like) {
+                    $attributeValueQuery->whereIn('attribute_id', $phoneAttributeIds);
+                    $this->applyInsensitiveLike($attributeValueQuery, 'value', $like);
+                });
+            }
+        });
+    }
+
     private function extractSearchTerms(Request $request): array
     {
         $rawSearchTerms = $request->input('search_terms');
@@ -397,7 +497,7 @@ class OrderController extends Controller
 
         $this->applyInsensitiveLike($query, 'order_number', $containsLike);
         $this->applyOrderNameSearch($query, $term, $accountId, true);
-        $this->applyInsensitiveLike($query, 'customer_phone', $containsLike, true);
+        $this->applyOrderPhoneSearch($query, $term, $accountId, true);
         $this->applyInsensitiveLike($query, 'shipping_address', $containsLike, true);
         $this->applyInsensitiveLike($query, 'notes', $containsLike, true);
         $this->applyInsensitiveLike($query, 'shipping_tracking_code', $containsLike, true);
@@ -437,6 +537,32 @@ class OrderController extends Controller
             foreach ($order->attributeValues as $attributeValue) {
                 if (
                     in_array((int) ($attributeValue->attribute_id ?? 0), $nameAttributeIds, true)
+                    && trim((string) ($attributeValue->value ?? '')) !== ''
+                ) {
+                    return trim((string) $attributeValue->value);
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveOrderDisplayCustomerPhone(Order $order, array $phoneAttributeIds = []): string
+    {
+        $customerPhone = trim((string) ($order->customer_phone ?? ''));
+        if ($customerPhone !== '') {
+            return $customerPhone;
+        }
+
+        $shipmentCustomerPhone = trim((string) ($order->activeShipment?->customer_phone ?? ''));
+        if ($shipmentCustomerPhone !== '') {
+            return $shipmentCustomerPhone;
+        }
+
+        if (!empty($phoneAttributeIds) && $order->relationLoaded('attributeValues')) {
+            foreach ($order->attributeValues as $attributeValue) {
+                if (
+                    in_array((int) ($attributeValue->attribute_id ?? 0), $phoneAttributeIds, true)
                     && trim((string) ($attributeValue->value ?? '')) !== ''
                 ) {
                     return trim((string) $attributeValue->value);
@@ -2006,8 +2132,8 @@ class OrderController extends Controller
             ->when($request->filled('order_number'), function ($q) use ($request) {
                 $this->applyInsensitiveLike($q, 'order_number', $this->containsLike((string) $request->input('order_number')));
             })
-            ->when($request->filled('customer_phone'), function ($q) use ($request) {
-                $this->applyInsensitiveLike($q, 'customer_phone', $this->prefixLike((string) $request->input('customer_phone')));
+            ->when($request->filled('customer_phone'), function ($q) use ($request, $accountId) {
+                $this->applyOrderPhoneSearch($q, (string) $request->input('customer_phone'), $accountId, false, true);
             })
             ->when($request->filled('shipping_address'), function ($q) use ($request) {
                 $this->applyInsensitiveLike($q, 'shipping_address', $this->containsLike((string) $request->input('shipping_address')));
@@ -2085,10 +2211,12 @@ class OrderController extends Controller
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildOrderMeta($orders, $accountId);
         $inventorySlipSummaryMap = $this->orderInventorySlipService->buildListSummaryMap($orders);
         $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
+        $phoneAttributeIds = $this->candidateOrderPhoneAttributeIds($accountId);
 
-        return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds) {
+        return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds, $phoneAttributeIds) {
             $payload = $order->toArray();
             $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
+            $payload['customer_phone'] = $this->resolveOrderDisplayCustomerPhone($order, $phoneAttributeIds);
 
             return array_merge(
                 $payload,
@@ -2516,7 +2644,7 @@ class OrderController extends Controller
                         ->select(['id', 'name', 'sku']),
                 ]),
             'attributeValues:id,order_id,attribute_id,value',
-            'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at'
+            'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at,customer_name,customer_phone'
         ]);
 
         $this->applyOrderListFilters($query, $request);

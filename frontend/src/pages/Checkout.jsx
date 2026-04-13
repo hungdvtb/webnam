@@ -6,6 +6,7 @@ import api, { couponApi } from '../services/api';
 import { VN_REGIONS } from '../data/regions';
 import SearchableSelect from '../components/SearchableSelect';
 import { rememberLeadAttribution } from '../utils/leadAttribution';
+import { resolveProductPrimaryImageUrl } from '../utils/mediaUrl';
 import {
     buildRegionPath,
     buildShippingAddress,
@@ -275,7 +276,7 @@ const Checkout = () => {
                 sku: item.product?.sku,
                 quantity: item.quantity,
                 price: item.price,
-                image: item.product?.images?.[0]?.image_url || '',
+                image: resolveProductPrimaryImageUrl(item.product, 'medium', ''),
                 meta: item.product?.category?.name || ''
             }));
 
@@ -607,7 +608,7 @@ const Checkout = () => {
                                         <div key={item.id} className="flex gap-3 rounded-[22px] bg-background-light p-3 lg:rounded-none lg:bg-transparent lg:p-0">
                                             <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-white lg:rounded-none lg:bg-background-light">
                                                 <img
-                                                    src={item.product?.images?.[0]?.image_url || 'https://placehold.co/120x120?text=No+Image'}
+                                                    src={resolveProductPrimaryImageUrl(item.product, 'medium', 'https://placehold.co/120x120?text=No+Image') || 'https://placehold.co/120x120?text=No+Image'}
                                                     alt={item.product?.name}
                                                     className="h-full w-full object-cover"
                                                 />

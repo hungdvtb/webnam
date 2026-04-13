@@ -54,7 +54,21 @@ const chunkItems = (items = [], size = 1) => {
 
 const resolveAdminImageUrl = (image, fallback = '') => resolveImageObjectUrl(image, 'thumbnail', fallback);
 
-const normalizeAdminImages = (items = []) => (
+const normalizeAdminPrimarySelection = (items = []) => {
+    if (!Array.isArray(items) || items.length === 0) {
+        return [];
+    }
+
+    const primaryIndex = items.findIndex((item) => Boolean(item?.is_primary));
+    const resolvedPrimaryIndex = primaryIndex >= 0 ? primaryIndex : 0;
+
+    return items.map((item, index) => ({
+        ...item,
+        is_primary: index === resolvedPrimaryIndex,
+    }));
+};
+
+const normalizeAdminImages = (items = []) => normalizeAdminPrimarySelection(
     Array.isArray(items)
         ? items.map((item) => ({
             ...item,
@@ -64,6 +78,11 @@ const normalizeAdminImages = (items = []) => (
         }))
         : []
 );
+
+const isTemporaryProductImageId = (imageId) => {
+    const normalizedId = String(imageId || '');
+    return normalizedId.startsWith('temp_') || normalizedId.startsWith('opt_');
+};
 
 const AI_INSTRUCTION_SUGGESTIONS = [
     'Viết ngắn gọn hơn, súc tích hơn.',
@@ -3428,12 +3447,7 @@ const ProductForm = () => {
         newImages.splice(dragIndex, 1);
         newImages.splice(hoverIndex, 0, draggedImage);
 
-        // Auto update primary status: first image is primary
-        const updatedImages = newImages.map((img, idx) => ({
-            ...img,
-            is_primary: idx === 0
-        }));
-        setImages(updatedImages);
+        setImages(normalizeAdminPrimarySelection(newImages));
     }, [images]);
 
     const handleImageUpload = async (e) => {
@@ -3451,7 +3465,7 @@ const ProductForm = () => {
             is_primary: false
         }));
         const placeholderIds = new Set(newPlaceholders.map((img) => img.id));
-        setImages(prev => [...prev, ...newPlaceholders]);
+        setImages(prev => normalizeAdminPrimarySelection([...prev, ...newPlaceholders]));
 
         try {
             const processedImages = [];
@@ -3471,7 +3485,7 @@ const ProductForm = () => {
             if (!isEdit) {
                 setImages(prev => {
                     const filtered = prev.filter(img => !placeholderIds.has(img.id));
-                    return [...filtered, ...finalImages];
+                    return normalizeAdminPrimarySelection([...filtered, ...finalImages]);
                 });
             } else {
                 let uploadedCount = 0;
@@ -3487,7 +3501,7 @@ const ProductForm = () => {
                     uploadedCount += uploadedImages.length;
                     setImages(prev => {
                         const filtered = prev.filter(img => !batchIds.has(img.id));
-                        return [...filtered, ...normalizeAdminImages(uploadedImages)];
+                        return normalizeAdminPrimarySelection([...filtered, ...normalizeAdminImages(uploadedImages)]);
                     });
 
                     batch.forEach((img) => {
@@ -3506,7 +3520,9 @@ const ProductForm = () => {
             }
         } catch (error) {
             console.error("Lỗi tối ưu/tải ảnh:", error);
-            setImages(prev => prev.filter(img => !placeholderIds.has(img.id)));
+            setImages(prev => normalizeAdminPrimarySelection(
+                prev.filter(img => !placeholderIds.has(img.id))
+            ));
             newPlaceholders.forEach((img) => {
                 if (img.image_url?.startsWith('blob:')) {
                     URL.revokeObjectURL(img.image_url);
@@ -3524,18 +3540,29 @@ const ProductForm = () => {
 
     const handleSetPrimary = async (imgId) => {
         try {
+            if (isTemporaryProductImageId(imgId)) {
+                setImages(prev => normalizeAdminPrimarySelection(
+                    prev.map(img => ({ ...img, is_primary: img.id === imgId }))
+                ));
+                return;
+            }
+
             await productImageApi.setPrimary(imgId);
-            setImages(images.map(img => ({ ...img, is_primary: img.id === imgId })));
+            setImages(prev => normalizeAdminPrimarySelection(
+                prev.map(img => ({ ...img, is_primary: img.id === imgId }))
+            ));
         } catch (error) {
             alert("Lỗi cài đặt ảnh đại diện");
         }
     };
 
     const handleDeleteImage = async (imgId) => {
-        setImages(prev => prev.filter(img => img.id !== imgId));
+        setImages(prev => normalizeAdminPrimarySelection(
+            prev.filter(img => img.id !== imgId)
+        ));
         setSelectedImages(prev => prev.filter(id => id !== imgId));
 
-        if (imgId.toString().startsWith('temp_') || imgId.toString().startsWith('opt_')) return;
+        if (isTemporaryProductImageId(imgId)) return;
         try {
             await productImageApi.destroy(imgId);
         } catch (error) {
@@ -3556,10 +3583,12 @@ const ProductForm = () => {
         if (selectedImages.length === 0) return;
         const toDelete = [...selectedImages];
         setSelectedImages([]); // clear
-        setImages(prev => prev.filter(img => !toDelete.includes(img.id)));
+        setImages(prev => normalizeAdminPrimarySelection(
+            prev.filter(img => !toDelete.includes(img.id))
+        ));
 
         toDelete.forEach(async (id) => {
-            if (id.toString().startsWith('temp_') || id.toString().startsWith('opt_')) return;
+            if (isTemporaryProductImageId(id)) return;
             try {
                 await productImageApi.destroy(id);
             } catch (e) { console.error("Lỗi xóa ảnh nhiều", e) }
@@ -5036,7 +5065,9 @@ const ProductForm = () => {
 
             // Add images
             // 1. Existing image IDs to keep
-            const existingImageIds = images.filter(img => !img.file).map(img => img.id);
+            const existingImageIds = images
+                .filter(img => !img.file && !isTemporaryProductImageId(img.id))
+                .map(img => img.id);
             existingImageIds.forEach(id => submitData.append('existing_image_ids[]', id));
 
             // 2. New files to upload
@@ -5057,10 +5088,39 @@ const ProductForm = () => {
 
             const productId = response.data.id;
 
-            // Sync image order if edited or newly created with multiple images
-            const realImageIds = images.filter(img => !img.id.toString().startsWith('temp_')).map(img => img.id);
-            if (!isDuplicate && realImageIds.length > 1) {
-                await productImageApi.reorder(realImageIds);
+            let persistedImages = Array.isArray(response.data?.images) ? response.data.images : [];
+            if (persistedImages.length === 0 && productId) {
+                try {
+                    const refreshedProduct = await productApi.getOne(productId);
+                    persistedImages = Array.isArray(refreshedProduct.data?.images) ? refreshedProduct.data.images : [];
+                } catch (refreshError) {
+                    console.error('Unable to refresh product images after save:', refreshError);
+                }
+            }
+
+            const remainingServerImages = [...persistedImages];
+            const resolvedImageIds = images
+                .map((img) => {
+                    if (!isTemporaryProductImageId(img.id)) {
+                        return Number(img.id) || null;
+                    }
+
+                    const nextServerImage = remainingServerImages.shift();
+                    return nextServerImage?.id ? Number(nextServerImage.id) : null;
+                })
+                .filter(Boolean);
+
+            const preferredPrimaryIndex = images.findIndex((img) => Boolean(img.is_primary));
+            const preferredPrimaryId = preferredPrimaryIndex >= 0
+                ? resolvedImageIds[preferredPrimaryIndex] || null
+                : (resolvedImageIds[0] || null);
+
+            if (resolvedImageIds.length > 0) {
+                await productImageApi.reorder(resolvedImageIds);
+
+                if (preferredPrimaryId) {
+                    await productImageApi.setPrimary(preferredPrimaryId);
+                }
             }
 
             showToast({ message: 'Sản phẩm đã được lưu thành công!', type: 'success' });

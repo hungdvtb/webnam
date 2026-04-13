@@ -59,6 +59,61 @@ const writeHtmlDocument = (targetWindow, html) => {
     targetWindow.document.close();
 };
 
+const loadHtmlIntoPrintWindow = async (targetWindow, html) => {
+    if (!targetWindow || targetWindow.closed) {
+        throw new Error('KhÃ´ng thá»ƒ khá»Ÿi táº¡o tÃ i liá»‡u in.');
+    }
+
+    const canNavigateWithBlobUrl = typeof Blob === 'function'
+        && typeof URL !== 'undefined'
+        && typeof URL.createObjectURL === 'function'
+        && typeof URL.revokeObjectURL === 'function'
+        && typeof targetWindow.location?.replace === 'function';
+
+    if (!canNavigateWithBlobUrl) {
+        writeHtmlDocument(targetWindow, html);
+        return () => {};
+    }
+
+    const htmlBlob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+
+    try {
+        await new Promise((resolve) => {
+            let settled = false;
+            let timeoutId = null;
+
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+
+                if (timeoutId !== null) {
+                    getTimerWindow(targetWindow).clearTimeout(timeoutId);
+                }
+
+                targetWindow.removeEventListener('load', handleLoad);
+                resolve();
+            };
+
+            const handleLoad = () => {
+                finish();
+            };
+
+            timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+            targetWindow.addEventListener('load', handleLoad, { once: true });
+            targetWindow.location.replace(htmlUrl);
+        });
+
+        return () => {
+            URL.revokeObjectURL(htmlUrl);
+        };
+    } catch (error) {
+        URL.revokeObjectURL(htmlUrl);
+        writeHtmlDocument(targetWindow, html);
+        return () => {};
+    }
+};
+
 const buildLoadingPrintDocument = (title = 'Chuẩn bị bản in') => `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -914,17 +969,29 @@ const printHtmlDocument = async ({
         throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
     }
 
-    writeHtmlDocument(targetWindow, html);
-    await waitForPrintableDocument(targetWindow);
+    const releaseLoadedDocument = await loadHtmlIntoPrintWindow(targetWindow, html);
 
-    const printResult = await waitForPrintDialogToClose({
-        ownerWindow: targetWindow,
-        printWindow: targetWindow,
-        triggerPrint: () => {
-            targetWindow.focus?.();
-            targetWindow.print();
-        },
-    });
+    try {
+        await waitForPrintableDocument(targetWindow);
+    } catch (error) {
+        releaseLoadedDocument();
+        throw error;
+    }
+
+    const printResult = await (async () => {
+        try {
+            return await waitForPrintDialogToClose({
+                ownerWindow: targetWindow,
+                printWindow: targetWindow,
+                triggerPrint: () => {
+                    targetWindow.focus?.();
+                    targetWindow.print();
+                },
+            });
+        } finally {
+            releaseLoadedDocument();
+        }
+    })();
 
     return {
         ...printResult,

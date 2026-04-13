@@ -56,6 +56,15 @@ export const resolveImageObjectUrl = (image, preferred = 'large', fallback = '')
     return resolved || resolveMediaUrl(fallback);
 };
 
+export const pickPrimaryImageObject = (images = []) => {
+    if (!Array.isArray(images)) {
+        return null;
+    }
+
+    const normalizedImages = images.filter((image) => image && typeof image === 'object');
+    return normalizedImages.find((image) => Boolean(image.is_primary)) || normalizedImages[0] || null;
+};
+
 export const resolveEntityImageUrl = (entity, preferred = 'large', fallback = '') => {
     if (!entity || typeof entity !== 'object') {
         return resolveMediaUrl(fallback);
@@ -97,6 +106,27 @@ export const resolveEntityImageUrl = (entity, preferred = 'large', fallback = ''
     }
 
     return resolveMediaUrl(fallback);
+};
+
+export const resolveProductPrimaryImageUrl = (entity, preferred = 'large', fallback = '') => {
+    if (!entity || typeof entity !== 'object') {
+        return resolveMediaUrl(fallback);
+    }
+
+    const explicitPrimaryUrl = resolveImageObjectUrl(entity.primary_image, preferred);
+    if (explicitPrimaryUrl) {
+        return explicitPrimaryUrl;
+    }
+
+    const collectionPrimaryUrl = resolveImageObjectUrl(
+        pickPrimaryImageObject(entity.images),
+        preferred,
+    );
+    if (collectionPrimaryUrl) {
+        return collectionPrimaryUrl;
+    }
+
+    return resolveEntityImageUrl(entity, preferred, fallback);
 };
 
 export const resolvePostFeaturedImageUrl = (post, preferred = 'large') => resolveEntityImageUrl(

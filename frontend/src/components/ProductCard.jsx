@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { resolveProductPrimaryImageUrl } from '../utils/mediaUrl';
 
 const ProductCard = ({ product }) => {
     const { addToCart } = useCart();
@@ -25,8 +26,11 @@ const ProductCard = ({ product }) => {
             <Link to={productDetailPath} className="relative w-full aspect-[4/5] overflow-hidden p-2 bg-white shadow-sm hover-lift cursor-pointer">
                 <div className="w-full h-full border-2 border-gold/20 overflow-hidden relative">
                     {(() => {
-                        const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
-                        const imageSrc = (primaryImage && primaryImage.image_url) ? primaryImage.image_url : "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800";
+                        const imageSrc = resolveProductPrimaryImageUrl(
+                            product,
+                            'large',
+                            "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?auto=format&fit=crop&q=80&w=800",
+                        );
                         return (
                             <img
                                 alt={product.name}

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, STORAGE_BASE_URL, aiApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, aiApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
@@ -22,6 +22,7 @@ import {
     normalizeWholeMoneyDraft,
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
+import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
 const PRODUCT_DETAIL_PATH = '/san-pham';
@@ -292,14 +293,7 @@ function downloadBlobResponse(response, fallbackFilename) {
 }
 
 function getPrimaryImage(product) {
-    if (!product || !product.images || product.images.length === 0) return null;
-    const primary = product.images.find(img => img.is_primary);
-    let url = primary?.image_url || product.images[0]?.image_url;
-    
-    if (url && !url.startsWith('http') && !url.startsWith('data:')) {
-        url = `${STORAGE_BASE_URL}/storage/${url.replace(/^\/storage\//, '').replace(/^\//, '')}`;
-    }
-    return url || null;
+    return resolveProductPrimaryImageUrl(product, 'thumbnail', '');
 }
 
 function getDisplayStock(product) {

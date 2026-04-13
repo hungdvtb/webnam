@@ -973,6 +973,69 @@ const updateInventoryImportStarInProductCollection = (rows = [], productId, star
             : row?.variants,
     }))
 );
+const normalizeImportProductId = (value) => {
+    const numericValue = Number(value || 0);
+    return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : 0;
+};
+const findImportDuplicateSelection = (items = [], productId, excludeIndex = null) => {
+    const normalizedProductId = normalizeImportProductId(productId);
+    if (!normalizedProductId) {
+        return null;
+    }
+
+    const duplicateIndex = (items || []).findIndex((item, index) => (
+        index !== excludeIndex
+        && normalizeImportProductId(item?.product_id) === normalizedProductId
+    ));
+
+    if (duplicateIndex < 0) {
+        return null;
+    }
+
+    return {
+        productId: normalizedProductId,
+        index: duplicateIndex,
+        item: items[duplicateIndex],
+    };
+};
+const findFirstDuplicateImportProductSelection = (items = []) => {
+    const seenIndexes = new Map();
+
+    for (let index = 0; index < (items || []).length; index += 1) {
+        const item = items[index];
+        const productId = normalizeImportProductId(item?.product_id);
+
+        if (!productId) {
+            continue;
+        }
+
+        if (seenIndexes.has(productId)) {
+            const firstIndex = seenIndexes.get(productId);
+
+            return {
+                productId,
+                firstIndex,
+                firstItem: items[firstIndex],
+                duplicateIndex: index,
+                duplicateItem: item,
+            };
+        }
+
+        seenIndexes.set(productId, index);
+    }
+
+    return null;
+};
+const buildImportDuplicateProductLabel = (product = null, item = null) => {
+    const name = String(product?.name || item?.product_name || '').trim();
+    const sku = String(product?.sku || item?.product_sku || '').trim();
+
+    if (name && sku) {
+        return `${name} (${sku})`;
+    }
+
+    return name || sku || 'Sản phẩm';
+};
 const hasImportSourceSnapshot = (item = {}) => [
     item.source_product_name,
     item.source_product_sku,
@@ -2702,7 +2765,12 @@ const ImportLineProductLookupInput = ({
         setDraftValue(product?.sku || draftValue);
         setResults([]);
         closeDropdown();
-        await Promise.resolve(onSelect?.(product));
+        const selectionResult = await Promise.resolve(onSelect?.(product));
+        if (selectionResult?.accepted === false) {
+            pendingSelectionRef.current = false;
+            setDraftValue(value || '');
+            requestAnimationFrame(() => inputRef.current?.focus());
+        }
     };
 
     useEffect(() => {
@@ -2726,7 +2794,14 @@ const ImportLineProductLookupInput = ({
         setOpen(false);
         setActiveIndex(-1);
         setResults([]);
-        void Promise.resolve(onSelect?.(exactMatch));
+        void (async () => {
+            const selectionResult = await Promise.resolve(onSelect?.(exactMatch));
+            if (selectionResult?.accepted === false) {
+                pendingSelectionRef.current = false;
+                setDraftValue(value || '');
+                requestAnimationFrame(() => inputRef.current?.focus());
+            }
+        })();
     }, [draftValue, exactMatch, onSelect, selectedProductId]);
 
     const showDropdown = open && (draftValue.trim().length > 0 || loading);
@@ -2865,6 +2940,7 @@ const ImportItemsEditorTable = ({
     onMoveLine = null,
     onToggleProductStar = null,
     starLoadingProductIds = [],
+    focusedRowKey = '',
     readOnly = false,
     hideActions = false,
     storageKey = 'inventory_import_modal_table_v3',
@@ -2888,6 +2964,7 @@ const ImportItemsEditorTable = ({
     const rowDragEnabled = Boolean(onMoveLine && !readOnly && !hideActions && displayRows.length > 1);
     const [draggingRowIndex, setDraggingRowIndex] = useState(null);
     const [dragOverRowIndex, setDragOverRowIndex] = useState(null);
+    const rowRefs = useRef(new Map());
 
     const {
         availableColumns,
@@ -2908,6 +2985,23 @@ const ImportItemsEditorTable = ({
         setDraggingRowIndex(null);
         setDragOverRowIndex(null);
     };
+
+    useEffect(() => {
+        if (!focusedRowKey) {
+            return;
+        }
+
+        const rowElement = rowRefs.current.get(focusedRowKey);
+        if (!rowElement) {
+            return;
+        }
+
+        rowElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        const focusTarget = rowElement.querySelector('input, select, textarea, button');
+        if (focusTarget && typeof focusTarget.focus === 'function') {
+            focusTarget.focus({ preventScroll: true });
+        }
+    }, [displayRows, focusedRowKey]);
 
     const handleRowDragStart = (event, rowIndex) => {
         if (!rowDragEnabled) return;
@@ -3154,12 +3248,20 @@ const ImportItemsEditorTable = ({
                         {displayRows.map((row, rowIndex) => (
                             <tr
                                 key={row.key}
+                                ref={(node) => {
+                                    if (node) {
+                                        rowRefs.current.set(row.key, node);
+                                    } else {
+                                        rowRefs.current.delete(row.key);
+                                    }
+                                }}
                                 onDragOver={rowDragEnabled ? (event) => handleRowDragOver(event, row._row_index) : undefined}
                                 onDrop={rowDragEnabled ? (event) => handleRowDrop(event, row._row_index) : undefined}
                                 onDragEnd={rowDragEnabled ? clearRowDragState : undefined}
                                 className={[
                                     row._is_incomplete ? 'bg-amber-50/70' : '',
                                     row.inventory_import_starred ? 'shadow-[inset_3px_0_0_0_rgba(245,158,11,0.95)]' : '',
+                                    focusedRowKey === row.key ? 'bg-amber-50 ring-2 ring-inset ring-amber-300' : '',
                                     draggingRowIndex === row._row_index ? 'opacity-55' : '',
                                     dragOverRowIndex === row._row_index && draggingRowIndex !== row._row_index ? 'bg-primary/[0.06]' : '',
                                 ].filter(Boolean).join(' ')}
@@ -3348,6 +3450,8 @@ const InventoryMovement = () => {
     const restoredSupplierContextRef = useRef(false);
     const restoredImportDraftRef = useRef(false);
     const importModalOpenRef = useRef(false);
+    const importModalStateRef = useRef({ open: false, form: createImportForm() });
+    const importDuplicateFocusTimeoutRef = useRef(null);
     const productCopyFeedbackTimeoutRef = useRef(null);
     const skipSupplierSearchResetRef = useRef(false);
     const savingSupplierPriceRowsRef = useRef(new Set());
@@ -3477,6 +3581,7 @@ const InventoryMovement = () => {
     const [importInvoiceDeletingId, setImportInvoiceDeletingId] = useState(null);
     const [importCompleteToggleSnapshot, setImportCompleteToggleSnapshot] = useState(null);
     const [importStarLoadingProductIds, setImportStarLoadingProductIds] = useState([]);
+    const [focusedImportRowKey, setFocusedImportRowKey] = useState('');
     const [importTableSettingsOpen, setImportTableSettingsOpen] = useState(false);
     const [importTableExpanded, setImportTableExpanded] = useState(false);
     const [importPrintModalOpen, setImportPrintModalOpen] = useState(false);
@@ -3951,6 +4056,45 @@ const InventoryMovement = () => {
         };
     };
 
+    const highlightImportRow = (rowKey) => {
+        setFocusedImportRowKey(rowKey || '');
+
+        if (importDuplicateFocusTimeoutRef.current) {
+            clearTimeout(importDuplicateFocusTimeoutRef.current);
+            importDuplicateFocusTimeoutRef.current = null;
+        }
+
+        if (!rowKey) {
+            return;
+        }
+
+        importDuplicateFocusTimeoutRef.current = setTimeout(() => {
+            setFocusedImportRowKey((currentKey) => (currentKey === rowKey ? '' : currentKey));
+            importDuplicateFocusTimeoutRef.current = null;
+        }, 1800);
+    };
+
+    const notifyDuplicateImportProduct = (duplicate, product = null) => {
+        const duplicateItem = duplicate?.item || duplicate?.firstItem || duplicate?.duplicateItem || null;
+        const rowKey = duplicateItem?.key || '';
+        const productLabel = buildImportDuplicateProductLabel(product, duplicateItem);
+
+        if (rowKey) {
+            highlightImportRow(rowKey);
+        }
+
+        showToast({
+            type: 'warning',
+            message: `${productLabel} đã tồn tại trong phiếu nhập.`,
+        });
+
+        return {
+            accepted: false,
+            duplicate: true,
+            rowKey,
+        };
+    };
+
     const closeImportModal = () => {
         clearPersistedImportDraft();
         setImportTableSettingsOpen(false);
@@ -3958,6 +4102,7 @@ const InventoryMovement = () => {
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
         setImportStarLoadingProductIds([]);
+        highlightImportRow('');
         setImportModal({
             open: false,
             form: createImportForm({
@@ -4478,23 +4623,34 @@ const InventoryMovement = () => {
     };
 
     const attachImportProductToLine = (index, product) => {
-        setImportModal((prev) => {
-            const nextItems = prev.form.items.map((item, itemIndex) => (
-                itemIndex === index
-                    ? applyImportProductData(item, product)
-                    : item
-            ));
+        if (!product?.id) {
+            return { accepted: false };
+        }
 
-            const syncedForm = synchronizeImportFormCompletion({
-                ...prev.form,
+        const currentModal = importModalStateRef.current;
+        const duplicateSelection = findImportDuplicateSelection(currentModal.form.items, product.id, index);
+        if (duplicateSelection) {
+            return notifyDuplicateImportProduct(duplicateSelection, product);
+        }
+
+        const nextItems = currentModal.form.items.map((item, itemIndex) => (
+            itemIndex === index
+                ? applyImportProductData(item, product)
+                : item
+        ));
+
+        const nextState = {
+            ...currentModal,
+            form: synchronizeImportFormCompletion({
+                ...currentModal.form,
                 items: product.inventory_import_starred ? sortImportItemsByStarPriority(nextItems) : nextItems,
-            });
+            }),
+        };
 
-            return {
-                ...prev,
-                form: syncedForm,
-            };
-        });
+        importModalStateRef.current = nextState;
+        setImportModal(nextState);
+
+        return { accepted: true };
     };
 
     const clearImportProductFromLine = (index) => {
@@ -4516,30 +4672,44 @@ const InventoryMovement = () => {
     };
 
     const appendImportProductFromQuickSearch = (product) => {
-        setImportModal((prev) => {
-            let targetIndex = prev.form.items.findIndex((item) => !item.product_id);
-            let nextItems = [...prev.form.items];
+        if (!product?.id) {
+            return { accepted: false };
+        }
 
-            if (targetIndex < 0) {
-                targetIndex = nextItems.length;
-                nextItems.push(createLine({
-                    update_supplier_price: Boolean(prev.form.update_supplier_prices),
-                }));
-            }
+        const currentModal = importModalStateRef.current;
+        const duplicateSelection = findImportDuplicateSelection(currentModal.form.items, product.id);
+        if (duplicateSelection) {
+            return notifyDuplicateImportProduct(duplicateSelection, product);
+        }
 
-            nextItems = nextItems.map((item, itemIndex) => (
-                itemIndex === targetIndex
-                    ? applyImportProductData(item, product)
-                    : item
-            ));
+        let targetIndex = currentModal.form.items.findIndex((item) => !item.product_id);
+        let nextItems = [...currentModal.form.items];
 
-            const syncedForm = synchronizeImportFormCompletion({
-                ...prev.form,
+        if (targetIndex < 0) {
+            targetIndex = nextItems.length;
+            nextItems.push(createLine({
+                update_supplier_price: Boolean(currentModal.form.update_supplier_prices),
+            }));
+        }
+
+        nextItems = nextItems.map((item, itemIndex) => (
+            itemIndex === targetIndex
+                ? applyImportProductData(item, product)
+                : item
+        ));
+
+        const nextState = {
+            ...currentModal,
+            form: synchronizeImportFormCompletion({
+                ...currentModal.form,
                 items: product.inventory_import_starred ? sortImportItemsByStarPriority(nextItems) : nextItems,
-            });
+            }),
+        };
 
-            return { ...prev, form: syncedForm };
-        });
+        importModalStateRef.current = nextState;
+        setImportModal(nextState);
+
+        return { accepted: true };
     };
 
     const fetchInventoryUnits = async () => {
@@ -4888,6 +5058,16 @@ const InventoryMovement = () => {
     }, [importModal.open]);
 
     useEffect(() => {
+        importModalStateRef.current = importModal;
+    }, [importModal]);
+
+    useEffect(() => () => {
+        if (importDuplicateFocusTimeoutRef.current) {
+            clearTimeout(importDuplicateFocusTimeoutRef.current);
+        }
+    }, []);
+
+    useEffect(() => {
         if (restoredImportDraftRef.current) return undefined;
 
         const draft = readPersistedImportDraft();
@@ -4918,9 +5098,10 @@ const InventoryMovement = () => {
                     : null
             );
             setImportStarLoadingProductIds([]);
+            const restoredForm = synchronizeImportFormCompletion(restorePersistedImportForm(draft.form));
             setImportModal({
                 open: true,
-                form: synchronizeImportFormCompletion(restorePersistedImportForm(draft.form)),
+                form: restoredForm,
             });
 
             showToast({
@@ -4929,6 +5110,11 @@ const InventoryMovement = () => {
                     ? 'Đã khôi phục phiếu nhập đang làm dở. Tệp đính kèm chưa tải lên cần chọn lại.'
                     : 'Đã khôi phục phiếu nhập đang làm dở.',
             });
+
+            const duplicateSelection = findFirstDuplicateImportProductSelection(restoredForm.items);
+            if (duplicateSelection) {
+                notifyDuplicateImportProduct(duplicateSelection);
+            }
         };
 
         void restoreDraft();
@@ -5917,6 +6103,23 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const subtotalAmount = Number(draft.subtotal_amount || 0);
             const totalAmount = Number(draft.total_amount || subtotalAmount);
             const extraChargeAmount = Math.round(totalAmount - subtotalAmount);
+            const mappedDraftItems = (draft.items || []).length
+                ? draft.items.map((item) => createLine({
+                    key: item.row_key || undefined,
+                    product_id: item.product_id || '',
+                    product_name: item.product_name || '',
+                    product_sku: item.sku || '',
+                    supplier_product_code: item.supplier_product_code || '',
+                    quantity: String(item.quantity || 1),
+                    received_quantity: String(item.received_quantity ?? 0),
+                    unit_name: item.unit_name || '',
+                    unit_cost: String(Math.round(Number(item.unit_cost || 0))),
+                    notes: item.notes || '',
+                    update_supplier_price: true,
+                    mapping_status: item.mapping_status || (item.product_id ? 'matched' : 'unmatched'),
+                    mapping_label: item.mapping_label || '',
+                }))
+                : null;
 
             setImportModal((prev) => {
                 const nextForm = {
@@ -5947,23 +6150,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                             url: log.file_url || null,
                         },
                     ] : prev.form.attachments,
-                    items: (draft.items || []).length
-                        ? draft.items.map((item) => createLine({
-                            key: item.row_key || undefined,
-                            product_id: item.product_id || '',
-                            product_name: item.product_name || '',
-                            product_sku: item.sku || '',
-                            supplier_product_code: item.supplier_product_code || '',
-                            quantity: String(item.quantity || 1),
-                            received_quantity: String(item.received_quantity ?? 0),
-                            unit_name: item.unit_name || '',
-                            unit_cost: String(Math.round(Number(item.unit_cost || 0))),
-                            notes: item.notes || '',
-                            update_supplier_price: true,
-                            mapping_status: item.mapping_status || (item.product_id ? 'matched' : 'unmatched'),
-                            mapping_label: item.mapping_label || '',
-                        }))
-                        : prev.form.items,
+                    items: mappedDraftItems || prev.form.items,
                 };
 
                 return {
@@ -5972,6 +6159,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     form: synchronizeImportFormCompletion(nextForm),
                 };
             });
+
+            const draftDuplicateSelection = findFirstDuplicateImportProductSelection(mappedDraftItems || []);
+            if (draftDuplicateSelection) {
+                notifyDuplicateImportProduct(draftDuplicateSelection);
+            }
 
             showToast({
                 type: Array.isArray(draft.unmatched_lines) && draft.unmatched_lines.length ? 'warning' : 'success',
@@ -5997,6 +6189,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         setImportTableSettingsOpen(false);
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
+        highlightImportRow('');
         setImportModal({
             open: true,
             form: synchronizeImportFormCompletion(createImportForm({
@@ -6093,10 +6286,16 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         setFlag('importModal', true);
         try {
             const response = await inventoryApi.getImport(row.id);
+            const nextForm = synchronizeImportFormCompletion(createImportForm(response.data));
             setImportTableSettingsOpen(false);
             closeImportPrintModal();
             setImportCompleteToggleSnapshot(null);
-            setImportModal({ open: true, form: synchronizeImportFormCompletion(createImportForm(response.data)) });
+            highlightImportRow('');
+            setImportModal({ open: true, form: nextForm });
+            const duplicateSelection = findFirstDuplicateImportProductSelection(nextForm.items);
+            if (duplicateSelection) {
+                notifyDuplicateImportProduct(duplicateSelection);
+            }
         } catch (error) {
             fail(error, 'Không thể tải phiếu nhập để sửa.');
         } finally {
@@ -6148,6 +6347,12 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         const pendingMappedLines = form.items.filter((item) => !item.product_id && (item.product_name || item.product_sku || item.supplier_product_code || item.unit_cost || item.notes));
         if (pendingMappedLines.length) {
             return showToast({ type: 'warning', message: 'Còn dòng chưa map sản phẩm. Hãy chọn tay trước khi lưu phiếu nhập.' });
+        }
+
+        const duplicateSelection = findFirstDuplicateImportProductSelection(form.items);
+        if (duplicateSelection) {
+            notifyDuplicateImportProduct(duplicateSelection);
+            return;
         }
 
         const items = buildImportPayloadItems(form.items);
@@ -8518,6 +8723,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         onMoveLine={moveImportLine}
                         onToggleProductStar={toggleImportProductStar}
                         starLoadingProductIds={importStarLoadingProductIds}
+                        focusedRowKey={!importTableExpanded ? focusedImportRowKey : ''}
                     />
 
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -8554,6 +8760,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     onMoveLine={moveImportLine}
                     onToggleProductStar={toggleImportProductStar}
                     starLoadingProductIds={importStarLoadingProductIds}
+                    focusedRowKey={importTableExpanded ? focusedImportRowKey : ''}
                 />
             </ModalShell>
             <ModalShell

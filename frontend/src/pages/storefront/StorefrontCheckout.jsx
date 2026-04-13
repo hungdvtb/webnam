@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
 import { trackInitiateCheckout, trackPurchase } from '../../components/TrackingScripts';
+import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
 
 const StorefrontCheckout = () => {
     const navigate = useNavigate();
@@ -116,7 +117,7 @@ const StorefrontCheckout = () => {
                         sku: product.sku,
                         quantity: form.quantity,
                         price: unitPrice,
-                        image: product.images?.[0]?.url || product.main_image || '',
+                        image: resolveProductPrimaryImageUrl(product, 'medium', product.main_image || ''),
                         meta: resolvedBundleOption || product.category?.name || '',
                     }] : [],
                 },
@@ -228,8 +229,12 @@ const StorefrontCheckout = () => {
                             {product ? (
                                 <div className="space-y-4">
                                     <div className="flex gap-3">
-                                        {product.images?.[0] && (
-                                            <img src={product.images[0].url} alt="" className="w-20 h-20 rounded-xl object-cover border border-stone-100" />
+                                        {resolveProductPrimaryImageUrl(product, 'medium') && (
+                                            <img
+                                                src={resolveProductPrimaryImageUrl(product, 'medium')}
+                                                alt=""
+                                                className="w-20 h-20 rounded-xl object-cover border border-stone-100"
+                                            />
                                         )}
                                         <div className="flex-1 min-w-0">
                                             <h4 className="text-sm font-bold text-stone-800 line-clamp-2">{product.name}</h4>

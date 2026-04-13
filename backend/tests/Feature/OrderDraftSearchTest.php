@@ -104,6 +104,73 @@ class OrderDraftSearchTest extends TestCase
             ->assertJsonPath('data.0.customer_name', $receiverName);
     }
 
+    public function test_draft_search_can_match_common_name_and_phone_attribute_aliases(): void
+    {
+        $this->skipUnlessPostgresSearchDriver();
+
+        [$account, $user] = $this->authenticate();
+
+        $nameAttribute = Attribute::query()->create([
+            'account_id' => $account->id,
+            'entity_type' => 'order',
+            'name' => "H\u{1ECD} v\u{00E0} t\u{00EA}n",
+            'code' => 'ho_va_ten',
+            'frontend_type' => 'text',
+            'is_filterable' => false,
+            'is_filterable_frontend' => false,
+            'is_filterable_backend' => false,
+            'is_required' => false,
+            'is_variant' => false,
+            'status' => true,
+        ]);
+
+        $phoneAttribute = Attribute::query()->create([
+            'account_id' => $account->id,
+            'entity_type' => 'order',
+            'name' => "S\u{1ED1} \u0111i\u{1EC7}n tho\u{1EA1}i",
+            'code' => 'so_dien_thoai',
+            'frontend_type' => 'text',
+            'is_filterable' => false,
+            'is_filterable_frontend' => false,
+            'is_filterable_backend' => false,
+            'is_required' => false,
+            'is_variant' => false,
+            'status' => true,
+        ]);
+
+        $resolvedName = "Ng\u{00F4} Thanh \u0110\u{1ED7}";
+        $resolvedPhone = '0911222333';
+
+        $target = $this->createDraftOrder($account, $user, [
+            'customer_name' => '',
+            'customer_phone' => '',
+        ]);
+
+        OrderAttributeValue::query()->insert([
+            [
+                'order_id' => $target->id,
+                'attribute_id' => $nameAttribute->id,
+                'value' => $resolvedName,
+            ],
+            [
+                'order_id' => $target->id,
+                'attribute_id' => $phoneAttribute->id,
+                'value' => $resolvedPhone,
+            ],
+        ]);
+
+        $this->draftResponse($account, ['search' => 'ngo thanh do'])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $target->id)
+            ->assertJsonPath('data.0.customer_name', $resolvedName)
+            ->assertJsonPath('data.0.customer_phone', $resolvedPhone);
+
+        $this->assertSame([$target->id], $this->draftSearchIds($account, ['customer_name' => 'ngo thanh do']));
+        $this->assertSame([$target->id], $this->draftSearchIds($account, ['customer_phone' => $resolvedPhone]));
+        $this->assertSame([$target->id], $this->draftSearchIds($account, ['search' => $resolvedPhone]));
+    }
+
     public function test_draft_search_keeps_phone_order_number_and_tracking_code_lookup_working(): void
     {
         [$account, $user] = $this->authenticate();

@@ -222,10 +222,7 @@ const Shop = () => {
                 ) : products.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-8 gap-y-16">
                         {products.map(product => (
-                            <ProductCard key={product.id} product={{
-                                ...product,
-                                image: product.images?.[0]?.image_url || 'https://placehold.co/400'
-                            }} />
+                            <ProductCard key={product.id} product={product} />
                         ))}
                     </div>
                 ) : (

@@ -49,6 +49,43 @@ const withTimeout = (promise, candidateWindow, timeoutMs) => Promise.race([
     delay(candidateWindow, timeoutMs),
 ]);
 
+const getPrintTargetWindow = (printTarget) => {
+    if (!printTarget) {
+        return null;
+    }
+
+    if (typeof printTarget.print === 'function' && printTarget.document) {
+        return printTarget;
+    }
+
+    if (printTarget.targetWindow && typeof printTarget.targetWindow.print === 'function') {
+        return printTarget.targetWindow;
+    }
+
+    if (printTarget.frame?.contentWindow && typeof printTarget.frame.contentWindow.print === 'function') {
+        return printTarget.frame.contentWindow;
+    }
+
+    return null;
+};
+
+const isPrintTargetClosed = (printTarget) => {
+    if (!printTarget) {
+        return true;
+    }
+
+    if (printTarget.frame) {
+        return !printTarget.frame.isConnected;
+    }
+
+    if (typeof printTarget.closed === 'boolean') {
+        return printTarget.closed;
+    }
+
+    const targetWindow = getPrintTargetWindow(printTarget);
+    return !targetWindow || Boolean(targetWindow.closed);
+};
+
 const writeHtmlDocument = (targetWindow, html) => {
     if (!targetWindow || targetWindow.closed || !targetWindow.document) {
         throw new Error('Không thể khởi tạo tài liệu in.');
@@ -112,6 +149,87 @@ const loadHtmlIntoPrintWindow = async (targetWindow, html) => {
         writeHtmlDocument(targetWindow, html);
         return () => {};
     }
+};
+
+const createHiddenPrintFrame = (ownerWindow = window, title = 'Bản in đơn hàng') => {
+    const ownerDocument = ownerWindow?.document;
+
+    if (!ownerDocument?.body || typeof ownerDocument.createElement !== 'function') {
+        return null;
+    }
+
+    const frame = ownerDocument.createElement('iframe');
+    frame.setAttribute('title', title);
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    frame.style.position = 'fixed';
+    frame.style.right = '0';
+    frame.style.bottom = '0';
+    frame.style.width = '0';
+    frame.style.height = '0';
+    frame.style.border = '0';
+    frame.style.opacity = '0';
+    frame.style.pointerEvents = 'none';
+    frame.style.visibility = 'hidden';
+
+    ownerDocument.body.appendChild(frame);
+
+    const targetWindow = frame.contentWindow;
+
+    if (!targetWindow) {
+        frame.remove();
+        return null;
+    }
+
+    return {
+        kind: 'iframe',
+        ownerWindow,
+        frame,
+        targetWindow,
+    };
+};
+
+const loadHtmlIntoPrintTarget = async (printTarget, html) => {
+    const targetWindow = getPrintTargetWindow(printTarget);
+
+    if (!targetWindow || isPrintTargetClosed(printTarget)) {
+        throw new Error('KhÃ´ng thá»ƒ khá»Ÿi táº¡o tÃ i liá»‡u in.');
+    }
+
+    if (printTarget?.frame && 'srcdoc' in printTarget.frame) {
+        await new Promise((resolve) => {
+            let settled = false;
+            let timeoutId = null;
+
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+
+                if (timeoutId !== null) {
+                    getTimerWindow(targetWindow).clearTimeout(timeoutId);
+                }
+
+                printTarget.frame.removeEventListener('load', handleLoad);
+                resolve();
+            };
+
+            const handleLoad = () => {
+                finish();
+            };
+
+            timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+            printTarget.frame.addEventListener('load', handleLoad, { once: true });
+            printTarget.frame.srcdoc = html;
+        });
+
+        return () => {
+            if (printTarget.frame?.isConnected) {
+                printTarget.frame.removeAttribute('srcdoc');
+            }
+        };
+    }
+
+    return loadHtmlIntoPrintWindow(targetWindow, html);
 };
 
 const buildLoadingPrintDocument = (title = 'Chuẩn bị bản in') => `<!DOCTYPE html>
@@ -186,7 +304,20 @@ const buildLoadingPrintDocument = (title = 'Chuẩn bị bản in') => `<!DOCTYP
 </body>
 </html>`;
 
-const closePrintWindow = (targetWindow) => {
+const closePrintWindow = (printTarget) => {
+    if (!printTarget) {
+        return;
+    }
+
+    if (printTarget.frame) {
+        if (printTarget.frame.isConnected) {
+            printTarget.frame.remove();
+        }
+        return;
+    }
+
+    const targetWindow = getPrintTargetWindow(printTarget);
+
     if (!targetWindow || targetWindow.closed || typeof targetWindow.close !== 'function') {
         return;
     }
@@ -963,29 +1094,33 @@ const printHtmlDocument = async ({
         throw new Error('Môi trường hiện tại không hỗ trợ in.');
     }
 
-    const targetWindow = printWindow || preparePrintPopupWindow(sourceWindow, { title });
+    const printTarget = printWindow || createHiddenPrintFrame(sourceWindow, title);
+    const targetWindow = getPrintTargetWindow(printTarget);
 
-    if (!targetWindow || targetWindow.closed) {
-        throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
+    if (!targetWindow || isPrintTargetClosed(printTarget)) {
+        throw new Error('Không thể khởi tạo bản in. Vui lòng thử lại.');
     }
 
-    const releaseLoadedDocument = await loadHtmlIntoPrintWindow(targetWindow, html);
+    const releaseLoadedDocument = await loadHtmlIntoPrintTarget(printTarget, html);
 
     try {
         await waitForPrintableDocument(targetWindow);
     } catch (error) {
         releaseLoadedDocument();
+        closePrintWindow(printTarget);
         throw error;
     }
 
     const printResult = await (async () => {
         try {
             return await waitForPrintDialogToClose({
-                ownerWindow: targetWindow,
+                ownerWindow: sourceWindow,
                 printWindow: targetWindow,
+                cleanup: () => closePrintWindow(printTarget),
                 triggerPrint: () => {
                     targetWindow.focus?.();
                     targetWindow.print();
+                    sourceWindow.focus?.();
                 },
             });
         } finally {
@@ -995,20 +1130,14 @@ const printHtmlDocument = async ({
 
     return {
         ...printResult,
-        close: () => closePrintWindow(targetWindow),
+        close: () => closePrintWindow(printTarget),
         targetWindow,
     };
 };
 
 export const closePrintSession = (session) => {
     if (!session) return;
-
-    if (typeof session.close === 'function') {
-        session.close();
-        return;
-    }
-
-    closePrintWindow(session?.targetWindow);
+    closePrintWindow(session);
 };
 
 export const printCurrentPage = async (sourceWindow = window, options = {}) => {

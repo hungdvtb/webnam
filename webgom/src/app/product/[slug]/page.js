@@ -52,6 +52,15 @@ function parseVideoLinks(html) {
   );
 }
 
+function normalizeDescriptionHtml(html) {
+  if (!html) return '';
+
+  return html
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/gi, ' ')
+    .replace(/\u00A0/g, ' ');
+}
+
 export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
@@ -96,7 +105,9 @@ export default async function ProductDetailPage({ params, searchParams }) {
   const mainImage = images.find((img) => img.is_primary) || images[0];
   const productPageGapClass =
     product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
-  const descriptionHtml = parseVideoLinks(product?.description || '');
+  const descriptionHtml = parseVideoLinks(
+    normalizeDescriptionHtml(product?.description || '')
+  );
   const hasDescription = Boolean(descriptionHtml.trim());
   const relatedViewAllHref = buildRelatedViewAllHref(product, relatedMeta);
 

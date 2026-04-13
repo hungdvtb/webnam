@@ -4,7 +4,7 @@ import { orderApi, orderStatusApi } from '../../services/api';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
-import { closePrintSession, preparePrintPopupWindow, printOrders } from '../../utils/orderPrint';
+import { closePrintSession, printOrders } from '../../utils/orderPrint';
 import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
@@ -89,18 +89,8 @@ const OrderDetail = () => {
     const handlePrintOrder = async () => {
         if (printing || printConfirmOpen) return;
 
-        let printWindow = null;
-
         setPrinting(true);
         try {
-            printWindow = preparePrintPopupWindow(window, {
-                title: 'Đang chuẩn bị bản in đơn hàng',
-            });
-
-            if (!printWindow) {
-                throw new Error('Không thể mở cửa sổ in. Vui lòng kiểm tra chặn popup và thử lại.');
-            }
-
             const response = await orderApi.getPrintData([Number(id)]);
             const printableOrders = response?.data?.data || [];
 
@@ -110,17 +100,12 @@ const OrderDetail = () => {
 
             const session = await printOrders(printableOrders, {
                 ownerWindow: window,
-                printWindow,
             });
 
-            printWindow = null;
             setPrintSession(session);
             setPrintConfirmOpen(true);
         } catch (error) {
             console.error('Error recording order print', error);
-            if (printWindow && !printWindow.closed) {
-                printWindow.close();
-            }
         } finally {
             setPrinting(false);
         }

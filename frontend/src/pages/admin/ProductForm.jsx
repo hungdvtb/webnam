@@ -84,6 +84,53 @@ const isTemporaryProductImageId = (imageId) => {
     return normalizedId.startsWith('temp_') || normalizedId.startsWith('opt_');
 };
 
+const getAdminImageDisplayName = (image, index = 0) => {
+    if (image?.file?.name) return image.file.name;
+    if (image?.file_name) return image.file_name;
+    if (image?.image_url) {
+        try {
+            const parts = String(image.image_url).split('/');
+            return parts[parts.length - 1].split('?')[0];
+        } catch {
+            return `Ảnh ${index + 1}`;
+        }
+    }
+
+    return `Ảnh ${index + 1}`;
+};
+
+const buildVariantImagePickerPosition = (anchorRect, panelWidth = 336, panelHeight = 356) => {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const resolvedWidth = Math.min(panelWidth, Math.max(280, viewportWidth - 32));
+    const fallbackTop = 120;
+    const fallbackLeft = Math.max(16, viewportWidth - resolvedWidth - 16);
+
+    if (!anchorRect) {
+        return {
+            top: fallbackTop,
+            left: fallbackLeft,
+            width: resolvedWidth,
+        };
+    }
+
+    const preferredLeft = anchorRect.left + (anchorRect.width / 2) - (resolvedWidth / 2);
+    const left = Math.min(
+        Math.max(16, preferredLeft),
+        Math.max(16, viewportWidth - resolvedWidth - 16),
+    );
+    const preferredTop = anchorRect.bottom + 10;
+    const top = preferredTop + panelHeight > viewportHeight - 16
+        ? Math.max(16, anchorRect.top - panelHeight - 10)
+        : preferredTop;
+
+    return {
+        top,
+        left,
+        width: resolvedWidth,
+    };
+};
+
 const AI_INSTRUCTION_SUGGESTIONS = [
     'Viết ngắn gọn hơn, súc tích hơn.',
     'Trình bày theo bố cục chuẩn: mở bài, chất liệu, ý nghĩa, bài trí.',
@@ -948,6 +995,195 @@ const createConvertVariantDraft = (overrides = {}) => ({
     ...overrides,
 });
 
+const getConvertVariantValueKey = (value) => normalizeSearchText(value);
+
+const normalizeConvertVariantOptionValues = (options = []) => {
+    const seen = new Set();
+
+    return (Array.isArray(options) ? options : [])
+        .map((option, index) => ({
+            id: option?.id ?? `convert-option-${index}`,
+            value: String(option?.value || '').trim(),
+            order: Number.isFinite(Number(option?.order)) ? Number(option.order) : index,
+        }))
+        .filter((option) => option.value)
+        .filter((option) => {
+            const key = getConvertVariantValueKey(option.value);
+
+            if (!key || seen.has(key)) {
+                return false;
+            }
+
+            seen.add(key);
+            return true;
+        })
+        .sort((left, right) => {
+            if (left.order !== right.order) {
+                return left.order - right.order;
+            }
+
+            return left.value.localeCompare(right.value, 'vi');
+        });
+};
+
+const resolveConvertVariantRawAttributeValue = (rawValue) => {
+    if (Array.isArray(rawValue)) {
+        return String(rawValue.find((item) => String(item || '').trim()) || '').trim();
+    }
+
+    return String(rawValue || '').trim();
+};
+
+const inferExistingConvertVariantValue = ({
+    optionValues = [],
+    rawAttributeValue,
+    productName,
+}) => {
+    const normalizedOptions = normalizeConvertVariantOptionValues(optionValues);
+
+    if (normalizedOptions.length === 0) {
+        return '';
+    }
+
+    const resolvedAttributeValue = resolveConvertVariantRawAttributeValue(rawAttributeValue);
+    const normalizedAttributeValue = getConvertVariantValueKey(resolvedAttributeValue);
+    const normalizedProductName = getConvertVariantValueKey(productName);
+
+    const rankedOptions = [...normalizedOptions].sort(
+        (left, right) => right.value.length - left.value.length
+    );
+
+    const exactAttributeMatch = rankedOptions.find(
+        (option) => getConvertVariantValueKey(option.value) === normalizedAttributeValue
+    );
+    if (exactAttributeMatch) {
+        return exactAttributeMatch.value;
+    }
+
+    const partialAttributeMatch = rankedOptions.find((option) => (
+        normalizedAttributeValue
+        && normalizedAttributeValue.includes(getConvertVariantValueKey(option.value))
+    ));
+    if (partialAttributeMatch) {
+        return partialAttributeMatch.value;
+    }
+
+    const productNameMatch = rankedOptions.find((option) => (
+        normalizedProductName
+        && normalizedProductName.includes(getConvertVariantValueKey(option.value))
+    ));
+    if (productNameMatch) {
+        return productNameMatch.value;
+    }
+
+    return normalizedOptions[0]?.value || '';
+};
+
+const buildConvertVariantAutoName = (parentName, sourceName, value) => {
+    const resolvedBaseName = String(parentName || sourceName || '').trim();
+
+    if (!resolvedBaseName) {
+        return value ? `Bien the - ${value}` : 'Bien the';
+    }
+
+    return value ? `${resolvedBaseName} - ${value}` : resolvedBaseName;
+};
+
+const buildConvertVariantsFromOptionValues = ({
+    optionValues = [],
+    previousVariants = [],
+    existingProductName = '',
+    existingProductSku = '',
+    parentName = '',
+    existingValue = '',
+}) => {
+    const normalizedOptions = normalizeConvertVariantOptionValues(optionValues).map((option) => option.value);
+    const normalizedExistingValue = String(existingValue || '').trim();
+    const orderedValues = normalizedExistingValue
+        ? [
+            normalizedExistingValue,
+            ...normalizedOptions.filter((value) => (
+                getConvertVariantValueKey(value) !== getConvertVariantValueKey(normalizedExistingValue)
+            )),
+        ]
+        : normalizedOptions;
+
+    const previousExistingVariant = Array.isArray(previousVariants)
+        ? previousVariants.find((variant) => variant?.is_existing)
+        : null;
+    const previousVariantsByValue = new Map();
+
+    (Array.isArray(previousVariants) ? previousVariants : []).forEach((variant) => {
+        if (variant?.is_existing) {
+            return;
+        }
+
+        const key = getConvertVariantValueKey(variant?.value);
+        if (!key || previousVariantsByValue.has(key)) {
+            return;
+        }
+
+        previousVariantsByValue.set(key, variant);
+    });
+
+    const firstVariantValue = orderedValues[0] || String(previousExistingVariant?.value || '').trim();
+    const firstVariant = {
+        ...(previousExistingVariant || createConvertVariantDraft()),
+        entry_id: previousExistingVariant?.entry_id || createConvertVariantEntryId(),
+        is_existing: true,
+        value: firstVariantValue,
+        name: String(
+            previousExistingVariant?.name
+            || existingProductName
+            || buildConvertVariantAutoName(parentName, existingProductName, firstVariantValue)
+        ).trim(),
+        sku: String(previousExistingVariant?.sku || existingProductSku || '').trim(),
+    };
+
+    const nextVariants = [firstVariant];
+
+    orderedValues
+        .filter((value) => getConvertVariantValueKey(value) !== getConvertVariantValueKey(firstVariantValue))
+        .forEach((value) => {
+            const previousVariant = previousVariantsByValue.get(getConvertVariantValueKey(value));
+
+            nextVariants.push(createConvertVariantDraft({
+                ...(previousVariant || {}),
+                entry_id: previousVariant?.entry_id || createConvertVariantEntryId(),
+                value,
+                name: String(
+                    previousVariant?.name
+                    || buildConvertVariantAutoName(parentName, existingProductName, value)
+                ).trim(),
+                sku: String(previousVariant?.sku || '').trim(),
+            }));
+        });
+
+    return nextVariants;
+};
+
+const areConvertVariantListsEqual = (left = [], right = []) => {
+    if (left === right) {
+        return true;
+    }
+
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+        return false;
+    }
+
+    return left.every((variant, index) => {
+        const nextVariant = right[index];
+
+        return (
+            String(variant?.entry_id || '') === String(nextVariant?.entry_id || '')
+            && Boolean(variant?.is_existing) === Boolean(nextVariant?.is_existing)
+            && String(variant?.value || '') === String(nextVariant?.value || '')
+            && String(variant?.name || '') === String(nextVariant?.name || '')
+            && String(variant?.sku || '') === String(nextVariant?.sku || '')
+        );
+    });
+};
+
 const buildInitialConvertToConfigurableForm = (sourceProduct = {}, fallbackProduct = {}) => {
     const resolvedName = String(sourceProduct?.name || fallbackProduct?.name || '').trim();
     const resolvedSku = String(sourceProduct?.sku || fallbackProduct?.sku || '').trim();
@@ -1617,6 +1853,12 @@ const ProductForm = () => {
     const [serverValidationErrors, setServerValidationErrors] = useState({});
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState([]);
+    const [variantImagePicker, setVariantImagePicker] = useState({
+        index: null,
+        top: 0,
+        left: 0,
+        width: 336,
+    });
     const [showVariantConfig, setShowVariantConfig] = useState(false);
     const [showVariantQuickUpdateModal, setShowVariantQuickUpdateModal] = useState(false);
     const [variantQuickUpdateScope, setVariantQuickUpdateScope] = useState('all');
@@ -1644,6 +1886,10 @@ const ProductForm = () => {
     const bundleOptionTitleInputRefs = useRef({});
     const pendingCopiedBundleOptionIdRef = useRef(null);
     const blogSearchRequestRef = useRef({});
+    const variantImageInputRefs = useRef({});
+    const variantImagePickerRef = useRef(null);
+    const variantImagePickerAnchorRef = useRef(null);
+    const ownedVariantPreviewUrlsRef = useRef(new Set());
 
     // Filters for Related Products suggestions
     const [relatedQuery, setRelatedQuery] = useState('');
@@ -1760,6 +2006,92 @@ const ProductForm = () => {
         ))
     ), [allAttributes]);
 
+    const selectedConvertAttribute = useMemo(() => {
+        if (convertToConfigurableForm.attribute_source !== 'existing') {
+            return null;
+        }
+
+        return variantReadyAttributes.find((attribute) => (
+            String(attribute.id) === String(convertToConfigurableForm.attribute_id)
+        )) || null;
+    }, [
+        convertToConfigurableForm.attribute_id,
+        convertToConfigurableForm.attribute_source,
+        variantReadyAttributes,
+    ]);
+
+    const selectedConvertAttributeOptions = useMemo(() => (
+        normalizeConvertVariantOptionValues(selectedConvertAttribute?.options)
+    ), [selectedConvertAttribute]);
+
+    const currentConvertAttributeValue = useMemo(() => {
+        if (convertToConfigurableForm.attribute_source !== 'existing' || !selectedConvertAttribute) {
+            return '';
+        }
+
+        return inferExistingConvertVariantValue({
+            optionValues: selectedConvertAttribute.options,
+            rawAttributeValue: formData.custom_attributes?.[selectedConvertAttribute.id],
+            productName: formData.name,
+        });
+    }, [
+        convertToConfigurableForm.attribute_source,
+        formData.custom_attributes,
+        formData.name,
+        selectedConvertAttribute,
+    ]);
+
+    const convertVariantOptionsByEntryId = useMemo(() => {
+        if (convertToConfigurableForm.attribute_source !== 'existing') {
+            return {};
+        }
+
+        const variantsList = Array.isArray(convertToConfigurableForm.variants)
+            ? convertToConfigurableForm.variants
+            : [];
+
+        return variantsList.reduce((accumulator, variant) => {
+            const currentValueKey = getConvertVariantValueKey(variant?.value);
+            const usedByOtherVariants = new Set(
+                variantsList
+                    .filter((item) => item?.entry_id !== variant?.entry_id)
+                    .map((item) => getConvertVariantValueKey(item?.value))
+                    .filter(Boolean)
+            );
+
+            accumulator[variant.entry_id] = selectedConvertAttributeOptions.filter((option) => {
+                const optionKey = getConvertVariantValueKey(option.value);
+                return optionKey === currentValueKey || !usedByOtherVariants.has(optionKey);
+            });
+
+            return accumulator;
+        }, {});
+    }, [
+        convertToConfigurableForm.attribute_source,
+        convertToConfigurableForm.variants,
+        selectedConvertAttributeOptions,
+    ]);
+
+    const remainingConvertAttributeOptions = useMemo(() => {
+        if (convertToConfigurableForm.attribute_source !== 'existing') {
+            return [];
+        }
+
+        const usedValueKeys = new Set(
+            (Array.isArray(convertToConfigurableForm.variants) ? convertToConfigurableForm.variants : [])
+                .map((variant) => getConvertVariantValueKey(variant?.value))
+                .filter(Boolean)
+        );
+
+        return selectedConvertAttributeOptions.filter((option) => (
+            !usedValueKeys.has(getConvertVariantValueKey(option.value))
+        ));
+    }, [
+        convertToConfigurableForm.attribute_source,
+        convertToConfigurableForm.variants,
+        selectedConvertAttributeOptions,
+    ]);
+
     const canConvertSimpleProduct = useMemo(() => (
         isEdit
         && !isDuplicate
@@ -1769,11 +2101,7 @@ const ProductForm = () => {
 
     const resolvedConvertAttributeName = useMemo(() => {
         if (convertToConfigurableForm.attribute_source === 'existing') {
-            const matchedAttribute = variantReadyAttributes.find((attribute) => (
-                String(attribute.id) === String(convertToConfigurableForm.attribute_id)
-            ));
-
-            return matchedAttribute?.name || '';
+            return selectedConvertAttribute?.name || '';
         }
 
         if (convertToConfigurableForm.attribute_source === 'custom') {
@@ -1786,7 +2114,7 @@ const ProductForm = () => {
         convertToConfigurableForm.attribute_source,
         convertToConfigurableForm.custom_attribute_name,
         convertToConfigurableForm.preset_attribute_name,
-        variantReadyAttributes,
+        selectedConvertAttribute,
     ]);
 
     const convertVariantValueGuide = useMemo(() => {
@@ -1819,6 +2147,43 @@ const ProductForm = () => {
         };
     }, [resolvedConvertAttributeName]);
 
+    useEffect(() => {
+        if (!showConvertToConfigurableModal) {
+            return;
+        }
+
+        if (convertToConfigurableForm.attribute_source !== 'existing' || !selectedConvertAttribute) {
+            return;
+        }
+
+        setConvertToConfigurableForm((prev) => {
+            const nextVariants = buildConvertVariantsFromOptionValues({
+                optionValues: selectedConvertAttribute.options,
+                previousVariants: prev.variants,
+                existingProductName: formData.name,
+                existingProductSku: formData.sku,
+                parentName: prev.parent_name || formData.name,
+                existingValue: currentConvertAttributeValue,
+            });
+
+            if (areConvertVariantListsEqual(prev.variants, nextVariants)) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                variants: nextVariants,
+            };
+        });
+    }, [
+        convertToConfigurableForm.attribute_source,
+        currentConvertAttributeValue,
+        formData.name,
+        formData.sku,
+        selectedConvertAttribute,
+        showConvertToConfigurableModal,
+    ]);
+
     const openConvertToConfigurableModal = useCallback(() => {
         setConvertToConfigurableForm(buildInitialConvertToConfigurableForm({
             name: formData.name,
@@ -1847,6 +2212,37 @@ const ProductForm = () => {
     }, []);
 
     const handleAddConvertVariant = useCallback(() => {
+        if (convertToConfigurableForm.attribute_source === 'existing') {
+            if (!selectedConvertAttribute) {
+                showToast({ message: 'Hãy chọn thuộc tính có sẵn trước khi thêm biến thể.', type: 'warning' });
+                return;
+            }
+
+            if (selectedConvertAttributeOptions.length === 0) {
+                showToast({ message: 'Thuộc tính này chưa có giá trị để tạo biến thể.', type: 'warning' });
+                return;
+            }
+
+            const nextOption = remainingConvertAttributeOptions[0];
+
+            if (!nextOption) {
+                showToast({ message: 'Tất cả giá trị của thuộc tính này đã có biến thể.', type: 'info' });
+                return;
+            }
+
+            setConvertToConfigurableForm((prev) => ({
+                ...prev,
+                variants: [
+                    ...prev.variants,
+                    createConvertVariantDraft({
+                        value: nextOption.value,
+                        name: buildConvertVariantAutoName(prev.parent_name || formData.name, formData.name, nextOption.value),
+                    }),
+                ],
+            }));
+            return;
+        }
+
         setConvertToConfigurableForm((prev) => ({
             ...prev,
             variants: [
@@ -1856,7 +2252,14 @@ const ProductForm = () => {
                 }),
             ],
         }));
-    }, []);
+    }, [
+        convertToConfigurableForm.attribute_source,
+        formData.name,
+        remainingConvertAttributeOptions,
+        selectedConvertAttribute,
+        selectedConvertAttributeOptions.length,
+        showToast,
+    ]);
 
     const handleRemoveConvertVariant = useCallback((entryId) => {
         setConvertToConfigurableForm((prev) => ({
@@ -2327,6 +2730,35 @@ const ProductForm = () => {
         () => variantQuickUpdateTargetCount > 0 && Object.values(variantQuickUpdateForm).some((value) => value !== ''),
         [variantQuickUpdateForm, variantQuickUpdateTargetCount]
     );
+    const variantImageLibraryItems = useMemo(
+        () => images.map((image, index) => ({
+            ...image,
+            display_name: getAdminImageDisplayName(image, index),
+        })),
+        [images]
+    );
+    const variantImagePickerVariant = useMemo(() => (
+        variantImagePicker.index === null ? null : (variants[variantImagePicker.index] || null)
+    ), [variantImagePicker.index, variants]);
+    const activeVariantLibraryImage = useMemo(() => {
+        if (!variantImagePickerVariant) {
+            return null;
+        }
+
+        if (variantImagePickerVariant.library_image_id) {
+            return variantImageLibraryItems.find((image) => (
+                String(image?.id || '') === String(variantImagePickerVariant.library_image_id)
+            )) || null;
+        }
+
+        if (variantImagePickerVariant.image_url) {
+            return variantImageLibraryItems.find((image) => (
+                String(image?.image_url || '') === String(variantImagePickerVariant.image_url || '')
+            )) || null;
+        }
+
+        return variantImageLibraryItems.find((image) => image?.is_primary) || variantImageLibraryItems[0] || null;
+    }, [variantImageLibraryItems, variantImagePickerVariant]);
 
     useEffect(() => {
         setSelectedVariantIds((prev) => {
@@ -2342,6 +2774,84 @@ const ProductForm = () => {
             setVariantQuickUpdateScope('all');
         }
     }, [selectedVariantCount, variantQuickUpdateScope]);
+
+    const closeVariantImagePicker = useCallback(() => {
+        variantImagePickerAnchorRef.current = null;
+        setVariantImagePicker((prev) => (
+            prev.index === null
+                ? prev
+                : { index: null, top: 0, left: 0, width: prev.width || 336 }
+        ));
+    }, []);
+
+    useEffect(() => {
+        if (variantImagePicker.index === null) {
+            return undefined;
+        }
+
+        const handlePointerDown = (event) => {
+            const target = event.target;
+            if (variantImagePickerRef.current?.contains(target)) {
+                return;
+            }
+            if (variantImagePickerAnchorRef.current?.contains?.(target)) {
+                return;
+            }
+            closeVariantImagePicker();
+        };
+
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') {
+                closeVariantImagePicker();
+            }
+        };
+
+        const handleViewportChange = () => {
+            closeVariantImagePicker();
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleEscape);
+        window.addEventListener('resize', handleViewportChange);
+        window.addEventListener('scroll', handleViewportChange, true);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleEscape);
+            window.removeEventListener('resize', handleViewportChange);
+            window.removeEventListener('scroll', handleViewportChange, true);
+        };
+    }, [closeVariantImagePicker, variantImagePicker.index]);
+
+    useEffect(() => {
+        const nextOwnedUrls = new Set(
+            variants
+                .filter((variant) => (
+                    variant?.image_preview_owned
+                    && String(variant?.image_url || '').startsWith('blob:')
+                ))
+                .map((variant) => variant.image_url)
+        );
+
+        ownedVariantPreviewUrlsRef.current.forEach((url) => {
+            if (!nextOwnedUrls.has(url)) {
+                URL.revokeObjectURL(url);
+            }
+        });
+
+        ownedVariantPreviewUrlsRef.current = nextOwnedUrls;
+    }, [variants]);
+
+    useEffect(() => {
+        if (variantImagePicker.index !== null && !variants[variantImagePicker.index]) {
+            closeVariantImagePicker();
+        }
+    }, [closeVariantImagePicker, variantImagePicker.index, variants]);
+
+    useEffect(() => () => {
+        ownedVariantPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        ownedVariantPreviewUrlsRef.current = new Set();
+    }, []);
 
     const appendAiInstruction = useCallback((suggestion) => {
         setAiInstruction((prev) => {
@@ -3157,6 +3667,8 @@ const ProductForm = () => {
             weight: formData.weight,
             inventory_unit_id: formData.inventory_unit_id || '',
             attributes: {},
+            library_image_id: null,
+            image_preview_owned: false,
             label: 'Biến thể tùy chỉnh',
             sku_auto: true,
         };
@@ -3375,6 +3887,8 @@ const ProductForm = () => {
                         sku: v.sku ?? '',
                         sku_auto: false,
                         attributes: attrs,
+                        library_image_id: null,
+                        image_preview_owned: false,
                         image_url: primaryImage ? resolveAdminImageUrl(primaryImage, primaryImage.image_url) : null,
                         label: v.name ?? (v.attribute_values || []).map(av => av.value).join(' / ') ?? ''
                     };
@@ -4176,6 +4690,8 @@ const ProductForm = () => {
                 weight: formData.weight,
                 inventory_unit_id: formData.inventory_unit_id || '',
                 attributes: combo,
+                library_image_id: null,
+                image_preview_owned: false,
                 label: `${formData.name} - ${attrLabel}`,
                 sku_auto: true,
             };
@@ -4204,24 +4720,114 @@ const ProductForm = () => {
         setVariants(updated);
     };
 
-    const handleVariantImageUpload = (index, e) => {
-        const file = e.target.files[0];
+    const openVariantUploadDialog = useCallback((index) => {
+        variantImageInputRefs.current[index]?.click();
+    }, []);
+
+    const openVariantImagePickerForIndex = useCallback((index, anchorElement) => {
+        if (variantImageLibraryItems.length === 0) {
+            closeVariantImagePicker();
+            openVariantUploadDialog(index);
+            return;
+        }
+
+        const nextPosition = buildVariantImagePickerPosition(anchorElement?.getBoundingClientRect?.());
+
+        setVariantImagePicker((prev) => {
+            if (prev.index === index) {
+                variantImagePickerAnchorRef.current = null;
+                return {
+                    index: null,
+                    top: 0,
+                    left: 0,
+                    width: prev.width || nextPosition.width,
+                };
+            }
+
+            variantImagePickerAnchorRef.current = anchorElement || null;
+            return {
+                index,
+                ...nextPosition,
+            };
+        });
+    }, [closeVariantImagePicker, openVariantUploadDialog, variantImageLibraryItems.length]);
+
+    const handleVariantImageCellClick = useCallback((index, anchorElement) => {
+        openVariantImagePickerForIndex(index, anchorElement);
+    }, [openVariantImagePickerForIndex]);
+
+    const handleSelectVariantLibraryImage = useCallback((index, image) => {
+        if (!image) {
+            return;
+        }
+
+        const isPersistedLibraryImage = !isTemporaryProductImageId(image?.id);
+        const clonedPreviewUrl = !isPersistedLibraryImage && image?.file
+            ? URL.createObjectURL(image.file)
+            : '';
+
+        setVariants((prev) => prev.map((variant, variantIndex) => {
+            if (variantIndex !== index) {
+                return variant;
+            }
+
+            return {
+                ...variant,
+                image_file: isPersistedLibraryImage ? null : (image?.file || null),
+                image_url: clonedPreviewUrl || image?.image_url || '',
+                image_preview_owned: Boolean(clonedPreviewUrl),
+                library_image_id: isPersistedLibraryImage ? (Number(image?.id) || null) : null,
+                remove_image: false,
+            };
+        }));
+
+        clearServerValidationErrors(['variants.']);
+        closeVariantImagePicker();
+    }, [clearServerValidationErrors, closeVariantImagePicker]);
+
+    const handleVariantImageUpload = useCallback((index, e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
         if (!file) return;
 
-        const updated = [...variants];
-        updated[index].image_file = file;
-        updated[index].image_url = URL.createObjectURL(file);
-        updated[index].remove_image = false;
-        setVariants(updated);
-    };
+        const previewUrl = URL.createObjectURL(file);
 
-    const handleRemoveVariantImage = (index) => {
-        const updated = [...variants];
-        updated[index].image_file = null;
-        updated[index].image_url = null;
-        updated[index].remove_image = true;
-        setVariants(updated);
-    };
+        setVariants((prev) => prev.map((variant, variantIndex) => (
+            variantIndex !== index
+                ? variant
+                : {
+                    ...variant,
+                    image_file: file,
+                    image_url: previewUrl,
+                    image_preview_owned: true,
+                    library_image_id: null,
+                    remove_image: false,
+                }
+        )));
+
+        clearServerValidationErrors(['variants.']);
+        closeVariantImagePicker();
+    }, [clearServerValidationErrors, closeVariantImagePicker]);
+
+    const handleRemoveVariantImage = useCallback((index) => {
+        setVariants((prev) => prev.map((variant, variantIndex) => (
+            variantIndex !== index
+                ? variant
+                : {
+                    ...variant,
+                    image_file: null,
+                    image_url: null,
+                    image_preview_owned: false,
+                    library_image_id: null,
+                    remove_image: true,
+                }
+        )));
+
+        clearServerValidationErrors(['variants.']);
+        if (variantImagePicker.index === index) {
+            closeVariantImagePicker();
+        }
+    }, [clearServerValidationErrors, closeVariantImagePicker, variantImagePicker.index]);
 
     const removeVariant = (index) => {
         if (variants[index]?.id && !String(variants[index].id).startsWith('new_')) {
@@ -5052,6 +5658,8 @@ const ProductForm = () => {
 
                     if (v.image_file) {
                         submitData.append(`variants[${idx}][image]`, v.image_file);
+                    } else if (v.library_image_id) {
+                        submitData.append(`variants[${idx}][library_image_id]`, v.library_image_id);
                     }
                     if (v.remove_image) {
                         submitData.append(`variants[${idx}][remove_image]`, 'true');
@@ -6274,6 +6882,8 @@ const ProductForm = () => {
                                                     const displayImageUrl = v.image_url || parentPrimaryImage?.image_url;
                                                     const variantSelectionKey = getVariantSelectionKey(v, index);
                                                     const isVariantSelected = selectedVariantIdSet.has(variantSelectionKey);
+                                                    const isImagePickerOpenForRow = variantImagePicker.index === index;
+                                                    const hasVariantLibraryImages = variantImageLibraryItems.length > 0;
 
                                                     return (
                                                         <tr key={v.id} className={`transition-colors ${isVariantSelected ? 'bg-purple-50/50 hover:bg-purple-50/70' : 'hover:bg-purple-50/30'}`}>
@@ -6290,7 +6900,33 @@ const ProductForm = () => {
                                                                 </button>
                                                             </td>
                                                             <td className="px-3 py-2 border-r border-stone/20 text-center">
-                                                                <div className="relative group/vimg mx-auto size-16 bg-white border border-stone/15 rounded flex items-center justify-center overflow-hidden shadow-sm">
+                                                                <div
+                                                                    role="button"
+                                                                    tabIndex={0}
+                                                                    data-variant-image-anchor="true"
+                                                                    onClick={(e) => handleVariantImageCellClick(index, e.currentTarget)}
+                                                                    onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter' || e.key === ' ') {
+                                                                            e.preventDefault();
+                                                                            handleVariantImageCellClick(index, e.currentTarget);
+                                                                        }
+                                                                    }}
+                                                                    className={`relative group/vimg mx-auto size-16 bg-white border rounded flex items-center justify-center overflow-hidden shadow-sm transition-all ${isImagePickerOpenForRow ? 'border-purple-300 ring-2 ring-purple-200' : 'border-stone/15'} ${hasVariantLibraryImages ? 'cursor-pointer' : 'cursor-pointer'}`}
+                                                                    title={hasVariantLibraryImages ? 'Mở thư viện ảnh của sản phẩm để chọn nhanh' : 'Chọn ảnh cho biến thể'}
+                                                                >
+                                                                    <input
+                                                                        ref={(node) => {
+                                                                            if (node) {
+                                                                                variantImageInputRefs.current[index] = node;
+                                                                            } else {
+                                                                                delete variantImageInputRefs.current[index];
+                                                                            }
+                                                                        }}
+                                                                        type="file"
+                                                                        className="hidden"
+                                                                        accept="image/*"
+                                                                        onChange={(e) => handleVariantImageUpload(index, e)}
+                                                                    />
                                                                     {displayImageUrl ? (
                                                                         <img src={displayImageUrl || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
                                                                     ) : (
@@ -6299,16 +6935,38 @@ const ProductForm = () => {
 
                                                                     {/* Variant image actions overlay */}
                                                                     <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/vimg:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
-                                                                        <label className="cursor-pointer text-white hover:text-gold transition-colors">
-                                                                            <span className="material-symbols-outlined text-[18px]">{v.image_url ? 'edit' : 'add_a_photo'}</span>
-                                                                            <input type="file" className="hidden" accept="image/*" onChange={(e) => handleVariantImageUpload(index, e)} />
-                                                                        </label>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                openVariantUploadDialog(index);
+                                                                            }}
+                                                                            className="text-white hover:text-gold transition-colors"
+                                                                            title="Tải ảnh riêng cho biến thể"
+                                                                        >
+                                                                            <span className="material-symbols-outlined text-[18px]">{v.image_url ? 'upload' : 'add_a_photo'}</span>
+                                                                        </button>
                                                                         {v.image_url && (
-                                                                            <button type="button" onClick={() => handleRemoveVariantImage(index)} className="text-white hover:text-brick transition-colors">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    handleRemoveVariantImage(index);
+                                                                                }}
+                                                                                className="text-white hover:text-brick transition-colors"
+                                                                                title="Bỏ ảnh riêng, dùng ảnh cha"
+                                                                            >
                                                                                 <span className="material-symbols-outlined text-[18px]">delete</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
+
+                                                                    {hasVariantLibraryImages && (
+                                                                        <div className="absolute top-1 left-1 inline-flex items-center gap-1 rounded-full bg-white/90 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-primary shadow-sm">
+                                                                            <span className="material-symbols-outlined text-[10px]">photo_library</span>
+                                                                            {variantImageLibraryItems.length}
+                                                                        </div>
+                                                                    )}
 
                                                                     {/* Badge if inheriting from parent */}
                                                                     {!v.image_url && parentPrimaryImage && (
@@ -7817,6 +8475,22 @@ const ProductForm = () => {
                                         <p className="mt-2 text-[11px] text-primary/50">
                                             Thuộc tính đang áp dụng: <span className="font-black text-emerald-700">{resolvedConvertAttributeName || 'Chưa chọn'}</span>
                                         </p>
+                                        {convertToConfigurableForm.attribute_source === 'existing' && selectedConvertAttribute ? (
+                                            <p className="mt-1 text-[11px] text-primary/50">
+                                                {selectedConvertAttributeOptions.length > 0 ? (
+                                                    <>
+                                                        Giá trị sẵn có: <span className="font-bold text-primary/75">{selectedConvertAttributeOptions.map((option) => option.value).join(' / ')}</span>
+                                                    </>
+                                                ) : (
+                                                    <span className="font-bold text-brick">Thuộc tính này chưa có giá trị để tạo biến thể.</span>
+                                                )}
+                                            </p>
+                                        ) : null}
+                                        {convertToConfigurableForm.attribute_source === 'existing' && currentConvertAttributeValue ? (
+                                            <p className="mt-1 text-[11px] text-emerald-700">
+                                                Sản phẩm hiện tại sẽ tự map vào giá trị đầu tiên: <span className="font-black">{currentConvertAttributeValue}</span>
+                                            </p>
+                                        ) : null}
                                     </div>
                                 </div>
 
@@ -7834,7 +8508,8 @@ const ProductForm = () => {
                                         <button
                                             type="button"
                                             onClick={handleAddConvertVariant}
-                                            className="inline-flex items-center gap-2 rounded-sm border border-emerald-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700 transition hover:bg-emerald-50"
+                                            disabled={convertToConfigurableForm.attribute_source === 'existing' && remainingConvertAttributeOptions.length === 0}
+                                            className="inline-flex items-center gap-2 rounded-sm border border-emerald-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
                                         >
                                             <span className="material-symbols-outlined text-[16px]">add</span>
                                             Thêm biến thể
@@ -7852,13 +8527,36 @@ const ProductForm = () => {
                                             {convertToConfigurableForm.variants.map((variant, index) => (
                                                 <div key={variant.entry_id} className="grid grid-cols-[160px_minmax(0,1fr)_160px_64px] border-b border-stone/10 last:border-b-0">
                                                     <div className="border-r border-stone/10 px-3 py-3">
-                                                        <input
-                                                            type="text"
-                                                            value={variant.value}
-                                                            onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'value', event.target.value)}
-                                                            className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
-                                                            placeholder={index === 0 ? convertVariantValueGuide.firstPlaceholder : convertVariantValueGuide.nextPlaceholder}
-                                                        />
+                                                        {convertToConfigurableForm.attribute_source === 'existing' && selectedConvertAttributeOptions.length > 0 ? (
+                                                            <select
+                                                                value={variant.value}
+                                                                onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'value', event.target.value)}
+                                                                className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                            >
+                                                                <option value="">
+                                                                    {index === 0 ? 'Chọn giá trị cho sản phẩm hiện tại' : 'Chọn giá trị'}
+                                                                </option>
+                                                                {(convertVariantOptionsByEntryId[variant.entry_id] || selectedConvertAttributeOptions).map((option) => (
+                                                                    <option key={`${variant.entry_id}-${option.id}`} value={option.value}>{option.value}</option>
+                                                                ))}
+                                                            </select>
+                                                        ) : convertToConfigurableForm.attribute_source === 'existing' ? (
+                                                            <input
+                                                                type="text"
+                                                                value=""
+                                                                readOnly
+                                                                className="w-full cursor-not-allowed rounded-sm border border-stone/10 bg-stone/10 px-2 py-2 text-[12px] font-bold text-stone/55 focus:outline-none"
+                                                                placeholder="Thuộc tính này chưa có giá trị"
+                                                            />
+                                                        ) : (
+                                                            <input
+                                                                type="text"
+                                                                value={variant.value}
+                                                                onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'value', event.target.value)}
+                                                                className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
+                                                                placeholder={index === 0 ? convertVariantValueGuide.firstPlaceholder : convertVariantValueGuide.nextPlaceholder}
+                                                            />
+                                                        )}
                                                         {variant.is_existing ? (
                                                             <p className="mt-2 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">Sản phẩm cũ giữ nguyên ID</p>
                                                         ) : null}
@@ -8455,6 +9153,126 @@ const ProductForm = () => {
                             </div>
                         </motion.div>
                     </div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {variantImagePicker.index !== null && variantImagePickerVariant && (
+                    <motion.div
+                        ref={variantImagePickerRef}
+                        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                        transition={{ duration: 0.16, ease: 'easeOut' }}
+                        style={{
+                            top: variantImagePicker.top,
+                            left: variantImagePicker.left,
+                            width: variantImagePicker.width,
+                        }}
+                        className="fixed z-[95] overflow-hidden rounded-sm border border-gold/20 bg-white shadow-[0_28px_60px_rgba(48,33,18,0.24)]"
+                    >
+                        <div className="border-b border-gold/10 bg-[#fcfaf7] px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-stone/45">Ảnh Biến Thể</p>
+                                    <h4 className="mt-1 truncate text-[14px] font-black text-primary">
+                                        Chọn nhanh từ thư viện sản phẩm
+                                    </h4>
+                                    <p className="mt-1 text-[11px] text-stone/50">
+                                        {variantImageLibraryItems.length} ảnh có sẵn, chọn là cập nhật ngay cho biến thể này.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeVariantImagePicker}
+                                    className="shrink-0 text-stone/35 transition-colors hover:text-brick"
+                                    title="Đóng bộ chọn ảnh"
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="max-h-[320px] overflow-y-auto bg-white p-3">
+                            <div className="grid grid-cols-4 gap-2">
+                                {variantImageLibraryItems.map((image, imageIndex) => {
+                                    const isActive = activeVariantLibraryImage
+                                        ? (
+                                            (String(activeVariantLibraryImage?.id || '') !== ''
+                                                && String(activeVariantLibraryImage?.id || '') === String(image?.id || ''))
+                                            || (
+                                                String(activeVariantLibraryImage?.image_url || '') !== ''
+                                                && String(activeVariantLibraryImage?.image_url || '') === String(image?.image_url || '')
+                                            )
+                                        )
+                                        : false;
+
+                                    return (
+                                        <button
+                                            key={String(image?.id || `variant-library-${imageIndex}`)}
+                                            type="button"
+                                            onClick={() => handleSelectVariantLibraryImage(variantImagePicker.index, image)}
+                                            className={`group/library relative overflow-hidden rounded-sm border bg-stone/5 text-left transition-all ${isActive ? 'border-primary ring-2 ring-primary/20' : 'border-stone/10 hover:border-gold/40 hover:shadow-sm'}`}
+                                            title={image.display_name}
+                                        >
+                                            <div className="aspect-square overflow-hidden bg-stone/5">
+                                                {image?.image_url ? (
+                                                    <img src={image.image_url} alt={image.display_name} className="size-full object-cover transition-transform duration-300 group-hover/library:scale-105" />
+                                                ) : (
+                                                    <div className="flex size-full items-center justify-center text-stone/20">
+                                                        <span className="material-symbols-outlined text-[24px]">image</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="border-t border-stone/10 bg-white px-2 py-1.5">
+                                                <p className="truncate text-[10px] font-bold text-primary">{image.display_name}</p>
+                                            </div>
+                                            {image?.is_primary && (
+                                                <div className="absolute left-1.5 top-1.5 rounded-full bg-gold px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.12em] text-white shadow-sm">
+                                                    Chính
+                                                </div>
+                                            )}
+                                            {isActive && (
+                                                <div className="absolute right-1.5 top-1.5 rounded-full bg-primary p-1 text-white shadow-sm">
+                                                    <span className="material-symbols-outlined text-[12px]">check</span>
+                                                </div>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 border-t border-stone/10 bg-stone/5 px-4 py-3">
+                            <p className="min-w-0 text-[11px] text-stone/50">
+                                {variantImagePickerVariant?.image_url
+                                    ? (activeVariantLibraryImage
+                                        ? 'Biến thể đang bám theo ảnh đã chọn trong thư viện.'
+                                        : 'Biến thể đang dùng ảnh riêng, bạn có thể đổi sang ảnh thư viện hoặc tải ảnh khác.')
+                                    : 'Biến thể đang kế thừa ảnh chính của sản phẩm cha.'}
+                            </p>
+                            <div className="flex shrink-0 items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => openVariantUploadDialog(variantImagePicker.index)}
+                                    className="inline-flex items-center gap-1.5 rounded-sm border border-gold/20 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-all hover:border-gold hover:bg-gold/10"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">upload</span>
+                                    Tải ảnh riêng
+                                </button>
+                                {variantImagePickerVariant?.image_url && (
+                                    <button
+                                        type="button"
+                                        onClick={() => handleRemoveVariantImage(variantImagePicker.index)}
+                                        className="inline-flex items-center gap-1.5 rounded-sm border border-stone/15 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-stone/70 transition-all hover:border-brick/30 hover:bg-brick/5 hover:text-brick"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+                                        Dùng ảnh cha
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </motion.div>
                 )}
             </AnimatePresence>
 

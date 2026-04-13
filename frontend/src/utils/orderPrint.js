@@ -163,14 +163,15 @@ const createHiddenPrintFrame = (ownerWindow = window, title = 'Bản in đơn h�
     frame.setAttribute('aria-hidden', 'true');
     frame.tabIndex = -1;
     frame.style.position = 'fixed';
-    frame.style.right = '0';
-    frame.style.bottom = '0';
-    frame.style.width = '0';
-    frame.style.height = '0';
+    frame.style.left = '-10000px';
+    frame.style.top = '0';
+    frame.style.width = `${Math.max(ownerWindow.innerWidth || 0, 1024)}px`;
+    frame.style.height = `${Math.max(ownerWindow.innerHeight || 0, 768)}px`;
     frame.style.border = '0';
     frame.style.opacity = '0';
     frame.style.pointerEvents = 'none';
-    frame.style.visibility = 'hidden';
+    frame.style.visibility = 'visible';
+    frame.style.background = '#ffffff';
 
     ownerDocument.body.appendChild(frame);
 
@@ -194,39 +195,6 @@ const loadHtmlIntoPrintTarget = async (printTarget, html) => {
 
     if (!targetWindow || isPrintTargetClosed(printTarget)) {
         throw new Error('KhÃ´ng thá»ƒ khá»Ÿi táº¡o tÃ i liá»‡u in.');
-    }
-
-    if (printTarget?.frame && 'srcdoc' in printTarget.frame) {
-        await new Promise((resolve) => {
-            let settled = false;
-            let timeoutId = null;
-
-            const finish = () => {
-                if (settled) return;
-                settled = true;
-
-                if (timeoutId !== null) {
-                    getTimerWindow(targetWindow).clearTimeout(timeoutId);
-                }
-
-                printTarget.frame.removeEventListener('load', handleLoad);
-                resolve();
-            };
-
-            const handleLoad = () => {
-                finish();
-            };
-
-            timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-            printTarget.frame.addEventListener('load', handleLoad, { once: true });
-            printTarget.frame.srcdoc = html;
-        });
-
-        return () => {
-            if (printTarget.frame?.isConnected) {
-                printTarget.frame.removeAttribute('srcdoc');
-            }
-        };
     }
 
     return loadHtmlIntoPrintWindow(targetWindow, html);
@@ -1102,41 +1070,60 @@ const printHtmlDocument = async ({
     }
 
     const releaseLoadedDocument = await loadHtmlIntoPrintTarget(printTarget, html);
+    let didClosePrintTarget = false;
+
+    const closePrintTarget = () => {
+        if (didClosePrintTarget) {
+            return;
+        }
+
+        didClosePrintTarget = true;
+
+        try {
+            releaseLoadedDocument?.();
+        } finally {
+            closePrintWindow(printTarget);
+        }
+    };
 
     try {
         await waitForPrintableDocument(targetWindow);
     } catch (error) {
-        releaseLoadedDocument();
-        closePrintWindow(printTarget);
+        closePrintTarget();
         throw error;
     }
 
-    const printResult = await (async () => {
-        try {
-            return await waitForPrintDialogToClose({
-                ownerWindow: sourceWindow,
-                printWindow: targetWindow,
-                cleanup: () => closePrintWindow(printTarget),
-                triggerPrint: () => {
-                    targetWindow.focus?.();
-                    targetWindow.print();
-                    sourceWindow.focus?.();
-                },
-            });
-        } finally {
-            releaseLoadedDocument();
-        }
-    })();
+    let printResult;
+
+    try {
+        printResult = await waitForPrintDialogToClose({
+            ownerWindow: sourceWindow,
+            printWindow: targetWindow,
+            triggerPrint: () => {
+                targetWindow.focus?.();
+                targetWindow.print();
+            },
+        });
+    } catch (error) {
+        closePrintTarget();
+        throw error;
+    }
 
     return {
         ...printResult,
-        close: () => closePrintWindow(printTarget),
+        close: closePrintTarget,
         targetWindow,
     };
 };
 
 export const closePrintSession = (session) => {
     if (!session) return;
+
+    if (typeof session.close === 'function') {
+        session.close();
+        return;
+    }
+
     closePrintWindow(session);
 };
 

@@ -2146,6 +2146,34 @@ class ProductController extends Controller
         ]);
     }
 
+    private function attachVariantLibraryImage(Product $parentProduct, Product $variantProduct, mixed $libraryImageId, int $variantIndex): void
+    {
+        $normalizedImageId = is_numeric($libraryImageId) ? (int) $libraryImageId : null;
+        if (!$normalizedImageId) {
+            return;
+        }
+
+        $libraryImage = ProductImage::query()
+            ->where('product_id', $parentProduct->id)
+            ->find($normalizedImageId);
+
+        if (!$libraryImage) {
+            throw ValidationException::withMessages([
+                "variants.{$variantIndex}.library_image_id" => ['Ảnh thư viện đã chọn không còn thuộc sản phẩm này.'],
+            ]);
+        }
+
+        $reference = trim((string) ($libraryImage->image_url ?? ''));
+        if ($reference === '') {
+            throw ValidationException::withMessages([
+                "variants.{$variantIndex}.library_image_id" => ['Ảnh thư viện đã chọn không có dữ liệu hợp lệ để sao chép.'],
+            ]);
+        }
+
+        $this->deleteProductImagesForProduct($variantProduct);
+        $this->createProductImageFromReference($variantProduct, $reference, 0, true);
+    }
+
     private function deleteProductImagesForProduct(Product $product): void
     {
         $this->deleteProductImageCollection($product->images()->get());
@@ -8395,6 +8423,7 @@ class ProductController extends Controller
             'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.library_image_id' => 'nullable|integer',
             'variants.*.attributes' => 'nullable|array',
         ], [
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
@@ -8567,6 +8596,8 @@ class ProductController extends Controller
                         if ($request->hasFile("variants.{$idx}.image")) {
                             $imageFile = $request->file("variants.{$idx}.image");
                             $this->createProductImageRecord($variantProduct, $imageFile, 0, true);
+                        } elseif (!empty($vData['library_image_id'])) {
+                            $this->attachVariantLibraryImage($product, $variantProduct, $vData['library_image_id'], $idx);
                         }
 
                         $product->linkedProducts()->attach($variantProduct->id, [
@@ -9039,6 +9070,7 @@ class ProductController extends Controller
             'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.library_image_id' => 'nullable|integer',
             'variants.*.attributes' => 'nullable|array',
         ], [
             'name.required' => 'Tên sản phẩm không được để trống.',
@@ -9328,6 +9360,9 @@ class ProductController extends Controller
                         $imageFile = $request->file("variants.{$idx}.image");
                         $this->createProductImageRecord($variant, $imageFile, 0, true);
                     }
+                    elseif (!empty($vData['library_image_id'])) {
+                        $this->attachVariantLibraryImage($product, $variant, $vData['library_image_id'], $idx);
+                    }
                     elseif (isset($vData['remove_image']) && $vData['remove_image'] == 'true') {
                         $this->deleteProductImagesForProduct($variant);
                     }
@@ -9401,6 +9436,8 @@ class ProductController extends Controller
                     if ($request->hasFile("variants.{$idx}.image")) {
                         $imageFile = $request->file("variants.{$idx}.image");
                         $this->createProductImageRecord($variant, $imageFile, 0, true);
+                    } elseif (!empty($vData['library_image_id'])) {
+                        $this->attachVariantLibraryImage($product, $variant, $vData['library_image_id'], $idx);
                     }
 
                     $product->linkedProducts()->attach($variant->id, [

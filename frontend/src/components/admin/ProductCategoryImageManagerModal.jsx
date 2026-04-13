@@ -18,6 +18,7 @@ const MAX_SERVER_UPLOAD_BYTES = 5 * 1024 * 1024;
 const UPLOAD_BATCH_SIZE = 2;
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100];
 const DRAG_SELECTION_THRESHOLD = 6;
+const IMAGE_SORT_DRAG_THRESHOLD = 4;
 const FILE_INPUT_VISUALLY_HIDDEN_CLASS = 'sr-only';
 
 function chunkItems(items = [], size = 1) {
@@ -440,6 +441,7 @@ function ProductCategoryImageManagerModal({
     const imageViewportRefs = useRef({});
     const imageCardRefs = useRef({});
     const dragSelectionRef = useRef(null);
+    const imageSortDragRef = useRef(null);
 
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -476,6 +478,15 @@ function ProductCategoryImageManagerModal({
     }, []);
 
     const clearImageSortDrag = useCallback(() => {
+        const activeDrag = imageSortDragRef.current;
+        if (activeDrag?.moveHandler) {
+            window.removeEventListener('mousemove', activeDrag.moveHandler);
+        }
+        if (activeDrag?.upHandler) {
+            window.removeEventListener('mouseup', activeDrag.upHandler);
+        }
+
+        imageSortDragRef.current = null;
         setImageSortDrag(null);
     }, []);
 
@@ -497,6 +508,10 @@ function ProductCategoryImageManagerModal({
     useEffect(() => () => {
         stopDragSelection();
     }, [stopDragSelection]);
+
+    useEffect(() => () => {
+        clearImageSortDrag();
+    }, [clearImageSortDrag]);
 
     const pushNotice = useCallback((type, message, options = {}) => {
         const normalizedMessage = String(message || '').trim();
@@ -876,6 +891,13 @@ function ProductCategoryImageManagerModal({
                 return normalizedCurrentKeys.includes(normalizedImageKey)
                     ? normalizedCurrentKeys.filter((key) => key !== normalizedImageKey)
                     : [...normalizedCurrentKeys, normalizedImageKey];
+            }
+
+            if (
+                normalizedCurrentKeys.length === 1
+                && normalizedCurrentKeys[0] === normalizedImageKey
+            ) {
+                return [];
             }
 
             return [normalizedImageKey];
@@ -1753,84 +1775,85 @@ function ProductCategoryImageManagerModal({
         pushNotice('success', 'Đã chọn ảnh chính trong bản nháp. Hãy bấm Lưu để áp dụng.');
     }, [pushNotice, updateDraftImages]);
 
-    const resolveImageSortPlacement = useCallback((event, image) => {
-        if (image?.is_primary) {
-            return 'after';
+    const findImageSortHoverTarget = useCallback((productId, sourceImageKey, clientX, clientY) => {
+        const productKey = String(productId);
+        const cardMap = imageCardRefs.current[productKey] || {};
+        let bestMatch = null;
+
+        Object.entries(cardMap).forEach(([candidateKey, node]) => {
+            if (!node || candidateKey === sourceImageKey) {
+                return;
+            }
+
+            const rect = node.getBoundingClientRect();
+            const inside = (
+                clientX >= rect.left
+                && clientX <= rect.right
+                && clientY >= rect.top
+                && clientY <= rect.bottom
+            );
+            const dx = clientX < rect.left
+                ? rect.left - clientX
+                : clientX > rect.right
+                    ? clientX - rect.right
+                    : 0;
+            const dy = clientY < rect.top
+                ? rect.top - clientY
+                : clientY > rect.bottom
+                    ? clientY - rect.bottom
+                    : 0;
+            const distance = inside ? 0 : Math.hypot(dx, dy);
+
+            if (!bestMatch || distance < bestMatch.distance) {
+                bestMatch = {
+                    key: candidateKey,
+                    rect,
+                    distance,
+                };
+            }
+        });
+
+        if (!bestMatch) {
+            return null;
         }
 
-        const targetRect = event.currentTarget.getBoundingClientRect();
-        return event.clientX >= targetRect.left + (targetRect.width / 2) ? 'after' : 'before';
+        return {
+            overKey: bestMatch.key,
+            placement: clientX >= bestMatch.rect.left + (bestMatch.rect.width / 2) ? 'after' : 'before',
+        };
     }, []);
 
-    const handleImageSortDragStart = useCallback((event, productId, imageKey, image) => {
-        const productKey = String(productId);
-        const normalizedImageKey = String(imageKey || '').trim();
+    const applyImageSortPreview = useCallback((dragState, clientX, clientY) => {
+        const hoverTarget = findImageSortHoverTarget(
+            dragState.productId,
+            dragState.imageKey,
+            clientX,
+            clientY,
+        );
 
-        if (!normalizedImageKey || image?.is_primary || image?.uploading) {
-            event.preventDefault();
-            return;
-        }
-
-        stopDragSelection();
-
-        if (event.dataTransfer) {
-            event.dataTransfer.effectAllowed = 'move';
-            event.dataTransfer.setData('text/plain', `${productKey}:${normalizedImageKey}`);
-        }
-
-        setImageSortDrag({
-            productId: productKey,
-            imageKey: normalizedImageKey,
-            overKey: normalizedImageKey,
-            placement: 'after',
-        });
-    }, [stopDragSelection]);
-
-    const handleImageSortDragOver = useCallback((event, productId, imageKey, image) => {
-        const productKey = String(productId);
-        const normalizedImageKey = String(imageKey || '').trim();
-
-        if (!imageSortDrag || imageSortDrag.productId !== productKey || !normalizedImageKey) {
-            return;
-        }
-
-        event.preventDefault();
-        if (event.dataTransfer) {
-            event.dataTransfer.dropEffect = 'move';
-        }
-
-        const placement = resolveImageSortPlacement(event, image);
-        setImageSortDrag((current) => {
-            if (!current || current.productId !== productKey) {
-                return current;
+        const nextPreview = hoverTarget
+            ? {
+                productId: dragState.productKey,
+                imageKey: dragState.imageKey,
+                overKey: hoverTarget.overKey,
+                placement: hoverTarget.placement,
             }
-
-            if (current.overKey === normalizedImageKey && current.placement === placement) {
-                return current;
-            }
-
-            return {
-                ...current,
-                overKey: normalizedImageKey,
-                placement,
+            : {
+                productId: dragState.productKey,
+                imageKey: dragState.imageKey,
+                overKey: dragState.imageKey,
+                placement: 'after',
             };
-        });
-    }, [imageSortDrag, resolveImageSortPlacement]);
 
-    const handleImageSortDrop = useCallback((event, productId, imageKey, image) => {
-        const productKey = String(productId);
-        const normalizedImageKey = String(imageKey || '').trim();
+        dragState.overKey = nextPreview.overKey;
+        dragState.placement = nextPreview.placement;
+        setImageSortDrag(nextPreview);
+    }, [findImageSortHoverTarget]);
 
-        if (!imageSortDrag || imageSortDrag.productId !== productKey || !normalizedImageKey) {
-            return;
-        }
-
-        event.preventDefault();
-        const placement = resolveImageSortPlacement(event, image);
-
+    const commitImageSortMove = useCallback((productId, sourceImageKey, overImageKey, placement) => {
         updateDraftImages(productId, (currentImages) => {
-            const sourceIndex = currentImages.findIndex((item) => String(item.key) === imageSortDrag.imageKey);
-            const targetIndex = currentImages.findIndex((item) => String(item.key) === normalizedImageKey);
+            const sourceIndex = currentImages.findIndex((item) => String(item.key) === String(sourceImageKey));
+            const targetIndex = currentImages.findIndex((item) => String(item.key) === String(overImageKey));
 
             if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
                 return currentImages;
@@ -1853,9 +1876,84 @@ function ProductCategoryImageManagerModal({
             nextImages.splice(insertIndex, 0, movedImage);
             return nextImages;
         });
+    }, [updateDraftImages]);
 
+    const beginImageSortPointerDrag = useCallback((event, productId, imageKey, image, options = {}) => {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const { onClick = null } = options;
+        const productKey = String(productId);
+        const normalizedImageKey = String(imageKey || '').trim();
+
+        if (!normalizedImageKey || image?.is_primary || image?.uploading) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        stopDragSelection();
         clearImageSortDrag();
-    }, [clearImageSortDrag, imageSortDrag, resolveImageSortPlacement, updateDraftImages]);
+
+        const dragState = {
+            productId,
+            productKey,
+            imageKey: normalizedImageKey,
+            overKey: normalizedImageKey,
+            placement: 'after',
+            originX: event.clientX,
+            originY: event.clientY,
+            didMove: false,
+            moveHandler: null,
+            upHandler: null,
+        };
+
+        const moveHandler = (moveEvent) => {
+            if (
+                !dragState.didMove
+                && Math.max(
+                    Math.abs(moveEvent.clientX - dragState.originX),
+                    Math.abs(moveEvent.clientY - dragState.originY),
+                ) < IMAGE_SORT_DRAG_THRESHOLD
+            ) {
+                return;
+            }
+
+            dragState.didMove = true;
+            applyImageSortPreview(dragState, moveEvent.clientX, moveEvent.clientY);
+        };
+
+        const upHandler = (upEvent) => {
+            if (dragState.didMove) {
+                applyImageSortPreview(dragState, upEvent.clientX, upEvent.clientY);
+                if (dragState.overKey && dragState.overKey !== dragState.imageKey) {
+                    commitImageSortMove(
+                        productId,
+                        dragState.imageKey,
+                        dragState.overKey,
+                        dragState.placement,
+                    );
+                }
+            } else if (typeof onClick === 'function') {
+                onClick(upEvent);
+            }
+
+            clearImageSortDrag();
+        };
+
+        dragState.moveHandler = moveHandler;
+        dragState.upHandler = upHandler;
+        imageSortDragRef.current = dragState;
+
+        window.addEventListener('mousemove', moveHandler);
+        window.addEventListener('mouseup', upHandler, { once: true });
+    }, [applyImageSortPreview, clearImageSortDrag, commitImageSortMove, stopDragSelection]);
+
+    const handleImageSortPointerDown = useCallback((event, productId, imageKey, image) => {
+        beginImageSortPointerDrag(event, productId, imageKey, image);
+    }, [beginImageSortPointerDrag]);
 
     const handleBulkAddImages = useCallback(async (files) => {
         const targetIds = selectedProductIds
@@ -2304,6 +2402,35 @@ function ProductCategoryImageManagerModal({
         selectionAnchorMapRef.current[productKey] = normalizedImageKey;
     }, [setSelectedImagesForProduct]);
 
+    const handleImageCheckboxMouseDown = useCallback((event) => {
+        event.preventDefault();
+        event.stopPropagation();
+    }, []);
+
+    const handleImageSurfacePointerDown = useCallback((event, productId, imageKey, image, workingImages) => {
+        event.stopPropagation();
+
+        if (
+            event.shiftKey
+            || isSelectionToggleModifier(event)
+            || image?.is_primary
+            || image?.uploading
+            || workingImages.length < 2
+        ) {
+            beginImageDragSelection(event, productId, imageKey, workingImages);
+            return;
+        }
+
+        beginImageSortPointerDrag(event, productId, imageKey, image, {
+            onClick: () => {
+                applyImageSelection(productId, workingImages, imageKey, {
+                    shiftKey: false,
+                    toggleKey: false,
+                });
+            },
+        });
+    }, [applyImageSelection, beginImageDragSelection, beginImageSortPointerDrag]);
+
     const confirmDiscardUnsavedChangesAsync = useCallback(async () => {
         if (!hasUnsavedChanges) {
             return true;
@@ -2444,6 +2571,8 @@ function ProductCategoryImageManagerModal({
                                         const imageKey = String(image.key);
                                         const fileLabel = getImageFileLabel(image, index);
                                         const isImageSelected = selectedImageKeys.has(imageKey);
+                                        const isImageSortSource = imageSortDrag?.productId === productKey
+                                            && imageSortDrag?.imageKey === imageKey;
                                         const isImageSortDropTarget = imageSortDrag?.productId === productKey
                                             && imageSortDrag?.overKey === imageKey
                                             && imageSortDrag?.imageKey !== imageKey;
@@ -2459,9 +2588,7 @@ function ProductCategoryImageManagerModal({
                                                 key={imageKey}
                                                 ref={(node) => registerImageCard(product.id, imageKey, node)}
                                                 onMouseDown={(event) => beginImageDragSelection(event, product.id, imageKey, workingImages)}
-                                                onDragOver={(event) => handleImageSortDragOver(event, product.id, imageKey, image)}
-                                                onDrop={(event) => handleImageSortDrop(event, product.id, imageKey, image)}
-                                                className={`relative min-w-0 rounded-sm border overflow-hidden shadow-sm select-none transition-[border-color,box-shadow,background-color] ${isImageSelected ? 'border-primary/40 ring-1 ring-primary/15 bg-primary/[0.02]' : 'border-primary/10 bg-white'} ${image.uploading ? 'opacity-85' : ''} ${isImageSortDropTarget ? 'border-gold/45 bg-gold/5 ring-1 ring-gold/20' : ''}`}
+                                                className={`relative min-w-0 rounded-sm border overflow-hidden shadow-sm select-none transition-[border-color,box-shadow,background-color,opacity] ${isImageSelected ? 'border-primary/40 ring-1 ring-primary/15 bg-primary/[0.02]' : 'border-primary/10 bg-white'} ${image.uploading ? 'opacity-85' : ''} ${isImageSortSource ? 'opacity-60' : ''} ${isImageSortDropTarget ? 'border-gold/45 bg-gold/5 ring-1 ring-gold/20' : ''}`}
                                             >
                                                 {isImageSortDropTarget ? (
                                                     <div
@@ -2470,12 +2597,13 @@ function ProductCategoryImageManagerModal({
                                                 ) : null}
                                                 <div
                                                     className="relative w-full aspect-[4/3] overflow-hidden bg-primary/[0.04]"
+                                                    onMouseDown={(event) => handleImageSurfacePointerDown(event, product.id, imageKey, image, workingImages)}
                                                     onDoubleClick={() => setPreviewImage({
                                                         url: image.full_url || image.preview_url,
                                                         fileName: fileLabel,
                                                         productName: product.name,
                                                     })}
-                                                    title="Bấm ảnh để chọn nhanh, bấm dấu tích để thêm hoặc bỏ chọn, double click để xem lớn"
+                                                    title="Bấm ảnh để chọn nhanh, giữ và kéo ngay trên ảnh để sắp xếp, double click để xem lớn"
                                                 >
                                                     {image.preview_url ? (
                                                         <img
@@ -2499,15 +2627,22 @@ function ProductCategoryImageManagerModal({
                                                         </div>
                                                     ) : null}
 
-                                                    <label className="absolute left-1.5 top-1.5 z-30 inline-flex items-center justify-center rounded-full bg-white/95 shadow px-1 py-0.5">
-                                                        <input
-                                                            type="checkbox"
-                                                            className="size-3 accent-primary"
-                                                            checked={isImageSelected}
-                                                            onClick={(event) => handleImageCheckboxToggle(event, product.id, imageKey, workingImages)}
-                                                            onChange={() => {}}
-                                                        />
-                                                    </label>
+                                                    <button
+                                                        type="button"
+                                                        onMouseDown={handleImageCheckboxMouseDown}
+                                                        onClick={(event) => handleImageCheckboxToggle(event, product.id, imageKey, workingImages)}
+                                                        className={`absolute left-1.5 top-1.5 z-30 inline-flex size-5 items-center justify-center rounded-md border shadow transition-colors ${
+                                                            isImageSelected
+                                                                ? 'border-primary bg-primary text-white'
+                                                                : 'border-primary/25 bg-white/95 text-primary/50 hover:border-primary/45 hover:text-primary'
+                                                        }`}
+                                                        title={isImageSelected ? 'Bỏ chọn ảnh này' : 'Chọn ảnh này'}
+                                                        aria-pressed={isImageSelected}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[13px]">
+                                                            {isImageSelected ? 'check_small' : ''}
+                                                        </span>
+                                                    </button>
 
                                                     <span className="absolute left-7 top-1.5 rounded-full bg-black/65 px-1.5 py-0.5 text-[8px] font-bold text-white">
                                                         #{index + 1}
@@ -2547,15 +2682,13 @@ function ProductCategoryImageManagerModal({
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        draggable={!dragHandleDisabled}
                                                         disabled={dragHandleDisabled}
-                                                        onDragStart={(event) => handleImageSortDragStart(event, product.id, imageKey, image)}
-                                                        onDragEnd={clearImageSortDrag}
+                                                        onMouseDown={(event) => handleImageSortPointerDown(event, product.id, imageKey, image)}
                                                         className="h-7 cursor-grab border-r border-primary/10 text-primary/70 hover:bg-primary/[0.04] hover:text-primary active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-35"
                                                         title={
                                                             image.is_primary
                                                                 ? 'Ảnh chính luôn đứng đầu. Đổi ảnh chính nếu muốn thay thứ tự.'
-                                                                : 'Kéo để sắp xếp trực tiếp'
+                                                                : 'Giữ và kéo để sắp xếp trực tiếp'
                                                         }
                                                     >
                                                         <span className="material-symbols-outlined text-[14px]">drag_indicator</span>

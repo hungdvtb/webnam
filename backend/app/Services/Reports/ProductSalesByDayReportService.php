@@ -214,6 +214,7 @@ class ProductSalesByDayReportService
 
         $reportDateExpression = $this->reportDateExpression('completed_logs', 'orders');
         $revenueExpression = $this->revenueExpression();
+        $effectiveProductIdExpression = $this->effectiveProductIdExpression();
 
         $query = DB::table('order_items')
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
@@ -223,9 +224,9 @@ class ProductSalesByDayReportService
             ->leftJoinSub($orderGrossSubquery, 'order_gross', function ($join) {
                 $join->on('order_gross.order_id', '=', 'orders.id');
             })
-            ->leftJoin('products as child_products', 'child_products.id', '=', 'order_items.product_id')
+            ->leftJoin('products as child_products', fn ($join) => $join->on('child_products.id', '=', DB::raw($effectiveProductIdExpression)))
             ->leftJoin('product_links as variant_links', function ($join) {
-                $join->on('variant_links.linked_product_id', '=', 'order_items.product_id')
+                $join->on('variant_links.linked_product_id', '=', DB::raw($this->effectiveProductIdExpression()))
                     ->where('variant_links.link_type', '=', 'super_link');
             })
             ->leftJoin('products as parent_products', 'parent_products.id', '=', 'variant_links.product_id')
@@ -248,6 +249,8 @@ class ProductSalesByDayReportService
                 $this->applyInsensitiveLike($searchQuery, 'orders.shipping_address', $searchContainsLike, true);
                 $this->applyInsensitiveLike($searchQuery, 'orders.notes', $searchContainsLike, true);
                 $this->applyInsensitiveLike($searchQuery, 'orders.shipping_tracking_code', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'order_items.actual_product_name_snapshot', $searchContainsLike, true);
+                $this->applyInsensitiveLike($searchQuery, 'order_items.actual_product_sku_snapshot', $searchContainsLike, true);
                 $this->applyInsensitiveLike($searchQuery, 'order_items.product_name_snapshot', $searchContainsLike, true);
                 $this->applyInsensitiveLike($searchQuery, 'order_items.product_sku_snapshot', $searchContainsLike, true);
                 $this->applyInsensitiveLike($searchQuery, 'child_products.name', $searchContainsLike, true);
@@ -297,7 +300,7 @@ class ProductSalesByDayReportService
             $productId = (int) $filters['product_id'];
             $query->where(function ($productQuery) use ($productId) {
                 $productQuery
-                    ->where('order_items.product_id', $productId)
+                    ->whereRaw($this->effectiveProductIdExpression() . ' = ?', [$productId])
                     ->orWhere('parent_products.id', $productId);
             });
         }
@@ -330,13 +333,15 @@ class ProductSalesByDayReportService
         }
 
         $currentUnitCostExpression = $this->currentUnitCostExpression();
+        $effectiveProductNameSnapshotExpression = $this->effectiveProductNameSnapshotExpression();
+        $effectiveProductSkuSnapshotExpression = $this->effectiveProductSkuSnapshotExpression();
 
         return $query
-            ->selectRaw('order_items.product_id AS child_product_id')
-            ->selectRaw('order_items.product_name_snapshot AS child_product_name_snapshot')
-            ->selectRaw('order_items.product_sku_snapshot AS child_product_sku_snapshot')
-            ->selectRaw('COALESCE(child_products.name, order_items.product_name_snapshot) AS child_product_name')
-            ->selectRaw('COALESCE(child_products.sku, order_items.product_sku_snapshot) AS child_product_sku')
+            ->selectRaw($effectiveProductIdExpression . ' AS child_product_id')
+            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS child_product_name_snapshot')
+            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS child_product_sku_snapshot')
+            ->selectRaw('COALESCE(child_products.name, ' . $effectiveProductNameSnapshotExpression . ') AS child_product_name')
+            ->selectRaw('COALESCE(child_products.sku, ' . $effectiveProductSkuSnapshotExpression . ') AS child_product_sku')
             ->selectRaw('parent_products.id AS parent_product_id')
             ->selectRaw('parent_products.name AS parent_product_name')
             ->selectRaw('parent_products.sku AS parent_product_sku')
@@ -345,15 +350,15 @@ class ProductSalesByDayReportService
             ->selectRaw('ROUND(SUM((' . $currentUnitCostExpression . ') * order_items.quantity), 2) AS total_cost_amount')
             ->selectRaw('ROUND(SUM(' . $revenueExpression . '), 2) AS total_revenue_amount')
             ->groupBy(
-                'order_items.product_id',
-                'order_items.product_name_snapshot',
-                'order_items.product_sku_snapshot',
                 'child_products.name',
                 'child_products.sku',
                 'parent_products.id',
                 'parent_products.name',
                 'parent_products.sku'
             )
+            ->groupByRaw($effectiveProductIdExpression)
+            ->groupByRaw($effectiveProductNameSnapshotExpression)
+            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->groupByRaw($reportDateExpression)
             ->orderByRaw($reportDateExpression . ' DESC')
             ->orderBy('child_product_name');
@@ -636,6 +641,21 @@ class ProductSalesByDayReportService
     private function reportDateExpression(string $completedAlias, string $ordersAlias): string
     {
         return "DATE(COALESCE({$completedAlias}.completed_at, {$ordersAlias}.created_at))";
+    }
+
+    private function effectiveProductIdExpression(): string
+    {
+        return 'COALESCE(order_items.actual_product_id, order_items.product_id)';
+    }
+
+    private function effectiveProductNameSnapshotExpression(): string
+    {
+        return "COALESCE(NULLIF(order_items.actual_product_name_snapshot, ''), order_items.product_name_snapshot)";
+    }
+
+    private function effectiveProductSkuSnapshotExpression(): string
+    {
+        return "COALESCE(NULLIF(order_items.actual_product_sku_snapshot, ''), order_items.product_sku_snapshot)";
     }
 
     private function currentUnitCostExpression(): string

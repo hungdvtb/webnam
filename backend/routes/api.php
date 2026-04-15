@@ -117,6 +117,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Admin Attribute routes
     Route::get('/attributes', [\App\Http\Controllers\AttributeController::class , 'index']); // Move here or public? Admin is fine
     Route::post('/attributes', [\App\Http\Controllers\AttributeController::class , 'store']);
+    Route::post('/attributes/reorder', [\App\Http\Controllers\AttributeController::class , 'reorder']);
     Route::get('/attributes/{id}', [\App\Http\Controllers\AttributeController::class , 'show']);
     Route::put('/attributes/{id}', [\App\Http\Controllers\AttributeController::class , 'update']);
     Route::delete('/attributes/{id}', [\App\Http\Controllers\AttributeController::class , 'destroy']);

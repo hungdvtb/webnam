@@ -51,7 +51,7 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             ->assertJsonPath('results.0.success', true)
             ->assertJsonPath('results.0.dispatch_mode', 'outside_delivery')
             ->assertJsonPath('results.0.shipment_id', null)
-            ->assertJsonPath('results.0.tracking_number', null);
+            ->assertJsonPath('results.0.tracking_number', 'shipngoai100');
 
         $order->refresh();
         $batch->refresh();
@@ -69,7 +69,7 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertSame('manual', (string) $order->shipping_status_source);
         $this->assertSame('outside_delivery', (string) $order->shipping_carrier_code);
         $this->assertStringContainsString('Gửi ngoài', (string) $order->shipping_carrier_name);
-        $this->assertNull($order->shipping_tracking_code);
+        $this->assertSame('shipngoai100', (string) $order->shipping_tracking_code);
         $this->assertNotNull($order->shipping_dispatched_at);
         $this->assertSame('xe_khach', data_get($order->external_delivery_meta, 'delivery_type'));
         $this->assertSame('Nha xe Phuong Trang', data_get($order->external_delivery_meta, 'contact_name'));
@@ -91,6 +91,53 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             'to_status' => 'shipping',
             'to_shipping_status' => 'out_for_delivery',
         ]);
+    }
+
+    public function test_quick_dispatch_outside_delivery_generates_incrementing_internal_tracking_codes(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham gui ngoai tu tang ma',
+            'sku' => 'OUTSIDE-AUTO-CODE-001',
+            'price' => 190000,
+        ]);
+        $this->createBatch($account, $product, 3, 90000, 'outside-auto-code');
+
+        $firstOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR88001A0',
+        ]);
+        $secondOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR88002A0',
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/quick-dispatch', [
+                'shipments' => [[
+                    'order_id' => $firstOrder->id,
+                    'dispatch_mode' => 'outside_delivery',
+                    'external_delivery_type' => 'xe_om',
+                    'shipping_cost' => 15000,
+                ]],
+            ])
+            ->assertCreated()
+            ->assertJsonPath('results.0.tracking_number', 'shipngoai100');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/quick-dispatch', [
+                'shipments' => [[
+                    'order_id' => $secondOrder->id,
+                    'dispatch_mode' => 'outside_delivery',
+                    'external_delivery_type' => 'tu_giao',
+                    'shipping_cost' => 18000,
+                ]],
+            ])
+            ->assertCreated()
+            ->assertJsonPath('results.0.tracking_number', 'shipngoai101');
+
+        $this->assertSame('shipngoai100', (string) $firstOrder->fresh()->shipping_tracking_code);
+        $this->assertSame('shipngoai101', (string) $secondOrder->fresh()->shipping_tracking_code);
     }
 
     public function test_cancel_dispatch_clears_outside_delivery_marker_without_shipments(): void

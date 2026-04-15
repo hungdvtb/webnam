@@ -48,7 +48,7 @@ const DEFAULT_COLUMNS = [
     { id: 'notes', label: 'Ghi Chú Đơn', minWidth: '180px' },
     { id: 'status', label: 'Trạng Thái', minWidth: '120px', align: 'left' },
     { id: 'shipping_carrier_name', label: 'Đơn vị VC', minWidth: '140px' },
-    { id: 'shipping_tracking_code', label: 'Mã vận đơn', minWidth: '170px' },
+    { id: 'shipping_tracking_code', label: 'Mã vận đơn', minWidth: '120px' },
     { id: 'shipping_dispatched_at', label: 'Ngày gửi VC', minWidth: '120px' },
 ];
 
@@ -328,6 +328,23 @@ const formatPrintCountLabel = (value) => {
 const getCompactColumnLabelLines = (columnId, label) => {
     if (columnId === 'created_at') return ['Ngày', 'đặt'];
     if (columnId === 'shipping_dispatched_at') return ['Ngày gửi', 'VC'];
+    if (columnId === 'shipping_tracking_code') return ['Mã vận', 'đơn'];
+    return [label];
+};
+
+const shouldStackColumnLabel = (columnId) => (
+    columnId === 'created_at'
+    || columnId === 'shipping_dispatched_at'
+    || columnId === 'shipping_tracking_code'
+);
+
+const getStatusDisplayLines = (label) => {
+    const normalizedLabel = String(label || '').trim().toLowerCase();
+
+    if (normalizedLabel === 'giao hàng thành công') {
+        return ['Giao hàng', 'Thành công'];
+    }
+
     return [label];
 };
 
@@ -377,6 +394,7 @@ const OUTSIDE_DELIVERY_TYPE_LABELS = OUTSIDE_DELIVERY_TYPE_OPTIONS.reduce((accum
 }, {});
 
 const isDraftOrder = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
+const getOrderDisplayTimestamp = (order) => order?.displayed_at || order?.created_at || null;
 const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'main');
 const buildOrderListUrl = (view = 'main') => {
     if (view === 'draft') return '/admin/orders?view=draft';
@@ -1173,7 +1191,7 @@ const QuickShipmentModal = ({
 
                 <div className="px-6 py-4 border-t border-primary/10 bg-white flex items-center justify-between gap-3">
                     <p className="text-[11px] text-primary/45 font-bold">
-                        Qua đơn vị VC sẽ tạo vận đơn nội bộ. Gửi ngoài chỉ lưu thông tin giao hàng thủ công, không tạo mã vận đơn và không sinh shipment nội bộ.
+                        Qua đơn vị VC sẽ tạo vận đơn nội bộ. Gửi ngoài sẽ tự sinh mã vận đơn nội bộ dạng shipngoai..., nhưng không sinh shipment nội bộ.
                     </p>
                     <div className="flex items-center gap-3">
                         <button type="button" onClick={onClose} className="h-10 px-4 rounded-sm border border-primary/20 text-primary text-[12px] font-black uppercase tracking-wide hover:bg-primary/5">
@@ -3557,7 +3575,7 @@ const OrderList = () => {
                     orders.map((o) => {
                         const isDraftRow = isDraftOrder(o.order_kind);
                         const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
-                        const dateDisplay = formatDateTimeParts(o.created_at);
+                const dateDisplay = formatDateTimeParts(getOrderDisplayTimestamp(o));
                         const isFocusedRouteRow = Number(o.id) === Number(routeOrderScope.focusOrderId);
                         const itemPreview = Array.isArray(o.items) ? o.items.slice(0, 2) : [];
                         const remainingItemCount = Math.max((o.items?.length || 0) - itemPreview.length, 0);
@@ -3740,7 +3758,7 @@ const OrderList = () => {
                 )}
             </div>
 
-            <div className="relative hidden flex-1 overflow-auto rounded-sm border border-primary/10 bg-white shadow-xl table-scrollbar lg:flex">
+            <div className="relative hidden flex-1 overflow-auto rounded-sm border border-primary/10 bg-white shadow-xl table-scrollbar lg:block">
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
@@ -3751,7 +3769,7 @@ const OrderList = () => {
                             </th>
                             {renderedColumns.map((c, i) => (
                                 <th key={c.id} draggable onDragStart={(e) => handleHeaderDragStart(e, i)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleHeaderDrop(e, i)} onDoubleClick={() => handleSort(c.id)} className={`px-3 py-2.5 border border-primary/10 cursor-move hover:bg-primary/5 relative group ${c.id === 'order_number' ? 'sticky-col-1' : ''}`} style={{ width: columnWidths[c.id] || c.minWidth }}>
-                                    <div className={`flex items-center gap-1.5 ${c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : ''}`}><span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span><span className={`text-primary font-black ${c.id === 'created_at' || c.id === 'shipping_dispatched_at' ? 'leading-[1.05]' : 'truncate'}`}>{(c.id === 'created_at' || c.id === 'shipping_dispatched_at') ? <span className="flex flex-col"><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[0]}</span><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[1]}</span></span> : c.label}</span><SortIndicator colId={c.id === 'customer' ? 'customer_name' : c.id} sortConfig={sortConfig} /></div>
+                                    <div className={`flex items-center gap-1.5 ${c.align === 'center' ? 'justify-center' : c.align === 'right' ? 'justify-end' : ''}`}><span className="material-symbols-outlined text-[14px] opacity-20 group-hover:opacity-100 text-primary">drag_indicator</span><span className={`text-primary font-black ${shouldStackColumnLabel(c.id) ? 'leading-[1.05]' : 'truncate'}`}>{shouldStackColumnLabel(c.id) ? <span className="flex flex-col"><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[0]}</span><span className="whitespace-nowrap">{getCompactColumnLabelLines(c.id, c.label)[1]}</span></span> : c.label}</span><SortIndicator colId={c.id === 'customer' ? 'customer_name' : c.id} sortConfig={sortConfig} /></div>
                                     <div onMouseDown={(e) => handleColumnResize(c.id, e)} className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/20 transition-colors" />
                                 </th>
                             ))}
@@ -3820,7 +3838,7 @@ const OrderList = () => {
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 group/customer_cell relative">
                                                 <div className="flex flex-col">
                                                     <div className="flex items-center justify-between group/name_c">
-                                                        <span className="font-bold text-[#111] truncate">{o.customer_name}</span>
+                                                        <span className="font-bold text-[#111] truncate" title={o.customer_name || undefined}>{o.customer_name}</span>
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(o.customer_name, e); }} className={`opacity-0 group-hover/name_c:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.customer_name ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[14px]">{copiedText === o.customer_name ? 'check' : 'content_copy'}</span>
                                                         </button>
@@ -3854,6 +3872,19 @@ const OrderList = () => {
                                                 </div>
                                             </td>
                                         );
+                                        if (c.id === 'shipping_address') {
+                                            const addressValue = String(o.shipping_address || '-').trim() || '-';
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-black italic group/address relative">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="truncate" title={addressValue !== '-' ? addressValue : undefined}>{addressValue}</span>
+                                                        {addressValue !== '-' && <button onClick={(e) => { e.stopPropagation(); handleCopy(addressValue, e); }} className={`opacity-0 group-hover/address:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === addressValue ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
+                                                            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                        </button>}
+                                                    </div>
+                                                </td>
+                                            );
+                                        }
                                         if (c.id === 'items') {
                                             const rawItems = o.items || [];
                                             const hasMany = rawItems.length > 2;
@@ -3875,9 +3906,9 @@ const OrderList = () => {
                                             }
 
                                             return (
-                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 align-top relative group/item_cell">
-                                                    <div className="flex flex-col h-full">
-                                                        <div className={`max-h-[110px] overflow-y-auto custom-scrollbar space-y-3 flex-1 ${hasMany ? 'pr-8' : 'pr-1'}`}>
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 align-top group/item_cell">
+                                                    <div className="relative">
+                                                        <div className={`max-h-[110px] min-h-0 overflow-y-auto custom-scrollbar space-y-3 ${hasMany ? 'pr-8 pb-9' : 'pr-1'}`}>
                                                             {itemsToShow.map((item, idx) => {
                                                                 const itemName = getOrderItemDisplayName(item, '...');
                                                                 const itemSku = getOrderItemDisplaySku(item, '');
@@ -3997,6 +4028,11 @@ const OrderList = () => {
                                         if (c.id === 'status') {
                                             const isDraftRow = isDraftOrder(o.order_kind);
                                             const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
+                                            const statusDisplayLines = getStatusDisplayLines(statusName);
+                                            const isMultiLineStatus = statusDisplayLines.length > 1;
+                                            const statusBadgeTextClassName = isMultiLineStatus
+                                                ? 'admin-order-status-badge__text admin-order-status-badge__text--multiline'
+                                                : 'admin-order-status-badge__text whitespace-nowrap';
                                             const printCountLabel = formatPrintCountLabel(o.print_count);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
@@ -4010,15 +4046,19 @@ const OrderList = () => {
                                                                         setStatusMenuOrderId(o.id);
                                                                     }}
                                                                     data-status-edit-btn
-                                                                    className="px-2 py-1 rounded-sm text-[11px] font-black border transition-all hover:scale-105 active:scale-95 shadow-sm group/status-btn flex items-center gap-1.5"
+                                                                    className="admin-order-status-badge rounded-sm border text-[11px] font-black shadow-sm transition-all hover:scale-105 active:scale-95 group/status-btn"
                                                                     style={getStatusStyle(o.status)}
                                                                 >
-                                                                    <span className="truncate">{statusName}</span>
-                                                                    <span className="material-symbols-outlined text-[16px] leading-none opacity-40 group-hover/status-btn:opacity-100 transition-opacity">expand_more</span>
+                                                                    <span className={statusBadgeTextClassName}>
+                                                                        {statusDisplayLines.map((line, index) => <span key={`${line}-${index}`} className="whitespace-nowrap">{line}</span>)}
+                                                                    </span>
+                                                                    <span className="admin-order-status-badge__icon material-symbols-outlined text-[16px] leading-none opacity-40 transition-opacity group-hover/status-btn:opacity-100">expand_more</span>
                                                                 </button>
                                                             ) : (
-                                                                <span className={`px-2 py-1 rounded-sm text-[11px] font-black border inline-flex items-center gap-1.5 shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
-                                                                    <span className="truncate">{statusName}</span>
+                                                                <span className={`admin-order-status-badge rounded-sm border text-[11px] font-black shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
+                                                                    <span className={statusBadgeTextClassName}>
+                                                                        {statusDisplayLines.map((line, index) => <span key={`${line}-${index}`} className="whitespace-nowrap">{line}</span>)}
+                                                                    </span>
                                                                 </span>
                                                             )}
                                                             <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
@@ -4061,7 +4101,7 @@ const OrderList = () => {
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 font-mono text-primary font-bold group/tracking">
                                                     <div className="flex items-center justify-between gap-2">
-                                                        <span className="truncate">{trackingCode}</span>
+                                                        <span className="truncate" title={trackingCode !== '-' ? trackingCode : undefined}>{trackingCode}</span>
                                                         {trackingCode !== '-' && (
                                                             <button onClick={(e) => { e.stopPropagation(); handleCopy(trackingCode, e); }} className={`opacity-0 group-hover/tracking:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === trackingCode ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                                 <span className="material-symbols-outlined text-[14px]">content_copy</span>
@@ -4100,7 +4140,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'created_at') {
-                                            const dateDisplay = formatDateTimeParts(o.created_at);
+                    const dateDisplay = formatDateTimeParts(getOrderDisplayTimestamp(o));
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary font-black italic group/date relative">
                                                     <div className="flex items-start justify-between gap-2">

@@ -161,9 +161,17 @@ class Product extends Model
      */
     public function superAttributes()
     {
-        return $this->belongsToMany(Attribute::class, 'product_super_attributes', 'product_id', 'attribute_id')
-                    ->withPivot(['position'])
-                    ->withTimestamps();
+        $relation = $this->belongsToMany(Attribute::class, 'product_super_attributes', 'product_id', 'attribute_id')
+            ->withPivot(['position']);
+
+        if (Attribute::hasSortOrderColumn()) {
+            $relation->orderBy('attributes.sort_order');
+        }
+
+        return $relation
+            ->orderBy('product_super_attributes.position')
+            ->orderBy('attributes.id')
+            ->withTimestamps();
     }
 
     /**
@@ -191,7 +199,16 @@ class Product extends Model
 
     public function attributeValues()
     {
-        return $this->hasMany(\App\Models\ProductAttributeValue::class);
+        $relation = $this->hasMany(\App\Models\ProductAttributeValue::class);
+        $sortOrderSubquery = Attribute::sortOrderSubquery('product_attribute_values.attribute_id');
+
+        if ($sortOrderSubquery !== null) {
+            $relation->orderBy($sortOrderSubquery);
+        }
+
+        return $relation
+            ->orderBy('product_attribute_values.attribute_id')
+            ->orderBy('product_attribute_values.id');
     }
 
     public function images()

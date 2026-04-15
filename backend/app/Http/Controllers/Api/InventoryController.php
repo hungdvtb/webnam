@@ -3192,9 +3192,10 @@ class InventoryController extends Controller
             ->join('order_items', 'order_items.id', '=', 'shipment_items.order_item_id')
             ->join('orders', 'orders.id', '=', 'shipments.order_id')
             ->selectRaw('shipments.order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(shipment_items.qty), 0) as automatic_export_quantity')
-            ->groupBy('shipments.order_id', 'order_items.product_id');
+            ->groupBy('shipments.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyExportEligibleOrderScope(
             $shipmentExportQtySub,
@@ -3206,10 +3207,11 @@ class InventoryController extends Controller
         $legacyAutomaticExportQtySub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('orders.id as order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as automatic_export_quantity')
             ->whereNotNull('order_items.product_id')
-            ->groupBy('orders.id', 'order_items.product_id');
+            ->groupBy('orders.id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyExportEligibleOrderScope(
             $legacyAutomaticExportQtySub,
@@ -3350,10 +3352,11 @@ class InventoryController extends Controller
         $pendingOrderItemsSub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as ordered_quantity')
             ->whereNotNull('order_items.product_id')
-            ->groupBy('order_items.order_id', 'order_items.product_id');
+            ->groupBy('order_items.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
 
@@ -3374,10 +3377,11 @@ class InventoryController extends Controller
         $pendingReturnItemsSub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as pending_return_quantity')
             ->whereNotNull('order_items.product_id')
-            ->groupBy('order_items.order_id', 'order_items.product_id');
+            ->groupBy('order_items.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
 

@@ -205,11 +205,12 @@ class SalesProductReportService
         $categoryIds = $this->normalizeArrayFilter($filters['category_ids'] ?? $filters['category_id'] ?? []);
         $productTypes = $this->normalizeArrayFilter($filters['product_types'] ?? $filters['type'] ?? []);
         $warehouseIds = $this->normalizeArrayFilter($filters['warehouse_ids'] ?? []);
+        $effectiveProductIdExpression = $this->effectiveProductIdExpression();
 
         return DB::table('order_items')
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->leftJoinSub($orderGrossSub, 'order_gross', fn ($join) => $join->on('order_gross.order_id', '=', 'orders.id'))
-            ->leftJoin('products', 'products.id', '=', 'order_items.product_id')
+            ->leftJoin('products', fn ($join) => $join->on('products.id', '=', DB::raw($effectiveProductIdExpression)))
             ->leftJoin('categories', 'categories.id', '=', 'products.category_id')
             ->where('orders.account_id', $accountId)
             ->whereNull('orders.deleted_at')
@@ -218,7 +219,9 @@ class SalesProductReportService
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($builder) use ($search) {
                     $builder
-                        ->where('order_items.product_sku_snapshot', 'like', '%' . $search . '%')
+                        ->where('order_items.actual_product_sku_snapshot', 'like', '%' . $search . '%')
+                        ->orWhere('order_items.actual_product_name_snapshot', 'like', '%' . $search . '%')
+                        ->orWhere('order_items.product_sku_snapshot', 'like', '%' . $search . '%')
                         ->orWhere('order_items.product_name_snapshot', 'like', '%' . $search . '%')
                         ->orWhere('products.sku', 'like', '%' . $search . '%')
                         ->orWhere('products.name', 'like', '%' . $search . '%')
@@ -242,13 +245,16 @@ class SalesProductReportService
     private function productSummaryQuery($baseQuery)
     {
         $netRevenueExpression = $this->netRevenueExpression();
+        $effectiveProductIdExpression = $this->effectiveProductIdExpression();
+        $effectiveProductNameSnapshotExpression = $this->effectiveProductNameSnapshotExpression();
+        $effectiveProductSkuSnapshotExpression = $this->effectiveProductSkuSnapshotExpression();
 
         return $baseQuery
-            ->selectRaw('order_items.product_id')
-            ->selectRaw('order_items.product_name_snapshot')
-            ->selectRaw('order_items.product_sku_snapshot')
-            ->selectRaw('COALESCE(products.name, order_items.product_name_snapshot) AS product_name')
-            ->selectRaw('COALESCE(products.sku, order_items.product_sku_snapshot) AS product_sku')
+            ->selectRaw($effectiveProductIdExpression . ' AS product_id')
+            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS product_name_snapshot')
+            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS product_sku_snapshot')
+            ->selectRaw('COALESCE(products.name, ' . $effectiveProductNameSnapshotExpression . ') AS product_name')
+            ->selectRaw('COALESCE(products.sku, ' . $effectiveProductSkuSnapshotExpression . ') AS product_sku')
             ->selectRaw('products.type AS product_type')
             ->selectRaw('products.category_id AS category_id')
             ->selectRaw("COALESCE(categories.name, 'Chưa phân loại') AS category_name")
@@ -256,15 +262,15 @@ class SalesProductReportService
             ->selectRaw("ROUND(SUM({$netRevenueExpression}), 2) AS total_net_revenue")
             ->selectRaw('ROUND(SUM(order_items.cost_total), 2) AS total_cost_amount')
             ->groupBy(
-                'order_items.product_id',
-                'order_items.product_name_snapshot',
-                'order_items.product_sku_snapshot',
                 'products.name',
                 'products.sku',
                 'products.type',
                 'products.category_id',
                 'categories.name'
             )
+            ->groupByRaw($effectiveProductIdExpression)
+            ->groupByRaw($effectiveProductNameSnapshotExpression)
+            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->orderByDesc('total_quantity')
             ->orderBy('product_name');
     }
@@ -285,20 +291,21 @@ class SalesProductReportService
     private function dailyProductQuery($baseQuery)
     {
         $netRevenueExpression = $this->netRevenueExpression();
+        $effectiveProductIdExpression = $this->effectiveProductIdExpression();
+        $effectiveProductNameSnapshotExpression = $this->effectiveProductNameSnapshotExpression();
+        $effectiveProductSkuSnapshotExpression = $this->effectiveProductSkuSnapshotExpression();
 
         return $baseQuery
-            ->selectRaw('order_items.product_id')
-            ->selectRaw('order_items.product_name_snapshot')
-            ->selectRaw('order_items.product_sku_snapshot')
+            ->selectRaw($effectiveProductIdExpression . ' AS product_id')
+            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS product_name_snapshot')
+            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS product_sku_snapshot')
             ->selectRaw('DATE(orders.created_at) AS report_date')
             ->selectRaw('SUM(order_items.quantity) AS total_quantity')
             ->selectRaw("ROUND(SUM({$netRevenueExpression}), 2) AS total_net_revenue")
             ->selectRaw('ROUND(SUM(order_items.cost_total), 2) AS total_cost_amount')
-            ->groupBy(
-                'order_items.product_id',
-                'order_items.product_name_snapshot',
-                'order_items.product_sku_snapshot'
-            )
+            ->groupByRaw($effectiveProductIdExpression)
+            ->groupByRaw($effectiveProductNameSnapshotExpression)
+            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->groupByRaw('DATE(orders.created_at)')
             ->orderBy('report_date');
     }
@@ -309,20 +316,20 @@ class SalesProductReportService
             foreach ($pageItems as $item) {
                 $builder->orWhere(function ($productQuery) use ($item) {
                     if (!empty($item['product_id'])) {
-                        $productQuery->where('order_items.product_id', $item['product_id']);
+                        $productQuery->whereRaw($this->effectiveProductIdExpression() . ' = ?', [$item['product_id']]);
 
                         return;
                     }
 
                     $productQuery
-                        ->whereNull('order_items.product_id')
-                        ->where('order_items.product_name_snapshot', $item['product_name_snapshot'])
+                        ->whereRaw($this->effectiveProductIdExpression() . ' IS NULL')
+                        ->whereRaw($this->effectiveProductNameSnapshotExpression() . ' = ?', [$item['product_name_snapshot']])
                         ->where(function ($skuQuery) use ($item) {
                             if (filled($item['product_sku_snapshot'])) {
-                                $skuQuery->where('order_items.product_sku_snapshot', $item['product_sku_snapshot']);
+                                $skuQuery->whereRaw($this->effectiveProductSkuSnapshotExpression() . ' = ?', [$item['product_sku_snapshot']]);
                             } else {
-                                $skuQuery->whereNull('order_items.product_sku_snapshot')
-                                    ->orWhere('order_items.product_sku_snapshot', '');
+                                $skuQuery->whereRaw($this->effectiveProductSkuSnapshotExpression() . ' IS NULL')
+                                    ->orWhereRaw($this->effectiveProductSkuSnapshotExpression() . " = ''");
                             }
                         });
                 });
@@ -518,6 +525,21 @@ class SalesProductReportService
         }
 
         return 'snapshot-' . md5(((string) $snapshotSku) . '|' . ((string) $snapshotName));
+    }
+
+    private function effectiveProductIdExpression(): string
+    {
+        return 'COALESCE(order_items.actual_product_id, order_items.product_id)';
+    }
+
+    private function effectiveProductNameSnapshotExpression(): string
+    {
+        return "COALESCE(NULLIF(order_items.actual_product_name_snapshot, ''), order_items.product_name_snapshot)";
+    }
+
+    private function effectiveProductSkuSnapshotExpression(): string
+    {
+        return "COALESCE(NULLIF(order_items.actual_product_sku_snapshot, ''), order_items.product_sku_snapshot)";
     }
 
     private function netRevenueExpression(): string

@@ -10,12 +10,14 @@ class OrderItem extends Model
     use \App\Traits\BelongsToAccount;
 
     protected $fillable = [
-        'order_id', 'product_id', 'product_name_snapshot', 'product_sku_snapshot', 'product_group_id', 
+        'order_id', 'product_id', 'actual_product_id', 'product_name_snapshot', 'product_sku_snapshot',
+        'actual_product_name_snapshot', 'actual_product_sku_snapshot', 'product_group_id',
         'sort_order', 'quantity', 'price', 'cost_price', 'cost_total', 'profit_total', 'options', 'account_id'
     ];
 
     protected $casts = [
         'options' => 'array',
+        'actual_product_id' => 'integer',
         'sort_order' => 'integer',
         'cost_price' => 'decimal:2',
         'cost_total' => 'decimal:2',
@@ -30,6 +32,11 @@ class OrderItem extends Model
     public function product()
     {
         return $this->belongsTo(Product::class)->withTrashed();
+    }
+
+    public function actualProduct()
+    {
+        return $this->belongsTo(Product::class, 'actual_product_id')->withTrashed();
     }
 
     public function productGroup()

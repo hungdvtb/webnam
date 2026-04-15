@@ -30,9 +30,73 @@ export const getOrderItemCurrentSku = (item) => (
     || ''
 );
 
+export const getOrderItemActualSnapshotName = (item) => (
+    normalizeText(item?.actual_snapshot_name)
+    || normalizeText(item?.actual_product_name_snapshot)
+    || ''
+);
+
+export const getOrderItemActualSnapshotSku = (item) => (
+    normalizeText(item?.actual_snapshot_sku)
+    || normalizeText(item?.actual_product_sku_snapshot)
+    || ''
+);
+
+export const getOrderItemCurrentActualName = (item) => (
+    normalizeText(item?.current_actual_product_name)
+    || normalizeText(item?.actual_product?.name)
+    || ''
+);
+
+export const getOrderItemCurrentActualSku = (item) => (
+    normalizeText(item?.current_actual_product_sku)
+    || normalizeText(item?.actual_product?.sku)
+    || ''
+);
+
+export const hasOrderItemActualProductOverride = (item) => {
+    if (typeof item?.has_actual_product_override === 'boolean') {
+        return item.has_actual_product_override;
+    }
+
+    const actualProductId = Number(item?.actual_product_id || 0);
+    const orderedProductId = Number(item?.product_id || 0);
+
+    return actualProductId > 0 && actualProductId !== orderedProductId;
+};
+
+export const getOrderItemActualDisplayName = (item, fallback = '') => {
+    if (!hasOrderItemActualProductOverride(item)) {
+        return '';
+    }
+
+    const resolvedFallback = normalizeText(fallback)
+        || (Number(item?.actual_product_id) ? `San pham #${item.actual_product_id}` : '');
+
+    return (
+        normalizeText(item?.actual_display_name)
+        || getOrderItemCurrentActualName(item)
+        || getOrderItemActualSnapshotName(item)
+        || resolvedFallback
+    );
+};
+
+export const getOrderItemActualDisplaySku = (item, fallback = '') => {
+    if (!hasOrderItemActualProductOverride(item)) {
+        return '';
+    }
+
+    return (
+        normalizeText(item?.actual_display_sku)
+        || getOrderItemCurrentActualSku(item)
+        || getOrderItemActualSnapshotSku(item)
+        || normalizeText(fallback)
+    );
+};
+
 export const getOrderItemDisplayName = (item, fallback = '') => {
     const resolvedFallback = normalizeText(fallback)
-        || (Number(item?.product_id) ? `Sản phẩm #${item.product_id}` : 'Sản phẩm');
+        || (Number(item?.product_id) ? `San pham #${item.product_id}` : 'San pham');
 
     return (
         getOrderItemCurrentName(item)

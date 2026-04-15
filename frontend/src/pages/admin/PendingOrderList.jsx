@@ -17,6 +17,8 @@ const DEFAULT_COLUMNS = [
     { id: 'actions', label: 'Thao Tác', minWidth: '180px', align: 'right', fixed: true },
 ];
 
+const getOrderDisplayTimestamp = (order) => order?.displayed_at || order?.created_at || null;
+
 const PendingOrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -145,7 +147,10 @@ const PendingOrderList = () => {
                                     if (col.id === 'total_price') return <td key={col.id} style={cellStyle} className="p-4 font-bold text-brick">{new Intl.NumberFormat('vi-VN').format(Math.floor(order.total_price))}₫</td>;
                                     if (col.id === 'status') return <td key={col.id} style={cellStyle} className="p-4 text-center"><span style={getStatusStyle(order.status)} className="px-2 py-1 text-[9px] font-bold uppercase border">{orderStatuses.find(s=>s.code===order.status)?.name || order.status}</span></td>;
                                     if (col.id === 'actions') return <td key={col.id} style={cellStyle} className="p-4 text-right sticky-col right-0"><div className="flex items-center justify-end gap-3"><button onClick={() => handleUpdateStatus(order.id, 'confirmed')} className="text-green-600 font-bold text-[10px] uppercase hover:opacity-70">Xác nhận</button><button onClick={() => handleUpdateStatus(order.id, 'cancelled')} className="text-brick font-bold text-[10px] uppercase hover:opacity-70">Hủy</button></div></td>;
-                                    if (col.id === 'created_at') return <td key={col.id} style={cellStyle} className="p-4 text-sm text-stone">{new Date(order.created_at).toLocaleDateString('vi-VN')}</td>;
+                                    if (col.id === 'created_at') {
+                                        const displayedAt = getOrderDisplayTimestamp(order);
+                                        return <td key={col.id} style={cellStyle} className="p-4 text-sm text-stone">{displayedAt ? new Date(displayedAt).toLocaleDateString('vi-VN') : '-'}</td>;
+                                    }
                                     return <td key={col.id} style={cellStyle} className="p-4 text-sm text-stone">{order[col.id] || '-'}</td>;
                                 })}
                             </tr>

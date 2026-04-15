@@ -396,13 +396,15 @@ class InventoryService
         }
 
         $productIds = $normalizedItems->pluck('product_id')->map(fn ($id) => (int) $id)->unique()->values()->all();
+        $actualProductIds = $normalizedItems->pluck('actual_product_id')->map(fn ($id) => (int) $id)->filter()->unique()->values()->all();
+        $requestedProductIds = array_values(array_unique(array_merge($productIds, $actualProductIds)));
         $products = Product::query()
-            ->whereIn('id', $productIds)
+            ->whereIn('id', $requestedProductIds)
             ->lockForUpdate()
             ->get()
             ->keyBy('id');
 
-        if (count($productIds) !== $products->count()) {
+        if (count($requestedProductIds) !== $products->count()) {
             throw ValidationException::withMessages([
                 'items' => 'Có sản phẩm không tồn tại hoặc không thuộc cửa hàng hiện tại.',
             ]);
@@ -413,9 +415,12 @@ class InventoryService
 
         foreach ($normalizedItems as $item) {
             $product = $products->get((int) $item['product_id']);
+            $actualProductId = (int) ($item['actual_product_id'] ?? 0);
+            $actualProduct = $actualProductId > 0 ? $products->get($actualProductId) : null;
+            $inventoryProduct = $actualProduct ?: $product;
             $quantity = (int) $item['quantity'];
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
+            $allocation = $this->allocateOrderSellableBatches($order->account_id, $inventoryProduct, $quantity);
             $avgUnitCost = $quantity > 0
                 ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
                 : 0;
@@ -426,8 +431,15 @@ class InventoryService
             $orderItem = $order->items()->create([
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
+                'actual_product_id' => $actualProduct?->id,
                 'product_name_snapshot' => filled($item['name'] ?? null) ? (string) $item['name'] : $product->name,
+                'actual_product_name_snapshot' => $actualProduct
+                    ? (filled($item['actual_name'] ?? null) ? (string) $item['actual_name'] : $actualProduct->name)
+                    : null,
                 'product_sku_snapshot' => filled($item['sku'] ?? null) ? (string) $item['sku'] : $product->sku,
+                'actual_product_sku_snapshot' => $actualProduct
+                    ? (filled($item['actual_sku'] ?? null) ? (string) $item['actual_sku'] : $actualProduct->sku)
+                    : null,
                 'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,
                 'price' => $sellingPrice,
@@ -441,7 +453,7 @@ class InventoryService
                 InventoryBatchAllocation::create([
                     'account_id' => $order->account_id,
                     'inventory_batch_id' => $row['inventory_batch_id'],
-                    'product_id' => $product->id,
+                    'product_id' => $inventoryProduct->id,
                     'order_id' => $order->id,
                     'order_item_id' => $orderItem->id,
                     'quantity' => $row['quantity'],
@@ -452,7 +464,7 @@ class InventoryService
             }
 
             $createdItems[] = $orderItem;
-            $touchedProductIds[] = $product->id;
+            $touchedProductIds[] = $inventoryProduct->id;
         }
 
         $this->refreshProducts($touchedProductIds);
@@ -483,7 +495,7 @@ class InventoryService
             $this->releaseOrderInventory($order);
         }
 
-        $productIds = $items->pluck('product_id')
+        $productIds = $items->map(fn ($item) => (int) ($item->actual_product_id ?: $item->product_id))
             ->map(fn ($id) => (int) $id)
             ->filter()
             ->unique()
@@ -508,7 +520,7 @@ class InventoryService
         $profitTotal = 0;
 
         foreach ($items as $item) {
-            $product = $products->get((int) $item->product_id);
+            $product = $products->get((int) ($item->actual_product_id ?: $item->product_id));
             $quantity = (int) $item->quantity;
             $sellingPrice = round((float) ($item->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);

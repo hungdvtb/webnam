@@ -36,6 +36,7 @@ class Order extends Model
         'supplement_items_total_price', 'supplement_items_cost_total', 'report_revenue_total', 'report_cost_total',
         'report_profit_total', 'customer_id',
         'print_count', 'last_printed_at',
+        'draft_created_at', 'officialized_at',
         'shipping_status', 'shipping_synced_at', 'shipping_status_source',
         'shipping_carrier_code', 'shipping_carrier_name', 'shipping_tracking_code',
         'shipping_dispatched_at', 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
@@ -45,6 +46,9 @@ class Order extends Model
     protected $casts = [
         'print_count' => 'integer',
         'last_printed_at' => 'datetime',
+        'draft_created_at' => 'datetime',
+        'officialized_at' => 'datetime',
+        'displayed_at' => 'datetime',
         'shipping_synced_at' => 'datetime',
         'shipping_dispatched_at' => 'datetime',
         'shipping_issue_detected_at' => 'datetime',
@@ -96,7 +100,16 @@ class Order extends Model
 
     public function attributeValues()
     {
-        return $this->hasMany(OrderAttributeValue::class);
+        $relation = $this->hasMany(OrderAttributeValue::class);
+        $sortOrderSubquery = Attribute::sortOrderSubquery('order_attribute_values.attribute_id');
+
+        if ($sortOrderSubquery !== null) {
+            $relation->orderBy($sortOrderSubquery);
+        }
+
+        return $relation
+            ->orderBy('order_attribute_values.attribute_id')
+            ->orderBy('order_attribute_values.id');
     }
 
     public function supplementItems()

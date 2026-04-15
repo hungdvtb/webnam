@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\Attribute;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class AttributeController extends Controller
 {
@@ -19,7 +21,9 @@ class AttributeController extends Controller
             $query->where('status', true);
         }
 
-        $attributes = $query->get();
+        $attributes = $query
+            ->ordered()
+            ->get();
         return response()->json($attributes);
     }
 
@@ -53,9 +57,11 @@ class AttributeController extends Controller
             $code = $code . '-' . time();
         }
 
-        $attribute = Attribute::create([
+        $entityType = $request->entity_type ?? 'product';
+
+        $payload = [
             'name' => $request->name,
-            'entity_type' => $request->entity_type ?? 'product',
+            'entity_type' => $entityType,
             'code' => $code,
             'frontend_type' => $request->frontend_type,
             'swatch_type' => $request->swatch_type === 'none' ? null : $request->swatch_type,
@@ -65,7 +71,13 @@ class AttributeController extends Controller
             'is_required' => $request->is_required ?? false,
             'is_variant' => $request->is_variant ?? false,
             'status' => $request->status ?? true,
-        ]);
+        ];
+
+        if (Attribute::hasSortOrderColumn()) {
+            $payload['sort_order'] = Attribute::nextSortOrderFor($entityType, $accountId);
+        }
+
+        $attribute = Attribute::create($payload);
 
         if (in_array($request->frontend_type, ['select', 'multiselect']) && $request->has('options')) {
             foreach ($request->options as $index => $option) {
@@ -146,5 +158,53 @@ class AttributeController extends Controller
         $attribute->delete();
 
         return response()->json(['message' => 'Attribute deleted']);
+    }
+
+    public function reorder(Request $request)
+    {
+        $validated = $request->validate([
+            'entity_type' => 'required|string|in:product,order',
+            'attribute_ids' => 'required|array|min:1',
+            'attribute_ids.*' => 'required|integer|distinct|exists:attributes,id',
+        ]);
+
+        $orderedIds = collect($validated['attribute_ids'])
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        $existingIds = Attribute::query()
+            ->byEntityType($validated['entity_type'])
+            ->ordered()
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values();
+
+        if (
+            $orderedIds->count() !== $existingIds->count()
+            || $orderedIds->diff($existingIds)->isNotEmpty()
+            || $existingIds->diff($orderedIds)->isNotEmpty()
+        ) {
+            throw ValidationException::withMessages([
+                'attribute_ids' => 'Danh sach thuoc tinh sap xep khong hop le. Vui long tai lai va thu lai.',
+            ]);
+        }
+
+        if (!Attribute::hasSortOrderColumn()) {
+            return response()->json([
+                'message' => 'Da bo qua sap xep thuoc tinh vi cot sort_order chua ton tai trong CSDL.',
+            ]);
+        }
+
+        DB::transaction(function () use ($orderedIds) {
+            foreach ($orderedIds as $index => $attributeId) {
+                Attribute::query()
+                    ->whereKey($attributeId)
+                    ->update(['sort_order' => $index + 1]);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Da cap nhat thu tu thuoc tinh thanh cong.',
+        ]);
     }
 }

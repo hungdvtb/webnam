@@ -573,6 +573,7 @@ class ProductController extends Controller
         
         $filterableAttributesQuery = \App\Models\Attribute::where('status', true)
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->ordered()
             ->with('options');
 
         if (isset($cat) && !empty($cat->filterable_attribute_ids)) {
@@ -764,8 +765,14 @@ class ProductController extends Controller
                     'category', 
                     'attributeValues.attribute',
                     'superAttributes' => function($q) {
-                        // Use a safe way to order by pivot
-                        $q->withPivot('position')->orderBy('product_super_attributes.position', 'asc');
+                        $q->withPivot('position');
+
+                        if (Attribute::hasSortOrderColumn()) {
+                            $q->orderBy('attributes.sort_order');
+                        }
+
+                        $q->orderBy('product_super_attributes.position', 'asc')
+                            ->orderBy('attributes.id');
                     },
                     'superAttributes.options',
                     'variations' => function($q) {
@@ -874,7 +881,7 @@ class ProductController extends Controller
             // Also include all available product attributes
             $allProductAttributes = Attribute::where('entity_type', 'product')
                 ->where('status', true)
-                ->orderBy('id', 'asc') 
+                ->ordered()
                 ->get(['id', 'name', 'code', 'frontend_type']);
             
             $responseData = $product->toArray();

@@ -76,6 +76,84 @@ class OrderItemDisplayPayloadTest extends TestCase
         $this->assertSame('CHEN-SU-CU', data_get($printedItem, 'sku'));
     }
 
+    public function test_order_list_exposes_actual_product_override_fields(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $orderedProduct = $this->createProduct($account, [
+            'name' => 'Mam bong 28',
+            'sku' => 'MAM-28',
+        ]);
+        $actualProduct = $this->createProduct($account, [
+            'name' => 'Mam bong 30',
+            'sku' => 'MAM-30',
+        ]);
+        $order = $this->createDraftOrder($account, $user, $orderedProduct, [
+            'actual_product_id' => $actualProduct->id,
+            'actual_product_name_snapshot' => $actualProduct->name,
+            'actual_product_sku_snapshot' => $actualProduct->sku,
+        ]);
+
+        $actualProduct->update([
+            'name' => 'Mam bong 30 moi',
+            'sku' => 'MAM-30-MOI',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?order_kind=draft&per_page=100')
+            ->assertOk();
+
+        $row = collect($response->json('data'))
+            ->firstWhere('id', $order->id);
+
+        $this->assertNotNull($row);
+        $this->assertTrue((bool) data_get($row, 'items.0.has_actual_product_override'));
+        $this->assertSame('Mam bong 28', data_get($row, 'items.0.snapshot_name'));
+        $this->assertSame('MAM-28', data_get($row, 'items.0.snapshot_sku'));
+        $this->assertSame('Mam bong 30', data_get($row, 'items.0.actual_snapshot_name'));
+        $this->assertSame('MAM-30', data_get($row, 'items.0.actual_snapshot_sku'));
+        $this->assertSame('Mam bong 30 moi', data_get($row, 'items.0.actual_display_name'));
+        $this->assertSame('MAM-30-MOI', data_get($row, 'items.0.actual_display_sku'));
+        $this->assertSame('Mam bong 30 moi', data_get($row, 'items.0.actual_product.name'));
+        $this->assertSame('MAM-30-MOI', data_get($row, 'items.0.actual_product.sku'));
+    }
+
+    public function test_order_detail_current_cost_metrics_use_actual_product_when_overridden(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $orderedProduct = $this->createProduct($account, [
+            'name' => 'Mam bong 28',
+            'sku' => 'MAM-28',
+            'cost_price' => 120000,
+            'expected_cost' => 120000,
+        ]);
+        $actualProduct = $this->createProduct($account, [
+            'name' => 'Mam bong 30',
+            'sku' => 'MAM-30',
+            'cost_price' => 150000,
+            'expected_cost' => 150000,
+        ]);
+        $order = $this->createDraftOrder($account, $user, $orderedProduct, [
+            'actual_product_id' => $actualProduct->id,
+            'actual_product_name_snapshot' => $actualProduct->name,
+            'actual_product_sku_snapshot' => $actualProduct->sku,
+            'cost_price' => 150000,
+            'cost_total' => 150000,
+            'profit_total' => -50000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$order->id}")
+            ->assertOk();
+
+        $item = data_get($response->json(), 'items.0');
+
+        $this->assertSame($actualProduct->id, data_get($item, 'actual_product_id'));
+        $this->assertSame(120000.0, (float) data_get($item, 'ordered_current_cost_price'));
+        $this->assertSame(150000.0, (float) data_get($item, 'current_cost_price'));
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([
@@ -123,7 +201,7 @@ class OrderItemDisplayPayloadTest extends TestCase
         ], $overrides));
     }
 
-    private function createDraftOrder(Account $account, User $user, Product $product): Order
+    private function createDraftOrder(Account $account, User $user, Product $product, array $itemOverrides = []): Order
     {
         $order = Order::query()->create([
             'user_id' => $user->id,
@@ -150,7 +228,7 @@ class OrderItemDisplayPayloadTest extends TestCase
             'shipping_status_source' => 'manual',
         ]);
 
-        OrderItem::query()->create([
+        OrderItem::query()->create(array_merge([
             'order_id' => $order->id,
             'account_id' => $account->id,
             'product_id' => $product->id,
@@ -161,7 +239,7 @@ class OrderItemDisplayPayloadTest extends TestCase
             'cost_price' => 0,
             'cost_total' => 0,
             'profit_total' => 100000,
-        ]);
+        ], $itemOverrides));
 
         return $order;
     }

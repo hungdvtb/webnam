@@ -3,12 +3,14 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Attribute;
 use App\Models\InventoryBatch;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -235,6 +237,82 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame('', (string) $order->shipping_address);
         $this->assertSame(0.0, (float) $order->total_price);
         $this->assertSame(0, $order->items()->count());
+    }
+
+    public function test_store_draft_order_reuses_existing_region_attributes_from_other_entity_types(): void
+    {
+        [$account] = $this->authenticate();
+        $this->seedSharedRegionAttributes($account);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach draft dia gioi',
+                'customer_phone' => '0912345678',
+                'region_type' => 'new',
+                'custom_attributes' => [
+                    'region_type' => 'Dia gioi moi',
+                    'full_region_path' => 'Xa moi, Huyen moi, Tinh moi',
+                ],
+                'items' => [],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT);
+
+        $order = Order::query()
+            ->with('attributeValues.attribute')
+            ->findOrFail((int) $response->json('id'));
+
+        $this->assertOrderAttributeValueByCode($order, 'region_type', 'Dia gioi moi');
+        $this->assertOrderAttributeValueByCode($order, 'full_region_path', 'Xa moi, Huyen moi, Tinh moi');
+        $this->assertSame('product', Attribute::withoutGlobalScope('account_id')->where('code', 'region_type')->value('entity_type'));
+        $this->assertSame('product', Attribute::withoutGlobalScope('account_id')->where('code', 'full_region_path')->value('entity_type'));
+    }
+
+    public function test_convert_official_order_to_draft_reuses_existing_region_attributes_from_other_entity_types(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham convert dia gioi',
+            'sku' => 'CONVERT-REGION-001',
+            'price' => 210000,
+        ]);
+        $this->seedSharedRegionAttributes($account);
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product));
+
+        $storeResponse->assertCreated();
+
+        $orderId = (int) $storeResponse->json('id');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$orderId}/convert", [
+                'target_kind' => Order::KIND_DRAFT,
+                'region_type' => 'old',
+                'custom_attributes' => [
+                    'region_type' => 'Dia gioi cu',
+                    'full_region_path' => 'Xa cu, Huyen cu, Tinh cu',
+                ],
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $orderId)
+            ->assertJsonPath('order_kind', Order::KIND_DRAFT);
+
+        $order = Order::query()
+            ->with('attributeValues.attribute')
+            ->findOrFail($orderId);
+
+        $this->assertSame(Order::KIND_DRAFT, $order->order_kind);
+        $this->assertOrderAttributeValueByCode($order, 'region_type', 'Dia gioi cu');
+        $this->assertOrderAttributeValueByCode($order, 'full_region_path', 'Xa cu, Huyen cu, Tinh cu');
     }
 
     public function test_draft_order_item_order_persists_across_reopen_and_multiple_updates(): void
@@ -715,6 +793,14 @@ class OrderDraftFlowTest extends TestCase
             'ward' => 'Xa test',
             'notes' => 'Don dang o khu nhap',
         ]);
+        $draftCreatedAt = Carbon::parse('2026-04-10 08:15:00');
+        $officializedAt = Carbon::parse('2026-04-15 09:45:00');
+        $this->forceOrderAttributes($order, [
+            'created_at' => $draftCreatedAt,
+            'updated_at' => $draftCreatedAt,
+            'draft_created_at' => $draftCreatedAt,
+            'officialized_at' => null,
+        ]);
 
         $mainListBefore = $this
             ->withHeaders($this->headers($account))
@@ -729,22 +815,31 @@ class OrderDraftFlowTest extends TestCase
         $this->assertNotContains($order->id, collect($mainListBefore->json('data'))->pluck('id')->all());
         $this->assertContains($order->id, collect($draftListBefore->json('data'))->pluck('id')->all());
 
-        $convertResponse = $this
-            ->withHeaders($this->headers($account))
-            ->postJson("/api/orders/{$order->id}/convert", [
-                'target_kind' => Order::KIND_OFFICIAL,
-                'region_type' => 'old',
-                'province' => 'Tinh test',
-                'district' => 'Huyen test',
-                'ward' => 'Xa test',
-                'shipping_address' => '789 Tran Hung Dao, Xa test, Huyen test, Tinh test',
-            ]);
+        Carbon::setTestNow($officializedAt);
+
+        try {
+            $convertResponse = $this
+                ->withHeaders($this->headers($account))
+                ->postJson("/api/orders/{$order->id}/convert", [
+                    'target_kind' => Order::KIND_OFFICIAL,
+                    'region_type' => 'old',
+                    'province' => 'Tinh test',
+                    'district' => 'Huyen test',
+                    'ward' => 'Xa test',
+                    'shipping_address' => '789 Tran Hung Dao, Xa test, Huyen test, Tinh test',
+                ]);
+        } finally {
+            Carbon::setTestNow();
+        }
 
         $convertResponse
             ->assertOk()
             ->assertJsonPath('id', $order->id)
             ->assertJsonPath('order_kind', Order::KIND_OFFICIAL)
-            ->assertJsonPath('shipping_status_source', 'manual');
+            ->assertJsonPath('shipping_status_source', 'manual')
+            ->assertJsonPath('draft_created_at', $draftCreatedAt->toISOString())
+            ->assertJsonPath('officialized_at', $officializedAt->toISOString())
+            ->assertJsonPath('displayed_at', $officializedAt->toISOString());
 
         $order->refresh();
 
@@ -752,6 +847,9 @@ class OrderDraftFlowTest extends TestCase
         $this->assertStringStartsWith('OR', (string) $order->order_number);
         $this->assertNotSame('OR10000A0', (string) $order->order_number);
         $this->assertSame(1, Order::withTrashed()->where('order_number', $order->order_number)->count());
+        $this->assertTrue($order->created_at->equalTo($draftCreatedAt));
+        $this->assertTrue($order->draft_created_at->equalTo($draftCreatedAt));
+        $this->assertTrue($order->officialized_at->equalTo($officializedAt));
 
         $mainListAfter = $this
             ->withHeaders($this->headers($account))
@@ -765,6 +863,196 @@ class OrderDraftFlowTest extends TestCase
 
         $this->assertContains($order->id, collect($mainListAfter->json('data'))->pluck('id')->all());
         $this->assertNotContains($order->id, collect($draftListAfter->json('data'))->pluck('id')->all());
+        $mainListRow = collect($mainListAfter->json('data'))
+            ->firstWhere('id', $order->id);
+        $this->assertSame($draftCreatedAt->toISOString(), $mainListRow['draft_created_at'] ?? null);
+        $this->assertSame($officializedAt->toISOString(), $mainListRow['officialized_at'] ?? null);
+        $this->assertSame($officializedAt->toISOString(), $mainListRow['displayed_at'] ?? null);
+    }
+
+    public function test_order_list_uses_displayed_at_for_sorting_and_date_filters_after_draft_conversion(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham sort timestamp',
+            'sku' => 'SORT-TS-001',
+            'price' => 155000,
+        ]);
+
+        $legacyOfficial = Order::query()->create([
+            'user_id' => $user->id,
+            'account_id' => $account->id,
+            'order_number' => 'OR-SORT-0001',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'total_price' => 155000,
+            'status' => 'new',
+            'customer_name' => 'Khach official cu',
+            'customer_email' => 'legacy-official@example.com',
+            'customer_phone' => '0901000001',
+            'shipping_address' => 'Dia chi official cu',
+            'province' => 'Tinh test',
+            'district' => 'Huyen test',
+            'ward' => 'Xa test',
+            'source' => 'Website',
+            'type' => 'Le',
+            'shipment_status' => 'Chua giao',
+            'shipping_status_source' => 'manual',
+            'officialized_at' => Carbon::parse('2026-04-11 07:00:00'),
+        ]);
+        $this->forceOrderAttributes($legacyOfficial, [
+            'created_at' => Carbon::parse('2026-04-11 07:00:00'),
+            'updated_at' => Carbon::parse('2026-04-11 07:00:00'),
+        ]);
+
+        $draft = $this->createDraftOrder($account, $user, $product, [
+            'order_number' => 'DR-SORT-0001',
+            'customer_name' => 'Khach draft doi gio',
+            'customer_phone' => '0902000002',
+        ]);
+        $draftCreatedAt = Carbon::parse('2026-04-01 10:00:00');
+        $officializedAt = Carbon::parse('2026-04-15 16:30:00');
+        $this->forceOrderAttributes($draft, [
+            'created_at' => $draftCreatedAt,
+            'updated_at' => $draftCreatedAt,
+            'draft_created_at' => $draftCreatedAt,
+            'officialized_at' => null,
+        ]);
+
+        Carbon::setTestNow($officializedAt);
+
+        try {
+            $this
+                ->withHeaders($this->headers($account))
+                ->postJson("/api/orders/{$draft->id}/convert", [
+                    'target_kind' => Order::KIND_OFFICIAL,
+                    'region_type' => 'old',
+                    'province' => 'Tinh test',
+                    'district' => 'Huyen test',
+                    'ward' => 'Xa test',
+                    'shipping_address' => '789 Tran Hung Dao, Xa test, Huyen test, Tinh test',
+                ])
+                ->assertOk();
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $listResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders')
+            ->assertOk();
+
+        $firstRow = collect($listResponse->json('data'))->first();
+        $convertedRow = collect($listResponse->json('data'))->firstWhere('id', $draft->id);
+
+        $this->assertSame($draft->id, $firstRow['id'] ?? null);
+        $this->assertSame($draftCreatedAt->toISOString(), $convertedRow['created_at'] ?? null);
+        $this->assertSame($officializedAt->toISOString(), $convertedRow['displayed_at'] ?? null);
+
+        $filteredResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?created_at_from=2026-04-15&created_at_to=2026-04-15')
+            ->assertOk();
+
+        $filteredIds = collect($filteredResponse->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertSame([$draft->id], $filteredIds);
+    }
+
+    public function test_convert_endpoint_persists_latest_draft_changes_before_officializing(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $originalProduct = $this->createProduct($account, [
+            'name' => 'San pham draft goc',
+            'sku' => 'DRAFT-CONVERT-OLD-001',
+            'price' => 125000,
+            'cost_price' => 70000,
+            'stock_quantity' => 40,
+        ]);
+        $latestProduct = $this->createProduct($account, [
+            'name' => 'San pham draft moi',
+            'sku' => 'DRAFT-CONVERT-NEW-001',
+            'price' => 210000,
+            'cost_price' => 110000,
+            'stock_quantity' => 40,
+        ]);
+        $this->createInventoryBatch($account, $originalProduct, 20, 70000, 'draft-convert-old');
+        $this->createInventoryBatch($account, $latestProduct, 20, 110000, 'draft-convert-new');
+
+        $order = $this->createDraftOrder($account, $user, $originalProduct, [
+            'order_number' => 'DR-CONVERT-LATEST-001',
+            'customer_name' => 'Khach draft cu',
+            'customer_phone' => '0901111111',
+            'notes' => 'Ban nhap ban dau',
+        ]);
+        $draftCreatedAt = Carbon::parse('2026-04-09 14:20:00');
+        $officializedAt = Carbon::parse('2026-04-15 15:05:00');
+        $this->forceOrderAttributes($order, [
+            'created_at' => $draftCreatedAt,
+            'updated_at' => $draftCreatedAt,
+            'draft_created_at' => $draftCreatedAt,
+            'officialized_at' => null,
+        ]);
+
+        Carbon::setTestNow($officializedAt);
+
+        try {
+            $response = $this
+                ->withHeaders($this->headers($account))
+                ->postJson("/api/orders/{$order->id}/convert", [
+                    'target_kind' => Order::KIND_OFFICIAL,
+                    'customer_name' => 'Khach draft da sua',
+                    'customer_phone' => '0987654321',
+                    'notes' => 'Ban da sua truoc khi chot',
+                    'region_type' => 'old',
+                    'province' => 'Tinh moi',
+                    'district' => 'Huyen moi',
+                    'ward' => 'Xa moi',
+                    'shipping_address' => '456 Le Loi, Xa moi, Huyen moi, Tinh moi',
+                    'items' => [
+                        [
+                            'product_id' => $latestProduct->id,
+                            'quantity' => 2,
+                            'price' => 210000,
+                            'cost_price' => 110000,
+                        ],
+                    ],
+                ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $order->id)
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL)
+            ->assertJsonPath('customer_name', 'Khach draft da sua')
+            ->assertJsonPath('customer_phone', '0987654321')
+            ->assertJsonPath('notes', 'Ban da sua truoc khi chot')
+            ->assertJsonPath('shipping_address', '456 Le Loi, Xa moi, Huyen moi, Tinh moi')
+            ->assertJsonPath('officialized_at', $officializedAt->toISOString())
+            ->assertJsonPath('displayed_at', $officializedAt->toISOString());
+
+        $order = $this->loadOrderWithAllocations($order->id);
+
+        $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
+        $this->assertSame('Khach draft da sua', $order->customer_name);
+        $this->assertSame('0987654321', $order->customer_phone);
+        $this->assertSame('Ban da sua truoc khi chot', $order->notes);
+        $this->assertSame('Tinh moi', $order->province);
+        $this->assertSame('Huyen moi', $order->district);
+        $this->assertSame('Xa moi', $order->ward);
+        $this->assertSame('456 Le Loi, Xa moi, Huyen moi, Tinh moi', $order->shipping_address);
+        $this->assertTrue($order->draft_created_at->equalTo($draftCreatedAt));
+        $this->assertTrue($order->officialized_at->equalTo($officializedAt));
+        $this->assertSame(420000.0, (float) $order->total_price);
+        $this->assertCount(1, $order->items);
+        $this->assertSame($latestProduct->id, (int) $order->items[0]->product_id);
+        $this->assertSame(2, (int) $order->items[0]->quantity);
+        $this->assertSame(210000.0, (float) $order->items[0]->price);
+        $this->assertSame(110000.0, (float) $order->items[0]->cost_price);
     }
 
     public function test_bulk_convert_drafts_to_official_assigns_distinct_unique_order_numbers(): void
@@ -842,6 +1130,8 @@ class OrderDraftFlowTest extends TestCase
         $this->assertTrue(Str::startsWith($draftTwo->order_number, 'OR'));
         $this->assertSame(1, Order::withTrashed()->where('order_number', $draftOne->order_number)->count());
         $this->assertSame(1, Order::withTrashed()->where('order_number', $draftTwo->order_number)->count());
+        $this->assertNotNull($draftOne->officialized_at);
+        $this->assertNotNull($draftTwo->officialized_at);
     }
 
     private function assertOrderItemSequence(Account $account, int $orderId, array $expectedProductIds): void
@@ -1032,6 +1322,7 @@ class OrderDraftFlowTest extends TestCase
             'discount' => 0,
             'cost_total' => $costTotal,
             'profit_total' => round($lineTotal - $costTotal, 2),
+            'draft_created_at' => now(),
             'shipping_status_source' => 'manual',
         ], $overrides));
 
@@ -1049,5 +1340,38 @@ class OrderDraftFlowTest extends TestCase
         ]);
 
         return $order;
+    }
+
+    private function seedSharedRegionAttributes(Account $account): void
+    {
+        foreach ([
+            'region_type' => 'Region Type',
+            'full_region_path' => 'Full Region Path',
+        ] as $code => $name) {
+            Attribute::query()->create([
+                'account_id' => $account->id,
+                'entity_type' => 'product',
+                'code' => $code,
+                'name' => $name,
+                'frontend_type' => 'text',
+                'status' => true,
+            ]);
+        }
+    }
+
+    private function assertOrderAttributeValueByCode(Order $order, string $code, string $expectedValue): void
+    {
+        $attributeId = (int) Attribute::withoutGlobalScope('account_id')->where('code', $code)->value('id');
+        $attributeValue = $order->attributeValues->firstWhere('attribute_id', $attributeId);
+
+        $this->assertGreaterThan(0, $attributeId);
+        $this->assertNotNull($attributeValue);
+        $this->assertSame($expectedValue, $attributeValue->value);
+    }
+
+    private function forceOrderAttributes(Order $order, array $attributes): void
+    {
+        $order->forceFill($attributes)->saveQuietly();
+        $order->refresh();
     }
 }

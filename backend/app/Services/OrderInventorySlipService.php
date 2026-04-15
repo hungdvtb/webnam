@@ -1027,15 +1027,15 @@ class OrderInventorySlipService
 
         return $order->items
             ->reduce(function (Collection $carry, $item) use (&$sortOrder) {
-                $productId = (int) $item->product_id;
+                $productId = (int) ($item->actual_product_id ?: $item->product_id);
                 if ($productId <= 0) {
                     return $carry;
                 }
 
                 $current = $carry->get($productId, [
                     'product_id' => $productId,
-                    'product_name' => $item->product_name_snapshot ?: "San pham #{$productId}",
-                    'product_sku' => $item->product_sku_snapshot,
+                    'product_name' => ($item->actual_product_name_snapshot ?: $item->product_name_snapshot) ?: "San pham #{$productId}",
+                    'product_sku' => ($item->actual_product_sku_snapshot ?: $item->product_sku_snapshot),
                     'required_quantity' => 0,
                     'ordered_revenue_total' => 0,
                     'ordered_cost_total' => 0,
@@ -1119,7 +1119,8 @@ class OrderInventorySlipService
             ->whereIn('order_id', $orderIds)
             ->whereNotIn('shipment_status', ['canceled'])
             ->with([
-                'items.orderItem:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
+                'items.orderItem:id,order_id,product_id,actual_product_id,product_name_snapshot,actual_product_name_snapshot,product_sku_snapshot,actual_product_sku_snapshot,quantity,price,cost_total,cost_price',
+                'items.orderItem.actualProduct:id,name,sku',
             ])
             ->orderBy('shipped_at')
             ->orderBy('id')
@@ -1142,7 +1143,8 @@ class OrderInventorySlipService
             ->where('order_id', (int) $order->id)
             ->whereNotIn('shipment_status', ['canceled'])
             ->with([
-                'items.orderItem:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
+                'items.orderItem:id,order_id,product_id,actual_product_id,product_name_snapshot,actual_product_name_snapshot,product_sku_snapshot,actual_product_sku_snapshot,quantity,price,cost_total,cost_price',
+                'items.orderItem.actualProduct:id,name,sku',
             ])
             ->orderByDesc('shipped_at')
             ->orderByDesc('id')
@@ -1331,9 +1333,10 @@ class OrderInventorySlipService
 
         return [
             'id' => $id,
-            'product_id' => (int) ($orderItem->product_id ?? 0),
-            'product_name' => $orderItem->product_name_snapshot ?: "San pham #{$orderItem->product_id}",
-            'product_sku' => $orderItem->product_sku_snapshot,
+            'product_id' => (int) ($orderItem->actual_product_id ?: $orderItem->product_id ?: 0),
+            'product_name' => ($orderItem->actual_product_name_snapshot ?: $orderItem->product_name_snapshot)
+                ?: "San pham #" . (int) ($orderItem->actual_product_id ?: $orderItem->product_id ?: 0),
+            'product_sku' => $orderItem->actual_product_sku_snapshot ?: $orderItem->product_sku_snapshot,
             'quantity' => $quantity,
             'unit_cost' => $unitCost,
             'total_cost' => round($unitCost * $quantity, 2),

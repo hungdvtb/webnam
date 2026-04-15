@@ -4,6 +4,24 @@ import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
 
+const resolveAttributeSortOrder = (attribute) => {
+    const numericValue = Number(attribute?.sort_order);
+    return Number.isFinite(numericValue) ? numericValue : Number.MAX_SAFE_INTEGER;
+};
+
+const sortAttributesForDisplay = (items = []) => (
+    Array.isArray(items)
+        ? [...items].sort((left, right) => {
+            const sortDifference = resolveAttributeSortOrder(left) - resolveAttributeSortOrder(right);
+            if (sortDifference !== 0) {
+                return sortDifference;
+            }
+
+            return Number(left?.id || 0) - Number(right?.id || 0);
+        })
+        : []
+);
+
 const AttributeList = () => {
     const [activeTab, setActiveTab] = useState('product'); // 'product' or 'order'
     const [attributes, setAttributes] = useState([]);
@@ -30,12 +48,15 @@ const AttributeList = () => {
 
     const [optionInput, setOptionInput] = useState({ value: '', swatch_value: '' });
     const [searchTerm, setSearchTerm] = useState('');
+    const [isSortOpen, setIsSortOpen] = useState(false);
+    const [sortDraft, setSortDraft] = useState([]);
+    const [isSavingSort, setIsSavingSort] = useState(false);
 
     const fetchAttributes = async () => {
         setLoading(true);
         try {
             const res = await attributeApi.getAll({ entity_type: activeTab });
-            setAttributes(res.data);
+            setAttributes(sortAttributesForDisplay(res.data));
         } catch (error) {
             console.error('Lỗi khi tải thuộc tính:', error);
         } finally {
@@ -44,18 +65,25 @@ const AttributeList = () => {
     };
 
     useEffect(() => {
+        setIsSortOpen(false);
+        setSortDraft([]);
         fetchAttributes();
     }, [activeTab]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
+            if (e.key === 'Escape' && isSortOpen) {
+                setIsSortOpen(false);
+                return;
+            }
+
             if (e.key === 'Escape' && isFormOpen) {
                 setIsFormOpen(false);
             }
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isFormOpen]);
+    }, [isFormOpen, isSortOpen]);
 
     const handleFormSubmit = async (e) => {
         e.preventDefault();
@@ -123,6 +151,38 @@ const AttributeList = () => {
             setAttributes(attributes.map(a => a.id === attr.id ? { ...a, [field]: newValue } : a));
         } catch (error) {
             showModal({ title: 'Lỗi', content: 'Không thể cập nhật trạng thái.', type: 'error' });
+        }
+    };
+
+    const handleOpenSorter = () => {
+        setSortDraft(sortAttributesForDisplay(attributes));
+        setIsSortOpen(true);
+    };
+
+    const handleSaveSort = async () => {
+        if (sortDraft.length === 0) {
+            setIsSortOpen(false);
+            return;
+        }
+
+        setIsSavingSort(true);
+        try {
+            await attributeApi.reorder({
+                entity_type: activeTab,
+                attribute_ids: sortDraft.map((attr) => attr.id),
+            });
+
+            setAttributes(sortDraft.map((attr, index) => ({
+                ...attr,
+                sort_order: index + 1,
+            })));
+            setIsSortOpen(false);
+            showModal({ title: 'Thành công', content: 'Đã cập nhật thứ tự thuộc tính.', type: 'success' });
+        } catch (error) {
+            console.error('Lỗi khi lưu thứ tự thuộc tính:', error);
+            showModal({ title: 'Lỗi', content: 'Không thể lưu thứ tự thuộc tính.', type: 'error' });
+        } finally {
+            setIsSavingSort(false);
         }
     };
 
@@ -305,6 +365,16 @@ const AttributeList = () => {
                             disabled={loading}
                         >
                             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleOpenSorter}
+                            disabled={attributes.length === 0}
+                            className="px-3 h-9 bg-white border border-gold/20 text-gold hover:bg-gold/5 transition-all flex items-center gap-2 rounded-sm shadow-sm disabled:opacity-40"
+                            title="Mở bảng sắp xếp thuộc tính"
+                        >
+                            <span className="material-symbols-outlined text-[18px]">reorder</span>
+                            <span className="text-[10px] font-black uppercase tracking-widest">Sắp xếp</span>
                         </button>
                     </div>
 
@@ -550,6 +620,69 @@ const AttributeList = () => {
                     </div>
                 )}
 
+                {isSortOpen && (
+                    <div className="absolute inset-0 z-50 bg-[#fcfcfa]/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+                        <div className="bg-white border border-gold/20 shadow-[0_15px_50px_-12px_rgba(0,0,0,0.25)] w-full max-w-2xl mx-auto rounded-md overflow-hidden flex flex-col max-h-full">
+                            <div className="flex-none px-6 py-4 bg-gold/5 border-b border-gold/10 flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded bg-primary/10 flex items-center justify-center">
+                                        <span className="material-symbols-outlined text-primary text-[18px]">reorder</span>
+                                    </div>
+                                    <div>
+                                        <h2 className="font-display text-lg font-bold text-primary uppercase italic">Sắp Xếp Thuộc Tính</h2>
+                                        <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] mt-1">Kéo thả để đổi thứ tự dùng chung cho admin và frontend</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setIsSortOpen(false)} className="w-8 h-8 flex items-center justify-center text-stone/40 hover:text-brick hover:bg-brick/5 transition-all rounded-full">
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+                                <Reorder.Group axis="y" values={sortDraft} onReorder={setSortDraft} className="space-y-3">
+                                    {sortDraft.map((attr, index) => (
+                                        <Reorder.Item
+                                            key={attr.id}
+                                            value={attr}
+                                            className="flex items-center gap-3 bg-[#fcfcfa] border border-gold/10 rounded-sm px-4 py-3 cursor-grab active:cursor-grabbing shadow-sm"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px] text-stone/30">drag_indicator</span>
+                                            <span className="min-w-[42px] text-center px-2 py-1 bg-white border border-gold/10 rounded-sm text-[10px] font-black uppercase tracking-widest text-primary">
+                                                #{index + 1}
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="font-display text-[15px] font-bold text-primary uppercase tracking-tight truncate">{attr.name}</div>
+                                                <div className="text-[9px] font-black text-stone/40 uppercase tracking-widest mt-1">Code: {attr.code}</div>
+                                            </div>
+                                            <span className="px-2.5 py-1 bg-gold/5 border border-gold/20 text-[10px] font-black uppercase tracking-widest text-gold rounded-full">
+                                                {attr.frontend_type}
+                                            </span>
+                                        </Reorder.Item>
+                                    ))}
+                                </Reorder.Group>
+                            </div>
+
+                            <div className="flex-none px-6 py-4 bg-stone/5 border-t border-gold/10 flex justify-end gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSortOpen(false)}
+                                    className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone-500 hover:bg-stone/10 transition-all border border-stone/20 rounded-sm"
+                                >
+                                    Đóng
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleSaveSort}
+                                    disabled={isSavingSort}
+                                    className="px-8 py-2 bg-primary text-white text-[11px] font-bold uppercase tracking-widest hover:bg-umber transition-all shadow-sm rounded-sm disabled:opacity-60"
+                                >
+                                    {isSavingSort ? 'Đang lưu...' : 'Lưu thứ tự'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <div className="flex-1 overflow-auto custom-scrollbar bg-white border border-gold/10 rounded-sm shadow-sm relative">
                     <table className="w-full table-grid table-scrollbar text-left min-w-[800px]">
                         <thead className="sticky top-0 z-20 bg-gold/5 backdrop-blur-sm">
@@ -594,6 +727,7 @@ const AttributeList = () => {
                                         <div className="flex flex-col gap-0.5">
                                             <span className="font-display text-[15px] font-bold text-primary group-hover:text-umber transition-colors tracking-tight uppercase">{attr.name}</span>
                                             <div className="flex items-center gap-2">
+                                                <span className="text-[9px] font-black text-primary bg-primary/5 px-1.5 py-0.5 rounded border border-primary/10 tracking-widest uppercase">STT {attr.sort_order || 0}</span>
                                                 <span className="text-[9px] font-black text-stone/40 bg-stone/5 px-1.5 py-0.5 rounded border border-stone/10 tracking-widest uppercase italic">CODE: {attr.code}</span>
                                             </div>
                                         </div>

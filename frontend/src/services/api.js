@@ -384,6 +384,7 @@ export const attributeApi = {
     getAll: (params) => api.get('/attributes', { params }),
     getOne: (id) => api.get(`/attributes/${id}`),
     store: (data) => api.post('/attributes', data),
+    reorder: (data) => api.post('/attributes/reorder', data),
     update: (id, data) => api.put(`/attributes/${id}`, data),
     destroy: (id) => api.delete(`/attributes/${id}`),
 };

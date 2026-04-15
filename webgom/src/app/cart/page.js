@@ -11,6 +11,7 @@ import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import { resolveCartItemImageUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
 import SearchableSelect from '@/components/ui/SearchableSelect';
+import ComponentSelectionModal from '@/components/product/common/ComponentSelectionModal';
 import styles from './cart.module.css';
 import ThankYouView from '@/components/common/ThankYouView';
 
@@ -282,7 +283,17 @@ const findCartBundleAnchorNode = (anchorKey = '') => {
 };
 
 export default function CartPage() {
-  const { cartItems, removeFromCart, updateQuantity, updateItem, restoreCombo, cartCount, cartTotal, clearCart } = useCart();
+  const {
+    cartItems,
+    removeFromCart,
+    updateQuantity,
+    updateItem,
+    updateBundleItemProduct,
+    restoreCombo,
+    cartCount,
+    cartTotal,
+    clearCart,
+  } = useCart();
 
   const [formData, setFormData] = useState({
     customer_name: '',
@@ -299,6 +310,7 @@ export default function CartPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOrderSuccess, setIsOrderSuccess] = useState(false);
   const [orderNumber, setOrderNumber] = useState('');
+  const [activeBundleSelection, setActiveBundleSelection] = useState(null);
   
   const [bankSettings, setBankSettings] = useState(null);
   const [successOrderData, setSuccessOrderData] = useState(null);
@@ -492,6 +504,37 @@ export default function CartPage() {
   const getImageUrl = (item) => resolveCartItemImageUrl(item, 'medium', '');
   const getBundleComponentImageUrl = (item) => resolveCartItemImageUrl(item, 'medium', '');
   const getBundleComponentAnchorKey = (cartKey, itemUid) => `${cartKey}::${itemUid}`;
+  const canChangeBundleComponent = (item) => Boolean(
+    item?.base_product_slug
+    || item?.base_product_id
+    || item?.slug
+    || item?.id
+  );
+
+  const closeBundleSelectionModal = () => {
+    setActiveBundleSelection(null);
+  };
+
+  const openBundleSelectionModal = (cartKey, slot) => {
+    if (!cartKey || !slot) {
+      return;
+    }
+
+    setActiveBundleSelection({ cartKey, slot });
+  };
+
+  const handleSelectBundleComponent = (newProduct) => {
+    if (!activeBundleSelection?.cartKey || !activeBundleSelection?.slot) {
+      return;
+    }
+
+    updateBundleItemProduct(
+      activeBundleSelection.cartKey,
+      activeBundleSelection.slot.bundle_item_uid || activeBundleSelection.slot.uid || activeBundleSelection.slot.id,
+      newProduct
+    );
+    closeBundleSelectionModal();
+  };
 
   const rememberBundleComponentReturnState = useEffectEvent((anchorKey = '') => {
     if (typeof window === 'undefined') {
@@ -1740,6 +1783,15 @@ export default function CartPage() {
                                       </div>
                                     </div>
 
+                                    {canChangeBundleComponent(gi) ? (
+                                      <button
+                                        type="button"
+                                        className={styles.mobileChildChange}
+                                        onClick={() => openBundleSelectionModal(item.cartKey, gi)}
+                                      >
+                                        Đổi mẫu / size
+                                      </button>
+                                    ) : null}
                                     <button
                                       type="button"
                                       className={styles.mobileChildRemove}
@@ -1821,35 +1873,36 @@ export default function CartPage() {
                           {isBundleItem ? (
                             <p className={styles.itemMeta}>Combo bộ sưu tập</p>
                           ) : null}
-                          <div className={styles.itemActions}>
-                            <div className={`${styles.itemMetric} ${styles.itemPriceMetric}`}>
-                              <span className={styles.itemLabel}>{itemMetricLabel}</span>
-                              <strong className={styles.itemUnitPrice}>{formatPrice(effectivePrice)}</strong>
-                            </div>
-                            <div className={styles.itemQtyInline}>
-                              <div className={styles.quantityCtrl}>
-                                <button
-                                  type="button"
-                                  onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
-                                  aria-label={`Giảm số lượng ${item.name}`}
-                                >
-                                  −
-                                </button>
-                                <span>{item.quantity}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
-                                  aria-label={`Tăng số lượng ${item.name}`}
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-                            <div className={`${styles.itemMetric} ${styles.itemTotalMetric}`}>
-                              <span className={styles.itemLineLabel}>Thành tiền</span>
-                              <strong className={styles.itemLinePrice}>{formatPrice(lineTotal)}</strong>
-                            </div>
+                        </div>
+                      </div>
+
+                      <div className={styles.itemActions}>
+                        <div className={`${styles.itemMetric} ${styles.itemPriceMetric}`}>
+                          <span className={styles.itemLabel}>{itemMetricLabel}</span>
+                          <strong className={styles.itemUnitPrice}>{formatPrice(effectivePrice)}</strong>
+                        </div>
+                        <div className={styles.itemQtyInline}>
+                          <div className={styles.quantityCtrl}>
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(item.cartKey, item.quantity - 1)}
+                              aria-label={`Giảm số lượng ${item.name}`}
+                            >
+                              −
+                            </button>
+                            <span>{item.quantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(item.cartKey, item.quantity + 1)}
+                              aria-label={`Tăng số lượng ${item.name}`}
+                            >
+                              +
+                            </button>
                           </div>
+                        </div>
+                        <div className={`${styles.itemMetric} ${styles.itemTotalMetric}`}>
+                          <span className={styles.itemLineLabel}>Thành tiền</span>
+                          <strong className={styles.itemLinePrice}>{formatPrice(lineTotal)}</strong>
                         </div>
                       </div>
 
@@ -1939,6 +1992,15 @@ export default function CartPage() {
                                       <span>{gi.qty || 1}</span>
                                       <button onClick={() => handleSubItemQty(item.cartKey, giUid, 1)}>+</button>
                                     </div>
+                                    {canChangeBundleComponent(gi) ? (
+                                      <button
+                                        type="button"
+                                        className={styles.childChange}
+                                        onClick={() => openBundleSelectionModal(item.cartKey, gi)}
+                                      >
+                                        Đổi mẫu / size
+                                      </button>
+                                    ) : null}
                                     <button
                                       className={styles.childRemove}
                                       onClick={() => handleRemoveSubItem(item.cartKey, giUid)}
@@ -2025,6 +2087,19 @@ export default function CartPage() {
           </aside>
         </div>
       </main>
+
+      <ComponentSelectionModal
+        isOpen={Boolean(activeBundleSelection?.slot)}
+        onClose={closeBundleSelectionModal}
+        onSelect={handleSelectBundleComponent}
+        currentSlot={activeBundleSelection?.slot}
+        getImageUrl={getImageUrl}
+        formatPrice={formatPrice}
+        allowSearch={false}
+        mobilePresentation="sheet"
+        title="Đổi mẫu / size"
+        subtitlePrefix="Đang chỉnh:"
+      />
 
       <div className={styles.mobileCheckoutBar}>
         <div className="container">

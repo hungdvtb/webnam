@@ -23,8 +23,11 @@ import {
 } from '../../config/orderTypes';
 import { writeLeadListReturnHint } from '../../utils/leadListViewState';
 import {
+    getOrderItemActualDisplayName,
+    getOrderItemActualDisplaySku,
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
+    hasOrderItemActualProductOverride,
     getOrderItemSnapshotName,
     getOrderItemSnapshotSku,
 } from '../../utils/orderItemDisplay';
@@ -105,17 +108,42 @@ const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_for
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
 const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
 const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
+const ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH = 44;
 const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
-    stt: 50,
-    sku: 150,
-    name: null,
-    quantity: 90,
-    unit: 104,
-    available_to_sell: 120,
-    price: 150,
-    cost_price: 150,
-    total: 170,
-    actions: 60,
+    stt: 48,
+    sku: 120,
+    name: 280,
+    quantity: 68,
+    unit: 72,
+    available_to_sell: 92,
+    price: 126,
+    cost_price: 126,
+    total: 138,
+    actions: 68,
+};
+const ORDER_FORM_COLUMN_MIN_WIDTHS = {
+    stt: 48,
+    sku: 104,
+    name: 220,
+    quantity: 62,
+    unit: 62,
+    available_to_sell: 84,
+    price: 108,
+    cost_price: 108,
+    total: 122,
+    actions: 68,
+};
+const ORDER_FORM_COLUMN_GROW_WEIGHTS = {
+    stt: 0,
+    sku: 0.7,
+    name: 4.8,
+    quantity: 0.45,
+    unit: 0.35,
+    available_to_sell: 0.7,
+    price: 0.9,
+    cost_price: 0.9,
+    total: 1.05,
+    actions: 0,
 };
 const autoOpenSupplementItemOrderTypes = new Set([
     ORDER_TYPE_EXCHANGE_RETURN,
@@ -278,6 +306,122 @@ const getStoredOrderFormVisibleColumns = () => {
 const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
     readOrderFormStorageJson(orderFormColumnWidthsStorageKey, ORDER_FORM_DEFAULT_COLUMN_WIDTHS)
 );
+const getOrderFormPreferredColumnWidth = (columnId, widthMap = ORDER_FORM_DEFAULT_COLUMN_WIDTHS) => {
+    const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60;
+    const candidateWidth = Number(widthMap?.[columnId]);
+    const fallbackWidth = Number(ORDER_FORM_DEFAULT_COLUMN_WIDTHS[columnId]);
+
+    if (Number.isFinite(candidateWidth) && candidateWidth > 0) {
+        return Math.max(minWidth, candidateWidth);
+    }
+
+    if (Number.isFinite(fallbackWidth) && fallbackWidth > 0) {
+        return Math.max(minWidth, fallbackWidth);
+    }
+
+    return minWidth;
+};
+const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, preferredWidths }) => {
+    const orderedColumnIds = (Array.isArray(visibleColumnIds) ? visibleColumnIds : [])
+        .map((columnId) => String(columnId || '').trim())
+        .filter((columnId) => ORDER_FORM_DEFAULT_COLUMN_IDS.includes(columnId));
+
+    if (orderedColumnIds.length === 0) {
+        return {};
+    }
+
+    const fallbackWidths = Object.fromEntries(
+        orderedColumnIds.map((columnId) => [columnId, getOrderFormPreferredColumnWidth(columnId, preferredWidths)])
+    );
+    const normalizedContainerWidth = Number(containerWidth);
+
+    if (!Number.isFinite(normalizedContainerWidth) || normalizedContainerWidth <= 0) {
+        return fallbackWidths;
+    }
+
+    const minimumTableWidth = orderedColumnIds.reduce(
+        (sum, columnId) => sum + (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60),
+        0
+    );
+    const targetTableWidth = Math.max(
+        minimumTableWidth,
+        Math.floor(normalizedContainerWidth - ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH)
+    );
+    const preferredTableWidth = orderedColumnIds.reduce(
+        (sum, columnId) => sum + fallbackWidths[columnId],
+        0
+    );
+    const nextWidths = { ...fallbackWidths };
+
+    if (preferredTableWidth > targetTableWidth) {
+        const totalShrinkCapacity = orderedColumnIds.reduce((sum, columnId) => (
+            sum + Math.max(0, nextWidths[columnId] - (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? nextWidths[columnId]))
+        ), 0);
+
+        if (totalShrinkCapacity > 0) {
+            const overflowWidth = preferredTableWidth - targetTableWidth;
+            orderedColumnIds.forEach((columnId) => {
+                const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? nextWidths[columnId];
+                const shrinkCapacity = Math.max(0, nextWidths[columnId] - minWidth);
+                const shrinkWidth = overflowWidth * (shrinkCapacity / totalShrinkCapacity);
+                nextWidths[columnId] = Math.max(minWidth, nextWidths[columnId] - shrinkWidth);
+            });
+        }
+    } else if (preferredTableWidth < targetTableWidth) {
+        const totalGrowWeight = orderedColumnIds.reduce(
+            (sum, columnId) => sum + (ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0),
+            0
+        );
+
+        if (totalGrowWeight > 0) {
+            const remainingWidth = targetTableWidth - preferredTableWidth;
+            orderedColumnIds.forEach((columnId) => {
+                const growWeight = ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0;
+                if (growWeight > 0) {
+                    nextWidths[columnId] += remainingWidth * (growWeight / totalGrowWeight);
+                }
+            });
+        }
+    }
+
+    const roundedWidths = Object.fromEntries(
+        orderedColumnIds.map((columnId) => [
+            columnId,
+            Math.max(ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60, Math.round(nextWidths[columnId]))
+        ])
+    );
+    const roundedTableWidth = orderedColumnIds.reduce((sum, columnId) => sum + roundedWidths[columnId], 0);
+    let remainingDelta = targetTableWidth - roundedTableWidth;
+
+    if (remainingDelta !== 0) {
+        const adjustableColumnIds = remainingDelta > 0
+            ? orderedColumnIds.filter((columnId) => (ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0) > 0)
+            : orderedColumnIds.filter((columnId) => (
+                roundedWidths[columnId] > (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? roundedWidths[columnId])
+            ));
+
+        if (adjustableColumnIds.length > 0) {
+            let cursor = 0;
+            const maxIterations = Math.max(orderedColumnIds.length * 8, Math.abs(remainingDelta) * adjustableColumnIds.length * 2);
+
+            while (remainingDelta !== 0 && cursor < maxIterations) {
+                const columnId = adjustableColumnIds[cursor % adjustableColumnIds.length];
+                const step = remainingDelta > 0 ? 1 : -1;
+                const nextWidth = roundedWidths[columnId] + step;
+                const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60;
+
+                if (step > 0 || nextWidth >= minWidth) {
+                    roundedWidths[columnId] = nextWidth;
+                    remainingDelta -= step;
+                }
+
+                cursor += 1;
+            }
+        }
+    }
+
+    return roundedWidths;
+};
 const shouldAutoOpenSupplementItemsModal = (value) => autoOpenSupplementItemOrderTypes.has(normalizeOrderType(value));
 const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? templates : [])].sort((a, b) => {
     const sortA = Number(a?.sort_order) || 0;
@@ -1123,10 +1267,15 @@ const createOrderLineItem = (payload = {}) => {
     const {
         line_id,
         product_id,
+        actual_product_id,
         name,
         sku,
         snapshot_name,
         snapshot_sku,
+        actual_name,
+        actual_sku,
+        actual_snapshot_name,
+        actual_snapshot_sku,
         unit_name,
         sort_order,
         quantity = 1,
@@ -1153,10 +1302,25 @@ const createOrderLineItem = (payload = {}) => {
         fallbackName: resolvedName,
     });
     const resolvedSnapshotSku = normalizeCanvasText(snapshot_sku ?? sku) || resolvedSku;
+    const resolvedCostPrice = resolveRoundedImportCostValue(cost_price, 0);
+    const normalizedActualProductId = Number(actual_product_id) || 0;
+    const resolvedActualName = resolveOrderLineItemDisplayName({
+        name: actual_name,
+        options: normalizedOptions,
+        fallbackName: '',
+    });
+    const resolvedActualSku = normalizeCanvasText(actual_sku) || '';
+    const resolvedActualSnapshotName = resolveOrderLineItemDisplayName({
+        name: actual_snapshot_name ?? actual_name,
+        options: normalizedOptions,
+        fallbackName: resolvedActualName,
+    });
+    const resolvedActualSnapshotSku = normalizeCanvasText(actual_snapshot_sku ?? actual_sku) || resolvedActualSku;
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
         product_id: Number(product_id) || 0,
+        actual_product_id: normalizedActualProductId || null,
         name: resolvedName,
         sku: resolvedSku,
         snapshot_name: resolvedSnapshotName,
@@ -1165,7 +1329,12 @@ const createOrderLineItem = (payload = {}) => {
         sort_order: Math.max(1, Number(sort_order) || 1),
         quantity: Math.max(1, Number(quantity) || 1),
         price: Number(price) || 0,
-        cost_price: resolveRoundedImportCostValue(cost_price, 0),
+        cost_price: resolvedCostPrice,
+        base_cost_price: resolveRoundedImportCostValue(payload.base_cost_price, resolvedCostPrice),
+        actual_name: normalizedActualProductId > 0 ? resolvedActualName : '',
+        actual_sku: normalizedActualProductId > 0 ? resolvedActualSku : '',
+        actual_snapshot_name: normalizedActualProductId > 0 ? resolvedActualSnapshotName : '',
+        actual_snapshot_sku: normalizedActualProductId > 0 ? resolvedActualSnapshotSku : '',
         computed_stock: inventorySnapshot.computed_stock,
         pending_export_quantity: inventorySnapshot.pending_export_quantity,
         available_to_sell: inventorySnapshot.available_to_sell,
@@ -1173,6 +1342,20 @@ const createOrderLineItem = (payload = {}) => {
         ai_meta: normalizedAiMeta,
     };
 };
+const hasActualOrderProductOverride = (item) => hasOrderItemActualProductOverride(item);
+const getOrderItemActualNameLabel = (item) => getOrderItemActualDisplayName(item, item?.actual_name || '');
+const getOrderItemActualSkuLabel = (item) => getOrderItemActualDisplaySku(item, item?.actual_sku || '');
+const getOrderItemEffectiveInventoryProductId = (item) => Number(item?.actual_product_id || item?.product_id || 0);
+const getOrderItemEffectiveInventorySku = (item) => (
+    hasActualOrderProductOverride(item)
+        ? getOrderItemActualSkuLabel(item) || item?.sku || ''
+        : item?.sku || ''
+);
+const getOrderItemEffectiveInventoryName = (item) => (
+    hasActualOrderProductOverride(item)
+        ? getOrderItemActualNameLabel(item) || item?.name || ''
+        : item?.name || ''
+);
 const buildOrderItemMergeKey = (item) => {
     const options = item?.options || {};
 
@@ -1998,7 +2181,7 @@ const getOrderFormHeaderJustifyClass = (align = 'left') => {
 
 const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
     <div className="relative inline-flex items-center group/tooltip">
-        <span className="block whitespace-nowrap text-primary font-black uppercase tracking-[0.15em]">{label}</span>
+        <span className="block whitespace-nowrap text-[12px] leading-none text-primary font-black uppercase tracking-[0.08em]">{label}</span>
         {tooltip ? (
             <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-[240px] -translate-x-1/2 rounded-sm border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold normal-case tracking-normal text-slate-700 opacity-0 shadow-[0_16px_32px_rgba(15,23,42,0.16)] transition-all duration-150 group-hover/tooltip:opacity-100">
                 {tooltip}
@@ -2041,16 +2224,20 @@ const OrderAiLineReplacePanel = ({
     loading = false,
     onSelect,
     currencyFormatter,
+    heading = '',
+    currentLabel = '',
+    searchPlaceholder = '',
+    emptyMessage = '',
 }) => {
     const isAiLine = isOrderAiItem(currentLine);
-    const currentSourceLabel = currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
+    const currentSourceLabel = currentLabel || currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
     const currentVariantLabel = currentLine?.options?.variant_label || '';
     const currentSku = currentLine?.sku || '';
-    const panelHeading = isAiLine ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm';
+    const panelHeading = heading || (isAiLine ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm');
     const hasSearchTerm = searchTerm.trim().length >= 2;
-    const emptyStateMessage = hasSearchTerm
+    const emptyStateMessage = emptyMessage || (hasSearchTerm
         ? 'Không thấy sản phẩm phù hợp, thử đổi từ khóa tìm kiếm.'
-        : 'Gõ ít nhất 2 ký tự để tìm sản phẩm thay thế.';
+        : 'Gõ ít nhất 2 ký tự để tìm sản phẩm thay thế.');
     const [panelPosition, setPanelPosition] = useState({
         left: 16,
         top: 88,
@@ -2146,7 +2333,7 @@ const OrderAiLineReplacePanel = ({
                             type="text"
                             value={searchTerm}
                             onChange={(event) => onSearchTermChange(event.target.value)}
-                            placeholder="Tìm sản phẩm để đổi nhanh..."
+                            placeholder={searchPlaceholder || 'Tìm sản phẩm để đổi nhanh...'}
                             className="h-full w-full bg-transparent text-[13px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
                             autoFocus
                         />
@@ -2256,6 +2443,12 @@ const OrderForm = () => {
     const [orderAiReplaceSearchTerm, setOrderAiReplaceSearchTerm] = useState('');
     const [orderAiReplaceResults, setOrderAiReplaceResults] = useState([]);
     const [orderAiReplaceLoading, setOrderAiReplaceLoading] = useState(false);
+    const [actualProductPickerLineId, setActualProductPickerLineId] = useState('');
+    const [actualProductPickerSearchTerm, setActualProductPickerSearchTerm] = useState('');
+    const [actualProductPickerResults, setActualProductPickerResults] = useState([]);
+    const [actualProductPickerLoading, setActualProductPickerLoading] = useState(false);
+    const [selectedOrderLineId, setSelectedOrderLineId] = useState('');
+    const [showActualProductSection, setShowActualProductSection] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
@@ -2267,6 +2460,7 @@ const OrderForm = () => {
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
+    const [orderFormTableViewportWidth, setOrderFormTableViewportWidth] = useState(0);
     const [isCapturing, setIsCapturing] = useState(false);
     const [isRefreshingItems, setIsRefreshingItems] = useState(false);
     const [isCompactOrderMobileLayout, setIsCompactOrderMobileLayout] = useState(() => {
@@ -2286,6 +2480,7 @@ const OrderForm = () => {
     const [activeTruncatedNameCellKey, setActiveTruncatedNameCellKey] = useState('');
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
+    const orderFormTableViewportRef = useRef(null);
     const lastAutoOpenedSupplementOrderTypeRef = useRef('');
     const lastVisitedProductQuickSetupKeyRef = useRef('');
     const copyFeedbackTimeoutRef = useRef(null);
@@ -2306,6 +2501,8 @@ const OrderForm = () => {
     const orderAiFileInputRef = useRef(null);
     const orderAiLastInputPreviewUrlRef = useRef('');
     const orderAiReplaceAnchorRef = useRef(null);
+    const actualProductPickerAnchorRef = useRef(null);
+    const actualProductSectionRef = useRef(null);
     const orderItemNameRefs = useRef(new Map());
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
@@ -2486,7 +2683,7 @@ const OrderForm = () => {
         setFormData((prev) => ({
             ...prev,
             items: prev.items.map((item) => {
-                const latest = refreshedMap.get(Number(item.product_id));
+                const latest = refreshedMap.get(getOrderItemEffectiveInventoryProductId(item));
                 if (!latest) return item;
 
                 return {
@@ -2512,13 +2709,13 @@ const OrderForm = () => {
         const normalizedItems = Array.from(new Map(
             (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
                 .map((item) => {
-                    const productId = Number(item?.product_id ?? 0);
+                    const productId = getOrderItemEffectiveInventoryProductId(item);
                     if (!productId) return null;
 
                     return [productId, {
                         product_id: productId,
-                        sku: item?.sku || '',
-                        name: item?.name || '',
+                        sku: getOrderItemEffectiveInventorySku(item),
+                        name: getOrderItemEffectiveInventoryName(item),
                     }];
                 })
                 .filter(Boolean)
@@ -2551,21 +2748,33 @@ const OrderForm = () => {
     }, [leadId, navigate, orderKind, returnTo]);
 
     const COLUMN_DEFS = {
-        stt: { label: 'STT', width: 'w-12', align: 'center' },
-        sku: { label: 'Mã sản phẩm', width: 'w-40', align: 'left' },
-        name: { label: 'Tên sản phẩm', width: '', align: 'left' },
-        quantity: { label: 'Số lượng', width: 'w-24', align: 'center' },
-        unit: { label: 'Đơn vị tính', width: 'w-28', align: 'center' },
-        available_to_sell: { label: 'Có thể bán', width: 'w-32', align: 'center', tooltip: ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP },
-        price: { label: 'Đơn giá', width: 'w-44', align: 'center' },
-        cost_price: { label: 'Giá nhập', width: 'w-44', align: 'center' },
-        total: { label: 'Thành tiền', width: 'w-48', align: 'right' },
-        actions: { label: 'Xoá', width: 'w-12', align: 'center' }
+        stt: { label: 'STT', align: 'center' },
+        sku: { label: 'Mã sản phẩm', align: 'left' },
+        name: { label: 'Tên sản phẩm', align: 'left' },
+        quantity: { label: 'SL', align: 'center' },
+        unit: { label: 'ĐVT', align: 'center' },
+        available_to_sell: { label: 'Có thể bán', align: 'center', tooltip: ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP },
+        price: { label: 'Đơn giá', align: 'center' },
+        cost_price: { label: 'Giá nhập', align: 'center' },
+        total: { label: 'Thành tiền', align: 'right' },
+        actions: { label: 'Xoá', align: 'center' }
     };
 
     const [columnOrder, setColumnOrder] = useState(() => getStoredOrderFormColumnOrder());
     const [visibleColumns, setVisibleColumns] = useState(() => getStoredOrderFormVisibleColumns());
     const [columnWidths, setColumnWidths] = useState(() => getStoredOrderFormColumnWidths());
+    const desktopVisibleColumnIds = useMemo(
+        () => columnOrder.filter((id) => visibleColumns.includes(id)),
+        [columnOrder, visibleColumns]
+    );
+    const desktopAutoColumnWidths = useMemo(
+        () => fitOrderFormColumnsToViewport({
+            containerWidth: orderFormTableViewportWidth,
+            visibleColumnIds: desktopVisibleColumnIds,
+            preferredWidths: columnWidths,
+        }),
+        [columnWidths, desktopVisibleColumnIds, orderFormTableViewportWidth]
+    );
 
     const [formData, setFormData] = useState({
         customer_name: '',
@@ -2596,6 +2805,26 @@ const OrderForm = () => {
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
     );
+    const activeActualProductPickerLine = useMemo(
+        () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(actualProductPickerLineId)) || null,
+        [actualProductPickerLineId, formData.items]
+    );
+    const selectedOrderLine = useMemo(
+        () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(selectedOrderLineId)) || null,
+        [formData.items, selectedOrderLineId]
+    );
+    const actualProductSectionLine = useMemo(
+        () => selectedOrderLine || formData.items[0] || null,
+        [formData.items, selectedOrderLine]
+    );
+    const isActualProductPickerOpenForSectionLine = Boolean(actualProductSectionLine)
+        && normalizeCanvasText(actualProductPickerLineId) === normalizeCanvasText(actualProductSectionLine?.line_id);
+    useEffect(() => {
+        if (!selectedOrderLineId) return;
+        if (selectedOrderLine) return;
+
+        setSelectedOrderLineId('');
+    }, [selectedOrderLine, selectedOrderLineId]);
     const selectedQuickSetupProductIds = useMemo(
         () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
         [activeProductQuickSetupItems]
@@ -2604,6 +2833,33 @@ const OrderForm = () => {
         () => mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems),
         [activeProductQuickSetupItems, productQuickSetupProducts]
     );
+    useLayoutEffect(() => {
+        const viewportNode = orderFormTableViewportRef.current;
+        if (!viewportNode || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const updateViewportWidth = () => {
+            setOrderFormTableViewportWidth(viewportNode.clientWidth || 0);
+        };
+
+        updateViewportWidth();
+
+        let resizeObserver;
+        if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(() => {
+                updateViewportWidth();
+            });
+            resizeObserver.observe(viewportNode);
+        }
+
+        window.addEventListener('resize', updateViewportWidth);
+
+        return () => {
+            window.removeEventListener('resize', updateViewportWidth);
+            resizeObserver?.disconnect();
+        };
+    }, []);
 
     const captureProductQuickSetupViewport = useCallback(() => {
         if (!showProductQuickSetupPanel) return;
@@ -2986,7 +3242,7 @@ const OrderForm = () => {
                     active.getAttribute('contenteditable') === 'true'
                 );
 
-                if (isWriting && !showColumnConfig && !showSearchDropdown && !showQuoteTemplatePicker && !orderAiReplaceLineId) return;
+                if (isWriting && !showColumnConfig && !showSearchDropdown && !showQuoteTemplatePicker && !orderAiReplaceLineId && !actualProductPickerLineId) return;
 
                 if (showColumnConfig) {
                     setShowColumnConfig(false);
@@ -3007,6 +3263,14 @@ const OrderForm = () => {
                     setOrderAiReplaceLoading(false);
                     return;
                 }
+                if (actualProductPickerLineId) {
+                    setActualProductPickerLineId('');
+                    setActualProductPickerSearchTerm('');
+                    setActualProductPickerResults([]);
+                    setActualProductPickerLoading(false);
+                    actualProductPickerAnchorRef.current = null;
+                    return;
+                }
                 if (showOrderAiInputReviewModal) {
                     setShowOrderAiInputReviewModal(false);
                     return;
@@ -3016,7 +3280,7 @@ const OrderForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [closeProductSearchDropdown, orderAiReplaceLineId, showColumnConfig, showOrderAiInputReviewModal, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
+    }, [actualProductPickerLineId, closeProductSearchDropdown, orderAiReplaceLineId, showColumnConfig, showOrderAiInputReviewModal, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
 
     useEffect(() => () => {
         if (copyFeedbackTimeoutRef.current) {
@@ -3093,6 +3357,43 @@ const OrderForm = () => {
         setOrderAiReplaceResults([]);
         setOrderAiReplaceLoading(false);
     }, []);
+    const closeActualProductPicker = useCallback(() => {
+        actualProductPickerAnchorRef.current = null;
+        setActualProductPickerLineId('');
+        setActualProductPickerSearchTerm('');
+        setActualProductPickerResults([]);
+        setActualProductPickerLoading(false);
+    }, []);
+    const handleSelectOrderLine = useCallback((lineId) => {
+        setSelectedOrderLineId((prev) => (
+            normalizeCanvasText(prev) === normalizeCanvasText(lineId)
+                ? prev
+                : normalizeCanvasText(lineId)
+        ));
+    }, []);
+    const handleActualProductSectionLineChange = useCallback((lineId) => {
+        closeActualProductPicker();
+        handleSelectOrderLine(lineId);
+    }, [closeActualProductPicker, handleSelectOrderLine]);
+    const handleToggleActualProductSection = useCallback(() => {
+        if (showActualProductSection) {
+            setShowActualProductSection(false);
+            closeActualProductPicker();
+            return;
+        }
+
+        if (!Array.isArray(formData.items) || formData.items.length === 0) {
+            showTransientNotification('error', 'Đơn chưa có sản phẩm để gán sản phẩm gửi thực tế.');
+            return;
+        }
+
+        const fallbackLine = selectedOrderLine || formData.items[0];
+        if (fallbackLine?.line_id) {
+            handleSelectOrderLine(fallbackLine.line_id);
+        }
+
+        setShowActualProductSection(true);
+    }, [closeActualProductPicker, formData.items, handleSelectOrderLine, selectedOrderLine, showActualProductSection, showTransientNotification]);
 
     const toggleOrderAiPanel = useCallback(() => {
         setShowOrderAiPanel((prev) => !prev);
@@ -3101,7 +3402,35 @@ const OrderForm = () => {
         setShowProductQuickSetupPanel(false);
         setShowProductQuickFilterPanel(false);
         closeOrderAiReplacePicker();
-    }, [closeOrderAiReplacePicker]);
+        closeActualProductPicker();
+    }, [closeActualProductPicker, closeOrderAiReplacePicker]);
+    useEffect(() => {
+        if (!showActualProductSection) return;
+
+        if (!Array.isArray(formData.items) || formData.items.length === 0) {
+            setShowActualProductSection(false);
+            closeActualProductPicker();
+            return;
+        }
+
+        if (!selectedOrderLine && formData.items[0]?.line_id) {
+            setSelectedOrderLineId(normalizeCanvasText(formData.items[0].line_id));
+        }
+    }, [closeActualProductPicker, formData.items, selectedOrderLine, showActualProductSection]);
+    useEffect(() => {
+        if (!showActualProductSection || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const frameId = window.requestAnimationFrame(() => {
+            actualProductSectionRef.current?.scrollIntoView?.({
+                behavior: 'smooth',
+                block: 'nearest',
+            });
+        });
+
+        return () => window.cancelAnimationFrame(frameId);
+    }, [showActualProductSection]);
 
     const handleOrderAiSelectedRuleChange = useCallback((nextRuleKey) => {
         setOrderAiSelectedRuleKey(String(nextRuleKey || '').trim());
@@ -3178,6 +3507,33 @@ const OrderForm = () => {
         setOrderAiReplaceSearchTerm(seedTerm || '');
         setOrderAiReplaceResults([]);
     }, []);
+    const handleOpenActualProductPicker = useCallback((lineId, seedTerm = '', triggerElement = null) => {
+        actualProductPickerAnchorRef.current = triggerElement;
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+        setShowActualProductSection(true);
+        setActualProductPickerLineId(lineId);
+        setActualProductPickerSearchTerm(seedTerm || '');
+        setActualProductPickerResults([]);
+    }, []);
+    const handleToggleActualProductPicker = useCallback((line, triggerElement = null) => {
+        const normalizedLineId = normalizeCanvasText(line?.line_id);
+        if (!normalizedLineId) return;
+
+        if (normalizeCanvasText(actualProductPickerLineId) === normalizedLineId) {
+            closeActualProductPicker();
+            return;
+        }
+
+        handleSelectOrderLine(normalizedLineId);
+        handleOpenActualProductPicker(
+            normalizedLineId,
+            getOrderItemActualNameLabel(line) || line?.name || line?.sku || '',
+            triggerElement
+        );
+    }, [actualProductPickerLineId, closeActualProductPicker, handleOpenActualProductPicker, handleSelectOrderLine]);
 
     const handleClearLatestOrderAiRun = useCallback(() => {
         const latestSessionId = normalizeCanvasText(orderAiLastRun?.sessionId);
@@ -3290,6 +3646,94 @@ const OrderForm = () => {
                 : 'Đã đổi sản phẩm cho dòng trong đơn.'
         );
     }, [closeOrderAiReplacePicker, formData.items, refreshOrderItemInventorySnapshot, showTransientNotification]);
+
+    const handleClearActualProductOverride = useCallback(async (lineId) => {
+        const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
+        if (!currentLine) {
+            closeActualProductPicker();
+            return;
+        }
+
+        const clearedLine = createOrderLineItem({
+            ...currentLine,
+            actual_product_id: null,
+            actual_name: '',
+            actual_sku: '',
+            actual_snapshot_name: '',
+            actual_snapshot_sku: '',
+            cost_price: resolveRoundedImportCostValue(currentLine.base_cost_price, currentLine.cost_price),
+        });
+
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => (
+                normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId)
+                    ? clearedLine
+                    : item
+            ));
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        closeActualProductPicker();
+        await refreshOrderItemInventorySnapshot([clearedLine]);
+        showTransientNotification('success', 'Đã bỏ gửi sản phẩm khác cho dòng đang chọn.');
+    }, [closeActualProductPicker, formData.items, refreshOrderItemInventorySnapshot, showTransientNotification]);
+    const handleSelectActualProductReplacement = useCallback(async (lineId, entry) => {
+        if (!entry) return;
+
+        const replacement = buildOrderItemsFromSearchEntry(entry)[0];
+        if (!replacement) {
+            showTransientNotification('error', 'Không thể chọn sản phẩm gửi thực tế.');
+            return;
+        }
+
+        const currentLine = formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId));
+        if (!currentLine) {
+            closeActualProductPicker();
+            showTransientNotification('error', 'Không tìm thấy dòng sản phẩm cần cập nhật.');
+            return;
+        }
+
+        if (Number(replacement.product_id) === Number(currentLine.product_id)) {
+            await handleClearActualProductOverride(lineId);
+            return;
+        }
+
+        const nextLine = createOrderLineItem({
+            ...currentLine,
+            actual_product_id: replacement.product_id,
+            actual_name: replacement.name,
+            actual_sku: replacement.sku,
+            actual_snapshot_name: replacement.snapshot_name || replacement.name,
+            actual_snapshot_sku: replacement.snapshot_sku || replacement.sku,
+            cost_price: resolveRoundedImportCostValue(replacement.cost_price, currentLine.cost_price),
+            computed_stock: replacement.computed_stock,
+            pending_export_quantity: replacement.pending_export_quantity,
+            available_to_sell: replacement.available_to_sell,
+        });
+
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => (
+                normalizeCanvasText(item?.line_id) === normalizeCanvasText(lineId)
+                    ? nextLine
+                    : item
+            ));
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        closeActualProductPicker();
+        await refreshOrderItemInventorySnapshot([nextLine]);
+        showTransientNotification('success', 'Đã gán sản phẩm gửi thực tế cho dòng đã chọn.');
+    }, [closeActualProductPicker, formData.items, handleClearActualProductOverride, refreshOrderItemInventorySnapshot, showTransientNotification]);
 
     const handleRunOrderAiPreview = useCallback(async () => {
         const preferredRuleKey = orderAiSelectedRuleKey.trim();
@@ -3594,6 +4038,39 @@ const OrderForm = () => {
             window.clearTimeout(timerId);
         };
     }, [orderAiReplaceLineId, orderAiReplaceSearchTerm]);
+    useEffect(() => {
+        if (!actualProductPickerLineId || actualProductPickerSearchTerm.trim().length < 2) {
+            setActualProductPickerResults([]);
+            setActualProductPickerLoading(false);
+            return undefined;
+        }
+
+        let cancelled = false;
+        setActualProductPickerLoading(true);
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll({ picker: 1, per_page: 20, search: actualProductPickerSearchTerm.trim() })
+                .then((response) => {
+                    if (cancelled) return;
+                    setActualProductPickerResults(buildOrderAiPickerEntries(response.data?.data || []));
+                })
+                .catch((error) => {
+                    if (cancelled) return;
+                    console.error('Error fetching actual shipped products', error);
+                    setActualProductPickerResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setActualProductPickerLoading(false);
+                    }
+                });
+        }, 200);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [actualProductPickerLineId, actualProductPickerSearchTerm]);
 
     const saveColumnSettings = () => {
         writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(columnOrder));
@@ -3607,9 +4084,10 @@ const OrderForm = () => {
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = columnWidths[id] || (e.currentTarget.parentElement.offsetWidth);
+        const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[id] ?? 50;
 
         const onMouseMove = (moveEvent) => {
-            const newWidth = Math.max(50, startWidth + (moveEvent.clientX - startX));
+            const newWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
             setColumnWidths(prev => ({ ...prev, [id]: newWidth }));
         };
 
@@ -4149,6 +4627,7 @@ const OrderForm = () => {
             const shouldUseCurrentProductCost = (isDuplicating ? requestedOrderKind : nextOrderKind) === MAIN_ORDER_KIND;
             const mappedItems = order.items?.map(item => ({
                 product_id: item.product_id,
+                actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
                 name: resolveOrderLineItemDisplayName({
                     name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
                     options: item.options || {},
@@ -4163,21 +4642,36 @@ const OrderForm = () => {
             const normalizedMappedItems = order.items?.map((item, index) => createOrderLineItem({
                 line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
                 product_id: item.product_id,
+                actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
                 name: resolveOrderLineItemDisplayName({
                     name: item.product_name_snapshot || item.product?.name || `Sản phẩm #${item.product_id}`,
                     options: item.options || {},
                     fallbackName: item.product?.name || `Sản phẩm #${item.product_id}`,
                 }),
                 sku: item.product_sku_snapshot || item.product?.sku || 'N/A',
+                actual_name: !isDuplicating && hasActualOrderProductOverride(item)
+                    ? getOrderItemActualDisplayName(item, item?.actual_product_name_snapshot || '')
+                    : '',
+                actual_sku: !isDuplicating && hasActualOrderProductOverride(item)
+                    ? getOrderItemActualDisplaySku(item, item?.actual_product_sku_snapshot || '')
+                    : '',
+                actual_snapshot_name: !isDuplicating && hasActualOrderProductOverride(item)
+                    ? (item.actual_product_name_snapshot || getOrderItemActualDisplayName(item, ''))
+                    : '',
+                actual_snapshot_sku: !isDuplicating && hasActualOrderProductOverride(item)
+                    ? (item.actual_product_sku_snapshot || getOrderItemActualDisplaySku(item, ''))
+                    : '',
                 unit_name: resolveOrderUnitLabel(item, item?.product),
                 sort_order: Number(item.sort_order) || index + 1,
                 quantity: parseMoneyNumber(item.quantity, 0) || 0,
                 price: parseMoneyNumber(item.price, 0) || 0,
                 cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
+                base_cost_price: resolveRoundedImportCostValue(
+                    item?.ordered_current_cost_price,
+                    item?.product?.cost_price ?? item?.product?.expected_cost ?? item?.cost_price ?? 0
+                ),
                 options: item.options || {},
             })) || [];
-            void mappedItems;
-            void normalizedMappedItems;
             const resolvedLoadedItems = order.items?.map((item, index) => {
                 const fallbackName = `San pham #${item.product_id}`;
                 const displayName = resolveOrderLineItemDisplayName({
@@ -4196,15 +4690,32 @@ const OrderForm = () => {
                 return createOrderLineItem({
                     line_id: item?.id ? `saved-${item.id}` : `saved-${Number(item?.product_id) || 0}-${index + 1}`,
                     product_id: item.product_id,
+                    actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
                     name: displayName,
                     sku: displaySku,
                     snapshot_name: snapshotName,
                     snapshot_sku: snapshotSku,
+                    actual_name: !isDuplicating && hasActualOrderProductOverride(item)
+                        ? getOrderItemActualDisplayName(item, item?.actual_product_name_snapshot || '')
+                        : '',
+                    actual_sku: !isDuplicating && hasActualOrderProductOverride(item)
+                        ? getOrderItemActualDisplaySku(item, item?.actual_product_sku_snapshot || '')
+                        : '',
+                    actual_snapshot_name: !isDuplicating && hasActualOrderProductOverride(item)
+                        ? (item.actual_product_name_snapshot || getOrderItemActualDisplayName(item, ''))
+                        : '',
+                    actual_snapshot_sku: !isDuplicating && hasActualOrderProductOverride(item)
+                        ? (item.actual_product_sku_snapshot || getOrderItemActualDisplaySku(item, ''))
+                        : '',
                     unit_name: resolveOrderUnitLabel(item, item?.product),
                     sort_order: Number(item.sort_order) || index + 1,
                     quantity: parseMoneyNumber(item.quantity, 0) || 0,
                     price: parseMoneyNumber(item.price, 0) || 0,
                     cost_price: resolveOrderItemCostPrice(item, shouldUseCurrentProductCost),
+                    base_cost_price: resolveRoundedImportCostValue(
+                        item?.ordered_current_cost_price,
+                        item?.product?.cost_price ?? item?.product?.expected_cost ?? item?.cost_price ?? 0
+                    ),
                     options: item.options || {},
                 });
             }) || [];
@@ -4227,6 +4738,10 @@ const OrderForm = () => {
                 };
             });
             const mappedCostTotal = calculateItemsCostTotal(resolvedLoadedItems);
+            closeActualProductPicker();
+            closeOrderAiReplacePicker();
+            setShowActualProductSection(false);
+            setSelectedOrderLineId('');
             setFormData({
                 customer_name: order.customer_name || '',
                 customer_email: order.customer_email || '',
@@ -4328,6 +4843,10 @@ const OrderForm = () => {
             }));
             void draftItems;
             const draftCostTotal = calculateItemsCostTotal(normalizedDraftItems);
+            closeActualProductPicker();
+            closeOrderAiReplacePicker();
+            setShowActualProductSection(false);
+            setSelectedOrderLineId('');
 
             setFormData((prev) => syncShippingAddress({
                 ...prev,
@@ -4400,19 +4919,123 @@ const OrderForm = () => {
         setOrderAiSelectedRuleKey('');
     }, [orderAiQuickRuleOptions, orderAiSelectedRuleKey]);
 
-    const handleConvertCurrentOrder = useCallback(async (targetKind) => {
+    function buildOrderMutationPayload(submitOrderKind = null) {
+        const normalizedOrderKind = getNormalizedOrderKind(submitOrderKind || orderKind);
+        const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
+
+        const normalizedAddressDetail = extractAddressDetail({
+            shippingAddress: formData.shipping_address.trim(),
+            ward: formData.ward,
+            district: formData.district,
+            province: formData.province,
+            regionType
+        });
+        const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
+        const trimmedCustomerName = String(formData.customer_name || '').trim();
+        const trimmedCustomerPhone = String(formData.customer_phone || '').trim();
+
+        if (isMainOrder && !effectiveAddressDetail) {
+            alert('Vui lòng nhập địa chỉ giao hàng.');
+            return null;
+        }
+
+        if (!isMainOrder && !trimmedCustomerName && !trimmedCustomerPhone) {
+            alert('Vui lòng nhập tên khách hàng hoặc số điện thoại cho đơn nháp.');
+            return null;
+        }
+
+        if (trimmedCustomerPhone && !validateVietnamesePhone(trimmedCustomerPhone)) {
+            alert('Số điện thoại không hợp lệ.');
+            return null;
+        }
+
+        const normalizedSupplementItems = specialOrderType
+            ? (Array.isArray(formData.supplement_items) ? formData.supplement_items : []).map((item) => ({
+                product_id: Number(item.product_id) || 0,
+                quantity: Math.max(0, Number(item.quantity) || 0),
+                price: Math.max(0, Number(item.price) || 0),
+                cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                name: item.snapshot_name || item.name || '',
+                sku: item.snapshot_sku || item.sku || '',
+                notes: item.notes || '',
+            })).filter((item) => item.product_id && item.quantity > 0)
+            : [];
+
+        const normalizedItems = (Array.isArray(formData.items) ? formData.items : [])
+            .map((item, index) => ({
+                product_id: Number(item.product_id) || 0,
+                actual_product_id: hasActualOrderProductOverride(item) ? (Number(item.actual_product_id) || 0) : undefined,
+                sort_order: index + 1,
+                quantity: Math.max(0, Number(item.quantity) || 0),
+                price: Math.max(0, Number(item.price) || 0),
+                cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                name: item.snapshot_name || item.name || '',
+                sku: item.snapshot_sku || item.sku || '',
+                actual_name: hasActualOrderProductOverride(item)
+                    ? (item.actual_snapshot_name || item.actual_name || '')
+                    : undefined,
+                actual_sku: hasActualOrderProductOverride(item)
+                    ? (item.actual_snapshot_sku || item.actual_sku || '')
+                    : undefined,
+                options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
+                    ? item.options
+                    : undefined,
+            }))
+            .filter((item) => item.product_id && item.quantity > 0);
+
+        return {
+            normalizedOrderKind,
+            payload: {
+                ...formData,
+                customer_name: trimmedCustomerName,
+                customer_phone: trimmedCustomerPhone,
+                items: normalizedItems,
+                order_kind: normalizedOrderKind,
+                order_type: normalizedOrderType,
+                settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
+                return_tracking_code: specialOrderType ? String(formData.return_tracking_code || '').trim() : '',
+                return_status: specialOrderType
+                    ? normalizeSupplementReturnStatus(formData.return_status)
+                    : SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
+                supplement_items: normalizedSupplementItems,
+                region_type: regionType,
+                lead_id: leadId ? Number(leadId) : undefined,
+                address_detail: effectiveAddressDetail,
+                shipping_address: isMainOrder
+                    ? buildShippingAddress({
+                        addressDetail: effectiveAddressDetail,
+                        ward: formData.ward,
+                        district: formData.district,
+                        province: formData.province,
+                        regionType
+                    })
+                    : (formData.shipping_address || effectiveAddressDetail || ''),
+                custom_attributes: {
+                    ...formData.custom_attributes,
+                    region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
+                    full_region_path: buildRegionPath({
+                        ward: formData.ward,
+                        district: formData.district,
+                        province: formData.province,
+                        regionType
+                    })
+                }
+            }
+        };
+    }
+
+    const handleConvertCurrentOrder = async (targetKind) => {
         if (!id) return;
+
+        const mutation = buildOrderMutationPayload(targetKind);
+        if (!mutation) return;
 
         try {
             setSaving(true);
-            const normalizedTargetKind = getNormalizedOrderKind(targetKind);
+            const normalizedTargetKind = mutation.normalizedOrderKind;
             const response = await orderApi.convert(id, {
+                ...mutation.payload,
                 target_kind: normalizedTargetKind,
-                region_type: regionType,
-                province: formData.province,
-                district: formData.district,
-                ward: formData.ward,
-                shipping_address: formData.shipping_address,
             });
             const convertedOrder = response?.data;
             if (convertedOrder?.id) {
@@ -4424,7 +5047,7 @@ const OrderForm = () => {
         } finally {
             setSaving(false);
         }
-    }, [formData.district, formData.province, formData.shipping_address, formData.ward, id, navigate, regionType]);
+    };
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -4546,7 +5169,10 @@ const OrderForm = () => {
             const nextValue = field === 'cost_price'
                 ? resolveRoundedImportCostValue(value, 0)
                 : value;
-            newItems[index] = { ...newItems[index], [field]: nextValue };
+            const currentItem = newItems[index] || {};
+            newItems[index] = field === 'cost_price' && !hasActualOrderProductOverride(currentItem)
+                ? { ...currentItem, cost_price: nextValue, base_cost_price: nextValue }
+                : { ...currentItem, [field]: nextValue };
             const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
@@ -4557,6 +5183,9 @@ const OrderForm = () => {
     }, []);
 
     const removeItem = React.useCallback((lineId) => {
+        setSelectedOrderLineId((prev) => (
+            normalizeCanvasText(prev) === normalizeCanvasText(lineId) ? '' : prev
+        ));
         setFormData(prev => {
             const newItems = applySequentialOrderLineSortOrder(prev.items.filter(item => item.line_id !== lineId));
             const costTotal = calculateItemsCostTotal(newItems);
@@ -4580,8 +5209,11 @@ const OrderForm = () => {
             actionText: 'Xóa tất cả',
             onAction: () => {
                 closeOrderAiReplacePicker();
+                closeActualProductPicker();
+                setShowActualProductSection(false);
                 setShowOrderAiInputReviewModal(false);
                 setOrderAiLastRun(null);
+                setSelectedOrderLineId('');
                 setFormData((prev) => ({
                     ...prev,
                     items: [],
@@ -4590,7 +5222,7 @@ const OrderForm = () => {
                 showTransientNotification('success', 'Đã xóa toàn bộ sản phẩm trong đơn.');
             },
         });
-    }, [closeOrderAiReplacePicker, formData.items.length, showModal, showTransientNotification]);
+    }, [closeActualProductPicker, closeOrderAiReplacePicker, formData.items.length, showModal, showTransientNotification]);
 
     const pendingOrderAiItems = useMemo(
         () => formData.items.filter((item) => isPendingOrderAiItem(item)),
@@ -5204,98 +5836,12 @@ const OrderForm = () => {
 
     const handleSubmit = async (e, submitOrderKind = null) => {
         e?.preventDefault?.();
-        const normalizedOrderKind = getNormalizedOrderKind(submitOrderKind || orderKind);
-        const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
-
-        const normalizedAddressDetail = extractAddressDetail({
-            shippingAddress: formData.shipping_address.trim(),
-            ward: formData.ward,
-            district: formData.district,
-            province: formData.province,
-            regionType
-        });
-        const effectiveAddressDetail = normalizedAddressDetail || formData.address_detail.trim() || formData.shipping_address.trim();
-        const trimmedCustomerName = String(formData.customer_name || '').trim();
-        const trimmedCustomerPhone = String(formData.customer_phone || '').trim();
-
-        if (isMainOrder && !effectiveAddressDetail) {
-            alert('Vui lòng nhập địa chỉ giao hàng.');
-            return;
-        }
-
-        if (!isMainOrder && !trimmedCustomerName && !trimmedCustomerPhone) {
-            alert('Vui lòng nhập tên khách hàng hoặc số điện thoại cho đơn nháp.');
-            return;
-        }
-
-        if (trimmedCustomerPhone && !validateVietnamesePhone(trimmedCustomerPhone)) {
-            alert('Số điện thoại không hợp lệ.');
-            return;
-        }
+        const mutation = buildOrderMutationPayload(submitOrderKind);
+        if (!mutation) return;
 
         setSaving(true);
         try {
-            const normalizedSupplementItems = specialOrderType
-                ? (Array.isArray(formData.supplement_items) ? formData.supplement_items : []).map((item) => ({
-                    product_id: Number(item.product_id) || 0,
-                    quantity: Math.max(0, Number(item.quantity) || 0),
-                    price: Math.max(0, Number(item.price) || 0),
-                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
-                    name: item.snapshot_name || item.name || '',
-                    sku: item.snapshot_sku || item.sku || '',
-                    notes: item.notes || '',
-                })).filter((item) => item.product_id && item.quantity > 0)
-                : [];
-            const normalizedItems = (Array.isArray(formData.items) ? formData.items : [])
-                .map((item, index) => ({
-                    product_id: Number(item.product_id) || 0,
-                    sort_order: index + 1,
-                    quantity: Math.max(0, Number(item.quantity) || 0),
-                    price: Math.max(0, Number(item.price) || 0),
-                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
-                    name: item.snapshot_name || item.name || '',
-                    sku: item.snapshot_sku || item.sku || '',
-                    options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
-                        ? item.options
-                        : undefined,
-                }))
-                .filter((item) => item.product_id && item.quantity > 0);
-            const payload = {
-                ...formData,
-                customer_name: trimmedCustomerName,
-                customer_phone: trimmedCustomerPhone,
-                items: normalizedItems,
-                order_kind: normalizedOrderKind,
-                order_type: normalizedOrderType,
-                settlement_delta: specialOrderType ? (parseMoneyNumber(formData.settlement_delta, 0) || 0) : 0,
-                return_tracking_code: specialOrderType ? String(formData.return_tracking_code || '').trim() : '',
-                return_status: specialOrderType
-                    ? normalizeSupplementReturnStatus(formData.return_status)
-                    : SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
-                supplement_items: normalizedSupplementItems,
-                region_type: regionType,
-                lead_id: leadId ? Number(leadId) : undefined,
-                address_detail: effectiveAddressDetail,
-                shipping_address: isMainOrder
-                    ? buildShippingAddress({
-                        addressDetail: effectiveAddressDetail,
-                        ward: formData.ward,
-                        district: formData.district,
-                        province: formData.province,
-                        regionType
-                    })
-                    : (formData.shipping_address || effectiveAddressDetail || ''),
-                custom_attributes: {
-                    ...formData.custom_attributes,
-                    region_type: regionType === 'new' ? 'Địa giới mới' : 'Địa giới cũ',
-                    full_region_path: buildRegionPath({
-                        ward: formData.ward,
-                        district: formData.district,
-                        province: formData.province,
-                        regionType
-                    })
-                }
-            };
+            const { normalizedOrderKind, payload } = mutation;
 
             const response = isEdit
                 ? await orderApi.update(id, payload)
@@ -6056,7 +6602,7 @@ const OrderForm = () => {
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
                 .admin-header-title { font-size: 18px !important; font-weight: 800 !important; color: #1B365D !important; letter-spacing: -0.01em !important; line-height: 1.4 !important; }
-                .admin-table-header { font-size: 14px !important; font-weight: 700 !important; color: #1B365D !important; letter-spacing: 0 !important; background-color: #F0F4F8 !important; }
+                .admin-table-header { font-size: 12px !important; font-weight: 700 !important; color: #1B365D !important; letter-spacing: 0 !important; background-color: #F0F4F8 !important; }
                 .order-form-table::-webkit-scrollbar { width: 10px; height: 10px; }
                 .order-form-table::-webkit-scrollbar-track { background: #F0F4F8; }
                 .order-form-table::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
@@ -6547,10 +7093,14 @@ const OrderForm = () => {
                                     {/* Scrollable Product Chips - Strictly Single Row */}
                                     <div className="flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden custom-scrollbar rounded-sm border border-primary/10 bg-primary/5 px-2 pb-1 h-[42px]">
                                         {formData.items.map((item, index) => (
-                                            <div key={item.line_id || `${item.product_id}-${index}`} className="bg-orange-50 hover:bg-orange-100/50 px-3 py-1.5 rounded-sm border border-orange-200 flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0">
+                                            <div
+                                                key={item.line_id || `${item.product_id}-${index}`}
+                                                onClick={() => handleSelectOrderLine(item.line_id)}
+                                                className={`${hasActualOrderProductOverride(item) ? 'bg-rose-50 hover:bg-rose-100/60 border-rose-200' : 'bg-orange-50 hover:bg-orange-100/50 border-orange-200'} ${normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id) ? 'ring-2 ring-primary/15' : ''} px-3 py-1.5 rounded-sm border flex items-center gap-2 transition-all group/chip relative shadow-sm shrink-0 cursor-pointer`}
+                                            >
                                                 <div className="flex items-center gap-2 overflow-hidden">
-                                                    <span className="text-[10px] text-orange-600/40 font-bold leading-none">{index + 1}.</span>
-                                                    <span className="text-[11px] text-orange-600 font-bold leading-none whitespace-nowrap tracking-tight">{item.sku || 'N/A'}</span>
+                                                    <span className={`text-[10px] font-bold leading-none ${hasActualOrderProductOverride(item) ? 'text-rose-600/45' : 'text-orange-600/40'}`}>{index + 1}.</span>
+                                                    <span className={`text-[11px] font-bold leading-none whitespace-nowrap tracking-tight ${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-orange-600'}`}>{item.sku || 'N/A'}</span>
                                                     {isOrderAiItem(item) && (
                                                         <span className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                                                             AI
@@ -6644,6 +7194,150 @@ const OrderForm = () => {
                             </div>
                         ) : null}
 
+                        {showActualProductSection && actualProductSectionLine ? (
+                            <div
+                                ref={actualProductSectionRef}
+                                className={`mt-3 rounded-[18px] border px-4 py-3 shadow-sm ${hasActualOrderProductOverride(actualProductSectionLine) ? 'border-rose-200 bg-rose-50/80' : 'border-primary/10 bg-white'}`}
+                            >
+                                <div className="flex flex-col gap-3">
+                                    {false && (
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Gửi sản phẩm khác</div>
+                                            <div className="mt-1 text-[13px] font-semibold leading-[1.5] text-primary/60">
+                                                Chọn dòng sản phẩm cần xử lý rồi mở bảng chọn sản phẩm thực gửi.
+                                            </div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleToggleActualProductSection}
+                                            className="inline-flex items-center gap-1 self-start rounded-full border border-primary/10 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">close</span>
+                                            Tắt
+                                        </button>
+                                    </div>
+                                    )}
+
+                                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                                        <div className="min-w-0">
+                                            {false && <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Dòng cần xử lý</div>}
+                                            <select
+                                                value={actualProductSectionLine.line_id || ''}
+                                                onChange={(event) => handleActualProductSectionLineChange(event.target.value)}
+                                                className="w-full rounded-[14px] border border-primary/10 bg-white px-3 py-2.5 text-[13px] font-semibold text-primary shadow-sm transition-all focus:border-primary/25 focus:outline-none"
+                                            >
+                                                {formData.items.map((item, index) => (
+                                                    <option key={item.line_id || `${item.product_id}-${index}`} value={item.line_id || ''}>
+                                                        {`${index + 1}. ${item.sku || 'N/A'} - ${item.name || 'Sản phẩm'}`}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={(event) => handleToggleActualProductPicker(actualProductSectionLine, event.currentTarget)}
+                                                className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${isActualProductPickerOpenForSectionLine ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : hasActualOrderProductOverride(actualProductSectionLine) ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-primary/10 bg-white text-primary/55 hover:border-primary/25 hover:text-primary'}`}
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">
+                                                    {isActualProductPickerOpenForSectionLine ? 'close' : 'local_shipping'}
+                                                </span>
+                                                {isActualProductPickerOpenForSectionLine
+                                                    ? 'Tắt bảng gửi khác'
+                                                    : hasActualOrderProductOverride(actualProductSectionLine)
+                                                        ? 'Đổi SP thực gửi'
+                                                        : 'Chọn SP thực gửi'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={handleToggleActualProductSection}
+                                                className="inline-flex items-center gap-1 rounded-full border border-primary/10 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">close</span>
+                                                Tắt
+                                            </button>
+                                            {hasActualOrderProductOverride(actualProductSectionLine) ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleClearActualProductOverride(actualProductSectionLine.line_id)}
+                                                    className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+                                                    Bỏ gửi khác
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    </div>
+
+                                    {false && (
+                                    <div className="min-w-0 rounded-[14px] border border-primary/10 bg-white/80 px-3 py-3 shadow-sm">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Dòng đang chọn</div>
+                                        <div className={`mt-1 truncate text-[14px] font-black leading-[1.35] ${hasActualOrderProductOverride(actualProductSectionLine) ? 'text-rose-700' : 'text-primary'}`}>
+                                            {actualProductSectionLine.name || 'Sản phẩm'}
+                                        </div>
+                                        <div className="mt-1 text-[12px] font-semibold text-primary/50">
+                                            {actualProductSectionLine.sku || 'N/A'}
+                                        </div>
+                                        {hasActualOrderProductOverride(actualProductSectionLine) ? (
+                                            <div className="mt-2 text-[12px] font-semibold text-rose-700">
+                                                {`Thực gửi: ${getOrderItemActualNameLabel(actualProductSectionLine) || 'Sản phẩm khác'}`}
+                                            </div>
+                                        ) : (
+                                            <div className="mt-2 text-[12px] font-semibold text-primary/45">
+                                                Chưa có sản phẩm thực gửi khác cho dòng này.
+                                            </div>
+                                        )}
+                                    </div>
+                                    )}
+                                </div>
+                            </div>
+                        ) : null}
+
+                        {false && selectedOrderLine ? (
+                            <div className={`mt-3 rounded-[18px] border px-4 py-3 shadow-sm ${hasActualOrderProductOverride(selectedOrderLine) ? 'border-rose-200 bg-rose-50/80' : 'border-primary/10 bg-white'}`}>
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div className="min-w-0">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Dòng đang chọn</div>
+                                        <div className={`mt-1 truncate text-[14px] font-black leading-[1.35] ${hasActualOrderProductOverride(selectedOrderLine) ? 'text-rose-700' : 'text-primary'}`}>
+                                            {selectedOrderLine.name || 'Sản phẩm'}
+                                        </div>
+                                        {hasActualOrderProductOverride(selectedOrderLine) ? (
+                                            <div className="mt-1 text-[12px] font-semibold text-rose-700">
+                                                {`Thực gửi: ${getOrderItemActualNameLabel(selectedOrderLine) || 'Sản phẩm khác'}`}
+                                            </div>
+                                        ) : (
+                                            <div className="mt-1 text-[12px] font-semibold text-primary/45">Chọn thao tác đặc biệt cho dòng này khi cần gửi sản phẩm khác thực tế.</div>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={(event) => handleOpenActualProductPicker(
+                                                selectedOrderLine.line_id,
+                                                getOrderItemActualNameLabel(selectedOrderLine) || selectedOrderLine.name || selectedOrderLine.sku || '',
+                                                event.currentTarget
+                                            )}
+                                            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${hasActualOrderProductOverride(selectedOrderLine) ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-primary/10 bg-white text-primary/55 hover:border-primary/25 hover:text-primary'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">local_shipping</span>
+                                            {hasActualOrderProductOverride(selectedOrderLine) ? 'Đổi SP thực gửi' : 'Gửi SP khác'}
+                                        </button>
+                                        {hasActualOrderProductOverride(selectedOrderLine) ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleClearActualProductOverride(selectedOrderLine.line_id)}
+                                                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+                                                Bỏ gửi khác
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null}
+
                         <div className="mt-2 -mx-2 space-y-2 lg:hidden">
                             {formData.items.length === 0 ? (
                                 <div className="rounded-[22px] border border-dashed border-primary/15 bg-white px-5 py-10 text-center shadow-sm">
@@ -6654,17 +7348,22 @@ const OrderForm = () => {
                                 formData.items.map((item, index) => {
                                     const itemTotal = Number(item.price || 0) * Number(item.quantity || 0);
                                     const canReplaceItem = Boolean(item.line_id);
+                                    const isSelectedLine = normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id);
+                                    const hasActualOverride = hasActualOrderProductOverride(item);
 
                                     return (
                                         <div
                                             key={item.line_id || `${item.product_id}-${index}`}
+                                            onClick={() => handleSelectOrderLine(item.line_id)}
                                             className={`rounded-[18px] border px-2.5 py-2 shadow-[0_18px_45px_-38px_rgba(15,23,42,0.35)] ${
-                                                isPendingOrderAiItem(item)
+                                                hasActualOverride
+                                                    ? 'border-rose-200 bg-rose-50/70'
+                                                    : isPendingOrderAiItem(item)
                                                     ? 'border-amber-200 bg-amber-50/70'
                                                     : isOrderAiItem(item)
                                                         ? 'border-sky-200 bg-sky-50/70'
                                                         : 'border-primary/10 bg-white'
-                                            }`}
+                                            } ${isSelectedLine ? 'ring-2 ring-primary/15' : ''}`}
                                         >
                                             <div className="flex items-start gap-2">
                                                 <div className="inline-flex h-8 min-w-[32px] items-center justify-center rounded-full bg-primary/[0.05] px-2 text-[12px] font-semibold text-primary/55">
@@ -6673,7 +7372,12 @@ const OrderForm = () => {
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex items-start gap-2">
                                                         <div className="min-w-0 flex-1">
-                                                            <div className="text-[14px] font-black leading-[1.35] text-primary">{item.name || 'Sản phẩm'}</div>
+                                                            <div className={`text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
+                                                            {hasActualOverride ? (
+                                                                <div className="mt-1 text-[12px] font-semibold leading-[1.4] text-rose-700">
+                                                                    {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
+                                                                </div>
+                                                            ) : null}
                                                             {isOrderAiItem(item) && (
                                                                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[12px] font-semibold leading-none ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-white text-amber-700' : 'border-sky-200 bg-white text-sky-700'}`}>
@@ -6770,12 +7474,27 @@ const OrderForm = () => {
 
                         {/* Captured Area for Screenshot */}
                         <div ref={captureRef} className="mt-[10px] hidden overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl lg:block">
-                            <div className="relative min-h-[400px] overflow-auto order-form-table">
-                                <table className="w-full text-left border-collapse table-fixed lg:table-auto">
+                            <div ref={orderFormTableViewportRef} className="relative min-h-[400px] overflow-y-auto overflow-x-hidden order-form-table">
+                                <table className="w-full min-w-0 text-left border-collapse table-fixed">
+                                    <colgroup>
+                                        <col style={{ width: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px` }} />
+                                        {desktopVisibleColumnIds.map((colId) => (
+                                            <col
+                                                key={`order-form-col-${colId}`}
+                                                style={{ width: `${desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths)}px` }}
+                                            />
+                                        ))}
+                                    </colgroup>
                                     <thead className="admin-table-header sticky top-0 z-30 shadow-sm border-b border-primary/10">
                                         <tr>
                                             {/* Column Config Header */}
-                                            <th className="w-12 border border-primary/10 bg-[#F0F4F8] shrink-0 relative text-center sticky top-0 z-30">
+                                            <th
+                                                className="border border-primary/10 bg-[#F0F4F8] shrink-0 relative text-center sticky top-0 z-30"
+                                                style={{
+                                                    width: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px`,
+                                                    minWidth: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px`,
+                                                }}
+                                            >
                                                 <div className="flex items-center justify-center">
                                                     <button
                                                         type="button"
@@ -6847,17 +7566,21 @@ const OrderForm = () => {
                                                     </AnimatePresence>
                                                 </div>
                                             </th>
-                                            {columnOrder.filter(id => visibleColumns.includes(id)).map((colId) => {
+                                            {desktopVisibleColumnIds.map((colId) => {
                                                 const def = COLUMN_DEFS[colId];
-                                                const width = columnWidths[colId];
+                                                const width = desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths);
                                                 const isActionColumn = colId === 'actions';
                                                 return (
                                                     <th
                                                         key={colId}
-                                                        className={`py-3 px-4 border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
-                                                        style={width ? { width: `${width}px` } : { width: 'auto' }}
+                                                        className={`py-2.5 px-3 border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
+                                                        style={{
+                                                            width: `${width}px`,
+                                                            minWidth: `${width}px`,
+                                                            maxWidth: `${width}px`,
+                                                        }}
                                                     >
-                                                        <div className={`flex items-center ${getOrderFormHeaderJustifyClass(def.align)}`}>
+                                                        <div className={`flex min-w-0 items-center ${getOrderFormHeaderJustifyClass(def.align)}`}>
                                                             {isActionColumn ? (
                                                                 <button
                                                                     type="button"
@@ -6889,20 +7612,21 @@ const OrderForm = () => {
                                                 key={item.line_id || `${item.product_id}-${index}`}
                                                 value={item}
                                                 as="tr"
-                                                className={`transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 ${isPendingOrderAiItem(item) ? 'bg-amber-50/50 hover:bg-amber-50/70' : isOrderAiItem(item) ? 'bg-sky-50/40 hover:bg-sky-50/60' : 'bg-white hover:bg-primary/[0.01]'}`}
+                                                onClick={() => handleSelectOrderLine(item.line_id)}
+                                                className={`transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 ${hasActualOrderProductOverride(item) ? 'bg-rose-50/60 hover:bg-rose-50/80' : isPendingOrderAiItem(item) ? 'bg-amber-50/50 hover:bg-amber-50/70' : isOrderAiItem(item) ? 'bg-sky-50/40 hover:bg-sky-50/60' : 'bg-white hover:bg-primary/[0.01]'} ${normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id) ? 'ring-2 ring-inset ring-primary/15' : ''}`}
                                             >
                                                 <td className="border border-primary/10 bg-primary/5 text-center">
                                                     <span className="material-symbols-outlined text-[16px] text-primary/10 group-hover:text-primary/30 font-bold">drag_indicator</span>
                                                 </td>
-                                                {columnOrder.filter(id => visibleColumns.includes(id)).map(colId => {
+                                                {desktopVisibleColumnIds.map(colId => {
                                                     switch (colId) {
                                                         case 'stt':
                                                             return <td key={colId} className="py-2.5 text-center text-primary/30 font-sans text-[12px] font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10 relative group/cell">
+                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 relative group/cell">
                                                                     <div className="flex items-center justify-between gap-2">
-                                                                        <p className="font-sans text-[13px] text-primary font-bold leading-none truncate flex-1 min-w-0">{item.sku || '---'}</p>
+                                                                        <p className={`font-sans text-[13px] font-bold leading-none truncate flex-1 min-w-0 ${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'}`}>{item.sku || '---'}</p>
                                                                         {item.sku && (
                                                                             <button
                                                                                 type="button"
@@ -6920,7 +7644,7 @@ const OrderForm = () => {
                                                                         <div className="absolute top-full left-2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-900"></div>
                                                                     </div>
                                                                 </td>
-                                                            );
+                                                                );
                                                         case 'name': {
                                                             const itemNameCellKey = `${item.line_id || item.product_id || index}-name-cell`;
                                                             const nameCopyId = `${item.line_id || item.product_id}-name-${index}`;
@@ -6929,7 +7653,7 @@ const OrderForm = () => {
                                                             return (
                                                                 <td
                                                                     key={colId}
-                                                                    className="py-2.5 px-4 border border-primary/10 relative group/cell"
+                                                                    className="py-2.5 px-3 border border-primary/10 relative group/cell"
                                                                     onMouseEnter={() => updateActiveTruncatedNameCell(itemNameCellKey)}
                                                                     onMouseLeave={() => clearActiveTruncatedNameCell(itemNameCellKey)}
                                                                 >
@@ -6937,10 +7661,15 @@ const OrderForm = () => {
                                                                         <div className="flex-1 min-w-0">
                                                                             <p
                                                                                 ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
-                                                                                className="text-primary font-bold text-[13px] leading-tight truncate"
+                                                                                className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} font-bold text-[13px] leading-tight truncate`}
                                                                             >
                                                                                 {item.name}
                                                                             </p>
+                                                                            {hasActualOrderProductOverride(item) ? (
+                                                                                <div className="mt-1 truncate text-[11px] font-semibold text-rose-700">
+                                                                                    {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
+                                                                                </div>
+                                                                            ) : null}
                                                                             {isOrderAiItem(item) && (
                                                                                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                                                                                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
@@ -6983,6 +7712,11 @@ const OrderForm = () => {
                                                                     {isNameTooltipVisible && (
                                                                         <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl pointer-events-none z-50 w-80 text-[12px] font-bold border border-white/10 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
                                                                             <div>{item.name}</div>
+                                                                            {hasActualOrderProductOverride(item) ? (
+                                                                                <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-rose-200">
+                                                                                    {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
+                                                                                </div>
+                                                                            ) : null}
                                                                             {isOrderAiItem(item) && (
                                                                                 <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/80">
                                                                                     {`AI: ${item.ai_meta?.source_phrase || 'Tự động ghép'}${item.ai_meta?.match_reasons?.length ? ` - ${item.ai_meta.match_reasons.join(', ')}` : ''}`}
@@ -7002,18 +7736,18 @@ const OrderForm = () => {
                                                         }
                                                         case 'quantity':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 text-center">
+                                                                <td key={colId} className="py-2.5 px-2.5 border border-primary/10 text-center">
                                                                     <input
                                                                         type="number"
                                                                         value={item.quantity}
                                                                         onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                                                                        className="w-16 h-8 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none text-[13px] font-bold rounded-sm shadow-inner text-slate-900"
+                                                                        className="h-8 w-full max-w-[54px] min-w-0 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none text-[13px] font-bold rounded-sm shadow-inner text-slate-900"
                                                                     />
                                                                 </td>
                                                             );
                                                         case 'unit':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 text-center">
+                                                                <td key={colId} className="py-2.5 px-2.5 border border-primary/10 text-center">
                                                                     <span className="font-sans text-[13px] font-bold text-primary/65">{getOrderUnitDisplay(item)}</span>
                                                                 </td>
                                                             );
@@ -7023,7 +7757,7 @@ const OrderForm = () => {
                                                             return (
                                                                 <td
                                                                     key={colId}
-                                                                    className="py-2.5 px-3 border border-primary/10 text-center"
+                                                                    className="py-2.5 px-2.5 border border-primary/10 text-center"
                                                                     title={buildAvailableToSellCellTitle(item)}
                                                                 >
                                                                     <span className={`font-sans text-[13px] font-black ${getAvailableToSellTextClass(availableToSell)}`}>
@@ -7034,7 +7768,7 @@ const OrderForm = () => {
                                                         }
                                                         case 'price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
+                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10">
                                                                     <div className="flex items-center justify-end">
                                                                         <input
                                                                             type="text"
@@ -7051,7 +7785,7 @@ const OrderForm = () => {
                                                             );
                                                         case 'cost_price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-4 border border-primary/10">
+                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10">
                                                                     <div className="flex items-center justify-end">
                                                                         <input
                                                                             type="text"
@@ -7067,15 +7801,15 @@ const OrderForm = () => {
                                                             );
                                                         case 'total':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-6 border border-primary/10 text-right bg-blue-50/30">
-                                                                    <p className="font-sans text-[13px] font-extrabold text-slate-900 tracking-tight">
+                                                                <td key={colId} className="py-2.5 px-3.5 border border-primary/10 text-right bg-blue-50/30">
+                                                                    <p className="truncate font-sans text-[13px] font-extrabold text-slate-900 tracking-tight">
                                                                         {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(item.price * item.quantity)}<span className="text-[11px] ml-0.5 opacity-40">₫</span>
                                                                     </p>
                                                                 </td>
                                                             );
                                                         case 'actions':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-2 text-center border border-primary/10 align-top">
+                                                                <td key={colId} className="py-2.5 px-1.5 text-center border border-primary/10 align-top">
                                                                     <div className="flex justify-center">
                                                                         <div className="flex items-center gap-1">
                                                                             <button
@@ -7112,14 +7846,32 @@ const OrderForm = () => {
                                         ))}
                                         {formData.items.length === 0 && (
                                             <tr>
-                                                <td colSpan={visibleColumns.length + 1} className="py-16 text-center italic text-primary/30 text-[12px] font-bold border border-primary/10 bg-primary/5">Phần này để hiển thị sản phẩm đã chọn...</td>
+                                                <td colSpan={desktopVisibleColumnIds.length + 1} className="py-16 text-center italic text-primary/30 text-[12px] font-bold border border-primary/10 bg-primary/5">Phần này để hiển thị sản phẩm đã chọn...</td>
                                             </tr>
                                         )}
                                     </Reorder.Group>
                                 </table>
                             </div>
 
-                            <div className="flex justify-end px-4 py-5 border-t border-primary/10 bg-white">
+                            <div className="flex items-center justify-between gap-4 px-4 py-5 border-t border-primary/10 bg-white">
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleActualProductSection}
+                                        disabled={formData.items.length === 0}
+                                        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${showActualProductSection ? 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100/70' : 'border-primary/10 bg-white text-primary/60 hover:border-primary/25 hover:text-primary'} disabled:cursor-not-allowed disabled:opacity-40`}
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">
+                                            {showActualProductSection ? 'close' : 'local_shipping'}
+                                        </span>
+                                        {showActualProductSection ? 'Tắt gửi SP khác' : 'Gửi SP khác'}
+                                    </button>
+                                    {showActualProductSection ? (
+                                        <div className="hidden text-[12px] font-semibold text-primary/45 lg:block">
+                                            Đã bật chế độ gửi sản phẩm khác. Chọn dòng trong panel để xử lý nhanh.
+                                        </div>
+                                    ) : null}
+                                </div>
                                 <div className="flex items-baseline gap-4">
                                     <span className="font-sans font-bold text-brick/60 text-[12px]">Tổng thanh toán:</span>
                                     <span className="font-sans font-black text-brick text-[32px] leading-none tracking-tighter">
@@ -7653,6 +8405,24 @@ const OrderForm = () => {
                 loading={orderAiReplaceLoading}
                 onSelect={(entry) => handleSelectOrderAiLineReplacement(orderAiReplaceLineId, entry)}
                 currencyFormatter={quoteCurrencyFormatter}
+            />
+            <OrderAiLineReplacePanel
+                show={Boolean(actualProductPickerLineId)}
+                currentLine={activeActualProductPickerLine}
+                anchorElement={actualProductPickerAnchorRef.current}
+                searchTerm={actualProductPickerSearchTerm}
+                onSearchTermChange={setActualProductPickerSearchTerm}
+                onClose={closeActualProductPicker}
+                results={actualProductPickerResults}
+                loading={actualProductPickerLoading}
+                onSelect={(entry) => handleSelectActualProductReplacement(actualProductPickerLineId, entry)}
+                currencyFormatter={quoteCurrencyFormatter}
+                heading="Gửi sản phẩm khác"
+                currentLabel={activeActualProductPickerLine?.name || selectedOrderLine?.name || ''}
+                searchPlaceholder="Tìm sản phẩm thực gửi..."
+                emptyMessage={actualProductPickerSearchTerm.trim().length >= 2
+                    ? 'Không thấy sản phẩm thực gửi phù hợp, thử đổi từ khóa.'
+                    : 'Gõ ít nhất 2 ký tự để chọn sản phẩm thực gửi.'}
             />
 
             <OrderSupplementItemsSection

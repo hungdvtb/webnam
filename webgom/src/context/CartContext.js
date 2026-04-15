@@ -218,6 +218,109 @@ const normalizeCartItem = (item = {}) => {
   };
 };
 
+const resolveBundleEntryUnitPrice = (product = {}, fallback = 0) => {
+  const candidates = [
+    product?.current_price,
+    product?.price,
+    product?.pivot?.price,
+    fallback,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = Number(candidate);
+    if (Number.isFinite(normalized)) {
+      return normalized;
+    }
+  }
+
+  return 0;
+};
+
+const mergeBundleSelectionIntoEntry = (currentItem = {}, newProduct = {}, fallbackIndex = 0) => {
+  const isSiblingVariant = newProduct?.pivot?.link_type === 'super_link';
+  const preservedQty = Math.max(1, Number(currentItem?.qty || currentItem?.quantity || 1));
+  const currentBaseProductId = Number(
+    currentItem?.base_product_id
+    || currentItem?.baseProductId
+    || currentItem?.id
+    || 0
+  );
+  const selectedProductId = Number(
+    newProduct?.id
+    || currentItem?.selected_product_id
+    || currentItem?.product_id
+    || currentItem?.id
+    || currentBaseProductId
+    || 0
+  );
+  const nextBaseProductId = isSiblingVariant
+    ? currentBaseProductId
+    : Number(
+      newProduct?.base_product_id
+      || newProduct?.baseProductId
+      || newProduct?.id
+      || currentBaseProductId
+      || 0
+    );
+  const bundleItemUid = String(
+    currentItem?.bundle_item_uid
+    || currentItem?.uid
+    || currentItem?.bundle_slot_key
+    || currentItem?.id
+    || `bundle-item-${fallbackIndex}`
+  );
+  const optionTitle = String(currentItem?.option_title || currentItem?.pivot?.option_title || '').trim();
+  const sourcePosition = Number(currentItem?.source_position ?? currentItem?.pivot?.position ?? fallbackIndex);
+  const resolvedVariantId = isSiblingVariant
+    ? (selectedProductId || null)
+    : (
+      newProduct?.variant_id
+      ?? newProduct?.pivot?.variant_id
+      ?? currentItem?.variant_id
+      ?? currentItem?.pivot?.variant_id
+      ?? null
+    );
+  const resolvedPrice = resolveBundleEntryUnitPrice(
+    newProduct,
+    currentItem?.price ?? currentItem?.unit_price ?? 0
+  );
+
+  return createBundleCartEntry({
+    ...currentItem,
+    ...cloneCartValue(newProduct),
+    id: selectedProductId || nextBaseProductId || currentBaseProductId,
+    product_id: selectedProductId || nextBaseProductId || currentBaseProductId,
+    selected_product_id: selectedProductId || nextBaseProductId || currentBaseProductId,
+    base_product_id: nextBaseProductId || currentBaseProductId || selectedProductId,
+    base_product_slug: isSiblingVariant
+      ? (currentItem?.base_product_slug || '')
+      : (newProduct?.base_product_slug || newProduct?.slug || currentItem?.base_product_slug || ''),
+    bundle_item_uid: bundleItemUid,
+    uid: bundleItemUid,
+    bundle_slot_key: currentItem?.bundle_slot_key,
+    option_title: optionTitle,
+    source_position: Number.isFinite(sourcePosition) ? sourcePosition : fallbackIndex,
+    name: newProduct?.name || currentItem?.name,
+    product_name: newProduct?.name || currentItem?.product_name || currentItem?.name,
+    sku: newProduct?.sku || currentItem?.sku,
+    product_sku: newProduct?.sku || currentItem?.product_sku || currentItem?.sku,
+    slug: newProduct?.slug || currentItem?.slug,
+    qty: preservedQty,
+    quantity: preservedQty,
+    price: resolvedPrice,
+    unit_price: resolvedPrice,
+    variant_id: resolvedVariantId,
+    pivot: {
+      ...cloneCartValue(currentItem?.pivot || {}),
+      ...cloneCartValue(newProduct?.pivot || {}),
+      option_title: optionTitle || newProduct?.pivot?.option_title,
+      position: Number.isFinite(sourcePosition) ? sourcePosition : fallbackIndex,
+      quantity: preservedQty,
+      variant_id: resolvedVariantId,
+    },
+  }, fallbackIndex);
+};
+
 export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -431,6 +534,30 @@ export function CartProvider({ children }) {
     )));
   };
 
+  const updateBundleItemProduct = (cartKey, bundleItemUid, newProduct) => {
+    setCartItems((prev) => prev.map((item) => {
+      if (item.cartKey !== cartKey || !Array.isArray(item.groupedItems) || item.groupedItems.length === 0) {
+        return item;
+      }
+
+      let hasChanges = false;
+      const nextGroupedItems = item.groupedItems.map((groupedItem, index) => {
+        const currentUid = String(groupedItem?.bundle_item_uid || groupedItem?.uid || groupedItem?.id || '');
+
+        if (currentUid !== String(bundleItemUid)) {
+          return groupedItem;
+        }
+
+        hasChanges = true;
+        return mergeBundleSelectionIntoEntry(groupedItem, newProduct, index);
+      });
+
+      return hasChanges
+        ? normalizeCartItem({ ...item, groupedItems: nextGroupedItems })
+        : item;
+    }));
+  };
+
   const clearCart = () => {
     setCartItems([]);
   };
@@ -476,6 +603,7 @@ export function CartProvider({ children }) {
         removeFromCart,
         updateQuantity,
         updateItem,
+        updateBundleItemProduct,
         clearCart,
         restoreCombo,
         cartCount,

@@ -31,6 +31,7 @@ use App\Services\Shipping\ShippingAlertService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Carbon;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -95,6 +96,8 @@ class OrderController extends Controller
         'khac' => 'Khác',
     ];
 
+    private const OUTSIDE_DELIVERY_TRACKING_PREFIX = 'shipngoai';
+    private const OUTSIDE_DELIVERY_TRACKING_SEQUENCE_START = 100;
     private const QUICK_DISPATCH_EXPORT_NOTE_PREFIX = 'Tu tao tu van chuyen';
     private const QUICK_DISPATCH_EXPORT_META_SOURCE = 'quick_dispatch';
 
@@ -605,8 +608,11 @@ class OrderController extends Controller
                     'order_id',
                     'account_id',
                     'product_id',
+                    'actual_product_id',
                     'product_name_snapshot',
+                    'actual_product_name_snapshot',
                     'product_sku_snapshot',
+                    'actual_product_sku_snapshot',
                     'sort_order',
                     'quantity',
                     'price',
@@ -619,6 +625,14 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->with([
+                            'unit:id,name',
+                            'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
+                                ->with(['unit:id,name']),
+                        ]),
+                    'actualProduct' => fn ($productQuery) => $productQuery
                         ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
                             'unit:id,name',
@@ -676,8 +690,11 @@ class OrderController extends Controller
                     'order_id',
                     'account_id',
                     'product_id',
+                    'actual_product_id',
                     'product_name_snapshot',
+                    'actual_product_name_snapshot',
                     'product_sku_snapshot',
+                    'actual_product_sku_snapshot',
                     'sort_order',
                     'quantity',
                     'price',
@@ -686,6 +703,7 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product:id,name,sku',
+                    'actualProduct:id,name,sku',
                 ]),
         ];
     }
@@ -707,9 +725,11 @@ class OrderController extends Controller
         $order->items->each(function (OrderItem $item) use (&$itemRevenue, &$currentCostTotal) {
             $quantity = (int) ($item->quantity ?? 0);
             $unitPrice = round((float) ($item->price ?? 0), 2);
-            $currentCostPrice = $this->resolveCurrentProductCost($item->product, $item->cost_price);
+            $orderedCurrentCostPrice = $this->resolveCurrentProductCost($item->product, $item->cost_price);
+            $currentCostPrice = $this->resolveCurrentProductCost($item->actualProduct ?: $item->product, $item->cost_price);
             $currentCostLineTotal = ImportCostRounding::lineTotal($currentCostPrice, $quantity);
 
+            $item->setAttribute('ordered_current_cost_price', $orderedCurrentCostPrice);
             $item->setAttribute('current_cost_price', $currentCostPrice);
             $item->setAttribute('current_cost_total', $currentCostLineTotal);
             $item->setAttribute('current_profit_total', round(($unitPrice * $quantity) - $currentCostLineTotal, 2));
@@ -733,7 +753,7 @@ class OrderController extends Controller
     {
         $order->refresh();
 
-        return [
+        return $this->appendOrderTimePayload([
             'id' => (int) $order->id,
             'order_number' => $order->order_number,
             'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
@@ -755,8 +775,70 @@ class OrderController extends Controller
             'shipping_status_source' => $order->shipping_status_source ?: self::SHIPPING_STATUS_SOURCE_MANUAL,
             'converted_from_order_id' => $order->converted_from_order_id,
             'converted_from_kind' => $order->converted_from_kind,
+            'created_at' => $order->created_at?->toISOString(),
             'updated_at' => $order->updated_at?->toISOString(),
-        ];
+        ], $order);
+    }
+
+    private function appendOrderTimePayload(array $payload, Order $order): array
+    {
+        return array_merge($payload, [
+            'draft_created_at' => $this->resolveOrderDraftCreatedAt($order)?->toISOString(),
+            'officialized_at' => $this->resolveOrderOfficializedAt($order)?->toISOString(),
+            'displayed_at' => $this->resolveOrderDisplayedAt($order)?->toISOString(),
+        ]);
+    }
+
+    private function normalizeOrderTimestamp(mixed $value): ?Carbon
+    {
+        if ($value instanceof Carbon) {
+            return $value;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value);
+        }
+
+        if (blank($value)) {
+            return null;
+        }
+
+        return Carbon::parse($value);
+    }
+
+    private function resolveOrderDraftCreatedAt(Order $order): ?Carbon
+    {
+        $draftCreatedAt = $this->normalizeOrderTimestamp($order->draft_created_at ?? null);
+
+        if ($draftCreatedAt) {
+            return $draftCreatedAt;
+        }
+
+        return $this->normalizeOrderKind((string) $order->order_kind) === self::ORDER_KIND_DRAFT
+            ? $this->normalizeOrderTimestamp($order->created_at)
+            : null;
+    }
+
+    private function resolveOrderOfficializedAt(Order $order): ?Carbon
+    {
+        $officializedAt = $this->normalizeOrderTimestamp($order->officialized_at ?? null);
+
+        if ($officializedAt) {
+            return $officializedAt;
+        }
+
+        return $this->normalizeOrderKind((string) $order->order_kind) === self::ORDER_KIND_OFFICIAL
+            ? $this->normalizeOrderTimestamp($order->created_at)
+            : null;
+    }
+
+    private function resolveOrderDisplayedAt(Order $order): ?Carbon
+    {
+        return match ($this->normalizeOrderKind((string) $order->order_kind)) {
+            self::ORDER_KIND_DRAFT => $this->resolveOrderDraftCreatedAt($order) ?: $this->normalizeOrderTimestamp($order->created_at),
+            self::ORDER_KIND_OFFICIAL => $this->resolveOrderOfficializedAt($order) ?: $this->normalizeOrderTimestamp($order->created_at),
+            default => $this->normalizeOrderTimestamp($order->created_at),
+        };
     }
 
     private function normalizeOrderKind(?string $orderKind): string
@@ -815,6 +897,42 @@ class OrderController extends Controller
         }
 
         return $tableExists;
+    }
+
+    private function orderDisplayTimestampSql(string $table = 'orders'): string
+    {
+        $createdAtSql = "{$table}.created_at";
+
+        if (!$this->orderTableHasColumn('order_kind')) {
+            return $createdAtSql;
+        }
+
+        $kindSql = "COALESCE({$table}.order_kind, '" . self::ORDER_KIND_OFFICIAL . "')";
+        $draftTimestampSql = $this->orderTableHasColumn('draft_created_at')
+            ? "COALESCE({$table}.draft_created_at, {$createdAtSql})"
+            : $createdAtSql;
+        $officialTimestampSql = $this->orderTableHasColumn('officialized_at')
+            ? "COALESCE({$table}.officialized_at, {$createdAtSql})"
+            : $createdAtSql;
+
+        return "CASE
+            WHEN {$kindSql} = '" . self::ORDER_KIND_DRAFT . "' THEN {$draftTimestampSql}
+            WHEN {$kindSql} = '" . self::ORDER_KIND_OFFICIAL . "' THEN {$officialTimestampSql}
+            ELSE {$createdAtSql}
+        END";
+    }
+
+    private function orderDisplayTimestampSelect(string $table = 'orders', string $alias = 'displayed_at')
+    {
+        return DB::raw($this->orderDisplayTimestampSql($table) . " as {$alias}");
+    }
+
+    private function applyOrderDisplayDateFilter($query, string $operator, string $date, string $table = 'orders'): void
+    {
+        $query->whereRaw(
+            'DATE(' . $this->orderDisplayTimestampSql($table) . ") {$operator} ?",
+            [$date]
+        );
     }
 
     private function filterPersistableOrderData(array $data): array
@@ -897,6 +1015,51 @@ class OrderController extends Controller
         ];
     }
 
+    private function initialOrderKindTimestampPayload(string $orderKind, ?Carbon $timestamp = null): array
+    {
+        $timestamp ??= now();
+        $orderKind = $this->normalizeOrderKind($orderKind);
+        $payload = [];
+
+        if ($orderKind === self::ORDER_KIND_DRAFT && $this->orderTableHasColumn('draft_created_at')) {
+            $payload['draft_created_at'] = $timestamp;
+        }
+
+        if ($orderKind === self::ORDER_KIND_OFFICIAL && $this->orderTableHasColumn('officialized_at')) {
+            $payload['officialized_at'] = $timestamp;
+        }
+
+        return $payload;
+    }
+
+    private function convertedOrderKindTimestampPayload(Order $order, string $targetKind, ?Carbon $timestamp = null): array
+    {
+        $timestamp ??= now();
+        $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+        $targetKind = $this->normalizeOrderKind($targetKind);
+        $payload = [];
+
+        if ($targetKind === self::ORDER_KIND_DRAFT && $this->orderTableHasColumn('draft_created_at')) {
+            $payload['draft_created_at'] = $timestamp;
+        }
+
+        if ($targetKind === self::ORDER_KIND_OFFICIAL) {
+            if ($this->orderTableHasColumn('officialized_at')) {
+                $payload['officialized_at'] = $timestamp;
+            }
+
+            if (
+                $currentKind === self::ORDER_KIND_DRAFT
+                && $this->orderTableHasColumn('draft_created_at')
+                && !$this->normalizeOrderTimestamp($order->draft_created_at ?? null)
+            ) {
+                $payload['draft_created_at'] = $this->normalizeOrderTimestamp($order->created_at) ?: $timestamp;
+            }
+        }
+
+        return $payload;
+    }
+
     private function shouldManageInventory(string $orderKind): bool
     {
         return $this->normalizeOrderKind($orderKind) === self::ORDER_KIND_OFFICIAL;
@@ -916,10 +1079,9 @@ class OrderController extends Controller
         };
     }
 
-    private function withOrderNumberLock(string $orderKind, callable $callback)
+    private function withNamedLock(string $lockName, callable $callback)
     {
         $connection = DB::connection();
-        $lockName = 'orders:order-number:' . $this->orderNumberPrefix($orderKind);
         $driver = $connection->getDriverName();
 
         if ($driver === 'mysql') {
@@ -953,14 +1115,29 @@ class OrderController extends Controller
         return $callback();
     }
 
+    private function withOrderNumberLock(string $orderKind, callable $callback)
+    {
+        return $this->withNamedLock(
+            'orders:order-number:' . $this->orderNumberPrefix($orderKind),
+            $callback
+        );
+    }
+
     private function isOrderNumberUniqueViolation(QueryException $exception): bool
     {
-        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
         $message = Str::lower($exception->getMessage());
 
         if (!Str::contains($message, ['order_number', 'orders.order_number', 'orders_order_number_unique'])) {
             return false;
         }
+
+        return $this->isUniqueConstraintViolation($exception);
+    }
+
+    private function isUniqueConstraintViolation(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $message = Str::lower($exception->getMessage());
 
         return in_array($sqlState, ['23000', '23505', '19'], true)
             || Str::contains($message, ['duplicate', 'unique', 'constraint']);
@@ -1150,13 +1327,20 @@ class OrderController extends Controller
             ->unique()
             ->values()
             ->all();
+        $actualProductIds = $normalizedItems->pluck('actual_product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $requestedProductIds = array_values(array_unique(array_merge($productIds, $actualProductIds)));
 
         $products = Product::query()
-            ->whereIn('id', $productIds)
+            ->whereIn('id', $requestedProductIds)
             ->get()
             ->keyBy('id');
 
-        if (count($productIds) !== $products->count()) {
+        if (count($requestedProductIds) !== $products->count()) {
             throw ValidationException::withMessages([
                 'items' => 'Có sản phẩm không tồn tại hoặc không thuộc cửa hàng hiện tại.',
             ]);
@@ -1167,17 +1351,32 @@ class OrderController extends Controller
         foreach ($normalizedItems as $item) {
             /** @var Product $product */
             $product = $products->get((int) $item['product_id']);
+            /** @var Product|null $actualProduct */
+            $actualProduct = null;
+            $actualProductId = (int) ($item['actual_product_id'] ?? 0);
+            if ($actualProductId > 0) {
+                $actualProduct = $products->get($actualProductId);
+            }
             $quantity = (int) $item['quantity'];
             $price = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $costPrice = ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
+            $costPrice = $actualProduct
+                ? ImportCostRounding::roundUnitCost($actualProduct->cost_price ?? $actualProduct->expected_cost ?? $item['cost_price'] ?? 0)
+                : ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
             $costTotal = ImportCostRounding::lineTotal($costPrice, $quantity);
             $profitTotal = round(($price * $quantity) - $costTotal, 2);
 
             $createdItems[] = $order->items()->create([
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
+                'actual_product_id' => $actualProduct?->id,
                 'product_name_snapshot' => $item['name'] ?? $product->name,
+                'actual_product_name_snapshot' => $actualProduct
+                    ? ($item['actual_name'] ?? $item['actual_product_name_snapshot'] ?? $actualProduct->name)
+                    : null,
                 'product_sku_snapshot' => $item['sku'] ?? $product->sku,
+                'actual_product_sku_snapshot' => $actualProduct
+                    ? ($item['actual_sku'] ?? $item['actual_product_sku_snapshot'] ?? $actualProduct->sku)
+                    : null,
                 'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,
                 'price' => $price,
@@ -1230,13 +1429,24 @@ class OrderController extends Controller
 
     private function syncOrderAttributes(Order $order, array $customAttributes = []): void
     {
+        $customAttributes = collect($customAttributes)
+            ->mapWithKeys(function ($value, $attrCode) {
+                $normalizedCode = trim((string) $attrCode);
+
+                return $normalizedCode === ''
+                    ? []
+                    : [$normalizedCode => $value];
+            })
+            ->all();
+
         if (empty($customAttributes)) {
             return;
         }
 
         $attrCodes = array_keys($customAttributes);
-        $existingAttrs = \App\Models\Attribute::query()
-            ->where('account_id', $order->account_id)
+        // Some deployments still keep attributes.code globally unique, so reuse
+        // existing codes even when they originated from another entity type.
+        $existingAttrs = Attribute::withoutGlobalScope('account_id')
             ->whereIn('code', $attrCodes)
             ->get()
             ->keyBy('code');
@@ -1245,12 +1455,35 @@ class OrderController extends Controller
             $attribute = $existingAttrs->get($attrCode);
 
             if (!$attribute) {
-                $attribute = \App\Models\Attribute::create([
+                $attributePayload = [
                     'account_id' => $order->account_id,
+                    'entity_type' => 'order',
                     'code' => $attrCode,
                     'name' => ucwords(str_replace('_', ' ', $attrCode)),
                     'frontend_type' => 'text',
-                ]);
+                    'status' => true,
+                ];
+
+                if (\App\Models\Attribute::hasSortOrderColumn()) {
+                    $attributePayload['sort_order'] = \App\Models\Attribute::nextSortOrderFor('order', $order->account_id);
+                }
+
+                try {
+                    $attribute = Attribute::create($attributePayload);
+                } catch (QueryException $exception) {
+                    if (!$this->isUniqueConstraintViolation($exception)) {
+                        throw $exception;
+                    }
+
+                    $attribute = Attribute::withoutGlobalScope('account_id')
+                        ->where('code', $attrCode)
+                        ->first();
+
+                    if (!$attribute) {
+                        throw $exception;
+                    }
+                }
+
                 $existingAttrs->put($attrCode, $attribute);
             }
 
@@ -1487,9 +1720,12 @@ class OrderController extends Controller
 
         return $this->runOrderNumberMutation($targetKind, function () use ($original, $targetKind) {
             return DB::transaction(function () use ($original, $targetKind) {
+                $recordedAt = now();
                 $newOrder = $original->replicate([
                     'order_number',
                     'customer_id',
+                    'draft_created_at',
+                    'officialized_at',
                     'shipping_status',
                     'shipping_synced_at',
                     'shipping_status_source',
@@ -1514,7 +1750,8 @@ class OrderController extends Controller
                 $newOrder->shipment_status = 'Chưa giao';
                 $newOrder->forceFill($this->filterPersistableOrderData(array_merge(
                     $this->freshShippingState(),
-                    $this->supplementReturnTrackingPayload((string) $newOrder->order_type)
+                    $this->supplementReturnTrackingPayload((string) $newOrder->order_type),
+                    $this->initialOrderKindTimestampPayload($targetKind, $recordedAt)
                 )));
                 $newOrder->save();
 
@@ -1593,6 +1830,8 @@ class OrderController extends Controller
 
         return $this->runOrderNumberMutation($targetKind, function () use ($order, $targetKind, $currentKind) {
             return DB::transaction(function () use ($order, $targetKind, $currentKind) {
+                $transitionedAt = now();
+
                 if ($this->shouldManageInventory($currentKind)) {
                     $this->releaseInventoryIfNeeded($order);
                     $this->removeOfficialSideEffects($order);
@@ -1604,7 +1843,7 @@ class OrderController extends Controller
                     'converted_from_kind' => $currentKind,
                     'order_number' => $this->generateOrderNumber($targetKind, $order->id),
                     'status' => $this->defaultStatusForKind($order->account_id, $targetKind, $order->status),
-                ], $this->freshShippingState()))->save();
+                ], $this->freshShippingState(), $this->convertedOrderKindTimestampPayload($order, $targetKind, $transitionedAt)))->save();
 
                 if ($this->shouldManageInventory($targetKind)) {
                     $summary = $this->reserveInventoryIfNeeded($order);
@@ -1634,6 +1873,75 @@ class OrderController extends Controller
         );
 
         return $shipmentNumber;
+    }
+
+    private function generateOutsideDeliveryTrackingCode(): string
+    {
+        $prefix = self::OUTSIDE_DELIVERY_TRACKING_PREFIX;
+        $likePattern = $prefix . '%';
+        $normalizedLikePattern = Str::lower($likePattern);
+        $matchPattern = '/^' . preg_quote($prefix, '/') . '(\d+)$/';
+
+        return $this->withNamedLock('orders:outside-delivery-tracking', function () use ($matchPattern, $normalizedLikePattern, $prefix) {
+            $orderCodes = Order::withoutGlobalScope('account_id')
+                ->withTrashed()
+                ->whereRaw('LOWER(shipping_tracking_code) LIKE ?', [$normalizedLikePattern])
+                ->pluck('shipping_tracking_code');
+
+            $shipmentCodes = Shipment::withoutGlobalScopes()
+                ->withTrashed()
+                ->where(function ($query) use ($normalizedLikePattern) {
+                    $query
+                        ->whereRaw('LOWER(tracking_number) LIKE ?', [$normalizedLikePattern])
+                        ->orWhereRaw('LOWER(carrier_tracking_code) LIKE ?', [$normalizedLikePattern]);
+                })
+                ->get(['tracking_number', 'carrier_tracking_code'])
+                ->flatMap(function (Shipment $shipment) {
+                    return array_filter([
+                        $shipment->tracking_number,
+                        $shipment->carrier_tracking_code,
+                    ], static fn ($value) => filled($value));
+                });
+
+            $maxSequence = $orderCodes
+                ->concat($shipmentCodes)
+                ->reduce(function (int $carry, $value) use ($matchPattern) {
+                    $normalizedValue = Str::lower(trim((string) $value));
+
+                    if (!preg_match($matchPattern, $normalizedValue, $matches)) {
+                        return $carry;
+                    }
+
+                    return max($carry, (int) ($matches[1] ?? 0));
+                }, self::OUTSIDE_DELIVERY_TRACKING_SEQUENCE_START - 1);
+
+            $nextSequence = max(self::OUTSIDE_DELIVERY_TRACKING_SEQUENCE_START, $maxSequence + 1);
+
+            while (true) {
+                $candidate = $prefix . $nextSequence;
+                $normalizedCandidate = Str::lower($candidate);
+
+                $orderExists = Order::withoutGlobalScope('account_id')
+                    ->withTrashed()
+                    ->whereRaw('LOWER(shipping_tracking_code) = ?', [$normalizedCandidate])
+                    ->exists();
+
+                $shipmentExists = Shipment::withoutGlobalScopes()
+                    ->withTrashed()
+                    ->where(function ($query) use ($normalizedCandidate) {
+                        $query
+                            ->whereRaw('LOWER(tracking_number) = ?', [$normalizedCandidate])
+                            ->orWhereRaw('LOWER(carrier_tracking_code) = ?', [$normalizedCandidate]);
+                    })
+                    ->exists();
+
+                if (!$orderExists && !$shipmentExists) {
+                    return $candidate;
+                }
+
+                $nextSequence++;
+            }
+        });
     }
 
     private function resolveManualCarrierMeta(string $carrierName): array
@@ -1919,6 +2227,7 @@ class OrderController extends Controller
 
             $meta = $this->buildOutsideDeliveryMetaPayload($shipmentInput);
             $carrierSummary = $this->buildOutsideDeliverySummary($meta);
+            $trackingCode = $this->generateOutsideDeliveryTrackingCode();
             $now = now();
 
             \App\Models\OrderStatusLog::query()->create([
@@ -1940,7 +2249,7 @@ class OrderController extends Controller
                 'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
                 'shipping_carrier_code' => self::OUTSIDE_DELIVERY_CARRIER_CODE,
                 'shipping_carrier_name' => $carrierSummary,
-                'shipping_tracking_code' => null,
+                'shipping_tracking_code' => $trackingCode,
                 'shipping_dispatched_at' => $now,
                 'shipping_issue_code' => null,
                 'shipping_issue_message' => null,
@@ -2149,10 +2458,10 @@ class OrderController extends Controller
                 $q->whereIn('status', $statuses);
             })
             ->when($request->filled('created_at_from'), function ($q) use ($request) {
-                $q->whereDate('created_at', '>=', $request->input('created_at_from'));
+                $this->applyOrderDisplayDateFilter($q, '>=', (string) $request->input('created_at_from'));
             })
             ->when($request->filled('created_at_to'), function ($q) use ($request) {
-                $q->whereDate('created_at', '<=', $request->input('created_at_to'));
+                $this->applyOrderDisplayDateFilter($q, '<=', (string) $request->input('created_at_to'));
             })
             ->when($request->filled('shipping_carrier_code'), function ($q) use ($request) {
                 $q->where('shipping_carrier_code', $request->input('shipping_carrier_code'));
@@ -2220,6 +2529,7 @@ class OrderController extends Controller
 
             return array_merge(
                 $payload,
+                $this->appendOrderTimePayload([], $order),
                 $this->repeatPhoneMetaForOrder($repeatMetaMap, (int) $order->id),
                 [
                     'inventory_slip_summary' => $inventorySlipSummaryMap[(int) $order->id] ?? null,
@@ -2308,7 +2618,7 @@ class OrderController extends Controller
             ->with('options')
             ->byEntityType($entityType)
             ->where('status', true)
-            ->orderBy('name')
+            ->ordered()
             ->get()
             ->toArray();
     }
@@ -2364,7 +2674,7 @@ class OrderController extends Controller
                     'shipping_address' => $this->buildPrintableAddress($order),
                     'notes' => trim((string) $order->notes),
                     'total_payment' => (float) $order->total_price,
-                    'created_at' => $order->created_at?->toISOString(),
+                    'created_at' => $this->resolveOrderDisplayedAt($order)?->toISOString(),
                     'items' => $order->items
                         ->map(function (OrderItem $item) {
                             $productName = trim((string) ($item->product_name_snapshot ?: $item->product?->name ?: ('Sản phẩm #' . $item->product_id)));
@@ -2614,6 +2924,7 @@ class OrderController extends Controller
             ->select($this->selectExistingOrderColumns([
                 'id', 'order_number', 'total_price', 'status', 'customer_name', 
                 'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
+                'draft_created_at', 'officialized_at',
                 'print_count', 'last_printed_at',
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
@@ -2621,7 +2932,8 @@ class OrderController extends Controller
                 'external_delivery_meta',
                 'shipping_issue_code', 'shipping_issue_message', 'shipping_issue_detected_at',
                 'deleted_at',
-            ]));
+            ]))
+            ->addSelect($this->orderDisplayTimestampSelect('orders'));
 
         // Eager load only what is needed for the table
         $query->with([
@@ -2631,8 +2943,11 @@ class OrderController extends Controller
                     'order_id',
                     'account_id',
                     'product_id',
+                    'actual_product_id',
                     'product_name_snapshot',
+                    'actual_product_name_snapshot',
                     'product_sku_snapshot',
+                    'actual_product_sku_snapshot',
                     'sort_order',
                     'quantity',
                     'price',
@@ -2641,6 +2956,8 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku']),
+                    'actualProduct' => fn ($productQuery) => $productQuery
                         ->select(['id', 'name', 'sku']),
                 ]),
             'attributeValues:id,order_id,attribute_id,value',
@@ -2661,7 +2978,11 @@ class OrderController extends Controller
         } else {
             $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status', 'shipping_dispatched_at'];
             $field = in_array($sortBy, $validSortFields) ? $sortBy : 'created_at';
-            $query->orderBy($field, $sortOrder);
+            if ($field === 'created_at') {
+                $query->orderByRaw($this->orderDisplayTimestampSql('orders') . ' ' . ($sortOrder === 'asc' ? 'asc' : 'desc'));
+            } else {
+                $query->orderBy($field, $sortOrder);
+            }
         }
 
         $perPage = (int) $request->input('per_page', 20);
@@ -2715,14 +3036,17 @@ class OrderController extends Controller
         }
 
         $query = $this->scopedOrderQuery($request)
-            ->select([
+            ->select($this->selectExistingOrderColumns([
                 'id',
                 'order_number',
                 'customer_name',
                 'status',
                 'order_kind',
                 'created_at',
-            ]);
+                'draft_created_at',
+                'officialized_at',
+            ]))
+            ->addSelect($this->orderDisplayTimestampSelect('orders'));
 
         $this->applyOrderListFilters($query, $request);
 
@@ -2734,7 +3058,7 @@ class OrderController extends Controller
         });
 
         $candidates = $query
-            ->orderByDesc('created_at')
+            ->orderByRaw($this->orderDisplayTimestampSql('orders') . ' desc')
             ->orderByDesc('id')
             ->get()
             ->map(function (Order $order) {
@@ -2745,6 +3069,9 @@ class OrderController extends Controller
                     'status' => (string) ($order->status ?? ''),
                     'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
                     'created_at' => $order->created_at?->toISOString(),
+                    'draft_created_at' => $this->resolveOrderDraftCreatedAt($order)?->toISOString(),
+                    'officialized_at' => $this->resolveOrderOfficializedAt($order)?->toISOString(),
+                    'displayed_at' => $this->resolveOrderDisplayedAt($order)?->toISOString(),
                     'normalized_order_number' => $this->normalizeSearchText((string) $order->order_number),
                 ];
             })
@@ -2761,6 +3088,9 @@ class OrderController extends Controller
             'status' => $candidate['status'],
             'order_kind' => $candidate['order_kind'],
             'created_at' => $candidate['created_at'],
+            'draft_created_at' => $candidate['draft_created_at'],
+            'officialized_at' => $candidate['officialized_at'],
+            'displayed_at' => $candidate['displayed_at'],
         ];
 
         foreach ($preparedCodes as $preparedCode) {
@@ -2953,6 +3283,7 @@ class OrderController extends Controller
 
         return $this->runOrderNumberMutation($orderKind, function () use ($request, $accountId, $rawItems, $orderKind, $orderType) {
             return DB::transaction(function () use ($request, $accountId, $rawItems, $orderKind, $orderType) {
+                $recordedAt = now();
                 $lead = null;
             if ($request->filled('lead_id')) {
                 $lead = \App\Models\Lead::query()
@@ -3003,7 +3334,7 @@ class OrderController extends Controller
                 'report_revenue_total' => 0,
                 'report_cost_total' => 0,
                 'report_profit_total' => 0,
-            ], $this->freshShippingState(), $returnTrackingData)));
+            ], $this->freshShippingState(), $returnTrackingData, $this->initialOrderKindTimestampPayload($orderKind, $recordedAt))));
 
             $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
             $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
@@ -3102,12 +3433,18 @@ class OrderController extends Controller
                 'report_cost_total',
                 'report_profit_total',
                 'created_at',
+                'draft_created_at',
+                'officialized_at',
                 'updated_at',
             ]))
+            ->addSelect($this->orderDisplayTimestampSelect('orders'))
             ->with($this->orderDetailRelations())
             ->findOrFail((int) $id);
 
         $this->appendCurrentCostMetrics($order);
+        $order->setAttribute('draft_created_at', $this->resolveOrderDraftCreatedAt($order));
+        $order->setAttribute('officialized_at', $this->resolveOrderOfficializedAt($order));
+        $order->setAttribute('displayed_at', $this->resolveOrderDisplayedAt($order));
 
         return response()->json($order);
     }
@@ -3154,6 +3491,9 @@ class OrderController extends Controller
                 'notes',
                 'total_price',
                 'created_at',
+                'draft_created_at',
+                'officialized_at',
+                'order_kind',
             ])
             ->with($this->orderPrintRelations())
             ->get()
@@ -3167,6 +3507,115 @@ class OrderController extends Controller
         return response()->json([
             'data' => $this->transformPrintableOrders($orders),
         ]);
+    }
+
+    private function persistOrderMutation(Order $order, Request $request, ?string $forcedTargetKind = null): Order
+    {
+        $requestedKind = $this->normalizeOrderKind($forcedTargetKind ?? $request->input('order_kind', $order->order_kind));
+        $requestedOrderType = $this->normalizeOrderType($request->input('order_type', $order->order_type));
+        $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+        $hasSupplementItems = collect((array) $request->input('supplement_items', []))
+            ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
+
+        $this->ensureRequestedOrderSchemaSupport($requestedKind, $requestedOrderType, $hasSupplementItems);
+
+        if ($this->requiresOfficialValidation($requestedKind)) {
+            $this->validateOfficialOrderPayload([
+                'province' => $request->input('province', $order->province),
+                'district' => $request->input('district', $order->district),
+                'ward' => $request->input('ward', $order->ward),
+                'shipping_address' => $request->input('shipping_address', $order->shipping_address),
+            ], (string) $request->input('region_type', 'new'));
+        } elseif ($this->allowsEmptyItems($requestedKind)) {
+            $this->validateDraftOrderPayload([
+                'customer_name' => $request->input('customer_name', $order->customer_name),
+                'customer_phone' => $request->input('customer_phone', $order->customer_phone),
+            ]);
+        }
+
+        $data = $this->normalizePersistedOrderTextFields($request->only([
+            'order_number', 'customer_name', 'customer_email', 'customer_phone',
+            'shipping_address', 'province', 'district', 'ward', 'notes', 'source',
+            'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
+        ]));
+        $data['order_type'] = $requestedOrderType;
+        $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
+            ? 0
+            : (float) $request->input('settlement_delta', $order->settlement_delta ?? 0);
+        $data = array_merge(
+            $data,
+            $this->supplementReturnTrackingPayload(
+                $requestedOrderType,
+                $request->input('return_tracking_code', $order->return_tracking_code),
+                $request->input('return_status', $order->return_status)
+            )
+        );
+
+        if (!$this->shouldManageInventory($requestedKind)) {
+            $data = array_merge($data, $this->freshShippingState());
+        } elseif (!$order->hasActiveShipment() && blank($order->shipping_status_source)) {
+            $data['shipping_status_source'] = self::SHIPPING_STATUS_SOURCE_MANUAL;
+        }
+
+        $data = $this->filterPersistableOrderData($data);
+
+        $order->update($data);
+
+        if ($request->has('items')) {
+            if ($this->shouldManageInventory($currentKind)) {
+                $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
+            }
+            $order->items()->delete();
+            $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
+                ? $currentKind
+                : $requestedKind;
+            $inventorySummary = $this->syncOrderItems($order, (array) $request->input('items', []), $itemSyncKind);
+            $itemRevenue = $inventorySummary['total_price'];
+            $costTotal = $inventorySummary['cost_total'];
+        } else {
+            $itemRevenue = (float) $order->items()->sum(DB::raw('price * quantity'));
+            $costTotal = (float) $order->items()->sum('cost_total');
+        }
+
+        $supplementSummary = $request->has('supplement_items') || $requestedOrderType === self::ORDER_TYPE_STANDARD
+            ? $this->syncSupplementItems(
+                $order,
+                $requestedOrderType === self::ORDER_TYPE_STANDARD
+                    ? []
+                    : (array) $request->input('supplement_items', [])
+            )
+            : [
+                'total_price' => (float) ($order->supplement_items_total_price ?? 0),
+                'cost_total' => (float) ($order->supplement_items_cost_total ?? 0),
+            ];
+
+        $this->recalculateOrderTotals(
+            $order,
+            (float) $itemRevenue,
+            (float) $costTotal,
+            $requestedOrderType,
+            (float) $data['settlement_delta'],
+            (float) ($supplementSummary['total_price'] ?? 0),
+            (float) ($supplementSummary['cost_total'] ?? 0)
+        );
+
+        if ($request->has('custom_attributes')) {
+            $this->syncOrderAttributes($order, (array) $request->input('custom_attributes', []));
+        }
+
+        if ($currentKind !== $requestedKind) {
+            $order = $this->convertOrderToKind($order->fresh(['items', 'attributeValues']), $requestedKind, [
+                'province' => $request->input('province', $order->province),
+                'district' => $request->input('district', $order->district),
+                'ward' => $request->input('ward', $order->ward),
+                'shipping_address' => $request->input('shipping_address', $order->shipping_address),
+                'region_type' => $request->input('region_type', 'new'),
+            ]);
+        } elseif ($this->shouldManageInventory($requestedKind)) {
+            $this->syncOfficialCustomerAndInvoice($order, false);
+        }
+
+        return $order;
     }
 
     public function update(Request $request, $id)
@@ -3219,113 +3668,9 @@ class OrderController extends Controller
         }
 
         return DB::transaction(function () use ($request, $order) {
-            $requestedKind = $this->normalizeOrderKind($request->input('order_kind', $order->order_kind));
-            $requestedOrderType = $this->normalizeOrderType($request->input('order_type', $order->order_type));
-            $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
-            $hasSupplementItems = collect((array) $request->input('supplement_items', []))
-                ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
-
-            $this->ensureRequestedOrderSchemaSupport($requestedKind, $requestedOrderType, $hasSupplementItems);
-
-            if ($this->requiresOfficialValidation($requestedKind)) {
-                $this->validateOfficialOrderPayload([
-                    'province' => $request->input('province', $order->province),
-                    'district' => $request->input('district', $order->district),
-                    'ward' => $request->input('ward', $order->ward),
-                    'shipping_address' => $request->input('shipping_address', $order->shipping_address),
-                ], (string) $request->input('region_type', 'new'));
-            } elseif ($this->allowsEmptyItems($requestedKind)) {
-                $this->validateDraftOrderPayload([
-                    'customer_name' => $request->input('customer_name', $order->customer_name),
-                    'customer_phone' => $request->input('customer_phone', $order->customer_phone),
-                ]);
-            }
-
-            $data = $this->normalizePersistedOrderTextFields($request->only([
-                'order_number', 'customer_name', 'customer_email', 'customer_phone', 
-                'shipping_address', 'province', 'district', 'ward', 'notes', 'source', 
-                'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
-            ]));
-            $data['order_type'] = $requestedOrderType;
-            $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
-                ? 0
-                : (float) $request->input('settlement_delta', $order->settlement_delta ?? 0);
-            $data = array_merge(
-                $data,
-                $this->supplementReturnTrackingPayload(
-                    $requestedOrderType,
-                    $request->input('return_tracking_code', $order->return_tracking_code),
-                    $request->input('return_status', $order->return_status)
-                )
-            );
-
-            if (!$this->shouldManageInventory($requestedKind)) {
-                $data = array_merge($data, $this->freshShippingState());
-            } elseif (!$order->hasActiveShipment() && blank($order->shipping_status_source)) {
-                $data['shipping_status_source'] = self::SHIPPING_STATUS_SOURCE_MANUAL;
-            }
-
-            $data = $this->filterPersistableOrderData($data);
-
-            $order->update($data);
-
-            // Sync items if provided
-            if ($request->has('items')) {
-                if ($this->shouldManageInventory($currentKind)) {
-                    $this->releaseInventoryIfNeeded($order->forceFill(['order_kind' => $currentKind]));
-                }
-                $order->items()->delete();
-                $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
-                    ? $currentKind
-                    : $requestedKind;
-                $inventorySummary = $this->syncOrderItems($order, (array) $request->input('items', []), $itemSyncKind);
-                $itemRevenue = $inventorySummary['total_price'];
-                $costTotal = $inventorySummary['cost_total'];
-            } else {
-                $itemRevenue = (float) $order->items()->sum(DB::raw('price * quantity'));
-                $costTotal = (float) $order->items()->sum('cost_total');
-            }
-
-            $supplementSummary = $request->has('supplement_items') || $requestedOrderType === self::ORDER_TYPE_STANDARD
-                ? $this->syncSupplementItems(
-                    $order,
-                    $requestedOrderType === self::ORDER_TYPE_STANDARD
-                        ? []
-                        : (array) $request->input('supplement_items', [])
-                )
-                : [
-                    'total_price' => (float) ($order->supplement_items_total_price ?? 0),
-                    'cost_total' => (float) ($order->supplement_items_cost_total ?? 0),
-                ];
-
-            $this->recalculateOrderTotals(
-                $order,
-                (float) $itemRevenue,
-                (float) $costTotal,
-                $requestedOrderType,
-                (float) $data['settlement_delta'],
-                (float) ($supplementSummary['total_price'] ?? 0),
-                (float) ($supplementSummary['cost_total'] ?? 0)
-            );
-
-            // Sync Order EAV custom attributes
-            if ($request->has('custom_attributes')) {
-                $this->syncOrderAttributes($order, (array) $request->input('custom_attributes', []));
-            }
-
-            if ($currentKind !== $requestedKind) {
-                $order = $this->convertOrderToKind($order->fresh(['items', 'attributeValues']), $requestedKind, [
-                    'province' => $request->input('province', $order->province),
-                    'district' => $request->input('district', $order->district),
-                    'ward' => $request->input('ward', $order->ward),
-                    'shipping_address' => $request->input('shipping_address', $order->shipping_address),
-                    'region_type' => $request->input('region_type', 'new'),
-                ]);
-            } elseif ($this->shouldManageInventory($requestedKind)) {
-                $this->syncOfficialCustomerAndInvoice($order, false);
-            }
-
-            return response()->json($this->mutationResponsePayload($order));
+            return response()->json($this->mutationResponsePayload(
+                $this->persistOrderMutation($order, $request)
+            ));
         });
     }
 
@@ -3491,12 +3836,14 @@ class OrderController extends Controller
         $order = $this->scopedOrderQuery($request)
             ->with(['items', 'attributeValues', 'shipments', 'inventoryDocuments'])
             ->findOrFail($id);
+        $targetKind = $this->normalizeOrderKind((string) $request->input('target_kind'));
+        $this->guardConvertOrderKind($order, $targetKind);
 
-        return response()->json(
-            $this->mutationResponsePayload(
-                $this->convertOrderToKind($order, (string) $request->input('target_kind'), $request->all())
-            )
-        );
+        return DB::transaction(function () use ($request, $order, $targetKind) {
+            return response()->json($this->mutationResponsePayload(
+                $this->persistOrderMutation($order, $request, $targetKind)
+            ));
+        });
     }
 
     public function updateStatus(Request $request, $id)
@@ -3976,7 +4323,7 @@ class OrderController extends Controller
                         'dispatch_mode' => self::QUICK_DISPATCH_MODE_OUTSIDE_DELIVERY,
                         'shipment_id' => null,
                         'shipment_number' => null,
-                        'tracking_number' => null,
+                        'tracking_number' => $updatedOrder->shipping_tracking_code,
                     ];
 
                     continue;

@@ -23,9 +23,38 @@
   animation: modalIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
+.modalOverlaySheet,
+.modalContentSheet {
+  width: 100%;
+}
+
+.modalSheetHandleWrap {
+  display: none;
+}
+
+.modalSheetHandle {
+  display: block;
+  width: 56px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(27, 54, 93, 0.16);
+}
+
 @keyframes modalIn {
   from { opacity: 0; transform: scale(0.9) translateY(20px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modalSheetIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .modalHeader {
@@ -370,6 +399,17 @@
   box-shadow: 0 0 0 2px rgba(27, 54, 93, 0.15);
 }
 
+.productCardDisabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.productCardDisabled:hover {
+  border-color: rgba(27, 54, 93, 0.08);
+  box-shadow: none;
+  transform: none;
+}
+
 .currentBadge {
   position: absolute;
   top: 6px;
@@ -466,6 +506,13 @@
 
 .productCardActive .productCardSelectBtn {
   background: #059669;
+}
+
+.productCardSelectBtnDisabled,
+.productCardSelectBtnDisabled:hover {
+  background: #d0d7e2;
+  color: rgba(27, 54, 93, 0.62);
+  cursor: not-allowed;
 }
 
 .switchModeBtn {
@@ -1399,10 +1446,31 @@
     padding: var(--bundle-mobile-modal-offset, 0.45rem) 0.45rem 0.45rem;
   }
 
+  .modalOverlaySheet {
+    align-items: flex-end;
+    justify-content: stretch;
+    padding: 0;
+  }
+
   .modalContent {
     max-width: 100%;
     max-height: calc(100dvh - var(--bundle-mobile-modal-offset, 0.45rem) - 0.45rem);
     border-radius: 18px;
+  }
+
+  .modalContentSheet {
+    max-width: 100%;
+    width: 100%;
+    max-height: calc(100dvh - var(--bundle-mobile-modal-offset, 0.45rem));
+    border-radius: 24px 24px 0 0;
+    animation: modalSheetIn 0.28s ease-out;
+  }
+
+  .modalSheetHandleWrap {
+    display: flex;
+    justify-content: center;
+    padding: 0.65rem 0 0.1rem;
+    background: white;
   }
 
   .modalHeader {
@@ -1509,6 +1577,10 @@
 
   .productCardActive {
     box-shadow: 0 0 0 1.5px rgba(27, 54, 93, 0.16);
+  }
+
+  .productCardDisabled {
+    opacity: 0.58;
   }
 
   .currentBadge {

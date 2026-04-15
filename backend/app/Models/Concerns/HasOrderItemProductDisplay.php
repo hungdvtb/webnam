@@ -11,11 +11,18 @@ trait HasOrderItemProductDisplay
         $this->appends = array_values(array_unique(array_merge($this->appends ?? [], [
             'snapshot_name',
             'snapshot_sku',
+            'actual_snapshot_name',
+            'actual_snapshot_sku',
             'current_product_name',
             'current_product_sku',
+            'current_actual_product_name',
+            'current_actual_product_sku',
             'display_name',
             'display_sku',
+            'actual_display_name',
+            'actual_display_sku',
             'has_product_snapshot_mismatch',
+            'has_actual_product_override',
         ])));
     }
 
@@ -26,6 +33,17 @@ trait HasOrderItemProductDisplay
         }
 
         $product = $this->getRelation('product');
+
+        return $product instanceof Product ? $product : null;
+    }
+
+    protected function loadedActualProductForDisplay(): ?Product
+    {
+        if (!$this->relationLoaded('actualProduct')) {
+            return null;
+        }
+
+        $product = $this->getRelation('actualProduct');
 
         return $product instanceof Product ? $product : null;
     }
@@ -47,6 +65,16 @@ trait HasOrderItemProductDisplay
         return $this->normalizeProductIdentity($this->attributes['product_sku_snapshot'] ?? null);
     }
 
+    public function getActualSnapshotNameAttribute(): ?string
+    {
+        return $this->normalizeProductIdentity($this->attributes['actual_product_name_snapshot'] ?? null);
+    }
+
+    public function getActualSnapshotSkuAttribute(): ?string
+    {
+        return $this->normalizeProductIdentity($this->attributes['actual_product_sku_snapshot'] ?? null);
+    }
+
     public function getCurrentProductNameAttribute(): ?string
     {
         return $this->normalizeProductIdentity($this->loadedProductForDisplay()?->name);
@@ -57,17 +85,48 @@ trait HasOrderItemProductDisplay
         return $this->normalizeProductIdentity($this->loadedProductForDisplay()?->sku);
     }
 
+    public function getCurrentActualProductNameAttribute(): ?string
+    {
+        return $this->normalizeProductIdentity($this->loadedActualProductForDisplay()?->name);
+    }
+
+    public function getCurrentActualProductSkuAttribute(): ?string
+    {
+        return $this->normalizeProductIdentity($this->loadedActualProductForDisplay()?->sku);
+    }
+
     public function getDisplayNameAttribute(): string
     {
         return $this->getCurrentProductNameAttribute()
             ?? $this->getSnapshotNameAttribute()
-            ?? ('Sản phẩm #' . ((int) ($this->attributes['product_id'] ?? 0) ?: (int) $this->getKey()));
+            ?? ('San pham #' . ((int) ($this->attributes['product_id'] ?? 0) ?: (int) $this->getKey()));
     }
 
     public function getDisplaySkuAttribute(): ?string
     {
         return $this->getCurrentProductSkuAttribute()
             ?? $this->getSnapshotSkuAttribute();
+    }
+
+    public function getActualDisplayNameAttribute(): ?string
+    {
+        if (!$this->getHasActualProductOverrideAttribute()) {
+            return null;
+        }
+
+        return $this->getCurrentActualProductNameAttribute()
+            ?? $this->getActualSnapshotNameAttribute()
+            ?? ('San pham #' . (int) ($this->attributes['actual_product_id'] ?? 0));
+    }
+
+    public function getActualDisplaySkuAttribute(): ?string
+    {
+        if (!$this->getHasActualProductOverrideAttribute()) {
+            return null;
+        }
+
+        return $this->getCurrentActualProductSkuAttribute()
+            ?? $this->getActualSnapshotSkuAttribute();
     }
 
     public function getHasProductSnapshotMismatchAttribute(): bool
@@ -83,5 +142,13 @@ trait HasOrderItemProductDisplay
 
         return ($currentName !== null && $snapshotName !== null && $currentName !== $snapshotName)
             || ($currentSku !== null && $snapshotSku !== null && $currentSku !== $snapshotSku);
+    }
+
+    public function getHasActualProductOverrideAttribute(): bool
+    {
+        $actualProductId = (int) ($this->attributes['actual_product_id'] ?? 0);
+        $productId = (int) ($this->attributes['product_id'] ?? 0);
+
+        return $actualProductId > 0 && $actualProductId !== $productId;
     }
 }

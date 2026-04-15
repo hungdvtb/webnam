@@ -79,6 +79,30 @@ const normalizeAdminImages = (items = []) => normalizeAdminPrimarySelection(
         : []
 );
 
+const resolveAttributeSortOrder = (attribute) => {
+    const numericValue = Number(attribute?.sort_order);
+    return Number.isFinite(numericValue) ? numericValue : Number.MAX_SAFE_INTEGER;
+};
+
+const sortAttributesBySortOrder = (items = []) => (
+    Array.isArray(items)
+        ? [...items].sort((left, right) => {
+            const sortDifference = resolveAttributeSortOrder(left) - resolveAttributeSortOrder(right);
+            if (sortDifference !== 0) {
+                return sortDifference;
+            }
+
+            return Number(left?.id || 0) - Number(right?.id || 0);
+        })
+        : []
+);
+
+const normalizeSelectedSuperAttributes = (items = []) => sortAttributesBySortOrder(items).map((item) => ({
+    ...item,
+    selected_values: Array.isArray(item?.selected_values) ? [...item.selected_values] : [],
+    default_value: item?.default_value ?? null,
+}));
+
 const isTemporaryProductImageId = (imageId) => {
     const normalizedId = String(imageId || '');
     return normalizedId.startsWith('temp_') || normalizedId.startsWith('opt_');
@@ -2282,7 +2306,7 @@ const ProductForm = () => {
             return {
                 value,
                 name: String(variant.name || '').trim() || fallbackName,
-                sku: variant.is_existing ? undefined : (String(variant.sku || '').trim() || undefined),
+                sku: String(variant.sku || '').trim() || undefined,
             };
         });
 
@@ -3432,7 +3456,7 @@ const ProductForm = () => {
     const fetchRelatedData = async () => {
         try {
             const attrRes = await attributeApi.getAll({ active_only: true });
-            setAllAttributes(attrRes.data || []);
+            setAllAttributes(sortAttributesBySortOrder(attrRes.data || []));
         } catch (error) {
             console.error("Error fetching related data", error);
         }
@@ -3599,15 +3623,22 @@ const ProductForm = () => {
         setRefreshingAttributes(true);
         try {
             const response = await attributeApi.getAll({ active_only: true });
-            setAllAttributes(response.data || []);
+            setAllAttributes(sortAttributesBySortOrder(response.data || []));
 
             // Sync current selection if attributes were updated
             if (selectedSuperAttributes.length > 0) {
                 setSelectedSuperAttributes(prev => {
-                    return prev.map(selected => {
+                    const synced = prev.map(selected => {
                         const updated = (response.data || []).find(a => a.id === selected.id);
-                        return updated ? { ...updated, selected_values: selected.selected_values } : selected;
+                        return updated
+                            ? {
+                                ...updated,
+                                selected_values: selected.selected_values,
+                                default_value: selected.default_value ?? null,
+                            }
+                            : selected;
                     });
+                    return normalizeSelectedSuperAttributes(synced);
                 });
             }
             showModal({ title: 'Thành công', content: 'Đã cập nhật danh sách thuộc tính mới nhất.', type: 'success', autoClose: 2000 });
@@ -3924,7 +3955,7 @@ const ProductForm = () => {
                     };
                 });
 
-                setSelectedSuperAttributes(superAttrs);
+                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(superAttrs));
                 setShowVariantConfig(true); // Tự động hiển thị danh sách biến thể / bảng cấu hình
             }
         } catch (error) {
@@ -6678,7 +6709,7 @@ const ProductForm = () => {
                                                                     if (isSelected) {
                                                                         setSelectedSuperAttributes(prev => prev.filter(sa => sa.id !== attr.id));
                                                                     } else {
-                                                                        setSelectedSuperAttributes(prev => [...prev, { ...attr, selected_values: [] }]);
+                                                                        setSelectedSuperAttributes(prev => normalizeSelectedSuperAttributes([...prev, { ...attr, selected_values: [] }]));
                                                                     }
                                                                 }}
                                                                 className={`flex items-center gap-2 p-2 border rounded-sm text-[12px] font-bold transition-all ${isSelected ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-stone/20 text-stone hover:border-purple-300'}`}
@@ -6707,7 +6738,7 @@ const ProductForm = () => {
                                                                             onClick={() => {
                                                                                 const updated = [...selectedSuperAttributes];
                                                                                 updated[idx].selected_values = (attr.options || []).map(o => o.value);
-                                                                                setSelectedSuperAttributes(updated);
+                                                                                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
                                                                             }}
                                                                             className="px-2 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 hover:bg-purple-200 rounded transition-colors"
                                                                         >
@@ -6718,7 +6749,7 @@ const ProductForm = () => {
                                                                             onClick={() => {
                                                                                 const updated = [...selectedSuperAttributes];
                                                                                 updated[idx].selected_values = [];
-                                                                                setSelectedSuperAttributes(updated);
+                                                                                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
                                                                             }}
                                                                             className="px-2 py-0.5 text-[10px] font-bold bg-stone-100 text-stone-600 hover:bg-stone-200 rounded transition-colors"
                                                                         >
@@ -6741,7 +6772,7 @@ const ProductForm = () => {
                                                                                         } else {
                                                                                             updated[idx].selected_values = [...(updated[idx].selected_values || []), opt.value];
                                                                                         }
-                                                                                        setSelectedSuperAttributes(updated);
+                                                                                        setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
                                                                                     }}
                                                                                     className={"px-3 py-1 text-[11px] font-bold rounded-full border transition-all flex items-center gap-1.5 " + (isValSelected
                                                                                         ? (isDefault ? 'bg-purple-600 border-purple-700 text-white shadow-md' : 'bg-purple-100 border-purple-400 text-purple-800')
@@ -6755,7 +6786,7 @@ const ProductForm = () => {
                                                                                             const updated = [...selectedSuperAttributes];
                                                                                             updated[idx].selected_values = updated[idx].selected_values.filter(v => v !== opt.value);
                                                                                             if (updated[idx].default_value === opt.value) updated[idx].default_value = null;
-                                                                                            setSelectedSuperAttributes(updated);
+                                                                                            setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
                                                                                         }}>close</span>
                                                                                     )}
                                                                                 </button>
@@ -8575,10 +8606,12 @@ const ProductForm = () => {
                                                             type="text"
                                                             value={variant.sku}
                                                             onChange={(event) => handleConvertVariantFieldChange(variant.entry_id, 'sku', event.target.value)}
-                                                            readOnly={variant.is_existing}
-                                                            className={`w-full rounded-sm border px-2 py-2 text-[12px] font-mono font-bold focus:outline-none ${variant.is_existing ? 'cursor-not-allowed border-stone/10 bg-stone/10 text-stone/55' : 'border-stone/15 bg-stone/5 text-primary focus:border-emerald-300 focus:bg-white'}`}
+                                                            className="w-full rounded-sm border border-stone/15 bg-stone/5 px-2 py-2 text-[12px] font-mono font-bold text-primary focus:border-emerald-300 focus:bg-white focus:outline-none"
                                                             placeholder="Để trống để tự sinh"
                                                         />
+                                                        {variant.is_existing ? (
+                                                            <p className="mt-2 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">SKU này sẽ cập nhật cho sản phẩm cũ</p>
+                                                        ) : null}
                                                     </div>
                                                     <div className="flex items-center justify-center px-3 py-3">
                                                         {variant.is_existing ? (

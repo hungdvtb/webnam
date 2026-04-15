@@ -1946,6 +1946,7 @@ class ProductController extends Controller
             'is_required' => false,
             'is_variant' => $forVariant,
             'status' => true,
+            'sort_order' => Attribute::nextSortOrderFor('product', $accountId),
         ]);
     }
 
@@ -2712,6 +2713,9 @@ class ProductController extends Controller
 
     protected function productResourceRelations(): array
     {
+        $attributeSummaryColumns = Attribute::relationColumnString(['id', 'name', 'code']);
+        $attributeResourceColumns = Attribute::relationColumnString(['id', 'name', 'code', 'frontend_type']);
+
         return [
             'category:id,name',
             'categories:id,name',
@@ -2721,36 +2725,38 @@ class ProductController extends Controller
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
             'images:id,product_id,image_url,is_primary,sort_order,file_name,file_size',
-            'superAttributes:id,name,code,frontend_type',
+            'superAttributes:' . $attributeResourceColumns,
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
             'attributeValues:id,product_id,attribute_id,value',
-            'attributeValues.attribute:id,name,code,frontend_type',
-            'linkedProducts' => function ($q) {
+            'attributeValues.attribute:' . $attributeResourceColumns,
+            'linkedProducts' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
-                        'attributeValues.attribute:id,name,code',
+                        'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
             },
-            'groupedItems' => function ($q) {
+            'groupedItems' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
+                        'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
             },
-            'bundleItems' => function ($q) {
+            'bundleItems' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
+                        'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
             },
             'approvedReviews.user:id,name',
@@ -2998,6 +3004,7 @@ class ProductController extends Controller
             'is_required' => false,
             'is_variant' => true,
             'status' => true,
+            'sort_order' => Attribute::nextSortOrderFor('product', $product->account_id),
         ]);
     }
 
@@ -3026,7 +3033,7 @@ class ProductController extends Controller
     {
         $messages = [];
         $prepared = [];
-        $reservedSkus = array_values(array_filter([$parentSku, $product->sku]));
+        $reservedSkus = array_values(array_filter([$parentSku]));
         $seenValues = [];
 
         foreach ($variants as $index => $variantData) {
@@ -3044,11 +3051,16 @@ class ProductController extends Controller
             $seenValues[$valueKey] = true;
 
             $isOriginalVariant = $index === 0;
-            $resolvedSku = $isOriginalVariant
-                ? $product->sku
-                : $this->productSkuService->normalize($variantData['sku'] ?? null);
+            if ($isOriginalVariant) {
+                $resolvedSku = $this->productSkuService->ensureUniqueSku(
+                    $variantData['sku'] ?? $product->sku,
+                    trim((string) ($variantData['name'] ?? '')) ?: $product->name,
+                    $product->id,
+                    $reservedSkus
+                );
+            } else {
+                $resolvedSku = $this->productSkuService->normalize($variantData['sku'] ?? null);
 
-            if (!$isOriginalVariant) {
                 if (
                     $resolvedSku === null
                     || in_array($resolvedSku, $reservedSkus, true)
@@ -3056,9 +3068,9 @@ class ProductController extends Controller
                 ) {
                     $resolvedSku = $this->productSkuService->generateVariantSku($parentSku, null, $reservedSkus);
                 }
-
-                $reservedSkus[] = $resolvedSku;
             }
+
+            $reservedSkus[] = $resolvedSku;
 
             $prepared[] = [
                 'is_original' => $isOriginalVariant,
@@ -3655,10 +3667,11 @@ class ProductController extends Controller
         $pendingOrderItemsSub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS ordered_quantity')
             ->whereNotNull('order_items.product_id')
-            ->groupBy('order_items.order_id', 'order_items.product_id');
+            ->groupBy('order_items.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
 
@@ -3679,10 +3692,11 @@ class ProductController extends Controller
         $pendingReturnItemsSub = OrderItem::query()
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
-            ->selectRaw('order_items.product_id')
+            ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) AS pending_return_quantity')
             ->whereNotNull('order_items.product_id')
-            ->groupBy('order_items.order_id', 'order_items.product_id');
+            ->groupBy('order_items.order_id')
+            ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
         $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
 
@@ -8894,6 +8908,7 @@ class ProductController extends Controller
             $firstVariant = $preparedVariants[0];
             $product->forceFill([
                 'name' => $firstVariant['name'],
+                'sku' => $firstVariant['sku'],
                 'price' => $firstVariant['price'] ?? $product->price,
                 'expected_cost' => $firstVariant['expected_cost'] ?? $product->expected_cost,
                 'weight' => $firstVariant['weight'] ?? $product->weight,

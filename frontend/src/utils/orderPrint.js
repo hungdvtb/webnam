@@ -1,513 +1,249 @@
-const PRINT_DIALOG_FALLBACK_MS = 3 * 60 * 1000;
-const PRINT_DIALOG_CLOSE_SETTLE_MS = 400;
-const PRINT_DIALOG_BLOCKING_THRESHOLD_MS = 350;
-const PRINT_DOCUMENT_READY_DELAY_MS = 120;
-const PRINT_RESOURCE_TIMEOUT_MS = 10000;
+/**
+ * orderPrint.js — Luồng in đơn hàng tin cậy
+ *
+ * Logic:
+ * 1. Mở popup window
+ * 2. Ghi HTML vào popup
+ * 3. Chờ tài nguyên load (ảnh, font)
+ * 4. Gọi popup.print() — trình duyệt sẽ hiện hộp thoại in chuẩn
+ * 5. Chờ sự kiện afterprint (hoặc timeout 10 phút) rồi resolve
+ * 6. KHÔNG bao giờ tự báo "in không thành công" do heuristic sai
+ */
 
-const formatCurrency = (value) => new Intl.NumberFormat('vi-VN', {
-    style: 'currency',
-    currency: 'VND',
-}).format(Number(value || 0));
+// ─── Constants ───────────────────────────────────────────────────────────────
+const PRINT_RESOURCE_TIMEOUT_MS = 12_000;   // max chờ load ảnh/font
+const PRINT_SESSION_TIMEOUT_MS  = 10 * 60 * 1000; // 10 phút — fallback nếu afterprint không fire
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const formatCurrency = (value) =>
+    new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' })
+        .format(Number(value || 0));
 
 const formatDateTime = (value) => {
     if (!value) return '';
-
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-
     return `${date.toLocaleDateString('vi-VN')} ${date.toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
     })}`;
 };
 
-const escapeHtml = (value) => String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+const escapeHtml = (value) =>
+    String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 
-const getTimerWindow = (candidateWindow) => {
-    if (candidateWindow && !candidateWindow.closed && typeof candidateWindow.setTimeout === 'function') {
-        return candidateWindow;
-    }
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
-        return window;
-    }
+const withTimeout = (promise, ms) =>
+    Promise.race([
+        Promise.resolve(promise).catch(() => undefined),
+        delay(ms),
+    ]);
 
-    return globalThis;
+// ─── Popup management ────────────────────────────────────────────────────────
+
+/**
+ * Mở popup window trắng. Trả về window object hoặc null nếu bị chặn.
+ */
+const openPrintPopup = (ownerWindow = window) => {
+    if (typeof ownerWindow?.open !== 'function') return null;
+
+    const name = `order_print_${Date.now()}`;
+    const popup = ownerWindow.open(
+        'about:blank',
+        name,
+        'width=1200,height=850,left=80,top=60,scrollbars=yes,resizable=yes,toolbar=no,menubar=no'
+    );
+
+    return popup || null;
 };
 
-const delay = (candidateWindow, timeoutMs) => new Promise((resolve) => {
-    getTimerWindow(candidateWindow).setTimeout(resolve, timeoutMs);
-});
-
-const withTimeout = (promise, candidateWindow, timeoutMs) => Promise.race([
-    Promise.resolve(promise).catch(() => undefined),
-    delay(candidateWindow, timeoutMs),
-]);
-
-const getPrintTargetWindow = (printTarget) => {
-    if (!printTarget) {
-        return null;
-    }
-
-    if (typeof printTarget.print === 'function' && printTarget.document) {
-        return printTarget;
-    }
-
-    if (printTarget.targetWindow && typeof printTarget.targetWindow.print === 'function') {
-        return printTarget.targetWindow;
-    }
-
-    if (printTarget.frame?.contentWindow && typeof printTarget.frame.contentWindow.print === 'function') {
-        return printTarget.frame.contentWindow;
-    }
-
-    return null;
-};
-
-const isPrintTargetClosed = (printTarget) => {
-    if (!printTarget) {
-        return true;
-    }
-
-    if (printTarget.frame) {
-        return !printTarget.frame.isConnected;
-    }
-
-    if (typeof printTarget.closed === 'boolean') {
-        return printTarget.closed;
-    }
-
-    const targetWindow = getPrintTargetWindow(printTarget);
-    return !targetWindow || Boolean(targetWindow.closed);
-};
-
-const writeHtmlDocument = (targetWindow, html) => {
-    if (!targetWindow || targetWindow.closed || !targetWindow.document) {
-        throw new Error('Không thể khởi tạo tài liệu in.');
-    }
-
+/**
+ * Ghi HTML document vào target window.
+ */
+const writeHtml = (targetWindow, html) => {
     targetWindow.document.open();
     targetWindow.document.write(html);
     targetWindow.document.close();
 };
 
-const loadHtmlIntoPrintWindow = async (targetWindow, html) => {
-    if (!targetWindow || targetWindow.closed) {
-        throw new Error('KhÃ´ng thá»ƒ khá»Ÿi táº¡o tÃ i liá»‡u in.');
-    }
+/**
+ * Chờ document trong popup load xong (readyState === 'complete').
+ */
+const waitForDocumentReady = (targetWindow) =>
+    new Promise((resolve) => {
+        const doc = targetWindow.document;
 
-    const canNavigateWithBlobUrl = typeof Blob === 'function'
-        && typeof URL !== 'undefined'
-        && typeof URL.createObjectURL === 'function'
-        && typeof URL.revokeObjectURL === 'function'
-        && typeof targetWindow.location?.replace === 'function';
-
-    if (!canNavigateWithBlobUrl) {
-        writeHtmlDocument(targetWindow, html);
-        return () => {};
-    }
-
-    const htmlBlob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const htmlUrl = URL.createObjectURL(htmlBlob);
-
-    try {
-        await new Promise((resolve) => {
-            let settled = false;
-            let timeoutId = null;
-
-            const finish = () => {
-                if (settled) return;
-                settled = true;
-
-                if (timeoutId !== null) {
-                    getTimerWindow(targetWindow).clearTimeout(timeoutId);
-                }
-
-                targetWindow.removeEventListener('load', handleLoad);
-                resolve();
-            };
-
-            const handleLoad = () => {
-                finish();
-            };
-
-            timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-            targetWindow.addEventListener('load', handleLoad, { once: true });
-            targetWindow.location.replace(htmlUrl);
-        });
-
-        return () => {
-            URL.revokeObjectURL(htmlUrl);
-        };
-    } catch (error) {
-        URL.revokeObjectURL(htmlUrl);
-        writeHtmlDocument(targetWindow, html);
-        return () => {};
-    }
-};
-
-const createHiddenPrintFrame = (ownerWindow = window, title = 'Bản in đơn hàng') => {
-    const ownerDocument = ownerWindow?.document;
-
-    if (!ownerDocument?.body || typeof ownerDocument.createElement !== 'function') {
-        return null;
-    }
-
-    const frame = ownerDocument.createElement('iframe');
-    frame.setAttribute('title', title);
-    frame.setAttribute('aria-hidden', 'true');
-    frame.tabIndex = -1;
-    frame.style.position = 'fixed';
-    frame.style.left = '-10000px';
-    frame.style.top = '0';
-    frame.style.width = `${Math.max(ownerWindow.innerWidth || 0, 1024)}px`;
-    frame.style.height = `${Math.max(ownerWindow.innerHeight || 0, 768)}px`;
-    frame.style.border = '0';
-    frame.style.opacity = '0';
-    frame.style.pointerEvents = 'none';
-    frame.style.visibility = 'visible';
-    frame.style.background = '#ffffff';
-
-    ownerDocument.body.appendChild(frame);
-
-    const targetWindow = frame.contentWindow;
-
-    if (!targetWindow) {
-        frame.remove();
-        return null;
-    }
-
-    return {
-        kind: 'iframe',
-        ownerWindow,
-        frame,
-        targetWindow,
-    };
-};
-
-const loadHtmlIntoPrintTarget = async (printTarget, html) => {
-    const targetWindow = getPrintTargetWindow(printTarget);
-
-    if (!targetWindow || isPrintTargetClosed(printTarget)) {
-        throw new Error('KhÃ´ng thá»ƒ khá»Ÿi táº¡o tÃ i liá»‡u in.');
-    }
-
-    return loadHtmlIntoPrintWindow(targetWindow, html);
-};
-
-const buildLoadingPrintDocument = (title = 'Chuẩn bị bản in') => `<!DOCTYPE html>
-<html lang="vi">
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${escapeHtml(title)}</title>
-    <style>
-        :root {
-            color-scheme: light;
+        if (!doc || doc.readyState === 'complete') {
+            resolve();
+            return;
         }
 
-        * {
-            box-sizing: border-box;
-        }
-
-        html,
-        body {
-            margin: 0;
-            min-height: 100%;
-            font-family: Roboto, "Segoe UI", Arial, sans-serif;
-            background: #f8fafc;
-            color: #0f172a;
-        }
-
-        body {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 32px;
-        }
-
-        .print-loader {
-            width: min(420px, 100%);
-            border: 1px solid #dbe2ea;
-            background: #ffffff;
-            box-shadow: 0 24px 60px -36px rgba(15, 23, 42, 0.35);
-            padding: 28px 30px;
-        }
-
-        .print-loader__kicker {
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            color: #64748b;
-            margin-bottom: 8px;
-        }
-
-        .print-loader__title {
-            margin: 0;
-            font-size: 24px;
-            line-height: 1.2;
-            font-weight: 800;
-        }
-
-        .print-loader__text {
-            margin: 12px 0 0;
-            font-size: 14px;
-            line-height: 1.7;
-            color: #475569;
-        }
-    </style>
-</head>
-<body>
-    <section class="print-loader">
-        <div class="print-loader__kicker">Hệ thống đang chuẩn bị</div>
-        <h1 class="print-loader__title">${escapeHtml(title)}</h1>
-        <p class="print-loader__text">Vui lòng chờ trong giây lát, nội dung in sẽ tự động hiển thị ngay sau khi dữ liệu và bố cục sẵn sàng.</p>
-    </section>
-</body>
-</html>`;
-
-const closePrintWindow = (printTarget) => {
-    if (!printTarget) {
-        return;
-    }
-
-    if (printTarget.frame) {
-        if (printTarget.frame.isConnected) {
-            printTarget.frame.remove();
-        }
-        return;
-    }
-
-    const targetWindow = getPrintTargetWindow(printTarget);
-
-    if (!targetWindow || targetWindow.closed || typeof targetWindow.close !== 'function') {
-        return;
-    }
-
-    targetWindow.close();
-};
-
-const waitForWindowLoad = async (targetWindow) => {
-    const targetDocument = targetWindow?.document;
-
-    if (!targetWindow || !targetDocument || targetDocument.readyState === 'complete') {
-        return;
-    }
-
-    await new Promise((resolve) => {
-        let settled = false;
-        let timeoutId = null;
-
+        let done = false;
         const finish = () => {
-            if (settled) return;
-            settled = true;
-
-            if (timeoutId !== null) {
-                getTimerWindow(targetWindow).clearTimeout(timeoutId);
-            }
-
-            targetWindow.removeEventListener('load', handleLoad);
-            targetDocument.removeEventListener('readystatechange', handleReadyStateChange);
+            if (done) return;
+            done = true;
+            clearTimeout(tid);
+            targetWindow.removeEventListener('load', finish);
             resolve();
         };
 
-        const handleLoad = () => {
-            finish();
-        };
-
-        const handleReadyStateChange = () => {
-            if (targetDocument.readyState === 'complete') {
-                finish();
-            }
-        };
-
-        timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-        targetWindow.addEventListener('load', handleLoad, { once: true });
-        targetDocument.addEventListener('readystatechange', handleReadyStateChange);
+        const tid = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+        targetWindow.addEventListener('load', finish, { once: true });
     });
+
+/**
+ * Chờ tất cả ảnh trong popup load xong.
+ */
+const waitForImages = async (targetWindow) => {
+    const images = Array.from(targetWindow.document?.images || []);
+    if (!images.length) return;
+
+    await Promise.all(
+        images.map(
+            (img) =>
+                new Promise((resolve) => {
+                    if (img.complete) { resolve(); return; }
+
+                    let done = false;
+                    const finish = () => { if (!done) { done = true; resolve(); } };
+                    const tid = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+
+                    img.addEventListener('load',  () => { clearTimeout(tid); finish(); }, { once: true });
+                    img.addEventListener('error', () => { clearTimeout(tid); finish(); }, { once: true });
+                })
+        )
+    );
 };
 
-const waitForImageReady = (image, targetWindow) => new Promise((resolve) => {
-    if (!image) {
-        resolve();
-        return;
+/**
+ * Chờ font load xong.
+ */
+const waitForFonts = async (targetWindow) => {
+    const fonts = targetWindow.document?.fonts;
+    if (fonts?.ready) {
+        await withTimeout(fonts.ready, PRINT_RESOURCE_TIMEOUT_MS);
     }
-
-    if (typeof image.decode === 'function') {
-        const decodePromise = image.decode();
-        withTimeout(decodePromise, targetWindow, PRINT_RESOURCE_TIMEOUT_MS).then(() => resolve());
-        return;
-    }
-
-    if (image.complete) {
-        resolve();
-        return;
-    }
-
-    let settled = false;
-    let timeoutId = null;
-
-    const finish = () => {
-        if (settled) return;
-        settled = true;
-
-        if (timeoutId !== null) {
-            getTimerWindow(targetWindow).clearTimeout(timeoutId);
-        }
-
-        image.removeEventListener('load', handleLoad);
-        image.removeEventListener('error', handleError);
-        resolve();
-    };
-
-    const handleLoad = () => {
-        finish();
-    };
-
-    const handleError = () => {
-        finish();
-    };
-
-    timeoutId = getTimerWindow(targetWindow).setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-    image.addEventListener('load', handleLoad, { once: true });
-    image.addEventListener('error', handleError, { once: true });
-});
-
-const waitForImagesReady = async (targetWindow) => {
-    const images = Array.from(targetWindow?.document?.images || []);
-
-    if (!images.length) {
-        return;
-    }
-
-    await Promise.all(images.map((image) => waitForImageReady(image, targetWindow)));
 };
 
-const waitForFontsReady = async (targetWindow) => {
-    const fontSet = targetWindow?.document?.fonts;
-
-    if (!fontSet?.ready) {
-        return;
-    }
-
-    await withTimeout(fontSet.ready, targetWindow, PRINT_RESOURCE_TIMEOUT_MS);
-};
-
-const waitForNextPaint = async (targetWindow) => {
-    const raf = targetWindow?.requestAnimationFrame?.bind(targetWindow);
-
-    if (typeof raf !== 'function') {
-        await delay(targetWindow, 32);
-        return;
-    }
-
-    await new Promise((resolve) => {
-        raf(() => {
-            raf(resolve);
-        });
-    });
-};
-
-const waitForPrintableDocument = async (targetWindow) => {
-    await waitForWindowLoad(targetWindow);
-    await Promise.all([
-        waitForFontsReady(targetWindow),
-        waitForImagesReady(targetWindow),
-    ]);
-    await waitForNextPaint(targetWindow);
-    await delay(targetWindow, PRINT_DOCUMENT_READY_DELAY_MS);
-};
-
-const copyLiveFormValuesIntoClone = (sourceDocument, clonedRoot) => {
-    const sourceFields = Array.from(sourceDocument.querySelectorAll('input, textarea, select'));
-    const clonedFields = Array.from(clonedRoot.querySelectorAll('input, textarea, select'));
-
-    sourceFields.forEach((field, index) => {
-        const clonedField = clonedFields[index];
-
-        if (!clonedField) return;
-
-        const tagName = field.tagName.toLowerCase();
-
-        if (tagName === 'textarea') {
-            clonedField.textContent = field.value;
+/**
+ * Chờ 1 frame paint để đảm bảo layout đã render.
+ */
+const waitForPaint = (targetWindow) =>
+    new Promise((resolve) => {
+        const raf = targetWindow?.requestAnimationFrame?.bind(targetWindow);
+        if (typeof raf !== 'function') {
+            setTimeout(resolve, 60);
             return;
         }
-
-        if (tagName === 'select') {
-            Array.from(clonedField.options || []).forEach((option, optionIndex) => {
-                option.selected = optionIndex === field.selectedIndex;
-            });
-            return;
-        }
-
-        clonedField.setAttribute('value', field.value ?? '');
-
-        if (field.type === 'checkbox' || field.type === 'radio') {
-            if (field.checked) {
-                clonedField.setAttribute('checked', 'checked');
-            } else {
-                clonedField.removeAttribute('checked');
-            }
-        }
+        raf(() => raf(resolve));
     });
+
+// ─── Core print function ─────────────────────────────────────────────────────
+
+/**
+ * Gọi hộp thoại in trong popup, resolve sau khi afterprint fire (hoặc timeout).
+ *
+ * Quan trọng:
+ * - KHÔNG reject / throw khi sau khi user bấm Hủy trong hộp thoại in —
+ *   đó là hành động hợp lệ, không phải lỗi.
+ * - KHÔNG dùng focus/blur heuristic vì không tin cậy với máy in thật.
+ * - afterprint event được fire bởi trình duyệt sau khi hộp thoại in đóng,
+ *   dù user bấm In hay Hủy.
+ */
+const triggerPrint = (popupWindow) =>
+    new Promise((resolve) => {
+        let settled = false;
+        let timeoutId = null;
+
+        const finish = (reason) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            popupWindow.removeEventListener('afterprint', handleAfterPrint);
+            resolve({ reason });
+        };
+
+        const handleAfterPrint = () => finish('afterprint');
+
+        // Fallback: nếu afterprint không bao giờ fire (một số trình duyệt/máy in cũ)
+        timeoutId = setTimeout(() => finish('timeout'), PRINT_SESSION_TIMEOUT_MS);
+
+        popupWindow.addEventListener('afterprint', handleAfterPrint);
+
+        // Gọi print sau một tick để listener đã được gắn
+        setTimeout(() => {
+            try {
+                popupWindow.focus();
+                popupWindow.print();
+            } catch (err) {
+                // Nếu print() bị block (rất hiếm), vẫn resolve để không treo UI
+                finish('print-error');
+            }
+        }, 0);
+    });
+
+/**
+ * Hàm in chính — mở popup, load HTML, chờ sẵn sàng, gọi hộp thoại in.
+ *
+ * @param {string} html        - HTML document đầy đủ cần in
+ * @param {string} [title]     - tiêu đề hiển thị trên tab / hộp thoại in
+ * @param {Window} [ownerWin]  - window của trang chủ (mặc định: window)
+ * @returns {{ close: () => void, reason: string }}
+ * @throws {Error} chỉ khi không mở được popup (popup bị chặn)
+ */
+const printHtmlInPopup = async (html, title = 'In đơn hàng', ownerWin = window) => {
+    const popup = openPrintPopup(ownerWin);
+
+    if (!popup || popup.closed) {
+        throw new Error(
+            'Không thể mở cửa sổ in. ' +
+            'Trình duyệt đang chặn popup — vui lòng cho phép popup từ trang này và thử lại.\n\n' +
+            'Cách bật: Thanh địa chỉ → biểu tượng chặn popup → "Luôn cho phép".'
+        );
+    }
+
+    // Ghi HTML vào popup
+    writeHtml(popup, html);
+
+    // Chờ tài nguyên sẵn sàng
+    await waitForDocumentReady(popup);
+    await Promise.all([waitForImages(popup), waitForFonts(popup)]);
+    await waitForPaint(popup);
+
+    // Thêm chút delay nhỏ để layout settle — quan trọng với Canon LBP
+    await delay(150);
+
+    // Gọi hộp thoại in (luôn resolve, không bao giờ reject)
+    const result = await triggerPrint(popup);
+
+    const close = () => {
+        try {
+            if (!popup.closed) popup.close();
+        } catch (_) {
+            // ignore
+        }
+    };
+
+    return { close, reason: result.reason };
 };
 
-const buildCurrentPagePrintDocument = (sourceWindow = window) => {
-    const sourceDocument = sourceWindow?.document;
-
-    if (!sourceDocument?.documentElement) {
-        throw new Error('Môi trường hiện tại không hỗ trợ in.');
-    }
-
-    const clonedRoot = sourceDocument.documentElement.cloneNode(true);
-
-    clonedRoot.querySelectorAll('script, noscript').forEach((node) => node.remove());
-    copyLiveFormValuesIntoClone(sourceDocument, clonedRoot);
-
-    const head = clonedRoot.querySelector('head');
-
-    if (head && !head.querySelector('base')) {
-        head.insertAdjacentHTML('afterbegin', `<base href="${escapeHtml(sourceWindow.location.href)}" />`);
-    }
-
-    return `<!DOCTYPE html>\n${clonedRoot.outerHTML}`;
-};
-
-export const preparePrintPopupWindow = (ownerWindow = window, options = {}) => {
-    if (typeof ownerWindow?.open !== 'function') {
-        return null;
-    }
-
-    const title = options.title || 'Chuẩn bị bản in';
-    const windowName = `order-print-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const popup = ownerWindow.open('', windowName, 'popup=yes,width=1280,height=900,left=120,top=80,scrollbars=yes,resizable=yes');
-
-    if (!popup) {
-        return null;
-    }
-
-    writeHtmlDocument(popup, buildLoadingPrintDocument(title));
-
-    return popup;
-};
+// ─── HTML builders ───────────────────────────────────────────────────────────
 
 const renderOrderRows = (items = []) => {
     if (!items.length) {
-        return `
-            <tr>
-                <td colspan="5" class="empty-state">Đơn hàng không có sản phẩm.</td>
-            </tr>
-        `;
+        return `<tr><td colspan="5" class="empty-state">Đơn hàng không có sản phẩm.</td></tr>`;
     }
 
-    return items.map((item, index) => `
+    return items
+        .map(
+            (item, index) => `
         <tr>
             <td class="col-index">${index + 1}</td>
             <td class="col-name">
@@ -517,74 +253,78 @@ const renderOrderRows = (items = []) => {
             <td class="col-qty">${escapeHtml(item.quantity ?? 0)}</td>
             <td class="col-money">${escapeHtml(formatCurrency(item.unit_price))}</td>
             <td class="col-money">${escapeHtml(formatCurrency(item.line_total))}</td>
-        </tr>
-    `).join('');
+        </tr>`
+        )
+        .join('');
 };
 
 export const buildOrderPrintDocument = (orders = []) => {
     const printedAt = formatDateTime(new Date().toISOString());
 
-    const sections = orders.map((order, orderIndex) => `
+    const sections = orders
+        .map(
+            (order, orderIndex) => `
         <section class="order-sheet ${orderIndex === orders.length - 1 ? 'order-sheet-last' : ''}">
             <div class="order-sheet__inner">
                 <header class="sheet-header">
-                <div>
-                    <div class="sheet-kicker">In đơn hàng</div>
-                    <h1 class="sheet-title">Đơn #${escapeHtml(order.order_number || '-')}</h1>
-                </div>
-                <div class="sheet-meta">
-                    <div><span>Ngày in:</span> ${escapeHtml(printedAt || '-')}</div>
-                    <div><span>Khách hàng:</span> ${escapeHtml(order.customer_name || '-')}</div>
-                </div>
-            </header>
+                    <div>
+                        <div class="sheet-kicker">In đơn hàng</div>
+                        <h1 class="sheet-title">Đơn #${escapeHtml(order.order_number || '-')}</h1>
+                    </div>
+                    <div class="sheet-meta">
+                        <div><span>Ngày in:</span> ${escapeHtml(printedAt || '-')}</div>
+                        <div><span>Khách hàng:</span> ${escapeHtml(order.customer_name || '-')}</div>
+                    </div>
+                </header>
 
-            <section class="info-grid">
-                <article class="info-card">
-                    <div class="info-label">Mã đơn</div>
-                    <div class="info-value">${escapeHtml(order.order_number || '-')}</div>
-                </article>
-                <article class="info-card">
-                    <div class="info-label">Tên khách hàng</div>
-                    <div class="info-value">${escapeHtml(order.customer_name || '-')}</div>
-                </article>
-                <article class="info-card">
-                    <div class="info-label">Số điện thoại</div>
-                    <div class="info-value">${escapeHtml(order.customer_phone || '-')}</div>
-                </article>
-                <article class="info-card info-card-wide">
-                    <div class="info-label">Địa chỉ</div>
-                    <div class="info-value info-value-wrap">${escapeHtml(order.shipping_address || '-')}</div>
-                </article>
-                <article class="info-card info-card-full">
-                    <div class="info-label">Ghi chú đơn hàng</div>
-                    <div class="info-value info-value-wrap">${escapeHtml(order.notes || 'Không có ghi chú.')}</div>
-                </article>
-            </section>
+                <section class="info-grid">
+                    <article class="info-card">
+                        <div class="info-label">Mã đơn</div>
+                        <div class="info-value">${escapeHtml(order.order_number || '-')}</div>
+                    </article>
+                    <article class="info-card">
+                        <div class="info-label">Tên khách hàng</div>
+                        <div class="info-value">${escapeHtml(order.customer_name || '-')}</div>
+                    </article>
+                    <article class="info-card">
+                        <div class="info-label">Số điện thoại</div>
+                        <div class="info-value">${escapeHtml(order.customer_phone || '-')}</div>
+                    </article>
+                    <article class="info-card info-card-wide">
+                        <div class="info-label">Địa chỉ</div>
+                        <div class="info-value info-value-wrap">${escapeHtml(order.shipping_address || '-')}</div>
+                    </article>
+                    <article class="info-card info-card-full">
+                        <div class="info-label">Ghi chú đơn hàng</div>
+                        <div class="info-value info-value-wrap">${escapeHtml(order.notes || 'Không có ghi chú.')}</div>
+                    </article>
+                </section>
 
-            <table class="items-table">
-                <thead>
-                    <tr>
-                        <th class="col-index">STT</th>
-                        <th class="col-name">Sản phẩm</th>
-                        <th class="col-qty">Số lượng</th>
-                        <th class="col-money">Đơn giá</th>
-                        <th class="col-money">Thành tiền</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${renderOrderRows(order.items)}
-                </tbody>
-            </table>
+                <table class="items-table">
+                    <thead>
+                        <tr>
+                            <th class="col-index">STT</th>
+                            <th class="col-name">Sản phẩm</th>
+                            <th class="col-qty">Số lượng</th>
+                            <th class="col-money">Đơn giá</th>
+                            <th class="col-money">Thành tiền</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${renderOrderRows(order.items)}
+                    </tbody>
+                </table>
 
-            <div class="summary-row">
-                <div class="summary-box">
-                    <div class="summary-label">Tổng thanh toán</div>
-                    <div class="summary-value">${escapeHtml(formatCurrency(order.total_payment))}</div>
+                <div class="summary-row">
+                    <div class="summary-box">
+                        <div class="summary-label">Tổng thanh toán</div>
+                        <div class="summary-value">${escapeHtml(formatCurrency(order.total_payment))}</div>
+                    </div>
                 </div>
             </div>
-            </div>
-        </section>
-    `).join('');
+        </section>`
+        )
+        .join('');
 
     return `<!DOCTYPE html>
 <html lang="vi">
@@ -593,16 +333,11 @@ export const buildOrderPrintDocument = (orders = []) => {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>In đơn hàng</title>
     <style>
-        :root {
-            color-scheme: light;
-        }
+        :root { color-scheme: light; }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
-        html,
-        body {
+        html, body {
             margin: 0;
             padding: 0;
             font-family: "Segoe UI", Arial, sans-serif;
@@ -612,20 +347,25 @@ export const buildOrderPrintDocument = (orders = []) => {
             line-height: 1.5;
         }
 
+        /* ── Page setup ── */
+        @page {
+            margin: 12mm 10mm;
+        }
+
+        /* ── Order sheets ── */
         .order-sheet {
             page-break-after: always;
             break-after: page;
         }
-
         .order-sheet-last {
             page-break-after: auto;
             break-after: auto;
         }
-
         .order-sheet__inner {
             padding: 0;
         }
 
+        /* ── Header ── */
         .sheet-header {
             display: flex;
             justify-content: space-between;
@@ -636,7 +376,6 @@ export const buildOrderPrintDocument = (orders = []) => {
             border-bottom: 2px solid #111827;
             padding-bottom: 10px;
         }
-
         .sheet-kicker {
             font-size: 10px;
             font-weight: 700;
@@ -645,14 +384,12 @@ export const buildOrderPrintDocument = (orders = []) => {
             color: #6b7280;
             margin-bottom: 4px;
         }
-
         .sheet-title {
             margin: 0;
             font-size: 24px;
             line-height: 1.1;
             font-weight: 800;
         }
-
         .sheet-meta {
             display: flex;
             flex-direction: column;
@@ -662,34 +399,25 @@ export const buildOrderPrintDocument = (orders = []) => {
             font-size: 11px;
             line-height: 1.45;
         }
-
         .sheet-meta span {
             font-weight: 700;
             color: #6b7280;
         }
 
+        /* ── Info grid ── */
         .info-grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
             margin-bottom: 12px;
         }
-
         .info-card {
             border: 1px solid #d1d5db;
             padding: 8px 10px;
             min-height: 60px;
         }
-
-        .info-card-wide {
-            grid-column: span 2;
-        }
-
-        .info-card-full {
-            grid-column: 1 / -1;
-            min-height: 76px;
-        }
-
+        .info-card-wide  { grid-column: span 2; }
+        .info-card-full  { grid-column: 1 / -1; min-height: 76px; }
         .info-label {
             font-size: 10px;
             font-weight: 700;
@@ -698,41 +426,31 @@ export const buildOrderPrintDocument = (orders = []) => {
             color: #6b7280;
             margin-bottom: 5px;
         }
-
         .info-value {
             font-size: 13px;
             font-weight: 700;
             line-height: 1.45;
             overflow-wrap: anywhere;
         }
-
         .info-value-wrap {
             white-space: pre-wrap;
             overflow-wrap: anywhere;
         }
 
+        /* ── Items table ── */
         .items-table {
             width: 100%;
             border-collapse: collapse;
             table-layout: fixed;
         }
-
-        .items-table thead {
-            display: table-header-group;
-        }
-
-        .items-table tr {
-            break-inside: avoid;
-            page-break-inside: avoid;
-        }
-
+        .items-table thead { display: table-header-group; }
+        .items-table tr    { break-inside: avoid; page-break-inside: avoid; }
         .items-table th,
         .items-table td {
             border: 1px solid #d1d5db;
             padding: 7px 8px;
             vertical-align: top;
         }
-
         .items-table th {
             background: #f8fafc;
             font-size: 10px;
@@ -741,59 +459,17 @@ export const buildOrderPrintDocument = (orders = []) => {
             letter-spacing: 0.12em;
             color: #374151;
         }
+        .col-index { width: 7%;  text-align: center; }
+        .col-name  { width: 49%; }
+        .col-qty   { width: 12%; text-align: center; }
+        .col-money { width: 16%; text-align: right; white-space: nowrap; }
+        .product-name { font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
+        .product-sku  { margin-top: 3px; font-size: 10px; color: #6b7280; }
+        .empty-state  { padding: 16px 12px; text-align: center; color: #6b7280; font-style: italic; }
 
-        .col-index {
-            width: 7%;
-            text-align: center;
-        }
-
-        .col-name {
-            width: 49%;
-        }
-
-        .col-qty {
-            width: 12%;
-            text-align: center;
-        }
-
-        .col-money {
-            width: 16%;
-            text-align: right;
-            white-space: nowrap;
-        }
-
-        .product-name {
-            font-weight: 700;
-            line-height: 1.45;
-            overflow-wrap: anywhere;
-        }
-
-        .product-sku {
-            margin-top: 3px;
-            font-size: 10px;
-            color: #6b7280;
-        }
-
-        .empty-state {
-            padding: 16px 12px;
-            text-align: center;
-            color: #6b7280;
-            font-style: italic;
-        }
-
-        .summary-row {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 12px;
-        }
-
-        .summary-box {
-            width: min(100%, 320px);
-            border: 2px solid #111827;
-            padding: 10px 12px;
-            margin-left: auto;
-        }
-
+        /* ── Summary ── */
+        .summary-row  { display: flex; justify-content: flex-end; margin-top: 12px; }
+        .summary-box  { width: min(100%, 320px); border: 2px solid #111827; padding: 10px 12px; margin-left: auto; }
         .summary-label {
             font-size: 11px;
             font-weight: 700;
@@ -802,7 +478,6 @@ export const buildOrderPrintDocument = (orders = []) => {
             color: #6b7280;
             margin-bottom: 4px;
         }
-
         .summary-value {
             font-size: 22px;
             font-weight: 800;
@@ -810,88 +485,38 @@ export const buildOrderPrintDocument = (orders = []) => {
             line-height: 1.2;
         }
 
+        /* ── Screen-only decoration ── */
         @media screen {
-            html,
-            body {
-                background: #eef2f7;
-            }
-
-            body {
-                padding: 16px;
-            }
-
+            html, body { background: #eef2f7; }
+            body { padding: 16px; }
             .order-sheet {
                 max-width: 1180px;
                 margin: 0 auto 16px;
                 border: 1px solid #d1d5db;
                 background: #ffffff;
-                box-shadow: 0 24px 60px -40px rgba(15, 23, 42, 0.35);
+                box-shadow: 0 24px 60px -40px rgba(15,23,42,.35);
             }
-
-            .order-sheet__inner {
-                padding: 16px 18px 18px;
-            }
+            .order-sheet__inner { padding: 16px 18px 18px; }
         }
 
+        /* ── Print overrides ── */
         @media print {
-            html,
-            body {
-                background: #ffffff;
-            }
-
-            body {
-                padding: 0;
-            }
-
-            .order-sheet {
-                margin: 0;
-                border: none;
-                box-shadow: none;
-                background: transparent;
-            }
+            html, body { background: #ffffff; padding: 0; }
+            .order-sheet { margin: 0; border: none; box-shadow: none; background: transparent; }
         }
 
+        /* ── Responsive (screen only) ── */
         @media (max-width: 900px) {
-            .sheet-meta {
-                min-width: 0;
-                width: 100%;
-                text-align: left;
-            }
-
-            .info-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .info-card-wide,
-            .info-card-full {
-                grid-column: span 2;
-            }
+            .sheet-meta { min-width: 0; width: 100%; text-align: left; }
+            .info-grid  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .info-card-wide, .info-card-full { grid-column: span 2; }
         }
-
         @media (max-width: 640px) {
-            .info-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .info-card-wide,
-            .info-card-full {
-                grid-column: auto;
-            }
-
-            .items-table {
-                table-layout: auto;
-            }
-
-            .col-index,
-            .col-name,
-            .col-qty,
-            .col-money {
-                width: auto;
-            }
-
-            .summary-box {
-                width: 100%;
-            }
+            .info-grid  { grid-template-columns: 1fr; }
+            .info-card-wide, .info-card-full { grid-column: auto; }
+            .items-table { table-layout: auto; }
+            .col-index, .col-name, .col-qty, .col-money { width: auto; }
+            .summary-box { width: 100%; }
         }
     </style>
 </head>
@@ -901,266 +526,62 @@ export const buildOrderPrintDocument = (orders = []) => {
 </html>`;
 };
 
-const waitForPrintDialogToClose = ({
-    ownerWindow = window,
-    printWindow = ownerWindow,
-    triggerPrint,
-    cleanup = () => {},
-    cleanupDelayMs = 0,
-}) => new Promise((resolve, reject) => {
-    let settled = false;
-    let timeoutId = null;
-    let focusTimerId = null;
-    let didTriggerPrint = false;
-    let didLoseFocus = false;
-    let mediaQueryList = null;
-    let cleanupScheduled = false;
+// ─── Public API ───────────────────────────────────────────────────────────────
 
-    const scheduleCleanup = () => {
-        if (cleanupScheduled) return;
-        cleanupScheduled = true;
-
-        getTimerWindow(ownerWindow).setTimeout(() => {
-            cleanup();
-        }, cleanupDelayMs);
-    };
-
-    const teardown = () => {
-        getTimerWindow(ownerWindow).clearTimeout(timeoutId);
-        getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
-        ownerWindow.removeEventListener('afterprint', handleAfterPrint);
-        ownerWindow.removeEventListener('focus', handleFocus);
-        ownerWindow.removeEventListener('blur', handleBlur);
-        ownerWindow.document?.removeEventListener('visibilitychange', handleVisibilityChange);
-
-        if (printWindow !== ownerWindow && typeof printWindow?.removeEventListener === 'function') {
-            printWindow.removeEventListener('afterprint', handleAfterPrint);
-        }
-
-        if (mediaQueryList) {
-            if (typeof mediaQueryList.removeEventListener === 'function') {
-                mediaQueryList.removeEventListener('change', handleMediaQueryChange);
-            } else if (typeof mediaQueryList.removeListener === 'function') {
-                mediaQueryList.removeListener(handleMediaQueryChange);
-            }
-        }
-    };
-
-    const finish = (reason = 'closed') => {
-        if (settled) return;
-        settled = true;
-        teardown();
-        scheduleCleanup();
-        resolve({
-            dialogClosed: true,
-            reason,
-        });
-    };
-
-    const fail = (error) => {
-        if (settled) return;
-        settled = true;
-        teardown();
-        scheduleCleanup();
-        reject(error instanceof Error ? error : new Error('Không thể mở hộp thoại in.'));
-    };
-
-    const handleAfterPrint = () => {
-        finish('afterprint');
-    };
-
-    const handleBlur = () => {
-        if (!didTriggerPrint) return;
-        didLoseFocus = true;
-    };
-
-    const handleFocus = () => {
-        if (!didTriggerPrint) return;
-
-        getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
-        focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
-            if (didLoseFocus) {
-                finish('focus');
-            }
-        }, PRINT_DIALOG_CLOSE_SETTLE_MS);
-    };
-
-    const handleVisibilityChange = () => {
-        if (!didTriggerPrint) return;
-
-        if (ownerWindow.document?.visibilityState === 'hidden') {
-            didLoseFocus = true;
-            return;
-        }
-
-        if (didLoseFocus) {
-            getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
-            focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
-                finish('visibilitychange');
-            }, PRINT_DIALOG_CLOSE_SETTLE_MS);
-        }
-    };
-
-    const handleMediaQueryChange = (event) => {
-        if (!didTriggerPrint) return;
-
-        if (event.matches) {
-            didLoseFocus = true;
-            return;
-        }
-
-        finish('mediaquery');
-    };
-
-    ownerWindow.addEventListener('afterprint', handleAfterPrint);
-    ownerWindow.addEventListener('focus', handleFocus);
-    ownerWindow.addEventListener('blur', handleBlur);
-    ownerWindow.document?.addEventListener('visibilitychange', handleVisibilityChange);
-
-    if (printWindow !== ownerWindow && typeof printWindow?.addEventListener === 'function') {
-        printWindow.addEventListener('afterprint', handleAfterPrint);
-    }
-
-    if (typeof ownerWindow.matchMedia === 'function') {
-        mediaQueryList = ownerWindow.matchMedia('print');
-
-        if (typeof mediaQueryList.addEventListener === 'function') {
-            mediaQueryList.addEventListener('change', handleMediaQueryChange);
-        } else if (typeof mediaQueryList.addListener === 'function') {
-            mediaQueryList.addListener(handleMediaQueryChange);
-        }
-    }
-
-    timeoutId = getTimerWindow(ownerWindow).setTimeout(() => {
-        finish('timeout');
-    }, PRINT_DIALOG_FALLBACK_MS);
-
-    try {
-        didTriggerPrint = true;
-        const triggerStartedAt = Date.now();
-        triggerPrint();
-        const triggerDurationMs = Date.now() - triggerStartedAt;
-
-        if (triggerDurationMs >= PRINT_DIALOG_BLOCKING_THRESHOLD_MS) {
-            getTimerWindow(ownerWindow).clearTimeout(focusTimerId);
-            focusTimerId = getTimerWindow(ownerWindow).setTimeout(() => {
-                finish('blocking-return');
-            }, PRINT_DIALOG_CLOSE_SETTLE_MS);
-        }
-    } catch (error) {
-        fail(error);
-    }
-});
-
-const printHtmlDocument = async ({
-    sourceWindow = window,
-    printWindow,
-    html,
-    title = 'In đơn hàng',
-}) => {
-    if (!sourceWindow?.document) {
-        throw new Error('Môi trường hiện tại không hỗ trợ in.');
-    }
-
-    const printTarget = printWindow || createHiddenPrintFrame(sourceWindow, title);
-    const targetWindow = getPrintTargetWindow(printTarget);
-
-    if (!targetWindow || isPrintTargetClosed(printTarget)) {
-        throw new Error('Không thể khởi tạo bản in. Vui lòng thử lại.');
-    }
-
-    const releaseLoadedDocument = await loadHtmlIntoPrintTarget(printTarget, html);
-    let didClosePrintTarget = false;
-
-    const closePrintTarget = () => {
-        if (didClosePrintTarget) {
-            return;
-        }
-
-        didClosePrintTarget = true;
-
-        try {
-            releaseLoadedDocument?.();
-        } finally {
-            closePrintWindow(printTarget);
-        }
-    };
-
-    try {
-        await waitForPrintableDocument(targetWindow);
-    } catch (error) {
-        closePrintTarget();
-        throw error;
-    }
-
-    let printResult;
-
-    try {
-        printResult = await waitForPrintDialogToClose({
-            ownerWindow: sourceWindow,
-            printWindow: targetWindow,
-            triggerPrint: () => {
-                targetWindow.focus?.();
-                targetWindow.print();
-            },
-        });
-    } catch (error) {
-        closePrintTarget();
-        throw error;
-    }
-
-    return {
-        ...printResult,
-        close: closePrintTarget,
-        targetWindow,
-    };
-};
-
-export const closePrintSession = (session) => {
-    if (!session) return;
-
-    if (typeof session.close === 'function') {
-        session.close();
-        return;
-    }
-
-    closePrintWindow(session);
-};
-
-export const printCurrentPage = async (sourceWindow = window, options = {}) => {
-    if (typeof sourceWindow === 'undefined' || typeof sourceWindow?.document === 'undefined') {
-        throw new Error('Môi trường hiện tại không hỗ trợ in.');
-    }
-
-    const title = sourceWindow.document?.title || 'In đơn hàng';
-    const html = buildCurrentPagePrintDocument(sourceWindow);
-
-    return printHtmlDocument({
-        sourceWindow,
-        printWindow: options.printWindow,
-        html,
-        title,
-    });
-};
-
+/**
+ * Mở cửa sổ in chuẩn của trình duyệt với danh sách đơn hàng.
+ *
+ * @param {Array}  orders          - mảng đơn hàng từ API
+ * @param {Object} [options]
+ * @param {Window} [options.ownerWindow] - parent window (mặc định: global window)
+ * @returns {{ close: () => void, reason: string }}
+ * @throws {Error} chỉ khi popup bị chặn
+ */
 export const printOrders = async (orders = [], options = {}) => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-        throw new Error('Môi trường hiện tại không hỗ trợ in.');
-    }
-
     if (!Array.isArray(orders) || orders.length === 0) {
         throw new Error('Không có dữ liệu đơn hàng để in.');
     }
 
+    const ownerWindow = options.ownerWindow || window;
     const primaryOrder = orders[0] || {};
-    const title = orders.length > 1
-        ? `In ${orders.length} đơn hàng`
-        : `In đơn #${primaryOrder.order_number || ''}`.trim();
+    const title =
+        orders.length > 1
+            ? `In ${orders.length} đơn hàng`
+            : `In đơn #${primaryOrder.order_number || ''}`.trim();
 
-    return printHtmlDocument({
-        sourceWindow: options.ownerWindow || window,
-        printWindow: options.printWindow,
-        html: buildOrderPrintDocument(orders),
-        title,
-    });
+    const html = buildOrderPrintDocument(orders);
+
+    return printHtmlInPopup(html, title, ownerWindow);
 };
+
+/**
+ * Đóng session in (popup window).
+ */
+export const closePrintSession = (session) => {
+    if (!session) return;
+    if (typeof session.close === 'function') {
+        session.close();
+    }
+};
+
+/**
+ * (Legacy / không dùng trong luồng chính) — In trang hiện tại
+ */
+export const printCurrentPage = async (sourceWindow = window) => {
+    const title = sourceWindow.document?.title || 'In đơn hàng';
+
+    return printHtmlInPopup(
+        `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${
+            sourceWindow.document.body?.innerHTML || ''
+        }</body></html>`,
+        title,
+        sourceWindow
+    );
+};
+
+/**
+ * (Legacy) — Chuẩn bị popup trước rồi dùng sau.
+ * Giữ export để không break import cũ — nhưng giờ chỉ trả về null
+ * vì luồng mới không cần pre-warm popup.
+ */
+export const preparePrintPopupWindow = () => null;

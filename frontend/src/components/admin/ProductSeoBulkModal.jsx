@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isRetryableRequestError, productSeoBulkApi } from '../../services/api';
+import { isRetryableRequestError, productSeoBulkApi, mediaApi } from '../../services/api';
 import { resolveAiRequestError } from '../../utils/aiError';
 
 const RUN_ACTIVE_STATUSES = ['queued', 'running'];
@@ -99,6 +99,9 @@ const ProductSeoBulkModal = ({
     const [loadingRun, setLoadingRun] = useState(false);
     const [creatingRun, setCreatingRun] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
+    const [customInstruction, setCustomInstruction] = useState('');
+    const [teamImageUrl, setTeamImageUrl] = useState('');
+    const [uploadingImage, setUploadingImage] = useState(false);
     const [transientMessage, setTransientMessage] = useState('');
     const [lastProcessedCount, setLastProcessedCount] = useState(0);
     const [statusFilter, setStatusFilter] = useState('');
@@ -257,6 +260,8 @@ const ProductSeoBulkModal = ({
             const response = await productSeoBulkApi.createRun({
                 product_ids: effectiveSelectedIds,
                 request_key: requestKey,
+                custom_instruction: customInstruction,
+                team_image_url: teamImageUrl,
             });
 
             const run = response.data?.data || null;
@@ -292,25 +297,12 @@ const ProductSeoBulkModal = ({
             return undefined;
         }
 
-        if (
-            autoStartToken
-            && autoStartedTokenRef.current !== autoStartToken
-            && Array.isArray(effectiveSelectedIds)
-            && effectiveSelectedIds.length > 0
-        ) {
-            autoStartedTokenRef.current = autoStartToken;
-            createRequestKeyRef.current = buildRunRequestKey();
-            startRun();
-
-            return undefined;
-        }
-
         if (effectiveRunId) {
             loadRun(effectiveRunId);
         }
 
         return undefined;
-    }, [autoStartToken, effectiveRunId, loadRun, open, effectiveSelectedIds, startRun]);
+    }, [effectiveRunId, loadRun, open]);
 
     useEffect(() => {
         clearPollingTimeout();
@@ -363,6 +355,30 @@ const ProductSeoBulkModal = ({
             window.removeEventListener('online', handleOnline);
         };
     }, [effectiveRunId, loadRun, notifyRunChange, open, recoverRunByRequestKey]);
+
+    const handleUploadImage = async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setUploadingImage(true);
+        setErrorMessage('');
+        
+        try {
+            const formData = new FormData();
+            formData.append('image', file);
+            
+            const response = await mediaApi.upload(formData);
+            if (!response.data?.success || !response.data?.url) {
+                throw new Error('UPLOAD_FAILED');
+            }
+            setTeamImageUrl(response.data.url);
+        } catch (error) {
+            setErrorMessage('Không thể tải ảnh lên. Vui lòng thử lại.');
+        } finally {
+            setUploadingImage(false);
+            if (event.target) event.target.value = '';
+        }
+    };
 
     const handleApplyFilters = (event) => {
         event?.preventDefault?.();
@@ -463,196 +479,296 @@ const ProductSeoBulkModal = ({
                     </div>
                 </div>
 
-                <div className="px-5 py-4 border-b border-primary/10 bg-slate-50/70">
-                    <div className="flex flex-wrap items-center gap-3">
-                        <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-[12px] font-bold ${statusBadgeClassName(currentRun?.status)}`}>
-                            <span className="material-symbols-outlined text-[16px]">
-                                {creatingRun || loadingRun ? 'sync' : 'monitoring'}
-                            </span>
-                            {currentRun ? runStatusLabel(currentRun.status) : (creatingRun ? 'Dang tao tien trinh' : 'Chua co tien trinh')}
-                        </div>
-                        <div className="text-[12px] text-primary/60">
-                            Run ID: <span className="font-mono font-bold text-primary/80">{currentRun?.id || '--'}</span>
-                        </div>
-                        <div className="text-[12px] text-primary/60">
-                            Bat dau: <span className="font-semibold text-primary/80">{formatDateTime(currentRun?.started_at || currentRun?.created_at)}</span>
-                        </div>
-                        <div className="text-[12px] text-primary/60">
-                            Ket thuc: <span className="font-semibold text-primary/80">{formatDateTime(currentRun?.finished_at)}</span>
-                        </div>
-                    </div>
-
-                    <div className="mt-4">
-                        <div className="flex items-center justify-between text-[12px] text-primary/60 mb-1.5">
-                            <span>Tien do</span>
-                            <span className="font-bold text-primary/80">{processedItems}/{totalItems} san pham - {progressPercent.toFixed(0)}%</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
-                            <div
-                                className="h-full bg-emerald-500 transition-all duration-300"
-                                style={{ width: `${progressPercent}%` }}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
-                        {statCards.map((card) => (
-                            <div key={card.label} className="rounded border border-primary/10 bg-white px-3 py-3">
-                                <div className="text-[11px] uppercase tracking-wide text-primary/45">{card.label}</div>
-                                <div className={`text-[20px] font-black mt-1 ${card.tone}`}>{card.value}</div>
-                            </div>
-                        ))}
-                    </div>
-
-                    {showQueueWorkerHint && (
-                        <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] text-amber-800">
-                            Tien trinh dang nam o trang thai xep hang qua lau hoac worker dang loi.
-                            Neu can, co the kiem tra worker bang script <span className="font-mono font-bold">backend/run-product-seo-bulk-worker.cmd</span>.
-                            {workerStatus?.last_error ? (
-                                <div className="mt-2 text-red-700 whitespace-pre-line">
-                                    {workerStatus.last_error}
-                                </div>
-                            ) : null}
-                        </div>
-                    )}
-
-                    {transientMessage && (
-                        <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] text-amber-800 whitespace-pre-line">
-                            {transientMessage}
-                        </div>
-                    )}
-
-                    {errorMessage && (
-                        <div className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-3 text-[12px] text-red-700 whitespace-pre-line">
-                            {errorMessage}
-                        </div>
-                    )}
-                </div>
-
-                <div className="px-5 py-4 border-b border-primary/10">
-                    <form className="flex flex-col lg:flex-row gap-3" onSubmit={handleApplyFilters}>
-                        <div className="flex-1">
-                            <input
-                                type="text"
-                                value={searchInput}
-                                onChange={(event) => setSearchInput(event.target.value)}
-                                placeholder="Tim theo SKU hoac ten san pham"
-                                className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-semibold text-[#0F172A] focus:outline-none focus:border-primary"
-                            />
-                        </div>
-                        <select
-                            value={statusFilter}
-                            onChange={(event) => {
-                                setStatusFilter(event.target.value);
-                                setPage(1);
-                            }}
-                            className="h-10 min-w-[180px] bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-semibold text-[#0F172A] focus:outline-none focus:border-primary"
-                        >
-                            <option value="">Tat ca trang thai</option>
-                            <option value="queued">Cho xu ly</option>
-                            <option value="processing">Dang tao SEO</option>
-                            <option value="retrying">Cho thu lai</option>
-                            <option value="completed">Hoan tat</option>
-                            <option value="failed">Can kiem tra</option>
-                        </select>
-                        <button
-                            type="submit"
-                            className="h-10 px-4 rounded-sm bg-primary text-white font-bold text-[13px] hover:opacity-90"
-                        >
-                            Loc
-                        </button>
-                    </form>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-auto">
-                    <table className="min-w-full text-[13px]">
-                        <thead className="sticky top-0 z-10 bg-slate-100/95 text-primary/70">
-                            <tr>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">STT</th>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">San pham</th>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Trang thai</th>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Lan thu</th>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Thong tin</th>
-                                <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Cap nhat</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {items.length === 0 ? (
-                                <tr>
-                                    <td colSpan={6} className="px-4 py-10 text-center text-primary/50 border-b border-primary/10">
-                                        {loadingRun || creatingRun ? 'Dang tai tien trinh...' : 'Khong co san pham nao khop bo loc hien tai.'}
-                                    </td>
-                                </tr>
-                            ) : items.map((item) => (
-                                <tr key={item.id} className="border-b border-primary/10 align-top">
-                                    <td className="px-3 py-3 text-primary/55 font-bold">{item.position}</td>
-                                    <td className="px-3 py-3">
-                                        <div className="font-black text-[#0F172A]">{item.product_name || `San pham #${item.product_id}`}</div>
-                                        <div className="text-[11px] text-primary/50 mt-1">
-                                            {item.product_sku || '--'} • ID {item.product_id}
+                {!currentRun && !loadingRun ? (
+                    <div className="px-5 py-6 bg-slate-50/70 flex-1 overflow-auto">
+                        <div className="max-w-3xl mx-auto space-y-6">
+                            <div className="bg-white p-5 rounded-md border border-primary/10 shadow-sm">
+                                <h4 className="text-[14px] font-black text-[#0F172A] mb-2 flex items-center gap-2">
+                                    <span className="material-symbols-outlined text-primary text-[20px]">psychology</span>
+                                    Cấu Hình SEO AI Hàng Loạt
+                                </h4>
+                                <p className="text-[13px] text-primary/60 mb-5">
+                                    Thiết lập các yêu cầu đặc biệt của bạn trước khi đưa cho AI để viết nội dung SEO cho <b>{effectiveSelectedIds?.length || 0} sản phẩm</b>.
+                                </p>
+                                
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-[12px] font-bold text-[#0F172A] mb-1.5 uppercase tracking-wide">
+                                            Yêu cầu thêm (Tùy chọn)
+                                        </label>
+                                        <textarea
+                                            value={customInstruction}
+                                            onChange={(e) => setCustomInstruction(e.target.value)}
+                                            placeholder="Ví dụ: Công ty của tôi là Gốm Đại Thành, hãy nhấn mạnh về kinh nghiệm 30 năm ở mọi bài viết..."
+                                            className="w-full h-32 border border-primary/20 rounded-md p-3 text-[13px] leading-relaxed focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all placeholder:text-primary/30"
+                                        />
+                                        <p className="mt-1.5 text-[11.5px] text-primary/50">
+                                            Lưu ý: Nội dung này sẽ được AI áp dụng cho toàn bộ các sản phẩm trong đợt tải lên này. Vui lòng để trống nếu không có yêu cầu đặc biệt.
+                                        </p>
+                                    </div>
+                                    
+                                    <div className="bg-blue-50 border border-blue-100 rounded p-4">
+                                        <div className="flex gap-3">
+                                            <span className="material-symbols-outlined text-blue-600 text-[20px]">group</span>
+                                            <div className="flex-1">
+                                                <h5 className="text-[13px] font-bold text-blue-800">Hình ảnh Đội ngũ nhân sự (Tùy chọn ghi đè)</h5>
+                                                <p className="text-[12px] text-blue-700 mt-1 mb-3">
+                                                    Hệ thống tự động sử dụng hình Đội ngũ được cài đặt sẵn. Tuy nhiên, anh có thể tải lên một bức ảnh mới ở đây. Hình này sẽ được <b>lưu làm mặc định mới</b> và áp dụng vào phần cuối các bài mô tả sản phẩm.
+                                                </p>
+                                                
+                                                <div className="flex items-start gap-4">
+                                                    <label className="shrink-0">
+                                                        <input 
+                                                            type="file" 
+                                                            accept="image/*" 
+                                                            className="hidden" 
+                                                            onChange={handleUploadImage}
+                                                            disabled={uploadingImage || creatingRun}
+                                                        />
+                                                        <div className={`px-4 py-2 bg-blue-600 text-white rounded text-[12px] font-bold cursor-pointer hover:bg-blue-700 transition-colors flex items-center gap-2 ${(uploadingImage || creatingRun) ? 'opacity-50 pointer-events-none' : ''}`}>
+                                                            <span className={`material-symbols-outlined text-[16px] ${uploadingImage ? 'animate-spin' : ''}`}>
+                                                                {uploadingImage ? 'sync' : 'upload'}
+                                                            </span>
+                                                            {uploadingImage ? 'Đang tải lên...' : 'Tải ảnh mới'}
+                                                        </div>
+                                                    </label>
+                                                    
+                                                    {teamImageUrl && (
+                                                        <div className="rounded overflow-hidden border border-blue-200 bg-white relative w-24 h-16 shrink-0 flex items-center justify-center">
+                                                            <img src={teamImageUrl} alt="Team" className="max-w-full max-h-full object-contain" />
+                                                            <button 
+                                                                type="button" 
+                                                                onClick={() => setTeamImageUrl('')}
+                                                                className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[12px]">close</span>
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                    </td>
-                                    <td className="px-3 py-3">
-                                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full border text-[11px] font-black ${statusBadgeClassName(item.status)}`}>
-                                            {itemStatusLabel(item.status)}
-                                        </span>
-                                    </td>
-                                    <td className="px-3 py-3 text-primary/70 font-semibold">
-                                        {item.attempt_count}/{item.max_attempts}
-                                        {item.next_retry_at ? (
-                                            <div className="text-[11px] text-amber-700 mt-1">
-                                                Thu lai luc {formatDateTime(item.next_retry_at)}
-                                            </div>
-                                        ) : null}
-                                    </td>
-                                    <td className="px-3 py-3">
-                                        {item.last_error ? (
-                                            <div className="text-[12px] text-red-700 whitespace-pre-line">
-                                                {item.last_error}
-                                            </div>
-                                        ) : (
-                                            <div className="text-[12px] text-primary/45">
-                                                {item.last_model ? `Model: ${item.last_model}` : '--'}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td className="px-3 py-3 text-[12px] text-primary/55">
-                                        <div>Bat dau: {formatDateTime(item.started_at)}</div>
-                                        <div className="mt-1">Xong: {formatDateTime(item.finished_at)}</div>
-                                        <div className="mt-1">Cap nhat: {formatDateTime(item.updated_at)}</div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div className="px-5 py-4 border-t border-primary/10 bg-slate-50/70 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                    <div className="text-[12px] text-primary/55">
-                        Hien thi {itemsMeta.from || 0}-{itemsMeta.to || 0} / {itemsMeta.total || 0} san pham
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            type="button"
-                            disabled={creatingRun || loadingRun || Number(itemsMeta.current_page || 1) <= 1}
-                            onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-                            className="px-3 py-2 border border-primary/20 rounded-sm text-[12px] font-bold text-primary disabled:opacity-40"
-                        >
-                            Trang truoc
-                        </button>
-                        <div className="text-[12px] text-primary/60 font-semibold">
-                            Trang {itemsMeta.current_page || 1}/{itemsMeta.last_page || 1}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-center justify-end gap-3 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={onClose}
+                                    className="px-5 py-2 rounded font-bold text-[13px] text-primary border border-primary/20 hover:bg-slate-50 transition-colors"
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={startRun}
+                                    disabled={creatingRun || !effectiveSelectedIds?.length}
+                                    className="px-6 py-2 rounded font-bold text-[13px] bg-primary text-white shadow-sm hover:opacity-90 flex items-center gap-2 transition-all disabled:opacity-50"
+                                >
+                                    {creatingRun ? (
+                                        <><span className="material-symbols-outlined text-[18px] animate-spin">sync</span> Đang khởi tạo...</>
+                                    ) : (
+                                        <><span className="material-symbols-outlined text-[18px]">auto_awesome</span> Bắt đầu khởi tạo dữ liệu SEO</>
+                                    )}
+                                </button>
+                            </div>
                         </div>
-                        <button
-                            type="button"
-                            disabled={creatingRun || loadingRun || Number(itemsMeta.current_page || 1) >= Number(itemsMeta.last_page || 1)}
-                            onClick={() => setPage((prev) => prev + 1)}
-                            className="px-3 py-2 border border-primary/20 rounded-sm text-[12px] font-bold text-primary disabled:opacity-40"
-                        >
-                            Trang sau
-                        </button>
                     </div>
-                </div>
+                ) : (
+                    <>
+                        <div className="px-5 py-4 border-b border-primary/10 bg-slate-50/70">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full border text-[12px] font-bold ${statusBadgeClassName(currentRun?.status)}`}>
+                                    <span className="material-symbols-outlined text-[16px]">
+                                        {creatingRun || loadingRun ? 'sync' : 'monitoring'}
+                                    </span>
+                                    {currentRun ? runStatusLabel(currentRun.status) : (creatingRun ? 'Dang tao tien trinh' : 'Chua co tien trinh')}
+                                </div>
+                                <div className="text-[12px] text-primary/60">
+                                    Run ID: <span className="font-mono font-bold text-primary/80">{currentRun?.id || '--'}</span>
+                                </div>
+                                <div className="text-[12px] text-primary/60">
+                                    Bat dau: <span className="font-semibold text-primary/80">{formatDateTime(currentRun?.started_at || currentRun?.created_at)}</span>
+                                </div>
+                                <div className="text-[12px] text-primary/60">
+                                    Ket thuc: <span className="font-semibold text-primary/80">{formatDateTime(currentRun?.finished_at)}</span>
+                                </div>
+                            </div>
+
+                            <div className="mt-4">
+                                <div className="flex items-center justify-between text-[12px] text-primary/60 mb-1.5">
+                                    <span>Tien do</span>
+                                    <span className="font-bold text-primary/80">{processedItems}/{totalItems} san pham - {progressPercent.toFixed(0)}%</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                                    <div
+                                        className="h-full bg-emerald-500 transition-all duration-300"
+                                        style={{ width: `${progressPercent}%` }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
+                                {statCards.map((card) => (
+                                    <div key={card.label} className="rounded border border-primary/10 bg-white px-3 py-3">
+                                        <div className="text-[11px] uppercase tracking-wide text-primary/45">{card.label}</div>
+                                        <div className={`text-[20px] font-black mt-1 ${card.tone}`}>{card.value}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {showQueueWorkerHint && (
+                                <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] text-amber-800">
+                                    Tien trinh dang nam o trang thai xep hang qua lau hoac worker dang loi.
+                                    Neu can, co the kiem tra worker bang script <span className="font-mono font-bold">backend/run-product-seo-bulk-worker.cmd</span>.
+                                    {workerStatus?.last_error ? (
+                                        <div className="mt-2 text-red-700 whitespace-pre-line">
+                                            {workerStatus.last_error}
+                                        </div>
+                                    ) : null}
+                                </div>
+                            )}
+
+                            {transientMessage && (
+                                <div className="mt-4 rounded border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] text-amber-800 whitespace-pre-line">
+                                    {transientMessage}
+                                </div>
+                            )}
+
+                            {errorMessage && (
+                                <div className="mt-4 rounded border border-red-200 bg-red-50 px-3 py-3 text-[12px] text-red-700 whitespace-pre-line">
+                                    {errorMessage}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="px-5 py-4 border-b border-primary/10">
+                            <form className="flex flex-col lg:flex-row gap-3" onSubmit={handleApplyFilters}>
+                                <div className="flex-1">
+                                    <input
+                                        type="text"
+                                        value={searchInput}
+                                        onChange={(event) => setSearchInput(event.target.value)}
+                                        placeholder="Tim theo SKU hoac ten san pham"
+                                        className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-semibold text-[#0F172A] focus:outline-none focus:border-primary"
+                                    />
+                                </div>
+                                <select
+                                    value={statusFilter}
+                                    onChange={(event) => {
+                                        setStatusFilter(event.target.value);
+                                        setPage(1);
+                                    }}
+                                    className="h-10 min-w-[180px] bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-semibold text-[#0F172A] focus:outline-none focus:border-primary"
+                                >
+                                    <option value="">Tat ca trang thai</option>
+                                    <option value="queued">Cho xu ly</option>
+                                    <option value="processing">Dang tao SEO</option>
+                                    <option value="retrying">Cho thu lai</option>
+                                    <option value="completed">Hoan tat</option>
+                                    <option value="failed">Can kiem tra</option>
+                                </select>
+                                <button
+                                    type="submit"
+                                    className="h-10 px-4 rounded-sm bg-primary text-white font-bold text-[13px] hover:opacity-90"
+                                >
+                                    Loc
+                                </button>
+                            </form>
+                        </div>
+
+                        <div className="flex-1 min-h-0 overflow-auto">
+                            <table className="min-w-full text-[13px]">
+                                <thead className="sticky top-0 z-10 bg-slate-100/95 text-primary/70">
+                                    <tr>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">STT</th>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">San pham</th>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Trang thai</th>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Lan thu</th>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Thong tin</th>
+                                        <th className="px-3 py-3 text-left font-black uppercase tracking-wide border-b border-primary/10">Cap nhat</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {items.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="px-4 py-10 text-center text-primary/50 border-b border-primary/10">
+                                                {loadingRun || creatingRun ? 'Dang tai tien trinh...' : 'Khong co san pham nao khop bo loc hien tai.'}
+                                            </td>
+                                        </tr>
+                                    ) : items.map((item) => (
+                                        <tr key={item.id} className="border-b border-primary/10 align-top">
+                                            <td className="px-3 py-3 text-primary/55 font-bold">{item.position}</td>
+                                            <td className="px-3 py-3">
+                                                <div className="font-black text-[#0F172A]">{item.product_name || `San pham #${item.product_id}`}</div>
+                                                <div className="text-[11px] text-primary/50 mt-1">
+                                                    {item.product_sku || '--'} • ID {item.product_id}
+                                                </div>
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full border text-[11px] font-black ${statusBadgeClassName(item.status)}`}>
+                                                    {itemStatusLabel(item.status)}
+                                                </span>
+                                            </td>
+                                            <td className="px-3 py-3 text-primary/70 font-semibold">
+                                                {item.attempt_count}/{item.max_attempts}
+                                                {item.next_retry_at ? (
+                                                    <div className="text-[11px] text-amber-700 mt-1">
+                                                        Thu lai luc {formatDateTime(item.next_retry_at)}
+                                                    </div>
+                                                ) : null}
+                                            </td>
+                                            <td className="px-3 py-3">
+                                                {item.last_error ? (
+                                                    <div className="text-[12px] text-red-700 whitespace-pre-line">
+                                                        {item.last_error}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-[12px] text-primary/45">
+                                                        {item.last_model ? `Model: ${item.last_model}` : '--'}
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-3 py-3 text-[12px] text-primary/55">
+                                                <div>Bat dau: {formatDateTime(item.started_at)}</div>
+                                                <div className="mt-1">Xong: {formatDateTime(item.finished_at)}</div>
+                                                <div className="mt-1">Cap nhat: {formatDateTime(item.updated_at)}</div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div className="px-5 py-4 border-t border-primary/10 bg-slate-50/70 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                            <div className="text-[12px] text-primary/55">
+                                Hien thi {itemsMeta.from || 0}-{itemsMeta.to || 0} / {itemsMeta.total || 0} san pham
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    disabled={creatingRun || loadingRun || Number(itemsMeta.current_page || 1) <= 1}
+                                    onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
+                                    className="px-3 py-2 border border-primary/20 rounded-sm text-[12px] font-bold text-primary disabled:opacity-40"
+                                >
+                                    Trang truoc
+                                </button>
+                                <div className="text-[12px] text-primary/60 font-semibold">
+                                    Trang {itemsMeta.current_page || 1}/{itemsMeta.last_page || 1}
+                                </div>
+                                <button
+                                    type="button"
+                                    disabled={creatingRun || loadingRun || Number(itemsMeta.current_page || 1) >= Number(itemsMeta.last_page || 1)}
+                                    onClick={() => setPage((prev) => prev + 1)}
+                                    className="px-3 py-2 border border-primary/20 rounded-sm text-[12px] font-bold text-primary disabled:opacity-40"
+                                >
+                                    Trang sau
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
             </div>
         </div>
     );

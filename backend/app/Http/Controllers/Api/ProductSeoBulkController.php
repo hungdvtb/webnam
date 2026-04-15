@@ -66,6 +66,7 @@ class ProductSeoBulkController extends Controller
             'product_ids.*' => 'integer',
             'model' => 'nullable|string|max:120',
             'custom_instruction' => 'nullable|string|max:4000',
+            'team_image_url' => 'nullable|string|max:1000',
             'request_key' => 'nullable|string|max:120',
         ]);
 
@@ -77,6 +78,15 @@ class ProductSeoBulkController extends Controller
             $validated['custom_instruction'] ?? null,
             $validated['request_key'] ?? null
         );
+
+        if (!empty($validated['team_image_url'])) {
+            \App\Models\SiteSetting::setValue(
+                 'product_seo_team_image_url', 
+                 trim($validated['team_image_url']), 
+                 $accountId
+            );
+            \App\Support\OrderBootstrapCache::forget($accountId, \App\Support\OrderBootstrapCache::MODE_FORM);
+        }
 
         $workerStatus = $this->bulkRunService->getWorkerStatus();
 

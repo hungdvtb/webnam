@@ -36,6 +36,7 @@ const OrderDetail = () => {
     const [printConfirmOpen, setPrintConfirmOpen] = useState(false);
     const [confirmingPrinted, setConfirmingPrinted] = useState(false);
     const [printSession, setPrintSession] = useState(null);
+    const [printError, setPrintError] = useState('');
 
     const [orderStatuses, setOrderStatuses] = useState([]);
 
@@ -90,6 +91,7 @@ const OrderDetail = () => {
         if (printing || printConfirmOpen) return;
 
         setPrinting(true);
+        setPrintError('');
         try {
             const response = await orderApi.getPrintData([Number(id)]);
             const printableOrders = response?.data?.data || [];
@@ -105,7 +107,8 @@ const OrderDetail = () => {
             setPrintSession(session);
             setPrintConfirmOpen(true);
         } catch (error) {
-            console.error('Error recording order print', error);
+            console.error('Print order error:', error);
+            setPrintError(error?.message || 'Không thể mở cửa sổ in. Vui lòng thử lại.');
         } finally {
             setPrinting(false);
         }
@@ -163,7 +166,8 @@ const OrderDetail = () => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 print:hidden items-center">
+                <div className="flex flex-col items-end gap-2">
+                    <div className="flex gap-2 print:hidden items-center">
                     {printCountLabel && (
                         <div className="inline-flex items-center rounded-sm border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[11px] font-black text-primary/70">
                             {printCountLabel}
@@ -175,7 +179,7 @@ const OrderDetail = () => {
                         className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing || printConfirmOpen ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
                     >
                         <span className="material-symbols-outlined text-sm">print</span>
-                        In Hóa Đơn
+                        {printing ? 'Đang chuẩn bị...' : 'In Hóa Đơn'}
                     </button>
                     <select
                         value={order.status}
@@ -188,6 +192,12 @@ const OrderDetail = () => {
                             <option key={s.id} value={s.code}>{s.name}</option>
                         ))}
                     </select>
+                    </div>
+                    {printError && (
+                        <div className="max-w-sm text-right text-[12px] font-semibold leading-relaxed" style={{color:'#b91c1c'}}>
+                            ⚠ {printError}
+                        </div>
+                    )}
                 </div>
             </div>
 

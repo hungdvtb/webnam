@@ -94,79 +94,96 @@ const waitForPaint = (targetWindow) =>
 /**
  * In bằng cách gọi window.print() trên chính trang admin.
  *
- * Đây là cách ĐÁNG TIN CẬY NHẤT vì:
- * - window.print() == Ctrl+P: driver máy in không thể phân biệt và từ chối
- * - Tránh mọi sandbox/restriction của popup hay iframe
- * - afterprint fire 100% trên main window
- *
- * Cơ chế: Inject CSS @media print để ẩn React app, hiện chỉ nội dung đơn hàng.
- * Kỹ thuật visibility (không dùng display:none) để tránh React reflow.
- *
- * @param {string} html        - HTML document đầy đủ cần in
- * @param {Window} ownerWin    - main window (mặc định: window)
- * @returns {{ close: () => void, reason: string }}
+ * Cơ chế:
+ * 1. Parse HTML đơn hàng → lấy CSS + body content
+ * 2. Inject content container vào DOM (off-screen, KHÔNG dùng display:none
+ *    vì display:none inline không thể override bằng CSS stylesheet)
+ * 3. Inject @media print CSS: ẩn React app (visibility:hidden),
+ *    hiện container đơn hàng (visibility:visible + position:fixed)
+ * 4. Gọi window.print() — tương đương Ctrl+P
+ * 5. Dọn dẹp sau afterprint
  */
 const printWithMainWindow = async (html, ownerWin = window) => {
     const ownerDoc = ownerWin.document;
 
-    // Dọn injection cũ nếu còn
     const STYLE_ID   = '__order_print_style__';
     const CONTENT_ID = '__order_print_content__';
+
+    // Dọn injection cũ nếu còn
     ownerDoc.getElementById(STYLE_ID)?.remove();
     ownerDoc.getElementById(CONTENT_ID)?.remove();
 
     // Parse HTML để tách <style> và <body> content
     const parsed = new DOMParser().parseFromString(html, 'text/html');
 
-    // Lấy CSS từ HTML đơn hàng
-    const printCss = Array.from(parsed.querySelectorAll('style'))
+    // Lấy toàn bộ CSS từ HTML đơn hàng
+    const rawCss = Array.from(parsed.querySelectorAll('style'))
         .map((s) => s.textContent)
         .join('\n');
 
-    // Inject print-override CSS vào <head> của trang chính
-    // Kỹ thuật: visibility:hidden toàn body, visible chỉ container đơn hàng
+    // Tách @page rules ra riêng — Chrome không cho phép @page lồng trong @media print
+    const pageRules  = [];
+    const otherCss   = rawCss.replace(/@page\s*\{[^}]*\}/g, (m) => { pageRules.push(m); return ''; });
+
+    // Inject style block vào <head>
     const styleEl = ownerDoc.createElement('style');
     styleEl.id = STYLE_ID;
     styleEl.textContent = `
-        @media print {
-            /* Ẩn toàn bộ React app trong khi in */
-            html body { visibility: hidden !important; }
+        /* @page phải ở top-level (không được lồng trong @media print) */
+        ${pageRules.join('\n')}
 
-            /* Chỉ hiện container đơn hàng */
+        @media print {
+            /* 1. Ẩn toàn bộ React app bằng visibility (KHÔNG dùng display:none
+               vì display:none có thể làm mất layout và gây lỗi render) */
+            html, body { visibility: hidden !important; }
+
+            /* 2. Hiện ONLY container đơn hàng — children kế thừa visibility:visible */
+            #${CONTENT_ID},
+            #${CONTENT_ID} * { visibility: visible !important; }
+
             #${CONTENT_ID} {
-                visibility: visible !important;
                 position: fixed !important;
-                inset: 0 !important;
+                left: 0 !important;
+                top: 0 !important;
+                right: 0 !important;
+                bottom: auto !important;
                 width: 100% !important;
                 height: auto !important;
                 overflow: visible !important;
-                z-index: 999999 !important;
-                background: #fff !important;
+                background: #ffffff !important;
             }
 
-            /* CSS nội dung in */
-            ${printCss}
+            /* 3. CSS nội dung đơn hàng (fonts, tables, v.v.) */
+            ${otherCss}
         }
     `;
     ownerDoc.head.appendChild(styleEl);
 
-    // Inject body content vào trang chính (ẩn khi bình thường, hiện khi in)
+    // Inject body content — KHÔNG dùng display:none (inline style không thể override bằng CSS)
+    // Thay vào đó: đặt ra ngoài viewport bình thường, @media print sẽ kéo về position:fixed
     const contentEl = ownerDoc.createElement('div');
     contentEl.id = CONTENT_ID;
-    contentEl.style.cssText = 'display:none;position:absolute;left:-9999px;top:-9999px;';
+    contentEl.style.cssText = [
+        'position:fixed',
+        'left:-210mm',     // nằm ngoài màn hình bên trái
+        'top:0',
+        'width:210mm',
+        'overflow:visible',
+        // KHÔNG dùng display:none hay visibility:hidden
+        // để @media print có thể override được
+    ].join(';');
     contentEl.innerHTML = parsed.body?.innerHTML || '';
     ownerDoc.body.appendChild(contentEl);
 
-    // Chờ một frame để style settle
+    // Chờ DOM update
     await delay(200);
 
-    // Hàm dọn dẹp
     const cleanup = () => {
-        try { ownerDoc.getElementById(STYLE_ID)?.remove(); } catch (_) { /* ignore */ }
+        try { ownerDoc.getElementById(STYLE_ID)?.remove(); }   catch (_) { /* ignore */ }
         try { ownerDoc.getElementById(CONTENT_ID)?.remove(); } catch (_) { /* ignore */ }
     };
 
-    // Gọi window.print() — tương đương Ctrl+P, driver không từ chối được
+    // Gọi window.print() — tương đương Ctrl+P, driver luôn nhận
     const printResult = await new Promise((resolve) => {
         let settled = false;
         let timeoutId = null;
@@ -180,14 +197,9 @@ const printWithMainWindow = async (html, ownerWin = window) => {
         };
 
         const handleAfterPrint = () => finish('afterprint');
-
-        // afterprint trên main window — 100% reliable
         ownerWin.addEventListener('afterprint', handleAfterPrint);
-
-        // Timeout 90s fallback
         timeoutId = setTimeout(() => finish('timeout'), 90_000);
 
-        // Gọi print
         setTimeout(() => {
             try {
                 ownerWin.print();
@@ -199,7 +211,7 @@ const printWithMainWindow = async (html, ownerWin = window) => {
 
     cleanup();
 
-    return { close: () => { /* nothing to close */ }, reason: printResult.reason };
+    return { close: () => { /* nothing */ }, reason: printResult.reason };
 };
 
 // ─── HTML builders ───────────────────────────────────────────────────────────

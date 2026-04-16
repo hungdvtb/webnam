@@ -49,53 +49,73 @@ const withTimeout = (promise, ms) =>
 // ─── Popup management ────────────────────────────────────────────────────────
 
 /**
- * Mở popup window trắng. Trả về window object hoặc null nếu bị chặn.
+ * Tạo Blob URL từ HTML string, mở popup với URL đó.
+ * Đây là cách đáng tin cậy nhất để print với driver máy in thật (Canon, HP, Brother...).
+ * Blob URL cho popup một origin hợp lệ, tránh lỗi "In không thành công" khi dùng about:blank.
+ *
+ * @returns {{ popup: Window, blobUrl: string } | null}
  */
-const openPrintPopup = (ownerWindow = window) => {
+const openPrintPopup = (ownerWindow = window, html) => {
     if (typeof ownerWindow?.open !== 'function') return null;
 
+    // Tạo blob URL từ HTML
+    let blobUrl = null;
+    try {
+        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        blobUrl = URL.createObjectURL(blob);
+    } catch (_) {
+        blobUrl = null;
+    }
+
     const name = `order_print_${Date.now()}`;
+
+    // Mở popup với blob URL (hoặc about:blank nếu Blob không được hỗ trợ)
     const popup = ownerWindow.open(
-        'about:blank',
+        blobUrl || 'about:blank',
         name,
         'width=1200,height=850,left=80,top=60,scrollbars=yes,resizable=yes,toolbar=no,menubar=no'
     );
 
-    return popup || null;
-};
+    if (!popup) {
+        // Popup bị chặn — giải phóng blob URL
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        return null;
+    }
 
-/**
- * Ghi HTML document vào target window.
- */
-const writeHtml = (targetWindow, html) => {
-    targetWindow.document.open();
-    targetWindow.document.write(html);
-    targetWindow.document.close();
-};
-
-/**
- * Chờ document trong popup load xong (readyState === 'complete').
- */
-const waitForDocumentReady = (targetWindow) =>
-    new Promise((resolve) => {
-        const doc = targetWindow.document;
-
-        if (!doc || doc.readyState === 'complete') {
-            resolve();
-            return;
+    // Nếu không có blob URL, fallback dùng document.write
+    if (!blobUrl) {
+        try {
+            popup.document.open();
+            popup.document.write(html);
+            popup.document.close();
+        } catch (_) {
+            // ignore — trình duyệt có thể block document.write
         }
+    }
+
+    return { popup, blobUrl };
+};
+
+/**
+ * Chờ popup load xong sau khi navigate tới blob URL.
+ */
+const waitForPopupLoad = (popup) =>
+    new Promise((resolve) => {
+        if (!popup || popup.closed) { resolve(); return; }
+
+        const doc = popup.document;
+        if (doc && doc.readyState === 'complete') { resolve(); return; }
 
         let done = false;
         const finish = () => {
             if (done) return;
             done = true;
             clearTimeout(tid);
-            targetWindow.removeEventListener('load', finish);
             resolve();
         };
 
         const tid = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-        targetWindow.addEventListener('load', finish, { once: true });
+        popup.addEventListener('load', finish, { once: true });
     });
 
 /**
@@ -190,40 +210,55 @@ const triggerPrint = (popupWindow) =>
     });
 
 /**
- * Hàm in chính — mở popup, load HTML, chờ sẵn sàng, gọi hộp thoại in.
+ * Hàm in chính — tạo Blob URL, mở popup, chờ load, gọi hộp thoại in.
+ *
+ * Tại sao dùng Blob URL thay vì about:blank + document.write:
+ * - Blob URL cho popup một origin hợp lệ (blob:https://...)
+ * - Chrome/Edge xử lý print job đúng với driver máy in thật (Canon, HP, Brother...)
+ * - about:blank + document.write có thể gây lỗi "In không thành công" với một số driver
  *
  * @param {string} html        - HTML document đầy đủ cần in
- * @param {string} [title]     - tiêu đề hiển thị trên tab / hộp thoại in
- * @param {Window} [ownerWin]  - window của trang chủ (mặc định: window)
+ * @param {string} [title]     - tiêu đề
+ * @param {Window} [ownerWin]  - window của trang admin (mặc định: window)
  * @returns {{ close: () => void, reason: string }}
- * @throws {Error} chỉ khi không mở được popup (popup bị chặn)
+ * @throws {Error} chỉ khi popup bị chặn hoặc Blob không được hỗ trợ
  */
 const printHtmlInPopup = async (html, title = 'In đơn hàng', ownerWin = window) => {
-    const popup = openPrintPopup(ownerWin);
+    const result = openPrintPopup(ownerWin, html);
 
-    if (!popup || popup.closed) {
+    if (!result) {
         throw new Error(
             'Không thể mở cửa sổ in. ' +
             'Trình duyệt đang chặn popup — vui lòng cho phép popup từ trang này và thử lại.\n\n' +
-            'Cách bật: Thanh địa chỉ → biểu tượng chặn popup → "Luôn cho phép".'
+            'Cách bật: Thanh địa chỉ → click biểu tượng bị chặn → "Luôn cho phép".'
         );
     }
 
-    // Ghi HTML vào popup
-    writeHtml(popup, html);
+    const { popup, blobUrl } = result;
 
-    // Chờ tài nguyên sẵn sàng
-    await waitForDocumentReady(popup);
+    // Dọn dẹp blob URL sau khi dùng xong
+    const releaseBlobUrl = () => {
+        if (blobUrl) {
+            try { URL.revokeObjectURL(blobUrl); } catch (_) { /* ignore */ }
+        }
+    };
+
+    // Chờ popup load xong (quan trọng với blob URL vì phải chờ navigate)
+    await waitForPopupLoad(popup);
+
+    // Chờ ảnh + font sau khi document ready
     await Promise.all([waitForImages(popup), waitForFonts(popup)]);
     await waitForPaint(popup);
 
-    // Thêm chút delay nhỏ để layout settle — quan trọng với Canon LBP
-    await delay(150);
+    // Delay nhỏ để layout settle hoàn toàn trước khi in
+    // Quan trọng với Canon LBP 6030 — driver cần thời gian khởi tạo
+    await delay(300);
 
     // Gọi hộp thoại in (luôn resolve, không bao giờ reject)
-    const result = await triggerPrint(popup);
+    const printResult = await triggerPrint(popup);
 
     const close = () => {
+        releaseBlobUrl();
         try {
             if (!popup.closed) popup.close();
         } catch (_) {
@@ -231,7 +266,7 @@ const printHtmlInPopup = async (html, title = 'In đơn hàng', ownerWin = windo
         }
     };
 
-    return { close, reason: result.reason };
+    return { close, reason: printResult.reason };
 };
 
 // ─── HTML builders ───────────────────────────────────────────────────────────

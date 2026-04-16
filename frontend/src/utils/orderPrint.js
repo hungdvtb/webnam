@@ -46,81 +46,9 @@ const withTimeout = (promise, ms) =>
         delay(ms),
     ]);
 
-// ─── Popup management ────────────────────────────────────────────────────────
+// ─── Resource helpers ────────────────────────────────────────────────────────
 
-/**
- * Tạo Blob URL từ HTML string, mở popup với URL đó.
- * Đây là cách đáng tin cậy nhất để print với driver máy in thật (Canon, HP, Brother...).
- * Blob URL cho popup một origin hợp lệ, tránh lỗi "In không thành công" khi dùng about:blank.
- *
- * @returns {{ popup: Window, blobUrl: string } | null}
- */
-const openPrintPopup = (ownerWindow = window, html) => {
-    if (typeof ownerWindow?.open !== 'function') return null;
-
-    // Tạo blob URL từ HTML
-    let blobUrl = null;
-    try {
-        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-        blobUrl = URL.createObjectURL(blob);
-    } catch (_) {
-        blobUrl = null;
-    }
-
-    const name = `order_print_${Date.now()}`;
-
-    // Mở popup với blob URL (hoặc about:blank nếu Blob không được hỗ trợ)
-    const popup = ownerWindow.open(
-        blobUrl || 'about:blank',
-        name,
-        'width=1200,height=850,left=80,top=60,scrollbars=yes,resizable=yes,toolbar=no,menubar=no'
-    );
-
-    if (!popup) {
-        // Popup bị chặn — giải phóng blob URL
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
-        return null;
-    }
-
-    // Nếu không có blob URL, fallback dùng document.write
-    if (!blobUrl) {
-        try {
-            popup.document.open();
-            popup.document.write(html);
-            popup.document.close();
-        } catch (_) {
-            // ignore — trình duyệt có thể block document.write
-        }
-    }
-
-    return { popup, blobUrl };
-};
-
-/**
- * Chờ popup load xong sau khi navigate tới blob URL.
- */
-const waitForPopupLoad = (popup) =>
-    new Promise((resolve) => {
-        if (!popup || popup.closed) { resolve(); return; }
-
-        const doc = popup.document;
-        if (doc && doc.readyState === 'complete') { resolve(); return; }
-
-        let done = false;
-        const finish = () => {
-            if (done) return;
-            done = true;
-            clearTimeout(tid);
-            resolve();
-        };
-
-        const tid = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
-        popup.addEventListener('load', finish, { once: true });
-    });
-
-/**
- * Chờ tất cả ảnh trong popup load xong.
- */
+/** Chờ tất cả ảnh trong một window load xong. */
 const waitForImages = async (targetWindow) => {
     const images = Array.from(targetWindow.document?.images || []);
     if (!images.length) return;
@@ -142,9 +70,7 @@ const waitForImages = async (targetWindow) => {
     );
 };
 
-/**
- * Chờ font load xong.
- */
+/** Chờ font load xong. */
 const waitForFonts = async (targetWindow) => {
     const fonts = targetWindow.document?.fonts;
     if (fonts?.ready) {
@@ -152,9 +78,7 @@ const waitForFonts = async (targetWindow) => {
     }
 };
 
-/**
- * Chờ 1 frame paint để đảm bảo layout đã render.
- */
+/** Chờ 1 frame paint để đảm bảo layout đã render. */
 const waitForPaint = (targetWindow) =>
     new Promise((resolve) => {
         const raf = targetWindow?.requestAnimationFrame?.bind(targetWindow);
@@ -165,105 +89,116 @@ const waitForPaint = (targetWindow) =>
         raf(() => raf(resolve));
     });
 
-// ─── Core print function ─────────────────────────────────────────────────────
+// ─── Iframe-based print (reliable with all drivers including Canon LBP) ───────
 
 /**
- * Gọi hộp thoại in trong popup, resolve sau khi afterprint fire (hoặc timeout).
+ * In bằng iframe ẩn nhúng trong trang chính.
  *
- * Quan trọng:
- * - KHÔNG reject / throw khi sau khi user bấm Hủy trong hộp thoại in —
- *   đó là hành động hợp lệ, không phải lỗi.
- * - KHÔNG dùng focus/blur heuristic vì không tin cậy với máy in thật.
- * - afterprint event được fire bởi trình duyệt sau khi hộp thoại in đóng,
- *   dù user bấm In hay Hủy.
+ * Tại sao iframe tốt hơn popup:
+ * - Iframe cùng origin với trang chủ — không có sandbox restriction
+ * - Canon LBP 6030 và nhiều driver Windows hoạt động đúng với iframe.contentWindow.print()
+ * - Không cần cho phép popup — tránh bị trình duyệt chặn
+ * - `srcdoc` attribute nạp HTML trực tiếp, không cần document.write hay blob URL
+ *
+ * @param {string} html        - HTML document đầy đủ cần in
+ * @param {Document} ownerDoc  - document của trang admin
+ * @returns {{ close: () => void, reason: string }}
  */
-const triggerPrint = (popupWindow) =>
-    new Promise((resolve) => {
+const printHtmlInIframe = async (html, ownerDoc = document) => {
+    // Dọn iframe cũ nếu còn
+    const old = ownerDoc.getElementById('__order_print_iframe__');
+    if (old) old.remove();
+
+    // Tạo iframe ẩn
+    const iframe = ownerDoc.createElement('iframe');
+    iframe.id = '__order_print_iframe__';
+    iframe.setAttribute('srcdoc', html);
+    iframe.style.cssText = [
+        'position:fixed',
+        'top:-9999px',
+        'left:-9999px',
+        'width:1px',
+        'height:1px',
+        'border:none',
+        'visibility:hidden',
+        'pointer-events:none',
+    ].join(';');
+
+    ownerDoc.body.appendChild(iframe);
+
+    // Chờ iframe load xong
+    await new Promise((resolve) => {
+        const iframeWin = iframe.contentWindow;
+
+        // Nếu contentWindow chưa ready, nghe sự kiện load
+        const onLoad = () => {
+            resolve();
+        };
+
+        if (iframeWin?.document?.readyState === 'complete') {
+            resolve();
+            return;
+        }
+
+        iframe.addEventListener('load', onLoad, { once: true });
+        setTimeout(resolve, PRINT_RESOURCE_TIMEOUT_MS); // fallback
+    });
+
+    // Lấy window của iframe
+    const iframeWin = iframe.contentWindow;
+    if (!iframeWin) {
+        iframe.remove();
+        throw new Error('Không thể khởi tạo cửa sổ in. Vui lòng thử lại.');
+    }
+
+    // Chờ ảnh + font
+    await Promise.all([waitForImages(iframeWin), waitForFonts(iframeWin)]);
+    await waitForPaint(iframeWin);
+    await delay(300);
+
+    // Gọi print trên iframe's window — resolve khi afterprint fire hoặc iframe unmount
+    const printResult = await new Promise((resolve) => {
         let settled = false;
         let timeoutId = null;
+        let pollId = null;
 
         const finish = (reason) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
-            popupWindow.removeEventListener('afterprint', handleAfterPrint);
+            clearInterval(pollId);
+            try { iframeWin.removeEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
             resolve({ reason });
         };
 
         const handleAfterPrint = () => finish('afterprint');
 
-        // Fallback: nếu afterprint không bao giờ fire (một số trình duyệt/máy in cũ)
-        timeoutId = setTimeout(() => finish('timeout'), PRINT_SESSION_TIMEOUT_MS);
+        // ① afterprint — hộp thoại in đóng
+        try { iframeWin.addEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
 
-        popupWindow.addEventListener('afterprint', handleAfterPrint);
+        // ② Cũng lắng nghe afterprint trên main window (Chrome bubble afterprint lên parent)
+        const handleParentAfterPrint = () => finish('afterprint-parent');
+        try { ownerDoc.defaultView?.addEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
 
-        // Gọi print sau một tick để listener đã được gắn
+        // ③ Timeout 90 giây
+        timeoutId = setTimeout(() => {
+            try { ownerDoc.defaultView?.removeEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
+            finish('timeout');
+        }, 90_000);
+
+        // Gọi print
         setTimeout(() => {
             try {
-                popupWindow.focus();
-                popupWindow.print();
+                iframeWin.focus();
+                iframeWin.print();
             } catch (err) {
-                // Nếu print() bị block (rất hiếm), vẫn resolve để không treo UI
                 finish('print-error');
             }
         }, 0);
     });
 
-/**
- * Hàm in chính — tạo Blob URL, mở popup, chờ load, gọi hộp thoại in.
- *
- * Tại sao dùng Blob URL thay vì about:blank + document.write:
- * - Blob URL cho popup một origin hợp lệ (blob:https://...)
- * - Chrome/Edge xử lý print job đúng với driver máy in thật (Canon, HP, Brother...)
- * - about:blank + document.write có thể gây lỗi "In không thành công" với một số driver
- *
- * @param {string} html        - HTML document đầy đủ cần in
- * @param {string} [title]     - tiêu đề
- * @param {Window} [ownerWin]  - window của trang admin (mặc định: window)
- * @returns {{ close: () => void, reason: string }}
- * @throws {Error} chỉ khi popup bị chặn hoặc Blob không được hỗ trợ
- */
-const printHtmlInPopup = async (html, title = 'In đơn hàng', ownerWin = window) => {
-    const result = openPrintPopup(ownerWin, html);
-
-    if (!result) {
-        throw new Error(
-            'Không thể mở cửa sổ in. ' +
-            'Trình duyệt đang chặn popup — vui lòng cho phép popup từ trang này và thử lại.\n\n' +
-            'Cách bật: Thanh địa chỉ → click biểu tượng bị chặn → "Luôn cho phép".'
-        );
-    }
-
-    const { popup, blobUrl } = result;
-
-    // Dọn dẹp blob URL sau khi dùng xong
-    const releaseBlobUrl = () => {
-        if (blobUrl) {
-            try { URL.revokeObjectURL(blobUrl); } catch (_) { /* ignore */ }
-        }
-    };
-
-    // Chờ popup load xong (quan trọng với blob URL vì phải chờ navigate)
-    await waitForPopupLoad(popup);
-
-    // Chờ ảnh + font sau khi document ready
-    await Promise.all([waitForImages(popup), waitForFonts(popup)]);
-    await waitForPaint(popup);
-
-    // Delay nhỏ để layout settle hoàn toàn trước khi in
-    // Quan trọng với Canon LBP 6030 — driver cần thời gian khởi tạo
-    await delay(300);
-
-    // Gọi hộp thoại in (luôn resolve, không bao giờ reject)
-    const printResult = await triggerPrint(popup);
-
     const close = () => {
-        releaseBlobUrl();
-        try {
-            if (!popup.closed) popup.close();
-        } catch (_) {
-            // ignore
-        }
+        try { iframe.remove(); } catch (_) { /* ignore */ }
     };
 
     return { close, reason: printResult.reason };
@@ -578,6 +513,8 @@ export const printOrders = async (orders = [], options = {}) => {
     }
 
     const ownerWindow = options.ownerWindow || window;
+    const ownerDoc = ownerWindow.document || document;
+
     const primaryOrder = orders[0] || {};
     const title =
         orders.length > 1
@@ -586,11 +523,12 @@ export const printOrders = async (orders = [], options = {}) => {
 
     const html = buildOrderPrintDocument(orders);
 
-    return printHtmlInPopup(html, title, ownerWindow);
+    // Dùng iframe trong trang chính — đáng tin cậy hơn popup với Canon LBP và nhiều driver khác
+    return printHtmlInIframe(html, ownerDoc);
 };
 
 /**
- * Đóng session in (popup window).
+ * Đóng session in (iframe cleanup).
  */
 export const closePrintSession = (session) => {
     if (!session) return;
@@ -600,17 +538,17 @@ export const closePrintSession = (session) => {
 };
 
 /**
- * (Legacy / không dùng trong luồng chính) — In trang hiện tại
+ * (Legacy / không dùng trong luồng chính)
  */
 export const printCurrentPage = async (sourceWindow = window) => {
-    const title = sourceWindow.document?.title || 'In đơn hàng';
+    const ownerDoc = sourceWindow.document || document;
+    const title = ownerDoc?.title || 'In đơn hàng';
 
-    return printHtmlInPopup(
+    return printHtmlInIframe(
         `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${
-            sourceWindow.document.body?.innerHTML || ''
+            ownerDoc.body?.innerHTML || ''
         }</body></html>`,
-        title,
-        sourceWindow
+        ownerDoc
     );
 };
 

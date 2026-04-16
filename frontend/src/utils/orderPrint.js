@@ -89,76 +89,84 @@ const waitForPaint = (targetWindow) =>
         raf(() => raf(resolve));
     });
 
-// ─── Iframe-based print (reliable with all drivers including Canon LBP) ───────
+// ─── Main-window print với visibility trick ──────────────────────────────────
 
 /**
- * In bằng iframe ẩn nhúng trong trang chính.
+ * In bằng cách gọi window.print() trên chính trang admin.
  *
- * Quan trọng — iframe PHẢI có kích thước thật (không phải 1px hay visibility:hidden)
- * thì Chrome mới render được và `contentWindow.print()` mới hiện hộp thoại in.
- * Đặt off-screen bằng left:-9999px thay vì visibility:hidden.
+ * Đây là cách ĐÁNG TIN CẬY NHẤT vì:
+ * - window.print() == Ctrl+P: driver máy in không thể phân biệt và từ chối
+ * - Tránh mọi sandbox/restriction của popup hay iframe
+ * - afterprint fire 100% trên main window
+ *
+ * Cơ chế: Inject CSS @media print để ẩn React app, hiện chỉ nội dung đơn hàng.
+ * Kỹ thuật visibility (không dùng display:none) để tránh React reflow.
  *
  * @param {string} html        - HTML document đầy đủ cần in
- * @param {Document} ownerDoc  - document của trang admin
+ * @param {Window} ownerWin    - main window (mặc định: window)
  * @returns {{ close: () => void, reason: string }}
  */
-const printHtmlInIframe = async (html, ownerDoc = document) => {
-    // Dọn iframe cũ nếu còn
-    const old = ownerDoc.getElementById('__order_print_iframe__');
-    if (old) old.remove();
+const printWithMainWindow = async (html, ownerWin = window) => {
+    const ownerDoc = ownerWin.document;
 
-    // Tạo iframe — đặt off-screen nhưng PHẢI có kích thước A4 thật
-    // để Chrome render và print() hiển thị đúng hộp thoại in
-    const iframe = ownerDoc.createElement('iframe');
-    iframe.id = '__order_print_iframe__';
-    iframe.style.cssText = [
-        'position:fixed',
-        'left:-210mm',   // nằm ngoài màn hình bên trái
-        'top:0',
-        'width:210mm',   // A4 width
-        'height:297mm',  // A4 height
-        'border:none',
-        'z-index:-99999',
-        'pointer-events:none',
-        // KHÔNG dùng visibility:hidden hay display:none — phải rendered
-    ].join(';');
+    // Dọn injection cũ nếu còn
+    const STYLE_ID   = '__order_print_style__';
+    const CONTENT_ID = '__order_print_content__';
+    ownerDoc.getElementById(STYLE_ID)?.remove();
+    ownerDoc.getElementById(CONTENT_ID)?.remove();
 
-    ownerDoc.body.appendChild(iframe);
+    // Parse HTML để tách <style> và <body> content
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
 
-    // Ghi HTML vào iframe bằng document.write (đáng tin hơn srcdoc với nội dung lớn)
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!iframeDoc) {
-        iframe.remove();
-        throw new Error('Không thể khởi tạo cửa sổ in. Vui lòng thử lại.');
-    }
+    // Lấy CSS từ HTML đơn hàng
+    const printCss = Array.from(parsed.querySelectorAll('style'))
+        .map((s) => s.textContent)
+        .join('\n');
 
-    iframeDoc.open();
-    iframeDoc.write(html);
-    iframeDoc.close();
+    // Inject print-override CSS vào <head> của trang chính
+    // Kỹ thuật: visibility:hidden toàn body, visible chỉ container đơn hàng
+    const styleEl = ownerDoc.createElement('style');
+    styleEl.id = STYLE_ID;
+    styleEl.textContent = `
+        @media print {
+            /* Ẩn toàn bộ React app trong khi in */
+            html body { visibility: hidden !important; }
 
-    // Chờ iframe load xong (load event fire khi document.close() xong)
-    await new Promise((resolve) => {
-        if (iframeDoc.readyState === 'complete') {
-            resolve();
-            return;
+            /* Chỉ hiện container đơn hàng */
+            #${CONTENT_ID} {
+                visibility: visible !important;
+                position: fixed !important;
+                inset: 0 !important;
+                width: 100% !important;
+                height: auto !important;
+                overflow: visible !important;
+                z-index: 999999 !important;
+                background: #fff !important;
+            }
+
+            /* CSS nội dung in */
+            ${printCss}
         }
-        iframe.addEventListener('load', resolve, { once: true });
-        setTimeout(resolve, PRINT_RESOURCE_TIMEOUT_MS); // fallback
-    });
+    `;
+    ownerDoc.head.appendChild(styleEl);
 
-    // Lấy window của iframe
-    const iframeWin = iframe.contentWindow;
-    if (!iframeWin) {
-        iframe.remove();
-        throw new Error('Không thể khởi tạo cửa sổ in. Vui lòng thử lại.');
-    }
+    // Inject body content vào trang chính (ẩn khi bình thường, hiện khi in)
+    const contentEl = ownerDoc.createElement('div');
+    contentEl.id = CONTENT_ID;
+    contentEl.style.cssText = 'display:none;position:absolute;left:-9999px;top:-9999px;';
+    contentEl.innerHTML = parsed.body?.innerHTML || '';
+    ownerDoc.body.appendChild(contentEl);
 
-    // Chờ ảnh + font
-    await Promise.all([waitForImages(iframeWin), waitForFonts(iframeWin)]);
-    await waitForPaint(iframeWin);
-    await delay(300);
+    // Chờ một frame để style settle
+    await delay(200);
 
-    // Gọi print trên iframe's window — resolve khi afterprint fire
+    // Hàm dọn dẹp
+    const cleanup = () => {
+        try { ownerDoc.getElementById(STYLE_ID)?.remove(); } catch (_) { /* ignore */ }
+        try { ownerDoc.getElementById(CONTENT_ID)?.remove(); } catch (_) { /* ignore */ }
+    };
+
+    // Gọi window.print() — tương đương Ctrl+P, driver không từ chối được
     const printResult = await new Promise((resolve) => {
         let settled = false;
         let timeoutId = null;
@@ -167,39 +175,31 @@ const printHtmlInIframe = async (html, ownerDoc = document) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
-            try { iframeWin.removeEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
-            try { ownerDoc.defaultView?.removeEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
+            try { ownerWin.removeEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
             resolve({ reason });
         };
 
         const handleAfterPrint = () => finish('afterprint');
-        const handleParentAfterPrint = () => finish('afterprint-parent');
 
-        // Chrome fires afterprint on iframe's window when iframe.print() is called
-        try { iframeWin.addEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
+        // afterprint trên main window — 100% reliable
+        ownerWin.addEventListener('afterprint', handleAfterPrint);
 
-        // Fallback: một số Chrome version bubble afterprint lên parent window
-        try { ownerDoc.defaultView?.addEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
-
-        // Timeout 90 giây — UI không bao giờ bị treo vĩnh viễn
+        // Timeout 90s fallback
         timeoutId = setTimeout(() => finish('timeout'), 90_000);
 
         // Gọi print
         setTimeout(() => {
             try {
-                iframeWin.focus();
-                iframeWin.print();
+                ownerWin.print();
             } catch (err) {
                 finish('print-error');
             }
         }, 0);
     });
 
-    const close = () => {
-        try { iframe.remove(); } catch (_) { /* ignore */ }
-    };
+    cleanup();
 
-    return { close, reason: printResult.reason };
+    return { close: () => { /* nothing to close */ }, reason: printResult.reason };
 };
 
 // ─── HTML builders ───────────────────────────────────────────────────────────
@@ -511,18 +511,17 @@ export const printOrders = async (orders = [], options = {}) => {
     }
 
     const ownerWindow = options.ownerWindow || window;
-    const ownerDoc = ownerWindow.document || document;
 
     const primaryOrder = orders[0] || {};
-    const title =
+    const _title =
         orders.length > 1
             ? `In ${orders.length} đơn hàng`
             : `In đơn #${primaryOrder.order_number || ''}`.trim();
 
     const html = buildOrderPrintDocument(orders);
 
-    // Dùng iframe trong trang chính — đáng tin cậy hơn popup với Canon LBP và nhiều driver khác
-    return printHtmlInIframe(html, ownerDoc);
+    // Dùng main window print — tương đương Ctrl+P, tin cậy nhất với mọi driver
+    return printWithMainWindow(html, ownerWindow);
 };
 
 /**

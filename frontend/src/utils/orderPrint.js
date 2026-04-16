@@ -567,3 +567,124 @@ export const printCurrentPage = async (sourceWindow = window) => {
  * vì luồng mới không cần pre-warm popup.
  */
 export const preparePrintPopupWindow = () => null;
+
+// ─── PDF Export ───────────────────────────────────────────────────────────────
+
+/**
+ * Tạo file PDF từ danh sách đơn hàng và download luôn về máy.
+ *
+ * Cách hoạt động:
+ * 1. Build HTML document giống như in
+ * 2. Render vào hidden iframe (kích thước A4)
+ * 3. Dùng html2canvas chụp từng trang
+ * 4. Ghép vào PDF bằng jsPDF
+ * 5. Auto download file .pdf
+ *
+ * @param {Array}  orders    - mảng đơn hàng từ API
+ * @param {string} [filename]
+ */
+export const exportOrderPdf = async (orders = [], filename) => {
+    if (!Array.isArray(orders) || orders.length === 0) {
+        throw new Error('Không có dữ liệu đơn hàng để xuất PDF.');
+    }
+
+    // Lazy-load libraries để không làm nặng bundle khi không dùng
+    const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+        import('jspdf'),
+        import('html2canvas'),
+    ]);
+
+    const html = buildOrderPrintDocument(orders);
+
+    // Tạo iframe ẩn kích thước A4 để render HTML
+    const iframeId = '__order_pdf_export_frame__';
+    document.getElementById(iframeId)?.remove();
+
+    const iframe = document.createElement('iframe');
+    iframe.id = iframeId;
+    // A4 at 96 DPI: 794 x 1123 px
+    iframe.style.cssText = [
+        'position:fixed',
+        'left:-900px',
+        'top:0',
+        'width:794px',
+        'height:1123px',
+        'border:none',
+        'overflow:hidden',
+        'z-index:-99999',
+    ].join(';');
+    document.body.appendChild(iframe);
+
+    // Ghi HTML vào iframe
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!iframeDoc) { iframe.remove(); throw new Error('Không thể khởi tạo iframe PDF.'); }
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+
+    // Chờ load xong
+    await new Promise((resolve) => {
+        if (iframeDoc.readyState === 'complete') { resolve(); return; }
+        iframe.addEventListener('load', resolve, { once: true });
+        setTimeout(resolve, 12_000);
+    });
+    await delay(300);
+
+    // Tìm tất cả các trang đơn hàng trong iframe
+    const iframeWin = iframe.contentWindow;
+    const sheets = Array.from(iframeDoc.querySelectorAll('.order-sheet, .order-sheet-last'));
+    if (!sheets.length) {
+        iframe.remove();
+        throw new Error('Không tìm thấy nội dung đơn hàng để xuất PDF.');
+    }
+
+    // Khởi tạo jsPDF với khổ A4
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
+
+    for (let i = 0; i < sheets.length; i++) {
+        const sheet = sheets[i];
+
+        // Chụp từng trang bằng html2canvas
+        const canvas = await html2canvas(sheet, {
+            scale:         2,              // 2x để ảnh nét hơn
+            useCORS:       true,
+            allowTaint:    true,
+            backgroundColor: '#ffffff',
+            windowWidth:   794,
+            windowHeight:  1123,
+            scrollX:       0,
+            scrollY:       0,
+            logging:       false,
+            foreignObjectRendering: false,
+            onclone: (cloneDoc) => {
+                // Đảm bảo tất cả nội dung hiện khi chụp
+                cloneDoc.querySelectorAll('*').forEach((el) => {
+                    el.style.visibility = 'visible';
+                });
+            },
+        });
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+
+        // Thêm trang mới (trừ trang đầu tiên)
+        if (i > 0) pdf.addPage();
+
+        // Scale ảnh vừa khổ A4, giữ tỉ lệ
+        const imgW = pdfW;
+        const imgH = (canvas.height * imgW) / canvas.width;
+        const finalH = Math.min(imgH, pdfH);
+
+        pdf.addImage(imgData, 'JPEG', 0, 0, imgW, finalH);
+    }
+
+    iframe.remove();
+
+    // Tên file
+    const defaultName = orders.length === 1
+        ? `don-hang-${orders[0].order_number || 'unknown'}.pdf`
+        : `don-hang-${orders.length}-orders.pdf`;
+
+    pdf.save(filename || defaultName);
+};

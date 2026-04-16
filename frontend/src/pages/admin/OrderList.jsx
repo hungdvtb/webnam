@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { orderApi, shipmentApi, warehouseApi } from '../../services/api';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -23,7 +23,7 @@ import MultiKeywordSearchInput, {
     parseKeywordTokens,
     serializeKeywordTokens,
 } from '../../components/admin/MultiKeywordSearchInput';
-import { closePrintSession, printOrders } from '../../utils/orderPrint';
+import { closePrintSession, exportOrderPdf, printOrders } from '../../utils/orderPrint';
 import {
     addOrderIdsToReturnWorkbench,
     clearOrderReturnWorkbench,
@@ -1283,6 +1283,7 @@ const OrderList = () => {
 
     const [notification, setNotification] = useState(null);
     const [printingOrders, setPrintingOrders] = useState(false);
+    const [exportingPdf, setExportingPdf] = useState(false);
     const [printConfirmState, setPrintConfirmState] = useState({
         open: false,
         ids: [],
@@ -2475,6 +2476,37 @@ const OrderList = () => {
         }
     };
 
+    const handleBulkExportPdf = async () => {
+        if (!selectedIds.length || exportingPdf) return;
+
+        const ids = [...selectedIds];
+
+        try {
+            setExportingPdf(true);
+
+            const response = await orderApi.getPrintData(ids);
+            const printableOrders = response?.data?.data || [];
+
+            if (!printableOrders.length) {
+                throw new Error('Không có đơn hàng hợp lệ để xuất PDF.');
+            }
+
+            const filename = printableOrders.length === 1
+                ? `don-hang-${printableOrders[0].order_number || ids[0]}.pdf`
+                : `don-hang-${printableOrders.length}-orders.pdf`;
+
+            await exportOrderPdf(printableOrders, filename);
+        } catch (error) {
+            console.error('Export PDF error', error);
+            setNotification({
+                type: 'error',
+                message: error.message || 'Không thể xuất PDF. Vui lòng thử lại.',
+            });
+        } finally {
+            setExportingPdf(false);
+        }
+    };
+
     const closePrintConfirmation = useCallback(() => {
         closePrintSession(printConfirmState.session);
         setPrintConfirmState((prev) => ({
@@ -2998,6 +3030,7 @@ const OrderList = () => {
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
+                                <button onClick={handleBulkExportPdf} disabled={selectedIds.length === 0 || exportingPdf} title="Tải PDF đơn hàng về máy" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !exportingPdf ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-refresh-spin' : ''}`}>{exportingPdf ? 'progress_activity' : 'picture_as_pdf'}</span></button>
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
                                 {canCreateBatchReturn && (
                                     <button

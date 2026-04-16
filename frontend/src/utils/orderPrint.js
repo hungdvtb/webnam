@@ -94,11 +94,9 @@ const waitForPaint = (targetWindow) =>
 /**
  * In bằng iframe ẩn nhúng trong trang chính.
  *
- * Tại sao iframe tốt hơn popup:
- * - Iframe cùng origin với trang chủ — không có sandbox restriction
- * - Canon LBP 6030 và nhiều driver Windows hoạt động đúng với iframe.contentWindow.print()
- * - Không cần cho phép popup — tránh bị trình duyệt chặn
- * - `srcdoc` attribute nạp HTML trực tiếp, không cần document.write hay blob URL
+ * Quan trọng — iframe PHẢI có kích thước thật (không phải 1px hay visibility:hidden)
+ * thì Chrome mới render được và `contentWindow.print()` mới hiện hộp thoại in.
+ * Đặt off-screen bằng left:-9999px thay vì visibility:hidden.
  *
  * @param {string} html        - HTML document đầy đủ cần in
  * @param {Document} ownerDoc  - document của trang admin
@@ -109,38 +107,42 @@ const printHtmlInIframe = async (html, ownerDoc = document) => {
     const old = ownerDoc.getElementById('__order_print_iframe__');
     if (old) old.remove();
 
-    // Tạo iframe ẩn
+    // Tạo iframe — đặt off-screen nhưng PHẢI có kích thước A4 thật
+    // để Chrome render và print() hiển thị đúng hộp thoại in
     const iframe = ownerDoc.createElement('iframe');
     iframe.id = '__order_print_iframe__';
-    iframe.setAttribute('srcdoc', html);
     iframe.style.cssText = [
         'position:fixed',
-        'top:-9999px',
-        'left:-9999px',
-        'width:1px',
-        'height:1px',
+        'left:-210mm',   // nằm ngoài màn hình bên trái
+        'top:0',
+        'width:210mm',   // A4 width
+        'height:297mm',  // A4 height
         'border:none',
-        'visibility:hidden',
+        'z-index:-99999',
         'pointer-events:none',
+        // KHÔNG dùng visibility:hidden hay display:none — phải rendered
     ].join(';');
 
     ownerDoc.body.appendChild(iframe);
 
-    // Chờ iframe load xong
+    // Ghi HTML vào iframe bằng document.write (đáng tin hơn srcdoc với nội dung lớn)
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!iframeDoc) {
+        iframe.remove();
+        throw new Error('Không thể khởi tạo cửa sổ in. Vui lòng thử lại.');
+    }
+
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+
+    // Chờ iframe load xong (load event fire khi document.close() xong)
     await new Promise((resolve) => {
-        const iframeWin = iframe.contentWindow;
-
-        // Nếu contentWindow chưa ready, nghe sự kiện load
-        const onLoad = () => {
-            resolve();
-        };
-
-        if (iframeWin?.document?.readyState === 'complete') {
+        if (iframeDoc.readyState === 'complete') {
             resolve();
             return;
         }
-
-        iframe.addEventListener('load', onLoad, { once: true });
+        iframe.addEventListener('load', resolve, { once: true });
         setTimeout(resolve, PRINT_RESOURCE_TIMEOUT_MS); // fallback
     });
 
@@ -156,35 +158,31 @@ const printHtmlInIframe = async (html, ownerDoc = document) => {
     await waitForPaint(iframeWin);
     await delay(300);
 
-    // Gọi print trên iframe's window — resolve khi afterprint fire hoặc iframe unmount
+    // Gọi print trên iframe's window — resolve khi afterprint fire
     const printResult = await new Promise((resolve) => {
         let settled = false;
         let timeoutId = null;
-        let pollId = null;
 
         const finish = (reason) => {
             if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
-            clearInterval(pollId);
             try { iframeWin.removeEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
+            try { ownerDoc.defaultView?.removeEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
             resolve({ reason });
         };
 
         const handleAfterPrint = () => finish('afterprint');
+        const handleParentAfterPrint = () => finish('afterprint-parent');
 
-        // ① afterprint — hộp thoại in đóng
+        // Chrome fires afterprint on iframe's window when iframe.print() is called
         try { iframeWin.addEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
 
-        // ② Cũng lắng nghe afterprint trên main window (Chrome bubble afterprint lên parent)
-        const handleParentAfterPrint = () => finish('afterprint-parent');
+        // Fallback: một số Chrome version bubble afterprint lên parent window
         try { ownerDoc.defaultView?.addEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
 
-        // ③ Timeout 90 giây
-        timeoutId = setTimeout(() => {
-            try { ownerDoc.defaultView?.removeEventListener('afterprint', handleParentAfterPrint); } catch (_) { /* ignore */ }
-            finish('timeout');
-        }, 90_000);
+        // Timeout 90 giây — UI không bao giờ bị treo vĩnh viễn
+        timeoutId = setTimeout(() => finish('timeout'), 90_000);
 
         // Gọi print
         setTimeout(() => {

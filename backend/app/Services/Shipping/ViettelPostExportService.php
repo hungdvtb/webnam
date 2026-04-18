@@ -77,9 +77,12 @@ class ViettelPostExportService
                 $order->province,
             ]));
 
+            $isExchange = $order->getNormalizedOrderType() === \App\Models\Order::TYPE_EXCHANGE_RETURN 
+                && $order->supplementItems()->exists();
+
             $rows[] = [
                 $stt++,                              // STT
-                'DH-' . $order->id,                 // Mã đơn hàng (our internal ID)
+                $order->order_number,                 // Mã đơn hàng (Mã hiển thị trên hệ thống)
                 $order->customer_name ?? '',          // Tên người nhận
                 $order->customer_phone ?? '',         // Số ĐT
                 $address,                            // Địa chỉ nhận
@@ -88,10 +91,10 @@ class ViettelPostExportService
                 1000,                                // Trọng lượng - placeholder, user fills in later
                 (int) ($order->total_price ?? 0),    // Giá trị hàng
                 (int) ($order->total_price ?? 0),    // Tiền thu hộ COD
-                '',                                  // Loại hàng hóa - user fills
+                'Bưu kiện',                          // Loại hàng hóa - Mặc định là bưu kiện
                 '',                                  // Tính chất đặc biệt
-                'VBK - ViettelPost Tiêu chuẩn',      // Dịch vụ default
-                ',PXD,COD',                          // Dịch vụ cộng thêm
+                'VBK',                               // Dịch vụ code (VBK = Tiêu chuẩn)
+                $isExchange ? 'GGDH' : '',            // Dịch vụ cộng thêm (GGDH = Đổi hàng)
                 '',                                  // Thu tiền xem hàng
                 '',                                  // Dài - user fills
                 '',                                  // Rộng - user fills

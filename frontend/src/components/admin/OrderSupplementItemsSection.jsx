@@ -107,9 +107,25 @@ const OrderSupplementItemsSection = ({
 
         const timeoutId = window.setTimeout(async () => {
             try {
-                const response = await productApi.getAll({ search: trimmedSearch, per_page: 8 }, controller.signal);
+                const response = await productApi.getAll({ search: trimmedSearch, per_page: 8, picker: 1 }, controller.signal);
                 if (controller.signal.aborted) return;
-                setSearchResults(response?.data?.data || []);
+                const rawData = Array.isArray(response?.data?.data) ? response.data.data : [];
+                const flattened = [];
+                
+                rawData.forEach(item => {
+                    if (item.type === 'configurable' && Array.isArray(item.variations) && item.variations.length > 0) {
+                        item.variations.forEach(v => {
+                            flattened.push({
+                                ...v,
+                                parent_name: item.name
+                            });
+                        });
+                    } else if (item.type !== 'configurable') {
+                        flattened.push(item);
+                    }
+                });
+
+                setSearchResults(flattened);
             } catch (error) {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error loading supplement products', error);
@@ -283,6 +299,11 @@ const OrderSupplementItemsSection = ({
                                                                             {product.name}
                                                                         </div>
                                                                         <div className="mt-0.5 text-[11px] font-black text-orange-600/70">
+                                                                            {product.attribute_summary && (
+                                                                                <div className="mt-0.5 text-[11px] italic text-primary/60">
+                                                                                    {product.attribute_summary}
+                                                                                </div>
+                                                                            )}
                                                                             {product.sku || 'Không có SKU'}
                                                                         </div>
                                                                     </div>

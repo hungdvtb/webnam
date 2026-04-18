@@ -53,10 +53,17 @@ class ShipmentController extends Controller
     ];
 
     private ShipmentStatusSyncService $syncService;
+    private \App\Services\Shipping\ViettelPostReconciliationService $reconcileService;
+    private \App\Services\Shipping\ViettelPostTrackingImportService $trackingImportService;
 
-    public function __construct(ShipmentStatusSyncService $syncService)
-    {
+    public function __construct(
+        ShipmentStatusSyncService $syncService,
+        \App\Services\Shipping\ViettelPostReconciliationService $reconcileService,
+        \App\Services\Shipping\ViettelPostTrackingImportService $trackingImportService
+    ) {
         $this->syncService = $syncService;
+        $this->reconcileService = $reconcileService;
+        $this->trackingImportService = $trackingImportService;
     }
 
     /**
@@ -816,5 +823,44 @@ class ShipmentController extends Controller
             'message' => 'Webhook đã được xử lý.',
             'result' => $result,
         ]);
+    }
+    public function reconcileViettelPost(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls',
+        ]);
+
+        $file = $request->file('file');
+        $filePath = $file->getRealPath();
+        
+        $result = $this->reconcileService->processFile($filePath, auth()->id());
+        
+        if (!$result['success']) {
+            return response()->json([
+                'message' => $result['message']
+            ], 422);
+        }
+
+        return response()->json($result['summary']);
+    }
+
+    public function importTrackingViettelPost(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls',
+        ]);
+
+        $file = $request->file('file');
+        $filePath = $file->getRealPath();
+        
+        $result = $this->trackingImportService->processFile($filePath, auth()->id());
+        
+        if (!$result['success']) {
+            return response()->json([
+                'message' => $result['message']
+            ], 422);
+        }
+
+        return response()->json($result['summary']);
     }
 }

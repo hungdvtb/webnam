@@ -19,6 +19,7 @@ import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../co
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
+import ViettelPostTrackingImportModal from '../../components/admin/ViettelPostTrackingImportModal';
 import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
 import OrderReturnFollowupPanel from '../../components/admin/OrderReturnFollowupPanel';
 import MultiKeywordSearchInput, {
@@ -2237,6 +2238,7 @@ const OrderList = () => {
     const [printingOrders, setPrintingOrders] = useState(false);
     const [exportingPdf, setExportingPdf] = useState(false);
     const [vtpExportOpen, setVtpExportOpen] = useState(false);
+    const [vtpTrackingImportOpen, setVtpTrackingImportOpen] = useState(false);
     const [vtpExporting, setVtpExporting] = useState(false);
     const [vtpGoodsName, setVtpGoodsName] = useState('Gốm sứ dễ vỡ');
     const [printConfirmState, setPrintConfirmState] = useState({
@@ -4205,10 +4207,9 @@ const OrderList = () => {
                                 type="button"
                                 onClick={openImportCostRefreshModal}
                                 title="Cập nhật giá nhập theo khoảng ngày hoặc toàn bộ lịch sử"
-                                className="h-9 px-3 rounded-sm border border-primary/15 bg-white text-primary flex items-center gap-1.5 transition-all hover:bg-primary hover:text-white shadow-sm"
+                                className="h-9 w-9 rounded-sm border border-primary/15 bg-white text-primary flex items-center justify-center transition-all hover:bg-primary hover:text-white shadow-sm"
                             >
                                 <span className="material-symbols-outlined text-[18px]">price_change</span>
-                                <span className="text-[12px] font-semibold whitespace-nowrap">Cập nhật giá nhập</span>
                             </button>
                         )}
                         {isMainView && (
@@ -4249,16 +4250,24 @@ const OrderList = () => {
                                         onClick={() => setVtpExportOpen(true)}
                                         disabled={selectedIds.length === 0 || vtpExporting}
                                         title="Xuất Excel gửi Viettel Post"
-                                        className={`h-9 px-2.5 rounded-sm border flex items-center gap-1.5 transition-all text-[12px] font-bold ${
+                                        className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all text-[12px] font-bold ${
                                             selectedIds.length > 0 && !vtpExporting
                                                 ? 'bg-violet-50 text-violet-700 border-violet-300 hover:bg-violet-600 hover:text-white shadow-sm'
                                                 : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
                                         }`}
                                     >
                                         <span className={`material-symbols-outlined text-[16px] ${vtpExporting ? 'animate-refresh-spin' : ''}`}>
-                                            {vtpExporting ? 'progress_activity' : 'local_shipping'}
+                                            {vtpExporting ? 'progress_activity' : 'description'}
                                         </span>
-                                        <span className="hidden sm:inline">Xuất VTP</span>
+                                    </button>
+                                    
+                                    <button
+                                        type="button"
+                                        onClick={() => setVtpTrackingImportOpen(true)}
+                                        title="Nhập mã vận đơn từ Excel kết quả VTP"
+                                        className="h-9 w-9 rounded-sm border border-emerald-200 bg-emerald-50 text-emerald-700 flex items-center justify-center transition-all hover:bg-emerald-600 hover:text-white shadow-sm"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">sync_alt</span>
                                     </button>
 
                                     {/* VTP Export Modal */}
@@ -4269,7 +4278,7 @@ const OrderList = () => {
                                                 {/* Header */}
                                                 <div className="px-6 py-4 border-b border-violet-100 bg-gradient-to-r from-violet-600 to-purple-700 flex items-center justify-between">
                                                     <div className="flex items-center gap-3">
-                                                        <span className="material-symbols-outlined text-white text-[22px]">local_shipping</span>
+                                                        <span className="material-symbols-outlined text-white text-[22px]">description</span>
                                                         <div>
                                                             <p className="text-[10px] font-black text-violet-200 uppercase tracking-[0.2em]">Xuất file</p>
                                                             <h3 className="text-[15px] font-extrabold text-white">Tạo đơn hàng Viettel Post</h3>
@@ -5707,6 +5716,11 @@ const OrderList = () => {
                 onClose={closeBatchReturnModal}
                 onSaved={handleBatchReturnSaved}
                 onNotify={setNotification}
+            />
+            <ViettelPostTrackingImportModal 
+                isOpen={vtpTrackingImportOpen} 
+                onClose={() => setVtpTrackingImportOpen(false)}
+                onRefresh={() => fetchOrders()}
             />
         </div>
     );

@@ -398,6 +398,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/shipments/{id}', [\App\Http\Controllers\Api\ShipmentController::class , 'destroy']);
     Route::post('/shipments/bulk-status', [\App\Http\Controllers\Api\ShipmentController::class , 'bulkUpdateStatus']);
     Route::post('/shipments/reconcile', [\App\Http\Controllers\Api\ShipmentController::class , 'bulkReconcile']);
+    Route::post('/shipments/reconcile/viettel-post', [\App\Http\Controllers\Api\ShipmentController::class, 'reconcileViettelPost']);
+    Route::post('/shipments/import-tracking/viettel-post', [\App\Http\Controllers\Api\ShipmentController::class, 'importTrackingViettelPost']);
     Route::post('/shipments/sync', [\App\Http\Controllers\Api\ShipmentController::class , 'syncCarrierShipments']);
     Route::post('/shipments/carrier-callback', [\App\Http\Controllers\Api\ShipmentController::class , 'processCarrierCallback']);
 

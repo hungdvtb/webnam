@@ -5254,6 +5254,7 @@ class ProductController extends Controller
                 'type' => $product->type,
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),
+                'attribute_summary' => $this->pickerAttributeSummary($product),
                 'variations' => $product->variations
                     ->map(fn (Product $variation) => [
                         'id' => (int) $variation->id,
@@ -5269,6 +5270,7 @@ class ProductController extends Controller
                         'type' => $variation->type,
                         'main_image' => $this->pickerPrimaryImage($variation),
                         'attribute_values' => $this->pickerAttributePayload($variation),
+                        'attribute_summary' => $this->pickerAttributeSummary($variation),
                     ])
                     ->values()
                     ->all(),

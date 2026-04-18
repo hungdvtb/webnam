@@ -9,6 +9,7 @@ use App\Models\OrderStatusLog;
 use App\Models\Shipment;
 use App\Models\ShipmentStatusLog;
 use App\Services\Inventory\InventoryService;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -30,11 +31,14 @@ class ShipmentRollbackService
         'completed',
         'pending_return',
         'returned',
+        OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+        OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
         'cancelled',
     ];
 
     private const SHIPPING_RESET_STATE = [
         'shipment_status' => null,
+        'internal_shipping_fee' => 0,
         'shipping_status' => null,
         'shipping_synced_at' => null,
         'shipping_status_source' => 'manual',

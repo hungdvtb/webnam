@@ -71,6 +71,9 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertStringContainsString('Gửi ngoài', (string) $order->shipping_carrier_name);
         $this->assertSame('shipngoai100', (string) $order->shipping_tracking_code);
         $this->assertNotNull($order->shipping_dispatched_at);
+        $this->assertSame(0.0, (float) $order->shipping_fee);
+        $this->assertSame(45000.0, (float) $order->internal_shipping_fee);
+        $this->assertSame(280000.0, (float) $order->total_price);
         $this->assertSame('xe_khach', data_get($order->external_delivery_meta, 'delivery_type'));
         $this->assertSame('Nha xe Phuong Trang', data_get($order->external_delivery_meta, 'contact_name'));
         $this->assertSame(45000.0, (float) data_get($order->external_delivery_meta, 'shipping_cost'));
@@ -91,6 +94,27 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
             'to_status' => 'shipping',
             'to_shipping_status' => 'out_for_delivery',
         ]);
+
+        $showResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$order->id}");
+
+        $showResponse->assertOk();
+        $showPayload = $showResponse->json();
+        $this->assertSame(0.0, (float) ($showPayload['shipping_fee'] ?? 0));
+        $this->assertSame(45000.0, (float) ($showPayload['internal_shipping_fee'] ?? 0));
+        $this->assertSame(280000.0, (float) ($showPayload['total_price'] ?? 0));
+
+        $listResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?per_page=20');
+
+        $listResponse->assertOk();
+        $listRow = collect($listResponse->json('data'))->firstWhere('id', $order->id);
+        $this->assertNotNull($listRow);
+        $this->assertSame(0.0, (float) ($listRow['shipping_fee'] ?? 0));
+        $this->assertSame(45000.0, (float) ($listRow['internal_shipping_fee'] ?? 0));
+        $this->assertSame(280000.0, (float) ($listRow['total_price'] ?? 0));
     }
 
     public function test_quick_dispatch_outside_delivery_generates_incrementing_internal_tracking_codes(): void
@@ -202,6 +226,7 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertNull($order->shipping_carrier_name);
         $this->assertNull($order->shipping_dispatched_at);
         $this->assertNull($order->external_delivery_meta);
+        $this->assertSame(0.0, (float) $order->internal_shipping_fee);
         $this->assertSame(0, Shipment::query()->where('order_id', $order->id)->count());
         $this->assertDatabaseMissing('inventory_documents', [
             'id' => $document->id,

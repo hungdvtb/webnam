@@ -212,6 +212,8 @@ class ShipmentDispatchService
         $trackingNumber = $this->extractTrackingNumber($response);
         $externalOrderNumber = $this->extractExternalOrderNumber($response) ?: $trackingNumber;
         $carrierFee = $this->extractCarrierFee($response);
+        $defaultShippingCost = max(0, round((float) data_get($order, 'internal_shipping_fee', 0), 2));
+        $resolvedShippingCost = $carrierFee ?? $defaultShippingCost;
 
         if (!$trackingNumber) {
             Log::error('ViettelPost createOrder response missing tracking number', [
@@ -254,9 +256,9 @@ class ShipmentDispatchService
             'carrier_status_code' => '101',
             'carrier_status_text' => 'Cho lay hang',
             'cod_amount' => max(0, (float) $order->total_price),
-            'shipping_cost' => $carrierFee ?? (float) ($order->shipping_fee ?? 0),
+            'shipping_cost' => $resolvedShippingCost,
             'service_fee' => 0,
-            'actual_received_amount' => max(0, (float) $order->total_price) - ($carrierFee ?? (float) ($order->shipping_fee ?? 0)),
+            'actual_received_amount' => max(0, (float) $order->total_price) - $resolvedShippingCost,
             'created_by' => $userId,
             'shipped_at' => now(),
             'dispatch_payload' => $payload,

@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
+#[\PHPUnit\Framework\Attributes\RequiresPhpExtension('pdo_sqlite')]
 class ShipmentStatusMappingToggleTest extends TestCase
 {
     protected function setUp(): void
@@ -212,6 +213,70 @@ class ShipmentStatusMappingToggleTest extends TestCase
 
         $this->assertSame('shipping', (string) $order->status);
         $this->assertSame('delivered', (string) $order->shipping_status);
+    }
+
+    public function test_partial_delivery_order_switches_to_partial_delivery_status_when_shipment_is_returned(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $order = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/shipments/{$shipment->id}/status", [
+                'status' => 'returned',
+                'reason' => 'Khach nhan mot phan, phan con lai da hoan ve',
+                'admin_override' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('shipment.shipment_status', 'returned')
+            ->assertJsonPath('shipment.order.status', 'partial_delivery');
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('partial_delivery', (string) $order->status);
+        $this->assertSame('returned', (string) $order->shipping_status);
+        $this->assertSame('returned', (string) $shipment->shipment_status);
+    }
+
+    public function test_exchange_return_order_stays_pending_return_until_return_slip_is_created(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $order = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/shipments/{$shipment->id}/status", [
+                'status' => 'returned',
+                'reason' => 'Don doi hang da nhan hang hoan ve',
+                'admin_override' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('shipment.shipment_status', 'returned')
+            ->assertJsonPath('shipment.order.status', 'pending_return');
+
+        $order->refresh();
+
+        $this->assertSame('pending_return', (string) $order->status);
+        $this->assertSame('returned', (string) $order->shipping_status);
     }
 
     public function test_admin_can_correct_returned_shipment_back_to_returning(): void
@@ -481,6 +546,7 @@ class ShipmentStatusMappingToggleTest extends TestCase
             $table->unsignedBigInteger('user_id')->nullable();
             $table->string('order_number');
             $table->string('order_kind')->nullable();
+            $table->string('order_type')->nullable();
             $table->decimal('total_price', 15, 2)->default(0);
             $table->string('status')->default('new');
             $table->string('customer_name')->nullable();

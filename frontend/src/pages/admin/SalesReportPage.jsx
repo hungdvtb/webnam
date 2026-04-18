@@ -129,7 +129,7 @@ const createEmptyState = () => ({
     rows: [],
     summary_row: { totals: { quantity: 0, cost_amount: 0, revenue_amount: 0 }, days: {} },
     summary: { top_level_count: 0, leaf_count: 0, total_quantity: 0, total_cost_amount: 0, total_revenue_amount: 0 },
-    meta: { effective_statuses: [], date_basis: 'completed_or_created' },
+    meta: { effective_statuses: [], date_basis: 'shipping_dispatched_or_order_displayed_at' },
 });
 
 const normalizeDatePair = (fromValue, toValue) => {
@@ -754,7 +754,7 @@ const SalesReportPage = () => {
                             <div>
                                 <div className="text-[11px] font-black uppercase tracking-[0.18em] text-primary/35">Cấu hình bộ lọc báo cáo</div>
                                 <h3 className="mt-1 text-[18px] font-black tracking-tight text-primary">Lọc giống màn quản lý đơn hàng</h3>
-                                <p className="mt-2 text-[13px] leading-6 text-primary/55">Trục ngày của báo cáo lấy ngày hoàn tất nếu đơn đã chốt completed, nếu chưa thì lấy ngày tạo đơn.</p>
+                                <p className="mt-2 text-[13px] leading-6 text-primary/55">Trục ngày của báo cáo ưu tiên ngày gửi vận chuyển. Nếu đơn chưa có ngày gửi, hệ thống mới lấy ngày lên đơn chính thức; nếu vẫn chưa có thì lấy ngày tạo.</p>
                             </div>
                             <div className="flex items-center gap-3">
                                 <button type="button" onClick={resetAllFilters} className="text-[13px] font-bold text-primary/45 hover:text-brick">Thiết lập lại</button>

@@ -37,9 +37,6 @@ import OrderDetail from './pages/admin/OrderDetail';
 import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
-import FinanceTracking from './pages/admin/FinanceTracking';
-import FixedExpenseTracking from './pages/admin/FixedExpenseTracking';
-import DailyProfitTracking from './pages/admin/DailyProfitTracking';
 import SalesReportPage from './pages/admin/SalesReportPage';
 import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
@@ -49,6 +46,10 @@ import AiTrainingManager from './pages/admin/AiTrainingManager';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
+import FixedCostTracker from './pages/admin/FixedCostTracker';
+import FundManagement from './pages/admin/FundManagement';
+import DebtManagement from './pages/admin/DebtManagement';
+import DailyProfitReport from './pages/admin/DailyProfitReport';
 import FloatingContactButtons from './components/FloatingContactButtons';
 
 import { AuthProvider } from './context/AuthContext';
@@ -66,7 +67,7 @@ function App() {
         const res = await accountApi.resolve(siteConfig.SITE_CODE);
         siteConfig.accountId = res.data.id;
         siteConfig.accountName = res.data.name;
-        
+
         // Don't overwrite activeAccountId if we are in admin panel
         if (!window.location.pathname.startsWith('/admin')) {
             localStorage.setItem('activeAccountId', res.data.id);
@@ -163,10 +164,11 @@ function App() {
                 <Route path="ai-training" element={<AiTrainingManager />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<SalesReportPage />} />
-                <Route path="finance" element={<FinanceTracking />} />
-                <Route path="finance/receipts" element={<Navigate to="/admin/finance" replace />} />
-                <Route path="finance/fixed-expenses" element={<FixedExpenseTracking />} />
-                <Route path="finance/daily-profit" element={<DailyProfitTracking />} />
+                <Route path="finance/fixed-costs" element={<FixedCostTracker />} />
+                <Route path="finance/funds" element={<FundManagement />} />
+                <Route path="finance/debts" element={<DebtManagement />} />
+                <Route path="finance/daily-profit" element={<DailyProfitReport />} />
+                <Route path="finance/*" element={<Navigate to="/admin" replace />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
                 <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />
                 <Route path="orders/:id" element={<OrderDetail />} />

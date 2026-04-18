@@ -59,6 +59,22 @@ class OrderController extends Controller
         self::RETURN_STATUS_NOT_RETURNED,
         self::RETURN_STATUS_RETURNED,
     ];
+    private const RETURN_FOLLOWUP_MIN_STALLED_DAYS = 10;
+    private const RETURN_FOLLOWUP_FILTER_ALL = 'all';
+    private const RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN = 'pending_return';
+    private const RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN = self::ORDER_TYPE_EXCHANGE_RETURN;
+    private const RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY = self::ORDER_TYPE_PARTIAL_DELIVERY;
+    private const RETURN_FOLLOWUP_FILTERS = [
+        self::RETURN_FOLLOWUP_FILTER_ALL,
+        self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN,
+        self::RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN,
+        self::RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY,
+    ];
+    private const RETURN_FOLLOWUP_RESOLVED_STATUSES = [
+        'pending_return',
+        OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+        OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+    ];
     private const ORDER_KIND_LABELS = [
         self::ORDER_KIND_OFFICIAL => 'Đơn hàng chính',
         self::ORDER_KIND_TEMPLATE => 'Đơn hàng mẫu',
@@ -579,6 +595,7 @@ class OrderController extends Controller
     private function freshShippingState(): array
     {
         $state = [
+            'internal_shipping_fee' => 0,
             'shipping_status' => null,
             'shipping_synced_at' => null,
             'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
@@ -598,10 +615,35 @@ class OrderController extends Controller
         return $state;
     }
 
+    private function resolveOrderInternalShippingFee(Order $order): float
+    {
+        $storedShippingFee = $this->orderTableHasColumn('internal_shipping_fee')
+            ? max(0, round((float) ($order->internal_shipping_fee ?? 0), 2))
+            : 0.0;
+
+        $outsideDeliveryFee = 0.0;
+        if ($this->orderTableHasColumn('external_delivery_meta') && is_array($order->external_delivery_meta)) {
+            $outsideDeliveryFee = max(0, round((float) data_get($order->external_delivery_meta, 'shipping_cost', 0), 2));
+        }
+
+        $activeShipmentFee = 0.0;
+        if ($order->relationLoaded('activeShipment') && $order->activeShipment) {
+            $activeShipmentFee = max(0, round((float) ($order->activeShipment->shipping_cost ?? 0), 2));
+        }
+
+        return max($storedShippingFee, $outsideDeliveryFee, $activeShipmentFee);
+    }
+
+    private function attachResolvedInternalShippingFee(Order $order): void
+    {
+        $order->setAttribute('internal_shipping_fee', $this->resolveOrderInternalShippingFee($order));
+    }
+
     private function orderDetailRelations(): array
     {
         $relations = [
             'user:id,name',
+            'activeShipment:id,order_id,shipment_number,carrier_name,tracking_number,carrier_tracking_code,shipment_status,shipping_cost,shipped_at,out_for_delivery_at',
             'items' => fn ($query) => $query
                 ->select([
                     'id',
@@ -752,6 +794,9 @@ class OrderController extends Controller
     private function mutationResponsePayload(Order $order): array
     {
         $order->refresh();
+        $order->loadMissing([
+            'activeShipment:id,order_id,shipping_cost',
+        ]);
 
         return $this->appendOrderTimePayload([
             'id' => (int) $order->id,
@@ -762,6 +807,10 @@ class OrderController extends Controller
             'customer_name' => $order->customer_name,
             'customer_phone' => $order->customer_phone,
             'total_price' => (float) $order->total_price,
+            'cost_total' => (float) ($order->cost_total ?? 0),
+            'shipping_fee' => (float) ($order->shipping_fee ?? 0),
+            'internal_shipping_fee' => $this->resolveOrderInternalShippingFee($order),
+            'discount' => (float) ($order->discount ?? 0),
             'settlement_delta' => (float) ($order->settlement_delta ?? 0),
             'return_tracking_code' => $order->return_tracking_code,
             'return_status' => $this->normalizeReturnStatus($order->return_status),
@@ -859,6 +908,19 @@ class OrderController extends Controller
             : self::ORDER_TYPE_STANDARD;
     }
 
+    private function extractRequestedOrderTypes(mixed $orderTypes): Collection
+    {
+        $rawValues = is_array($orderTypes)
+            ? $orderTypes
+            : explode(',', (string) $orderTypes);
+
+        return collect($rawValues)
+            ->map(fn ($value) => Str::lower(trim((string) $value)))
+            ->filter(fn (string $value) => in_array($value, Order::TYPES, true))
+            ->unique()
+            ->values();
+    }
+
     private function normalizeReturnTrackingCode(mixed $trackingCode): ?string
     {
         $normalized = trim((string) $trackingCode);
@@ -897,6 +959,187 @@ class OrderController extends Controller
         }
 
         return $tableExists;
+    }
+
+    private function orderStatusLogsTableExists(): bool
+    {
+        static $tableExists = null;
+
+        if ($tableExists === null) {
+            $tableExists = Schema::hasTable('order_status_logs');
+        }
+
+        return $tableExists;
+    }
+
+    private function normalizeReturnFollowupFilter(?string $value): string
+    {
+        $normalized = Str::lower(trim((string) $value));
+
+        return in_array($normalized, self::RETURN_FOLLOWUP_FILTERS, true)
+            ? $normalized
+            : self::RETURN_FOLLOWUP_FILTER_ALL;
+    }
+
+    private function applyManagedOrderScope($query, string $table = 'orders'): void
+    {
+        $query->where(function ($managedOrderQuery) use ($table) {
+            $managedOrderQuery
+                ->where("{$table}.order_kind", self::ORDER_KIND_OFFICIAL)
+                ->orWhereNull("{$table}.order_kind")
+                ->orWhere("{$table}.order_kind", '');
+        });
+    }
+
+    private function buildReturnFollowupBaseQuery(int $accountId)
+    {
+        $query = DB::table('orders')
+            ->where('orders.account_id', $accountId);
+
+        if ($this->orderTableHasColumn('deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $this->applyManagedOrderScope($query, 'orders');
+
+        return $query;
+    }
+
+    private function buildPendingReturnFollowupQuery(int $accountId, Carbon $threshold)
+    {
+        $query = $this->buildReturnFollowupBaseQuery($accountId);
+        $referenceCandidates = [];
+
+        if ($this->orderStatusLogsTableExists()) {
+            $pendingReturnLogSubquery = DB::table('order_status_logs')
+                ->select('order_id', DB::raw('MAX(created_at) as relevant_date'))
+                ->where('to_status', 'pending_return')
+                ->groupBy('order_id');
+
+            $query->leftJoinSub($pendingReturnLogSubquery, 'pending_return_logs', function ($join) {
+                $join->on('pending_return_logs.order_id', '=', 'orders.id');
+            });
+
+            $referenceCandidates[] = 'pending_return_logs.relevant_date';
+        }
+
+        if ($this->orderTableHasColumn('shipping_issue_detected_at')) {
+            $referenceCandidates[] = 'orders.shipping_issue_detected_at';
+        }
+
+        if ($this->orderTableHasColumn('shipping_dispatched_at')) {
+            $referenceCandidates[] = 'orders.shipping_dispatched_at';
+        }
+
+        if (empty($referenceCandidates)) {
+            $referenceCandidates[] = 'orders.created_at';
+        }
+
+        $referenceExpression = 'COALESCE(' . implode(', ', $referenceCandidates) . ')';
+
+        return $query
+            ->where('orders.status', 'pending_return')
+            ->whereRaw("{$referenceExpression} IS NOT NULL")
+            ->whereRaw("{$referenceExpression} <= ?", [$threshold->toDateTimeString()])
+            ->select('orders.id as order_id')
+            ->selectRaw('? as followup_category', [self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN])
+            ->selectRaw("{$referenceExpression} as relevant_date");
+    }
+
+    private function buildExchangeReturnFollowupQuery(int $accountId, Carbon $threshold)
+    {
+        $query = $this->buildReturnFollowupBaseQuery($accountId)
+            ->where('orders.order_type', self::ORDER_TYPE_EXCHANGE_RETURN)
+            ->whereNotIn('orders.status', self::RETURN_FOLLOWUP_RESOLVED_STATUSES);
+
+        if ($this->orderSupplementItemsTableExists()) {
+            $query->whereExists(function ($supplementQuery) {
+                $supplementQuery->select(DB::raw(1))
+                    ->from('order_supplement_items')
+                    ->whereColumn('order_supplement_items.order_id', 'orders.id')
+                    ->where('order_supplement_items.quantity', '>', 0);
+            });
+        } elseif ($this->orderTableHasColumn('supplement_items_total_price')) {
+            $query->where('orders.supplement_items_total_price', '>', 0);
+        } else {
+            $query->whereRaw('1 = 0');
+        }
+
+        if (!$this->orderTableHasColumn('shipping_dispatched_at')) {
+            return $query->whereRaw('1 = 0')
+                ->select('orders.id as order_id')
+                ->selectRaw('? as followup_category', [self::RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN])
+                ->selectRaw('orders.created_at as relevant_date');
+        }
+
+        return $query
+            ->whereNotNull('orders.shipping_dispatched_at')
+            ->where('orders.shipping_dispatched_at', '<=', $threshold->toDateTimeString())
+            ->select('orders.id as order_id')
+            ->selectRaw('? as followup_category', [self::RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN])
+            ->selectRaw('orders.shipping_dispatched_at as relevant_date');
+    }
+
+    private function buildPartialDeliveryFollowupQuery(int $accountId, Carbon $threshold)
+    {
+        $query = $this->buildReturnFollowupBaseQuery($accountId)
+            ->where('orders.order_type', self::ORDER_TYPE_PARTIAL_DELIVERY)
+            ->whereNotIn('orders.status', self::RETURN_FOLLOWUP_RESOLVED_STATUSES);
+
+        if (!$this->orderTableHasColumn('shipping_dispatched_at')) {
+            return $query->whereRaw('1 = 0')
+                ->select('orders.id as order_id')
+                ->selectRaw('? as followup_category', [self::RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY])
+                ->selectRaw('orders.created_at as relevant_date');
+        }
+
+        return $query
+            ->whereNotNull('orders.shipping_dispatched_at')
+            ->where('orders.shipping_dispatched_at', '<=', $threshold->toDateTimeString())
+            ->select('orders.id as order_id')
+            ->selectRaw('? as followup_category', [self::RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY])
+            ->selectRaw('orders.shipping_dispatched_at as relevant_date');
+    }
+
+    private function buildReturnFollowupSearchOrderIdsQuery(int $accountId, array $terms)
+    {
+        $query = Order::query()
+            ->select('orders.id')
+            ->distinct()
+            ->where('orders.account_id', $accountId);
+
+        if ($this->orderTableHasColumn('deleted_at')) {
+            $query->whereNull('orders.deleted_at');
+        }
+
+        $this->applyManagedOrderScope($query, 'orders');
+
+        foreach ($terms as $term) {
+            $query->where(function ($searchQuery) use ($term, $accountId) {
+                $this->applyOrderSearchTerm($searchQuery, $term, $accountId);
+            });
+        }
+
+        return $query;
+    }
+
+    private function applyReturnFollowupSearch($query, int $accountId, array $terms): void
+    {
+        if (empty($terms)) {
+            return;
+        }
+
+        $query->whereIn(
+            'orders.id',
+            $this->buildReturnFollowupSearchOrderIdsQuery($accountId, $terms)
+        );
+    }
+
+    private function countReturnFollowupQuery($query): int
+    {
+        return (int) DB::query()
+            ->fromSub($query, 'return_followup_count')
+            ->count();
     }
 
     private function orderDisplayTimestampSql(string $table = 'orders'): string
@@ -1395,10 +1638,10 @@ class OrderController extends Controller
         ];
     }
 
-    private function syncOrderItems(Order $order, array $rawItems, string $orderKind): array
+    private function syncOrderItems(Order $order, array $rawItems, string $orderKind, bool $preferSubmittedCostPrice = false): array
     {
         if ($this->shouldManageInventory($orderKind)) {
-            return app(InventoryService::class)->attachInventoryToOrder($order, $rawItems);
+            return app(InventoryService::class)->attachInventoryToOrder($order, $rawItems, $preferSubmittedCostPrice);
         }
 
         return $this->syncManualOrderItems($order, $rawItems, $this->allowsEmptyItems($orderKind));
@@ -1576,6 +1819,196 @@ class OrderController extends Controller
             'items' => $createdItems,
             'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->total_price), 2),
             'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->total_cost), 2),
+        ];
+    }
+
+    private function resolveStoredImportCostFromOrderLine($costPrice, $costTotal, int $quantity): float
+    {
+        if ($costPrice !== null && $costPrice !== '') {
+            return ImportCostRounding::roundUnitCost((float) $costPrice);
+        }
+
+        if ($quantity > 0 && $costTotal !== null && $costTotal !== '') {
+            return ImportCostRounding::roundUnitCost((float) $costTotal / $quantity);
+        }
+
+        return 0;
+    }
+
+    private function resolveCurrentImportCostFromProduct(?Product $product, float $fallback = 0): float
+    {
+        if ($product) {
+            if ($product->cost_price !== null) {
+                return ImportCostRounding::roundUnitCost((float) $product->cost_price);
+            }
+
+            if ($product->expected_cost !== null) {
+                return ImportCostRounding::roundUnitCost((float) $product->expected_cost);
+            }
+        }
+
+        return ImportCostRounding::roundUnitCost($fallback);
+    }
+
+    private function expandRefreshImportCostProductIds(array $productIds): array
+    {
+        $normalizedProductIds = collect($productIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($normalizedProductIds)) {
+            return [];
+        }
+
+        $variationIds = Product::query()
+            ->whereIn('id', $normalizedProductIds)
+            ->with(['variations' => fn ($query) => $query->select('products.id')])
+            ->get(['products.id'])
+            ->flatMap(fn (Product $product) => $product->variations->pluck('id'))
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        return collect($normalizedProductIds)
+            ->merge($variationIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function matchesRefreshImportCostProductFilter($productId, $actualProductId = null, ?array $productIdLookup = null): bool
+    {
+        if ($productIdLookup === null) {
+            return true;
+        }
+
+        $resolvedProductId = (int) $productId;
+        if ($resolvedProductId > 0 && isset($productIdLookup[$resolvedProductId])) {
+            return true;
+        }
+
+        $resolvedActualProductId = (int) $actualProductId;
+        return $resolvedActualProductId > 0 && isset($productIdLookup[$resolvedActualProductId]);
+    }
+
+    private function refreshOrderImportCostSnapshots(Order $order, array $productIds = []): array
+    {
+        $order->loadMissing(['items.product', 'items.actualProduct']);
+
+        if ($this->orderSupplementItemsTableExists()) {
+            $order->loadMissing(['supplementItems.product']);
+        }
+
+        $productIdLookup = !empty($productIds)
+            ? array_fill_keys(
+                collect($productIds)
+                    ->map(fn ($id) => (int) $id)
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->all(),
+                true
+            )
+            : null;
+
+        $itemRevenue = 0.0;
+        $costTotal = 0.0;
+        $updatedItems = 0;
+
+        foreach ($order->items as $item) {
+            $quantity = (int) ($item->quantity ?? 0);
+            $lineRevenue = round((float) ($item->price ?? 0) * $quantity, 2);
+            $fallbackCostPrice = $this->resolveStoredImportCostFromOrderLine(
+                $item->cost_price,
+                $item->cost_total,
+                $quantity
+            );
+            $storedLineCost = $item->cost_total !== null && $item->cost_total !== ''
+                ? round((float) $item->cost_total, 2)
+                : ImportCostRounding::lineTotal($fallbackCostPrice, $quantity);
+
+            if ($this->matchesRefreshImportCostProductFilter($item->product_id, $item->actual_product_id, $productIdLookup)) {
+                $costPrice = $this->resolveCurrentImportCostFromProduct(
+                    $item->actualProduct ?: $item->product,
+                    $fallbackCostPrice
+                );
+                $lineCost = ImportCostRounding::lineTotal($costPrice, $quantity);
+                $lineProfit = round($lineRevenue - $lineCost, 2);
+
+                $item->forceFill([
+                    'cost_price' => $costPrice,
+                    'cost_total' => $lineCost,
+                    'profit_total' => $lineProfit,
+                ])->save();
+
+                $updatedItems++;
+            } else {
+                $lineCost = $storedLineCost;
+            }
+
+            $itemRevenue += $lineRevenue;
+            $costTotal += $lineCost;
+        }
+
+        $supplementTotalPrice = 0.0;
+        $supplementCostTotal = 0.0;
+        $updatedSupplementItems = 0;
+
+        if ($this->orderSupplementItemsTableExists()) {
+            foreach ($order->supplementItems as $item) {
+                $quantity = (int) ($item->quantity ?? 0);
+                $linePrice = $item->total_price !== null && $item->total_price !== ''
+                    ? round((float) $item->total_price, 2)
+                    : round((float) ($item->price ?? 0) * $quantity, 2);
+                $fallbackCostPrice = $this->resolveStoredImportCostFromOrderLine(
+                    $item->cost_price,
+                    $item->total_cost,
+                    $quantity
+                );
+                $storedLineCost = $item->total_cost !== null && $item->total_cost !== ''
+                    ? round((float) $item->total_cost, 2)
+                    : ImportCostRounding::lineTotal($fallbackCostPrice, $quantity);
+
+                if ($this->matchesRefreshImportCostProductFilter($item->product_id, null, $productIdLookup)) {
+                    $costPrice = $this->resolveCurrentImportCostFromProduct($item->product, $fallbackCostPrice);
+                    $lineCost = ImportCostRounding::lineTotal($costPrice, $quantity);
+
+                    $item->forceFill([
+                        'cost_price' => $costPrice,
+                        'total_price' => $linePrice,
+                        'total_cost' => $lineCost,
+                    ])->save();
+
+                    $updatedSupplementItems++;
+                } else {
+                    $lineCost = $storedLineCost;
+                }
+
+                $supplementTotalPrice += $linePrice;
+                $supplementCostTotal += $lineCost;
+            }
+        }
+
+        $this->recalculateOrderTotals(
+            $order,
+            round($itemRevenue, 2),
+            round($costTotal, 2),
+            (string) $order->order_type,
+            (float) ($order->settlement_delta ?? 0),
+            round($supplementTotalPrice, 2),
+            round($supplementCostTotal, 2)
+        );
+
+        return [
+            'updated_items' => $updatedItems,
+            'updated_supplement_items' => $updatedSupplementItems,
         ];
     }
 
@@ -1768,7 +2201,12 @@ class OrderController extends Controller
                     ];
                 })->all();
 
-                $summary = $this->syncOrderItems($newOrder, $rawItems, $targetKind);
+                $summary = $this->syncOrderItems(
+                    $newOrder,
+                    $rawItems,
+                    $targetKind,
+                    $this->shouldManageInventory($targetKind)
+                );
                 $rawSupplementItems = $this->orderSupplementItemsTableExists()
                     ? $original->supplementItems->map(function ($item) {
                         return [
@@ -2244,6 +2682,7 @@ class OrderController extends Controller
             $lockedOrder->forceFill($this->filterPersistableOrderData([
                 'status' => 'shipping',
                 'shipment_status' => 'shipped',
+                'internal_shipping_fee' => max(0, round((float) ($shipmentInput['shipping_cost'] ?? 0), 2)),
                 'shipping_status' => 'out_for_delivery',
                 'shipping_synced_at' => $now,
                 'shipping_status_source' => self::SHIPPING_STATUS_SOURCE_MANUAL,
@@ -2403,7 +2842,37 @@ class OrderController extends Controller
         }
 
         if ($request->filled('order_type')) {
-            $query->where('order_type', $this->normalizeOrderType((string) $request->input('order_type')));
+            $requestedOrderTypes = $this->extractRequestedOrderTypes($request->input('order_type'));
+
+            if ($requestedOrderTypes->isEmpty()) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where(function ($orderTypeQuery) use ($requestedOrderTypes) {
+                    $explicitTypes = $requestedOrderTypes
+                        ->reject(fn (string $type) => $type === self::ORDER_TYPE_STANDARD)
+                        ->values()
+                        ->all();
+
+                    if (!empty($explicitTypes)) {
+                        $orderTypeQuery->whereIn('order_type', $explicitTypes);
+                    }
+
+                    if ($requestedOrderTypes->contains(self::ORDER_TYPE_STANDARD)) {
+                        $standardScope = function ($standardQuery) {
+                            $standardQuery
+                                ->where('order_type', self::ORDER_TYPE_STANDARD)
+                                ->orWhereNull('order_type')
+                                ->orWhere('order_type', '');
+                        };
+
+                        if (!empty($explicitTypes)) {
+                            $orderTypeQuery->orWhere($standardScope);
+                        } else {
+                            $orderTypeQuery->where($standardScope);
+                        }
+                    }
+                });
+            }
         }
 
         if ($request->filled('order_ids')) {
@@ -2523,6 +2992,7 @@ class OrderController extends Controller
         $phoneAttributeIds = $this->candidateOrderPhoneAttributeIds($accountId);
 
         return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds, $phoneAttributeIds) {
+            $this->attachResolvedInternalShippingFee($order);
             $payload = $order->toArray();
             $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
             $payload['customer_phone'] = $this->resolveOrderDisplayCustomerPhone($order, $phoneAttributeIds);
@@ -2625,7 +3095,7 @@ class OrderController extends Controller
 
     private function loadOrderStatuses(int $accountId): array
     {
-        OrderStatusCatalog::ensurePrintedStatus($accountId);
+        OrderStatusCatalog::ensureDefaultSystemStatuses($accountId);
 
         return OrderStatus::query()
             ->where('account_id', $accountId)
@@ -2917,12 +3387,12 @@ class OrderController extends Controller
     public function index(Request $request)
     {
         $accountId = $this->resolveAccountId($request);
-        
+
         // Base select for listing - avoid * to reduce payload
         $query = Order::query()
             ->where('account_id', $accountId)
             ->select($this->selectExistingOrderColumns([
-                'id', 'order_number', 'total_price', 'status', 'customer_name', 
+                'id', 'order_number', 'total_price', 'cost_total', 'shipping_fee', 'internal_shipping_fee', 'status', 'customer_name',
                 'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
                 'draft_created_at', 'officialized_at',
                 'print_count', 'last_printed_at',
@@ -2961,14 +3431,14 @@ class OrderController extends Controller
                         ->select(['id', 'name', 'sku']),
                 ]),
             'attributeValues:id,order_id,attribute_id,value',
-            'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at,customer_name,customer_phone'
+            'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at,customer_name,customer_phone,shipping_cost'
         ]);
 
         $this->applyOrderListFilters($query, $request);
 
         $sortBy = $request->input('sort_by', 'created_at');
         $sortOrder = $request->input('sort_order', 'desc');
-        
+
         if ($sortBy === 'status') {
             $query->leftJoin('order_statuses', function($join) use ($accountId) {
                     $join->on('orders.status', '=', 'order_statuses.code')
@@ -2976,10 +3446,15 @@ class OrderController extends Controller
                 })
                 ->orderBy('order_statuses.sort_order', $sortOrder);
         } else {
-            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status', 'shipping_dispatched_at'];
+            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'cost_total', 'status', 'shipping_dispatched_at'];
+            if ($this->orderTableHasColumn('shipping_fee')) {
+                $validSortFields[] = 'shipping_fee';
+            }
             $field = in_array($sortBy, $validSortFields) ? $sortBy : 'created_at';
             if ($field === 'created_at') {
                 $query->orderByRaw($this->orderDisplayTimestampSql('orders') . ' ' . ($sortOrder === 'asc' ? 'asc' : 'desc'));
+            } elseif ($field === 'shipping_fee' && $this->orderTableHasColumn('internal_shipping_fee')) {
+                $query->orderBy('internal_shipping_fee', $sortOrder);
             } else {
                 $query->orderBy($field, $sortOrder);
             }
@@ -2996,6 +3471,135 @@ class OrderController extends Controller
 
         $response = $paginator->toArray();
         $response['order_kind_counts'] = $this->loadOrderKindCounts($accountId);
+
+        return response()->json($response);
+    }
+
+    public function returnFollowups(Request $request)
+    {
+        $accountId = $this->resolveAccountId($request);
+        $filter = $this->normalizeReturnFollowupFilter($request->input('category'));
+        $searchTerms = $this->extractSearchTerms($request);
+        $threshold = now()->subDays(self::RETURN_FOLLOWUP_MIN_STALLED_DAYS);
+        $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
+
+        $pendingReturnQuery = $this->buildPendingReturnFollowupQuery($accountId, $threshold);
+        $exchangeReturnQuery = $this->buildExchangeReturnFollowupQuery($accountId, $threshold);
+        $partialDeliveryQuery = $this->buildPartialDeliveryFollowupQuery($accountId, $threshold);
+
+        if (!empty($searchTerms)) {
+            $this->applyReturnFollowupSearch($pendingReturnQuery, $accountId, $searchTerms);
+            $this->applyReturnFollowupSearch($exchangeReturnQuery, $accountId, $searchTerms);
+            $this->applyReturnFollowupSearch($partialDeliveryQuery, $accountId, $searchTerms);
+        }
+
+        $counts = [
+            self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN => $this->countReturnFollowupQuery(clone $pendingReturnQuery),
+            self::RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN => $this->countReturnFollowupQuery(clone $exchangeReturnQuery),
+            self::RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY => $this->countReturnFollowupQuery(clone $partialDeliveryQuery),
+        ];
+        $counts[self::RETURN_FOLLOWUP_FILTER_ALL] = array_sum($counts);
+
+        $followupQuery = match ($filter) {
+            self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN => clone $pendingReturnQuery,
+            self::RETURN_FOLLOWUP_CATEGORY_EXCHANGE_RETURN => clone $exchangeReturnQuery,
+            self::RETURN_FOLLOWUP_CATEGORY_PARTIAL_DELIVERY => clone $partialDeliveryQuery,
+            default => (clone $pendingReturnQuery)
+                ->unionAll(clone $exchangeReturnQuery)
+                ->unionAll(clone $partialDeliveryQuery),
+        };
+
+        $paginator = DB::query()
+            ->fromSub($followupQuery, 'return_followups')
+            ->orderBy('relevant_date')
+            ->orderBy('order_id')
+            ->paginate($perPage);
+
+        $followupRows = collect($paginator->items());
+        $orderIds = $followupRows
+            ->pluck('order_id')
+            ->map(fn ($value) => (int) $value)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values();
+
+        $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
+        $phoneAttributeIds = $this->candidateOrderPhoneAttributeIds($accountId);
+        $orders = $orderIds->isEmpty()
+            ? collect()
+            : Order::query()
+                ->where('account_id', $accountId)
+                ->whereIn('id', $orderIds->all())
+                ->select($this->selectExistingOrderColumns([
+                    'id',
+                    'order_number',
+                    'order_kind',
+                    'order_type',
+                    'status',
+                    'customer_name',
+                    'customer_phone',
+                    'notes',
+                    'return_tracking_code',
+                    'return_status',
+                    'shipping_tracking_code',
+                    'shipping_dispatched_at',
+                    'shipping_issue_detected_at',
+                    'created_at',
+                ]))
+                ->with([
+                    'attributeValues:id,order_id,attribute_id,value',
+                    'activeShipment:id,order_id,carrier_tracking_code,tracking_number,customer_name,customer_phone,shipped_at',
+                ])
+                ->get()
+                ->keyBy(fn (Order $order) => (int) $order->id);
+
+        $now = now();
+        $paginator->setCollection(
+            $followupRows->map(function ($row) use ($orders, $nameAttributeIds, $phoneAttributeIds, $now) {
+                $order = $orders->get((int) ($row->order_id ?? 0));
+
+                if (!$order) {
+                    return null;
+                }
+
+                $relevantDate = $this->normalizeOrderTimestamp($row->relevant_date ?? null);
+                $trackingCode = $this->normalizeReturnTrackingCode($order->return_tracking_code)
+                    ?? $this->normalizeReturnTrackingCode($order->shipping_tracking_code)
+                    ?? $this->normalizeReturnTrackingCode(
+                        $order->activeShipment?->carrier_tracking_code
+                        ?: $order->activeShipment?->tracking_number
+                    );
+                $notes = trim((string) ($order->notes ?? ''));
+
+                return [
+                    'id' => (int) $order->id,
+                    'order_number' => $order->order_number,
+                    'customer_name' => $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds),
+                    'customer_phone' => $this->resolveOrderDisplayCustomerPhone($order, $phoneAttributeIds),
+                    'status' => (string) $order->status,
+                    'order_type' => $this->normalizeOrderType((string) $order->order_type),
+                    'followup_category' => (string) ($row->followup_category ?? self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN),
+                    'tracking_code' => $trackingCode,
+                    'return_tracking_code' => $this->normalizeReturnTrackingCode($order->return_tracking_code),
+                    'shipping_tracking_code' => $this->normalizeReturnTrackingCode($order->shipping_tracking_code),
+                    'shipping_dispatched_at' => $this->normalizeOrderTimestamp($order->shipping_dispatched_at)?->toISOString(),
+                    'relevant_date' => $relevantDate?->toISOString(),
+                    'relevant_date_mode' => (string) ($row->followup_category ?? '') === self::RETURN_FOLLOWUP_CATEGORY_PENDING_RETURN
+                        ? 'status_changed'
+                        : 'dispatched',
+                    'stalled_days' => $relevantDate ? $relevantDate->diffInDays($now) : 0,
+                    'notes' => $notes !== '' ? $notes : null,
+                ];
+            })->filter()->values()
+        );
+
+        $response = $paginator->toArray();
+        $response['meta'] = [
+            'filter' => $filter,
+            'minimum_stalled_days' => self::RETURN_FOLLOWUP_MIN_STALLED_DAYS,
+            'counts' => $counts,
+            'search_terms' => $searchTerms,
+        ];
 
         return response()->json($response);
     }
@@ -3118,6 +3722,15 @@ class OrderController extends Controller
         }
 
         $resolvedOrders = array_values($resolvedOrdersById);
+        $selectedProductIds = [];
+        $scopeLabel = '';
+
+        $productScopeLabel = empty($selectedProductIds)
+            ? null
+            : (count($selectedProductIds) === 1
+                ? '1 sÃ¡ÂºÂ£n phÃ¡ÂºÂ©m Ä‘ÃƒÂ£ chÃ¡Â»Ân'
+                : count($selectedProductIds) . ' sÃ¡ÂºÂ£n phÃ¡ÂºÂ£m Ä‘ÃƒÂ£ chÃ¡Â»Ân');
+        $messageScopeLabel = $productScopeLabel ? "{$scopeLabel}, {$productScopeLabel}" : $scopeLabel;
 
         return response()->json([
             'resolved_order_ids' => array_map(fn (array $order) => (int) $order['id'], $resolvedOrders),
@@ -3336,7 +3949,12 @@ class OrderController extends Controller
                 'report_profit_total' => 0,
             ], $this->freshShippingState(), $returnTrackingData, $this->initialOrderKindTimestampPayload($orderKind, $recordedAt))));
 
-            $summary = $this->syncOrderItems($order, $rawItems, $orderKind);
+            $summary = $this->syncOrderItems(
+                $order,
+                $rawItems,
+                $orderKind,
+                $this->shouldManageInventory($orderKind)
+            );
             $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
                 ? $this->syncSupplementItems($order, [])
                 : $this->syncSupplementItems($order, (array) $request->input('supplement_items', []));
@@ -3419,6 +4037,7 @@ class OrderController extends Controller
                 'type',
                 'shipment_status',
                 'shipping_fee',
+                'internal_shipping_fee',
                 'discount',
                 'settlement_delta',
                 'return_tracking_code',
@@ -3432,6 +4051,7 @@ class OrderController extends Controller
                 'report_revenue_total',
                 'report_cost_total',
                 'report_profit_total',
+                'external_delivery_meta',
                 'created_at',
                 'draft_created_at',
                 'officialized_at',
@@ -3442,6 +4062,7 @@ class OrderController extends Controller
             ->findOrFail((int) $id);
 
         $this->appendCurrentCostMetrics($order);
+        $this->attachResolvedInternalShippingFee($order);
         $order->setAttribute('draft_created_at', $this->resolveOrderDraftCreatedAt($order));
         $order->setAttribute('officialized_at', $this->resolveOrderOfficializedAt($order));
         $order->setAttribute('displayed_at', $this->resolveOrderDisplayedAt($order));
@@ -3569,7 +4190,12 @@ class OrderController extends Controller
             $itemSyncKind = $this->shouldManageInventory($requestedKind) && !$this->shouldManageInventory($currentKind)
                 ? $currentKind
                 : $requestedKind;
-            $inventorySummary = $this->syncOrderItems($order, (array) $request->input('items', []), $itemSyncKind);
+            $inventorySummary = $this->syncOrderItems(
+                $order,
+                (array) $request->input('items', []),
+                $itemSyncKind,
+                $this->shouldManageInventory($itemSyncKind)
+            );
             $itemRevenue = $inventorySummary['total_price'];
             $costTotal = $inventorySummary['cost_total'];
         } else {
@@ -3853,7 +4479,7 @@ class OrderController extends Controller
                 'status' => 'required|string',
                 'allow_shipping_override' => 'nullable|boolean',
             ]);
-            
+
             return DB::transaction(function () use ($request, $id) {
                 $order = $this->findScopedOrder($request, (int) $id);
 
@@ -3877,18 +4503,25 @@ class OrderController extends Controller
                 $exists = \App\Models\OrderStatus::where('account_id', $order->account_id)
                     ->where('code', $newStatus)
                     ->exists();
-                
+
                 if (!$exists) {
                     return response()->json(['message' => "Trạng thái '{$newStatus}' không hợp lệ cho hệ thống của bạn."], 422);
                 }
 
                 // Check if shipping-related statuses are locked by active shipment
-                $shippingLockedStatuses = ['shipping', 'completed', 'pending_return', 'returned'];
+                $shippingLockedStatuses = [
+                    'shipping',
+                    'completed',
+                    'pending_return',
+                    'returned',
+                    OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+                    OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+                ];
                 $allowShippingOverride = $request->boolean('allow_shipping_override');
                 if (!$allowShippingOverride && in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
                     $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
                     $canEdit = $syncService->canManuallyEditOrderShipping($order);
-                    
+
                     if (!$canEdit['allowed']) {
                         return response()->json([
                             'message' => $canEdit['reason'],
@@ -3909,7 +4542,7 @@ class OrderController extends Controller
                 ]);
 
                 $order->update(['status' => $newStatus]);
-                
+
                 return response()->json($order->load(array_merge(
                     $this->orderDetailRelations(),
                     ['customer', 'shipments']
@@ -4148,6 +4781,150 @@ class OrderController extends Controller
         });
 
         return response()->json(['message' => 'Cập nhật hàng loạt thành công.']);
+    }
+
+    public function refreshImportCosts(Request $request)
+    {
+        $validated = $request->validate([
+            'all_history' => 'nullable|boolean',
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'product_ids' => 'nullable|array|min:1',
+            'product_ids.*' => 'integer|distinct|exists:products,id',
+        ]);
+
+        $allHistory = (bool) ($validated['all_history'] ?? false);
+        $dateFrom = !empty($validated['date_from']) ? (string) $validated['date_from'] : null;
+        $dateTo = !empty($validated['date_to']) ? (string) $validated['date_to'] : null;
+        $selectedProductIds = collect($validated['product_ids'] ?? [])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $refreshProductIds = $this->expandRefreshImportCostProductIds($selectedProductIds);
+
+        if (!$allHistory && !$dateFrom && !$dateTo) {
+            throw ValidationException::withMessages([
+                'date_from' => 'Vui lÃ²ng chá»n khoáº£ng ngÃ y hoáº·c báº­t cáº­p nháº­t toÃ n bá»™ lá»‹ch sá»­.',
+            ]);
+        }
+
+        if ($dateFrom && $dateTo && Carbon::parse($dateFrom)->gt(Carbon::parse($dateTo))) {
+            throw ValidationException::withMessages([
+                'date_to' => 'NgÃ y káº¿t thÃºc pháº£i lá»›n hÆ¡n hoáº·c báº±ng ngÃ y báº¯t Ä‘áº§u.',
+            ]);
+        }
+
+        $baseQuery = $this->scopedOrderQuery($request)
+            ->where(function ($query) {
+                $query
+                    ->where('order_kind', self::ORDER_KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            });
+
+        if (!$allHistory && $dateFrom) {
+            $this->applyOrderDisplayDateFilter($baseQuery, '>=', $dateFrom);
+        }
+
+        if (!$allHistory && $dateTo) {
+            $this->applyOrderDisplayDateFilter($baseQuery, '<=', $dateTo);
+        }
+
+        if (!empty($refreshProductIds)) {
+            $baseQuery->where(function ($query) use ($refreshProductIds) {
+                $query->whereHas('items', function ($itemQuery) use ($refreshProductIds) {
+                    $itemQuery->where(function ($matchQuery) use ($refreshProductIds) {
+                        $matchQuery
+                            ->whereIn('product_id', $refreshProductIds)
+                            ->orWhereIn('actual_product_id', $refreshProductIds);
+                    });
+                });
+
+                if ($this->orderSupplementItemsTableExists()) {
+                    $query->orWhereHas('supplementItems', function ($itemQuery) use ($refreshProductIds) {
+                        $itemQuery->whereIn('product_id', $refreshProductIds);
+                    });
+                }
+            });
+        }
+
+        $matchedOrders = (clone $baseQuery)->count();
+
+        if ($matchedOrders === 0) {
+            return response()->json([
+                'message' => 'KhÃ´ng cÃ³ Ä‘Æ¡n chÃ­nh nÃ o khá»›p pháº¡m vi cáº­p nháº­t.',
+                'matched_orders' => 0,
+                'updated_orders' => 0,
+                'updated_items' => 0,
+                'updated_supplement_items' => 0,
+            ]);
+        }
+
+        $updatedOrders = 0;
+        $updatedItems = 0;
+        $updatedSupplementItems = 0;
+
+        (clone $baseQuery)
+            ->select('id')
+            ->orderBy('id')
+            ->chunkById(50, function ($chunk) use (
+                $request,
+                $refreshProductIds,
+                &$updatedOrders,
+                &$updatedItems,
+                &$updatedSupplementItems
+            ) {
+                $orderIds = $chunk->pluck('id')
+                    ->map(fn ($id) => (int) $id)
+                    ->filter()
+                    ->values()
+                    ->all();
+
+                if (empty($orderIds)) {
+                    return;
+                }
+
+                $relations = ['items.product', 'items.actualProduct'];
+                if ($this->orderSupplementItemsTableExists()) {
+                    $relations[] = 'supplementItems.product';
+                }
+
+                $orders = $this->scopedOrderQuery($request)
+                    ->whereIn('id', $orderIds)
+                    ->with($relations)
+                    ->orderBy('id')
+                    ->get();
+
+                foreach ($orders as $order) {
+                    DB::transaction(function () use (
+                        $order,
+                        $refreshProductIds,
+                        &$updatedOrders,
+                        &$updatedItems,
+                        &$updatedSupplementItems
+                    ) {
+                        $summary = $this->refreshOrderImportCostSnapshots($order, $refreshProductIds);
+
+                        $updatedOrders++;
+                        $updatedItems += (int) ($summary['updated_items'] ?? 0);
+                        $updatedSupplementItems += (int) ($summary['updated_supplement_items'] ?? 0);
+                    });
+                }
+            }, 'id');
+
+        $scopeLabel = $allHistory
+            ? 'toÃ n bá»™ lá»‹ch sá»­'
+            : trim(collect([$dateFrom ?: '...', $dateTo ?: '...'])->implode(' â†’ '));
+
+        return response()->json([
+            'message' => "ÄÃ£ cáº­p nháº­t giÃ¡ nháº­p cho {$updatedOrders} Ä‘Æ¡n ({$scopeLabel}).",
+            'matched_orders' => $matchedOrders,
+            'updated_orders' => $updatedOrders,
+            'updated_items' => $updatedItems,
+            'updated_supplement_items' => $updatedSupplementItems,
+        ]);
     }
 
     public function dispatchPreview(Request $request, ShipmentDispatchService $dispatchService)

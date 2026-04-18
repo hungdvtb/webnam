@@ -30,9 +30,9 @@ class Order extends Model
 
     protected $fillable = [
         'user_id', 'lead_id', 'order_number', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind', 'total_price', 'status',
-        'customer_name', 'customer_email', 'customer_phone', 
+        'customer_name', 'customer_email', 'customer_phone',
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
-        'source', 'type', 'shipment_status', 'shipping_fee', 'discount', 'settlement_delta', 'return_tracking_code', 'return_status', 'cost_total', 'profit_total',
+        'source', 'type', 'shipment_status', 'shipping_fee', 'internal_shipping_fee', 'discount', 'settlement_delta', 'return_tracking_code', 'return_status', 'cost_total', 'profit_total',
         'supplement_items_total_price', 'supplement_items_cost_total', 'report_revenue_total', 'report_cost_total',
         'report_profit_total', 'customer_id',
         'print_count', 'last_printed_at',
@@ -53,6 +53,9 @@ class Order extends Model
         'shipping_dispatched_at' => 'datetime',
         'shipping_issue_detected_at' => 'datetime',
         'external_delivery_meta' => 'json',
+        'shipping_fee' => 'decimal:2',
+        'internal_shipping_fee' => 'decimal:2',
+        'discount' => 'decimal:2',
         'settlement_delta' => 'decimal:2',
         'cost_total' => 'decimal:2',
         'profit_total' => 'decimal:2',

@@ -164,6 +164,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/orders/ai/training/{datasetId}', [OrderAiTrainingController::class, 'destroy'])->whereNumber('datasetId');
     Route::get('/orders/connected-carriers', [\App\Http\Controllers\Api\OrderController::class , 'connectedCarriers']);
     Route::get('/orders/shipping-alerts', [\App\Http\Controllers\Api\OrderController::class , 'shippingAlerts']);
+    Route::get('/orders/return-followups', [\App\Http\Controllers\Api\OrderController::class , 'returnFollowups']);
     Route::post('/orders/dispatch/preview', [\App\Http\Controllers\Api\OrderController::class , 'dispatchPreview']);
     Route::post('/orders/dispatch', [\App\Http\Controllers\Api\OrderController::class , 'dispatch']);
     Route::post('/orders/dispatch/cancel', [\App\Http\Controllers\Api\OrderController::class , 'cancelDispatch']);
@@ -186,6 +187,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/{id}/duplicate', [\App\Http\Controllers\Api\OrderController::class , 'duplicate'])->whereNumber('id');
     Route::post('/orders/{id}/restore', [\App\Http\Controllers\Api\OrderController::class , 'restore'])->whereNumber('id');
     Route::post('/orders/bulk-update', [\App\Http\Controllers\Api\OrderController::class , 'bulkUpdate']);
+    Route::post('/orders/refresh-import-costs', [\App\Http\Controllers\Api\OrderController::class , 'refreshImportCosts']);
     Route::post('/orders/bulk-delete', [\App\Http\Controllers\Api\OrderController::class , 'bulkDelete']);
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
     Route::post('/orders/bulk-convert', [\App\Http\Controllers\Api\OrderController::class , 'bulkConvert']);
@@ -359,8 +361,22 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/finance/fixed-expenses/{id}', [FinanceController::class, 'updateFixedExpense'])->whereNumber('id');
     Route::delete('/finance/fixed-expenses/{id}', [FinanceController::class, 'destroyFixedExpense'])->whereNumber('id');
     Route::post('/finance/fixed-expenses/{id}/pay', [FinanceController::class, 'payFixedExpense'])->whereNumber('id');
+
+    // New Fixed Cost Tracker with Snapshots (Google Sheets style)
+    Route::get('/finance/fixed-costs', [\App\Http\Controllers\FixedCostController::class, 'index']);
+    Route::post('/finance/fixed-costs/apply', [\App\Http\Controllers\FixedCostController::class, 'apply']);
     Route::get('/finance/daily-profit', [FinanceController::class, 'dailyProfitTable']);
     Route::post('/finance/daily-profit/config', [FinanceController::class, 'storeDailyProfitConfig']);
+
+    // New Daily Profit/Loss Report (P&L) routes
+    Route::prefix('finance/daily-pnl')->group(function () {
+        Route::get('report', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getReport']);
+        Route::get('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getConfig']);
+        Route::post('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'updateConfig']);
+        Route::get('fb-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFacebookAdAccounts']);
+        Route::post('sync-fb', [\App\Http\Controllers\FinDailyProfitReportController::class, 'syncFacebookAds']);
+        Route::get('fb-split', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFbAdSpendSplit']);
+    });
     Route::get('/finance/catalogs', [FinanceController::class, 'catalogs']);
     Route::post('/finance/catalogs', [FinanceController::class, 'storeCatalog']);
     Route::put('/finance/catalogs/{id}', [FinanceController::class, 'updateCatalog'])->whereNumber('id');
@@ -479,9 +495,36 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::post('/ai/generate-product-description', [AIController::class , 'generateProductDescription']);
         Route::post('/ai/generate-product-seo', [AIController::class , 'generateProductSeo']);
         Route::post('/ai/rewrite-product-description', [AIController::class , 'rewriteProductDescription']);
-        
+
         // Media Upload for Editor
         Route::post('/media/upload', [MediaController::class, 'upload']);
+
+        // --- Finance & Funds (Sổ Cái Dòng Tiền) ---
+        Route::prefix('finance/funds')->group(function () {
+            Route::get('summary', [\App\Http\Controllers\FundController::class, 'summary']);
+            Route::get('accounts', [\App\Http\Controllers\FundController::class, 'accounts']);
+            Route::post('accounts', [\App\Http\Controllers\FundController::class, 'saveAccount']);
+            Route::delete('accounts/{id}', [\App\Http\Controllers\FundController::class, 'deleteAccount']);
+            Route::put('accounts/{id}/initial-balance', [\App\Http\Controllers\FundController::class, 'updateAccountInitialBalance']);
+            Route::get('categories', [\App\Http\Controllers\FundController::class, 'categories']);
+            Route::post('categories', [\App\Http\Controllers\FundController::class, 'saveCategory']);
+            Route::delete('categories/{id}', [\App\Http\Controllers\FundController::class, 'deleteCategory']);
+            Route::get('transactions', [\App\Http\Controllers\FundController::class, 'transactions']);
+            Route::post('transactions', [\App\Http\Controllers\FundController::class, 'saveTransaction']);
+            Route::delete('transactions/{id}', [\App\Http\Controllers\FundController::class, 'deleteTransaction']);
+            Route::post('transfer', [\App\Http\Controllers\FundController::class, 'transfer']);
+            Route::get('report', [\App\Http\Controllers\FundController::class, 'report']);
+        });
+
+        // Debt Management Routes
+        Route::prefix('finance/debts')->group(function () {
+            Route::get('subjects', [\App\Http\Controllers\DebtController::class, 'getSubjects']);
+            Route::post('subjects', [\App\Http\Controllers\DebtController::class, 'saveSubject']);
+            Route::delete('subjects/{id}', [\App\Http\Controllers\DebtController::class, 'deleteSubject']);
+            Route::get('transactions/{subjectId}', [\App\Http\Controllers\DebtController::class, 'getTransactions']);
+            Route::post('transactions', [\App\Http\Controllers\DebtController::class, 'saveTransaction']);
+            Route::delete('transactions/{id}', [\App\Http\Controllers\DebtController::class, 'deleteTransaction']);
+        });
     });
 
 // Public Routes for Reviews (Reading)

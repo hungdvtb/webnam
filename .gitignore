@@ -12,7 +12,23 @@ webgom/.tmp-chrome-profile/
 webgom/.tmp-chrome-footer-profile/
 webgom/.tmp-edge-cdp-profile/
 webgom/.tmp-edge-profile/
+.chrome-*/
+.tmp-*
+.tmp-*/
+tmp-*
+tmp-*/
+backend/.tmp-*
+frontend/.tmp-*
+webgom/.tmp-*
+webgom/tmp-*
+webgom/public/tmp-*
+.tmp-chrome-*/
+.tmp-edge-*/
+.tmp-headless-*/
+.tmp-selftest-*/
 
 # Local Codex backup files
 *.bak-codex-*
 .codex-backups/
+brain/
+scratch/

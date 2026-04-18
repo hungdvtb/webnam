@@ -20,6 +20,7 @@ use App\Services\Inventory\ProductPricingService;
 use App\Services\MediaService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
+use App\Support\OrderStatusCatalog;
 use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
@@ -3774,7 +3775,11 @@ class ProductController extends Controller
                     ->whereNull('orders.type')
                     ->orWhere('orders.type', '!=', 'inventory_export');
             })
-            ->whereIn('orders.status', ['pending_return', 'returned']);
+            ->whereIn('orders.status', [
+                'pending_return',
+                'returned',
+                OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+            ]);
 
         $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
     }
@@ -5707,9 +5712,14 @@ class ProductController extends Controller
             $searchMatches = $directMatchQuery->toBase()->unionAll($variantMatchQuery->toBase());
             $collapsedMatches = DB::query()
                 ->fromSub($searchMatches, 'search_matches')
-                ->leftJoin('product_links as matched_variant_parent_links', function ($join) {
+                ->leftJoin('product_links as matched_variant_parent_links', function ($join) use ($configurableParentIdsQuery) {
                     $join->on('matched_variant_parent_links.linked_product_id', '=', 'search_matches.id')
-                        ->where('matched_variant_parent_links.link_type', 'super_link');
+                        ->where('matched_variant_parent_links.link_type', 'super_link')
+                        // Only collapse to a parent that is still visible in the
+                        // current list scope. If the configurable parent was
+                        // soft-deleted, keep the matching child id so search
+                        // results do not point at an empty row.
+                        ->whereIn('matched_variant_parent_links.product_id', $configurableParentIdsQuery);
                 })
                 ->selectRaw('COALESCE(matched_variant_parent_links.product_id, search_matches.id) AS id')
                 ->selectRaw('search_matches.search_score')
@@ -8655,13 +8665,12 @@ class ProductController extends Controller
         $product = Product::with($this->productResourceRelations())->findOrFail($id);
 
         if ($product->type === 'configurable') {
-            // Get variations manually to find all used attribute values from IN-STOCK variations
+            // Use all linked variants for the admin edit screen, including out-of-stock rows.
             $variations = $product->linkedProducts()
                 ->wherePivot('link_type', 'super_link')
-                ->where('stock_quantity', '>', 0) // Only count in-stock variations for initial attribute listing
                 ->with('attributeValues')
                 ->get();
-            
+
             $usedValuesByAttr = [];
             foreach ($variations as $v) {
                 foreach ($v->attributeValues as $av) {
@@ -8669,7 +8678,7 @@ class ProductController extends Controller
                 }
             }
 
-            // Filter the eager-loaded superAttributes to only include those that have valid in-stock options
+            // Keep only options that are actually used by linked variants.
             $filteredSuperAttributes = $product->superAttributes->filter(function($attribute) use ($usedValuesByAttr) {
                 $relevantValues = array_unique($usedValuesByAttr[$attribute->id] ?? []);
                 if (empty($relevantValues)) return false;
@@ -8684,7 +8693,7 @@ class ProductController extends Controller
 
             $product->setRelation('superAttributes', $filteredSuperAttributes);
 
-            // Also expose ALL variations (including out of stock ones if needed, 
+            // Also expose ALL variations (including out of stock ones if needed,
             // but for filtering we might want to know about them, or just keep what's returned by linkedProducts)
             // Re-fetch all variations to ensure we have the full list for frontend logic if it needs to show "out of stock" instead of hiding
             // But user said "không có hàng... phải ẩn hẳn", so let's stick to in-stock variations for selection logic.
@@ -9271,7 +9280,7 @@ class ProductController extends Controller
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
             $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
-            
+
             if ($product->type === 'bundle') {
                 $product->bundleItems()->detach();
             } else {
@@ -9328,7 +9337,7 @@ class ProductController extends Controller
                 ->wherePivot('link_type', 'super_link')
                 ->pluck('products.id')
                 ->toArray();
-            
+
             $toDelete = array_diff($existingVariantIds, $incomingVariantIds);
             if (!empty($toDelete)) {
                 $product->linkedProducts()->detach($toDelete);

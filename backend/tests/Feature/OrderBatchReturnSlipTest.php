@@ -306,6 +306,129 @@ class OrderBatchReturnSlipTest extends TestCase
         $this->assertDatabaseMissing('inventory_documents', ['id' => $adjustmentDocument->id]);
     }
 
+    public function test_managed_batch_return_applies_special_system_statuses_for_exchange_and_partial_orders(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham workflow return',
+            'sku' => 'WORKFLOW-RETURN-001',
+            'price' => 160000,
+            'cost_price' => 95000,
+            'expected_cost' => 95000,
+        ]);
+
+        $exchangeOrder = $this->createOfficialOrder($account, $user, $product, 2, 'OR-EXCHANGE-0001', [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'pending_return',
+        ]);
+        $partialOrder = $this->createOfficialOrder($account, $user, $product, 1, 'OR-PARTIAL-0001', [
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+            'status' => 'pending_return',
+        ]);
+
+        $this->createExportDocument($account, $exchangeOrder, $product, 2, 'PXK-EXCHANGE-0001');
+        $this->createExportDocument($account, $partialOrder, $product, 1, 'PXK-PARTIAL-0001');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/inventory-returns/batch', [
+                'order_ids' => [$exchangeOrder->id, $partialOrder->id],
+                'document_date' => now()->toDateString(),
+                'notes' => 'Return workflow special statuses',
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 3,
+                    ],
+                ],
+            ])
+            ->assertCreated();
+
+        $this->assertSame('exchange_completed', (string) $exchangeOrder->fresh()->status);
+        $this->assertSame('partial_delivery', (string) $partialOrder->fresh()->status);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $exchangeOrder->id,
+            'from_status' => 'pending_return',
+            'to_status' => 'exchange_completed',
+            'source' => 'system',
+        ]);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $partialOrder->id,
+            'from_status' => 'pending_return',
+            'to_status' => 'partial_delivery',
+            'source' => 'system',
+        ]);
+        $this->assertDatabaseHas('order_statuses', [
+            'account_id' => $account->id,
+            'code' => 'exchange_completed',
+            'is_system' => true,
+        ]);
+        $this->assertDatabaseHas('order_statuses', [
+            'account_id' => $account->id,
+            'code' => 'partial_delivery',
+            'is_system' => true,
+        ]);
+    }
+
+    public function test_single_return_slip_applies_exchange_completed_status_and_restores_previous_status_when_deleted(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $product = $this->createProduct($account, [
+            'name' => 'San pham single return',
+            'sku' => 'SINGLE-RETURN-001',
+            'price' => 140000,
+            'cost_price' => 88000,
+            'expected_cost' => 88000,
+        ]);
+
+        $order = $this->createOfficialOrder($account, $user, $product, 2, 'OR-SINGLE-RETURN-0001', [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'pending_return',
+        ]);
+
+        $this->createExportDocument($account, $order, $product, 2, 'PXK-SINGLE-RETURN-0001');
+
+        $createResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$order->id}/inventory-slips", [
+                'type' => 'return',
+                'document_date' => now()->toDateString(),
+                'notes' => 'Single return workflow',
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 2,
+                    ],
+                ],
+            ])
+            ->assertCreated();
+
+        $documentId = (int) $createResponse->json('id');
+
+        $this->assertSame('exchange_completed', (string) $order->fresh()->status);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $order->id,
+            'from_status' => 'pending_return',
+            'to_status' => 'exchange_completed',
+            'source' => 'system',
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->deleteJson("/api/orders/{$order->id}/inventory-slips/{$documentId}")
+            ->assertOk();
+
+        $this->assertSame('pending_return', (string) $order->fresh()->status);
+        $this->assertDatabaseHas('order_status_logs', [
+            'order_id' => $order->id,
+            'from_status' => 'exchange_completed',
+            'to_status' => 'pending_return',
+            'source' => 'system',
+        ]);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([
@@ -348,9 +471,9 @@ class OrderBatchReturnSlipTest extends TestCase
         ], $overrides));
     }
 
-    private function createOfficialOrder(Account $account, User $user, Product $product, int $quantity, string $orderNumber): Order
+    private function createOfficialOrder(Account $account, User $user, Product $product, int $quantity, string $orderNumber, array $overrides = []): Order
     {
-        $order = Order::query()->create([
+        $order = Order::query()->create(array_merge([
             'user_id' => $user->id,
             'account_id' => $account->id,
             'order_number' => $orderNumber,
@@ -364,7 +487,7 @@ class OrderBatchReturnSlipTest extends TestCase
             'discount' => 0,
             'cost_total' => $quantity * (float) ($product->cost_price ?? 0),
             'profit_total' => ($quantity * (float) ($product->price ?? 0)) - ($quantity * (float) ($product->cost_price ?? 0)),
-        ]);
+        ], $overrides));
 
         OrderItem::query()->create([
             'order_id' => $order->id,

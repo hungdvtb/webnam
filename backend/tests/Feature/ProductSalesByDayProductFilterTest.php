@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -75,6 +76,81 @@ class ProductSalesByDayProductFilterTest extends TestCase
         $this->assertSame($parentProduct->id, (int) ($response->json('filters.product_id') ?? 0));
     }
 
+    public function test_product_sales_by_day_prefers_shipping_dispatched_date_and_falls_back_to_order_display_date(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham doi chieu ngay',
+            'sku' => 'DATE-ALIGN-001',
+        ]);
+
+        $pendingReturnOrder = $this->createOrder($account, $user, [
+            'order_number' => 'REPORT-DATE-001',
+            'status' => 'pending_return',
+            'created_at' => Carbon::parse('2026-04-09 23:15:00'),
+            'updated_at' => Carbon::parse('2026-04-10 08:30:00'),
+            'officialized_at' => Carbon::parse('2026-04-10 08:30:00'),
+        ]);
+
+        $dispatchedOrder = $this->createOrder($account, $user, [
+            'order_number' => 'REPORT-DATE-002',
+            'status' => 'shipping',
+            'created_at' => Carbon::parse('2026-04-09 21:45:00'),
+            'updated_at' => Carbon::parse('2026-04-10 09:10:00'),
+            'officialized_at' => Carbon::parse('2026-04-10 09:10:00'),
+            'shipping_dispatched_at' => Carbon::parse('2026-04-12 10:00:00'),
+        ]);
+
+        $this->createOrderItem($account, $pendingReturnOrder, $product, 2);
+        $this->createOrderItem($account, $dispatchedOrder, $product, 3);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/reports/product-sales-by-day?date_from=2026-04-10&date_to=2026-04-10');
+
+        $response->assertOk()
+            ->assertJsonPath('summary.total_quantity', 2)
+            ->assertJsonPath('summary_row.days.2026-04-10.quantity', 2)
+            ->assertJsonPath('meta.date_basis', 'shipping_dispatched_or_order_displayed_at');
+
+        $dispatchedDateResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/reports/product-sales-by-day?date_from=2026-04-12&date_to=2026-04-12');
+
+        $dispatchedDateResponse->assertOk()
+            ->assertJsonPath('summary.total_quantity', 3)
+            ->assertJsonPath('summary_row.days.2026-04-12.quantity', 3);
+    }
+
+    public function test_product_sales_by_day_created_at_filter_matches_order_management_display_date(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $product = $this->createProduct($account, $supplier, [
+            'name' => 'San pham loc ngay dat',
+            'sku' => 'DISPLAY-FILTER-001',
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'order_number' => 'REPORT-FILTER-001',
+            'status' => 'confirmed',
+            'created_at' => Carbon::parse('2026-04-09 22:40:00'),
+            'updated_at' => Carbon::parse('2026-04-10 07:05:00'),
+            'officialized_at' => Carbon::parse('2026-04-10 07:05:00'),
+        ]);
+
+        $this->createOrderItem($account, $order, $product, 1);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/reports/product-sales-by-day?date_from=2026-04-01&date_to=2026-04-17&created_at_from=2026-04-10&created_at_to=2026-04-10');
+
+        $response->assertOk()
+            ->assertJsonPath('summary.total_quantity', 1)
+            ->assertJsonPath('summary_row.days.2026-04-10.quantity', 1);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([
@@ -122,7 +198,7 @@ class ProductSalesByDayProductFilterTest extends TestCase
             'name' => 'San pham ' . Str::upper(Str::random(4)),
             'slug' => 'san-pham-' . Str::lower(Str::random(8)),
             'sku' => 'SKU-' . Str::upper(Str::random(8)),
-            'status' => 'active',
+            'status' => true,
             'price' => 120000,
             'expected_cost' => 80000,
             'cost_price' => 80000,
@@ -133,7 +209,15 @@ class ProductSalesByDayProductFilterTest extends TestCase
 
     private function createOrder(Account $account, User $user, array $overrides = []): Order
     {
-        return Order::query()->create(array_merge([
+        $timestamps = [];
+        foreach (['created_at', 'updated_at', 'draft_created_at', 'officialized_at', 'shipping_dispatched_at'] as $column) {
+            if (array_key_exists($column, $overrides)) {
+                $timestamps[$column] = $overrides[$column];
+                unset($overrides[$column]);
+            }
+        }
+
+        $order = Order::query()->create(array_merge([
             'user_id' => $user->id,
             'account_id' => $account->id,
             'order_number' => 'ORD-' . Str::upper(Str::random(8)),
@@ -155,6 +239,16 @@ class ProductSalesByDayProductFilterTest extends TestCase
             'profit_total' => 0,
             'shipping_status_source' => 'manual',
         ], $overrides));
+
+        if ($timestamps !== []) {
+            Order::withoutEvents(function () use ($order, $timestamps) {
+                $order->forceFill($timestamps)->saveQuietly();
+            });
+
+            $order->refresh();
+        }
+
+        return $order;
     }
 
     private function createOrderItem(Account $account, Order $order, Product $product, int $quantity): OrderItem

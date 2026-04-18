@@ -508,11 +508,16 @@ export const orderApi = {
     bulkDuplicate: (ids, targetKind = null) => api.post('/orders/bulk-duplicate', targetKind ? { ids, target_kind: targetKind } : { ids }),
     bulkConvert: (ids, targetKind, data = {}) => api.post('/orders/bulk-convert', { ids, target_kind: targetKind, ...data }),
     bulkUpdate: (data) => api.post('/orders/bulk-update', data),
+    refreshImportCosts: (data) => api.post('/orders/refresh-import-costs', data).then((response) => {
+        requestCache.orderDetail.clear();
+        return response;
+    }),
     dispatchPreview: (data) => api.post('/orders/dispatch/preview', data),
     dispatch: (data) => api.post('/orders/dispatch', data),
     cancelDispatch: (data) => api.post('/orders/dispatch/cancel', data),
     quickDispatch: (data) => api.post('/orders/quick-dispatch', data),
     getShippingAlerts: (params) => api.get('/orders/shipping-alerts', { params }),
+    getReturnFollowups: (params, signal) => api.get('/orders/return-followups', { params, signal }),
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
 };
 
@@ -681,6 +686,11 @@ export const financeApi = {
     getFixedExpenses: (params) => api.get('/finance/fixed-expenses', { params }),
     getFixedExpenseByDate: (params) => api.get('/finance/fixed-expenses/by-date', { params }),
     syncFixedExpenseSheet: (data) => api.put('/finance/fixed-expenses/sheet', data),
+
+    // New Fixed Cost Tracker endpoints
+    getFixedCostTracker: (params) => api.get('/finance/fixed-costs', { params }),
+    applyFixedCosts: (data) => api.post('/finance/fixed-costs/apply', data),
+
     getDailyProfitTable: (params) => api.get('/finance/daily-profit', { params }),
     saveDailyProfitConfig: (data) => api.post('/finance/daily-profit/config', data),
     createFixedExpense: (data) => api.post('/finance/fixed-expenses', data),
@@ -692,6 +702,36 @@ export const financeApi = {
     updateCatalog: (id, data) => api.put(`/finance/catalogs/${id}`, data),
     deleteCatalog: (id) => api.delete(`/finance/catalogs/${id}`),
     getReports: (params) => api.get('/finance/reports', { params }),
+    // New Fund Management (Sổ cái) endpoints
+    getFundSummary: () => api.get('/finance/funds/summary'),
+    getFundAccounts: () => api.get('/finance/funds/accounts'),
+    saveFundAccount: (data) => api.post('/finance/funds/accounts', data),
+    deleteFundAccount: (id) => api.delete(`/finance/funds/accounts/${id}`),
+    updateFundAccountInitial: (id, data) => api.put(`/finance/funds/accounts/${id}/initial-balance`, data),
+    getFundCategories: () => api.get('/finance/funds/categories'),
+    saveFundCategory: (data) => api.post('/finance/funds/categories', data),
+    deleteFundCategory: (id) => api.delete(`/finance/funds/categories/${id}`),
+    getFundTransactions: (params) => api.get('/finance/funds/transactions', { params }),
+    saveFundTransaction: (data) => api.post('/finance/funds/transactions', data),
+    deleteFundTransaction: (id) => api.delete(`/finance/funds/transactions/${id}`),
+    getFundReport: (params) => api.get('/finance/funds/report', { params }),
+    transferFunds: (data) => api.post('/finance/funds/transfer', data),
+
+    // Daily Profit/Loss Report (P&L)
+    getDailyPnlReport: (params) => api.get('/finance/daily-pnl/report', { params }),
+    getDailyPnlConfig: () => api.get('/finance/daily-pnl/config'),
+    updateDailyPnlConfig: (data) => api.post('/finance/daily-pnl/config', data),
+    getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),
+    syncFbAdSpend: (params) => api.post('/finance/daily-pnl/sync-fb', params),
+    getFbAdSpendSplit: (params) => api.get('/finance/daily-pnl/fb-split', { params }),
+
+    // Debt Management (Sổ nợ) endpoints
+    getDebtSubjects: () => api.get('/finance/debts/subjects'),
+    saveDebtSubject: (data) => api.post('/finance/debts/subjects', data),
+    deleteDebtSubject: (id) => api.delete(`/finance/debts/subjects/${id}`),
+    getDebtTransactions: (subjectId) => api.get(`/finance/debts/transactions/${subjectId}`),
+    saveDebtTransaction: (data) => api.post('/finance/debts/transactions', data),
+    deleteDebtTransaction: (id) => api.delete(`/finance/debts/transactions/${id}`),
 };
 
 export const receiptVoucherApi = {

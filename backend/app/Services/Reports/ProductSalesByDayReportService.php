@@ -175,7 +175,7 @@ class ProductSalesByDayReportService
             ],
             'meta' => [
                 'effective_statuses' => $effectiveStatusOptions,
-                'date_basis' => 'completed_or_created',
+                'date_basis' => 'shipping_dispatched_or_order_displayed_at',
             ],
         ];
     }
@@ -189,16 +189,8 @@ class ProductSalesByDayReportService
     ) {
         $search = $filters['search'];
         $searchContainsLike = $this->containsLike($search);
-        $completedAtSubquery = DB::table('order_status_logs')
-            ->selectRaw('order_id, MAX(created_at) AS completed_at')
-            ->where('to_status', 'completed')
-            ->groupBy('order_id');
-
         $orderGrossSubquery = DB::table('order_items as gross_items')
             ->join('orders as gross_orders', 'gross_orders.id', '=', 'gross_items.order_id')
-            ->leftJoinSub($completedAtSubquery, 'gross_completed_logs', function ($join) {
-                $join->on('gross_completed_logs.order_id', '=', 'gross_orders.id');
-            })
             ->where('gross_orders.account_id', $accountId)
             ->whereNull('gross_orders.deleted_at')
             ->where(function ($kindQuery) {
@@ -208,19 +200,17 @@ class ProductSalesByDayReportService
                     ->orWhere('gross_orders.order_kind', '');
             })
             ->whereIn('gross_orders.status', $effectiveStatuses)
-            ->whereBetween(DB::raw($this->reportDateExpression('gross_completed_logs', 'gross_orders')), [$from->toDateString(), $to->toDateString()])
+            ->whereBetween(DB::raw($this->reportDateExpression('gross_orders')), [$from->toDateString(), $to->toDateString()])
             ->groupBy('gross_items.order_id')
             ->selectRaw('gross_items.order_id, SUM(gross_items.price * gross_items.quantity) AS gross_item_revenue');
 
-        $reportDateExpression = $this->reportDateExpression('completed_logs', 'orders');
+        $reportDateExpression = $this->reportDateExpression('orders');
+        $orderDisplayDateExpression = $this->orderDisplayDateExpression('orders');
         $revenueExpression = $this->revenueExpression();
         $effectiveProductIdExpression = $this->effectiveProductIdExpression();
 
         $query = DB::table('order_items')
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
-            ->leftJoinSub($completedAtSubquery, 'completed_logs', function ($join) {
-                $join->on('completed_logs.order_id', '=', 'orders.id');
-            })
             ->leftJoinSub($orderGrossSubquery, 'order_gross', function ($join) {
                 $join->on('order_gross.order_id', '=', 'orders.id');
             })
@@ -277,11 +267,11 @@ class ProductSalesByDayReportService
         }
 
         if ($filters['created_at_from'] !== '') {
-            $query->whereDate('orders.created_at', '>=', $filters['created_at_from']);
+            $query->whereRaw($orderDisplayDateExpression . ' >= ?', [$filters['created_at_from']]);
         }
 
         if ($filters['created_at_to'] !== '') {
-            $query->whereDate('orders.created_at', '<=', $filters['created_at_to']);
+            $query->whereRaw($orderDisplayDateExpression . ' <= ?', [$filters['created_at_to']]);
         }
 
         if ($filters['shipping_carrier_code'] !== '') {
@@ -619,15 +609,9 @@ class ProductSalesByDayReportService
             'cancel',
             'canceled',
             'cancelled',
-            'return',
-            'returned',
-            'returning',
-            'pending return',
-            'pending_return',
             'draft',
             'nhap',
             'huy',
-            'hoan',
             'void',
         ] as $invalidKeyword) {
             if (str_contains($haystack, $invalidKeyword)) {
@@ -638,9 +622,35 @@ class ProductSalesByDayReportService
         return false;
     }
 
-    private function reportDateExpression(string $completedAlias, string $ordersAlias): string
+    private function reportDateExpression(string $ordersAlias): string
     {
-        return "DATE(COALESCE({$completedAlias}.completed_at, {$ordersAlias}.created_at))";
+        return 'DATE(' . $this->reportTimestampExpression($ordersAlias) . ')';
+    }
+
+    private function orderDisplayDateExpression(string $ordersAlias): string
+    {
+        return 'DATE(' . $this->orderDisplayTimestampExpression($ordersAlias) . ')';
+    }
+
+    private function reportTimestampExpression(string $ordersAlias): string
+    {
+        $shippingDispatchedSql = "{$ordersAlias}.shipping_dispatched_at";
+
+        return "COALESCE({$shippingDispatchedSql}, " . $this->orderDisplayTimestampExpression($ordersAlias) . ')';
+    }
+
+    private function orderDisplayTimestampExpression(string $ordersAlias): string
+    {
+        $createdAtSql = "{$ordersAlias}.created_at";
+        $kindSql = "COALESCE({$ordersAlias}.order_kind, '" . Order::KIND_OFFICIAL . "')";
+        $draftTimestampSql = "COALESCE({$ordersAlias}.draft_created_at, {$createdAtSql})";
+        $officialTimestampSql = "COALESCE({$ordersAlias}.officialized_at, {$createdAtSql})";
+
+        return "CASE
+            WHEN {$kindSql} = '" . Order::KIND_DRAFT . "' THEN {$draftTimestampSql}
+            WHEN {$kindSql} = '" . Order::KIND_OFFICIAL . "' THEN {$officialTimestampSql}
+            ELSE {$createdAtSql}
+        END";
     }
 
     private function effectiveProductIdExpression(): string
@@ -661,9 +671,9 @@ class ProductSalesByDayReportService
     private function currentUnitCostExpression(): string
     {
         return "COALESCE(
+            order_items.cost_price,
             child_products.cost_price,
             child_products.expected_cost,
-            order_items.cost_price,
             CASE
                 WHEN COALESCE(order_items.quantity, 0) <> 0 THEN order_items.cost_total / order_items.quantity
                 ELSE 0
@@ -827,7 +837,7 @@ class ProductSalesByDayReportService
             ],
             'meta' => [
                 'effective_statuses' => $effectiveStatuses,
-                'date_basis' => 'completed_or_created',
+                'date_basis' => 'shipping_dispatched_or_order_displayed_at',
             ],
         ];
     }

@@ -223,7 +223,7 @@ const InventoryProductDailyOutboundDrawer = ({ open, product, onClose }) => {
                         <div className="mt-5 overflow-hidden rounded-sm border border-primary/10 bg-white">
                             <div className="border-b border-primary/10 bg-[#fbfcfe] px-4 py-3">
                                 <div className="text-[14px] font-black text-primary">Theo ngày</div>
-                                <div className="mt-1 text-[11px] text-primary/55">Dữ liệu lấy từ báo cáo hàng đi hàng ngày hiện có, lọc riêng theo sản phẩm đang xem.</div>
+                                <div className="mt-1 text-[11px] text-primary/55">Dữ liệu lấy từ báo cáo hàng đi hàng ngày, ưu tiên ngày gửi vận chuyển; nếu chưa có thì fallback về ngày lên đơn chính thức hoặc ngày tạo.</div>
                             </div>
                             {loading ? (
                                 <div className="px-4 py-10 text-center text-[13px] text-primary/55">Đang tải dữ liệu...</div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, shipmentApi, warehouseApi } from '../../services/api';
+import { orderApi, productApi, shipmentApi, warehouseApi } from '../../services/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -9,6 +9,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import {
     ORDER_TYPE_OPTIONS,
+    ORDER_TYPE_PARTIAL_DELIVERY,
     ORDER_TYPE_STANDARD,
     getOrderTypeMeta,
     normalizeOrderType,
@@ -18,6 +19,8 @@ import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../co
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
+import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
+import OrderReturnFollowupPanel from '../../components/admin/OrderReturnFollowupPanel';
 import MultiKeywordSearchInput, {
     buildActiveKeywordTokens,
     parseKeywordTokens,
@@ -44,6 +47,7 @@ const DEFAULT_COLUMNS = [
     { id: 'shipping_address', label: 'Địa Chỉ', minWidth: '220px' },
     { id: 'items', label: 'Sản Phẩm', minWidth: '250px' },
     { id: 'total_price', label: 'Tổng Tiền', minWidth: '130px' },
+    { id: 'shipping_fee', label: 'Phí Ship', minWidth: '126px', align: 'right' },
     { id: 'created_at', label: 'Ngày Đặt', minWidth: '112px' },
     { id: 'notes', label: 'Ghi Chú Đơn', minWidth: '180px' },
     { id: 'status', label: 'Trạng Thái', minWidth: '120px', align: 'left' },
@@ -52,9 +56,15 @@ const DEFAULT_COLUMNS = [
     { id: 'shipping_dispatched_at', label: 'Ngày gửi VC', minWidth: '120px' },
 ];
 
-DEFAULT_COLUMNS.splice(7, 0, { id: 'inventory_slips', label: 'Phiếu kho', minWidth: '180px' });
+DEFAULT_COLUMNS.splice(8, 0, { id: 'inventory_slips', label: 'Phiếu kho', minWidth: '180px' });
+
+DEFAULT_COLUMNS.splice(7, 0, { id: 'cost_total', label: 'Giá vốn nhập', minWidth: '140px', align: 'right' });
 
 const ORDER_TABLE_COLUMNS = [...DEFAULT_COLUMNS];
+const ORDER_LIST_STORAGE_KEY = 'order_list';
+const ORDER_LIST_VIEW_STATE_STORAGE_KEY = 'order_list_view_state_v1';
+const ORDER_COST_TOTAL_COLUMN_ID = 'cost_total';
+const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
 
 const EXPORT_SLIP_FILTER_OPTIONS = [
     { value: 'created', label: 'Đã tạo phiếu xuất' },
@@ -76,6 +86,12 @@ const ORDER_TYPE_BADGE_CLASSNAMES = {
     exchange_return: 'border-amber-200 bg-amber-50 text-amber-800',
     partial_delivery: 'border-sky-200 bg-sky-50 text-sky-700',
 };
+
+const ORDER_STATUS_EXCHANGE_COMPLETED = 'exchange_completed';
+const IMPORT_COST_REFRESH_SCOPE_RANGE = 'date_range';
+const IMPORT_COST_REFRESH_SCOPE_ALL = 'all_history';
+const IMPORT_COST_REFRESH_PRODUCT_SCOPE_ALL = 'all_products';
+const IMPORT_COST_REFRESH_PRODUCT_SCOPE_SELECTED = 'selected_products';
 
 /**
  * Hover card that shows full product list for an order.
@@ -281,6 +297,138 @@ const SHIPPING_ALERT_SEEN_STORAGE_KEY = 'order_shipping_alert_seen_v1';
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
 
+const normalizeImportCostRefreshAttributeValues = (value) => {
+    if (Array.isArray(value)) {
+        return value
+            .map((entry) => String(entry ?? '').trim())
+            .filter(Boolean);
+    }
+
+    if (value && typeof value === 'object') {
+        return Object.values(value)
+            .flatMap((entry) => normalizeImportCostRefreshAttributeValues(entry))
+            .filter(Boolean);
+    }
+
+    const normalizedValue = String(value ?? '').trim();
+    if (!normalizedValue) {
+        return [];
+    }
+
+    if (
+        (normalizedValue.startsWith('[') && normalizedValue.endsWith(']'))
+        || (normalizedValue.startsWith('{') && normalizedValue.endsWith('}'))
+    ) {
+        try {
+            const parsedValue = JSON.parse(normalizedValue);
+            return normalizeImportCostRefreshAttributeValues(parsedValue);
+        } catch {
+            return [normalizedValue];
+        }
+    }
+
+    return [normalizedValue];
+};
+
+const buildImportCostRefreshAttributeSummary = (product) => Array.from(new Set(
+    (Array.isArray(product?.attribute_values) ? product.attribute_values : [])
+        .flatMap((attributeValue) => normalizeImportCostRefreshAttributeValues(attributeValue?.value))
+        .filter(Boolean)
+)).join(' / ');
+
+const buildImportCostRefreshProductEntries = (products = []) => {
+    const entries = [];
+    const seenIds = new Set();
+
+    const pushEntry = (entry) => {
+        const productId = Number(entry?.target_product_id ?? entry?.id ?? 0);
+        if (!Number.isFinite(productId) || productId <= 0 || seenIds.has(productId)) {
+            return;
+        }
+
+        seenIds.add(productId);
+
+        const displayName = String(entry?.display_name ?? entry?.name ?? '').trim() || `Sản phẩm #${productId}`;
+        const displaySku = String(entry?.display_sku ?? entry?.sku ?? '').trim();
+        const parentProductId = Number(entry?.parent_product_id ?? 0);
+        const variationCount = Math.max(Number(entry?.variation_count) || 0, 0);
+
+        entries.push({
+            id: productId,
+            target_product_id: productId,
+            display_name: displayName,
+            display_sku: displaySku,
+            parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
+            parent_product_name: String(entry?.parent_product_name ?? '').trim(),
+            option_label: String(entry?.option_label ?? '').trim(),
+            entry_kind: String(entry?.entry_kind ?? (parentProductId > 0 ? 'variation' : 'product')).trim() || 'product',
+            type: String(entry?.type ?? '').trim(),
+            cost_price: Number(entry?.cost_price ?? entry?.expected_cost ?? 0) || 0,
+            expected_cost: entry?.expected_cost == null ? null : (Number(entry.expected_cost) || 0),
+            variation_count: variationCount,
+        });
+    };
+
+    (Array.isArray(products) ? products : []).forEach((rawProduct) => {
+        if (!rawProduct || typeof rawProduct !== 'object') {
+            return;
+        }
+
+        const baseId = Number(rawProduct?.id ?? rawProduct?.product_id ?? 0);
+        if (!Number.isFinite(baseId) || baseId <= 0) {
+            return;
+        }
+
+        const baseName = String(rawProduct?.name ?? '').trim() || `Sản phẩm #${baseId}`;
+        const variations = Array.isArray(rawProduct?.variations) ? rawProduct.variations : [];
+
+        pushEntry({
+            id: baseId,
+            target_product_id: baseId,
+            name: baseName,
+            display_name: baseName,
+            sku: String(rawProduct?.sku ?? '').trim(),
+            display_sku: String(rawProduct?.sku ?? '').trim(),
+            type: rawProduct?.type,
+            cost_price: rawProduct?.cost_price ?? rawProduct?.expected_cost ?? 0,
+            expected_cost: rawProduct?.expected_cost,
+            entry_kind: 'product',
+            variation_count: variations.length,
+        });
+
+        variations.forEach((variation) => {
+            const variationId = Number(variation?.id ?? 0);
+            if (!Number.isFinite(variationId) || variationId <= 0) {
+                return;
+            }
+
+            const optionLabel = buildImportCostRefreshAttributeSummary(variation);
+            const variationName = String(variation?.name ?? '').trim();
+            const displayName = optionLabel
+                ? `${baseName} - ${optionLabel}`
+                : `${baseName} - ${variationName || `Biến thể #${variationId}`}`;
+
+            pushEntry({
+                id: variationId,
+                target_product_id: variationId,
+                name: variationName || baseName,
+                display_name: displayName,
+                sku: String(variation?.sku ?? '').trim(),
+                display_sku: String(variation?.sku ?? rawProduct?.sku ?? '').trim(),
+                type: variation?.type,
+                cost_price: variation?.cost_price ?? variation?.expected_cost ?? 0,
+                expected_cost: variation?.expected_cost,
+                parent_product_id: baseId,
+                parent_product_name: baseName,
+                option_label: optionLabel,
+                entry_kind: 'variation',
+            });
+        });
+    });
+
+    return entries;
+};
+
 const formatDateTime = (value) => {
     if (!value) return '-';
     const date = new Date(value);
@@ -351,6 +499,7 @@ const getStatusDisplayLines = (label) => {
 const MAIN_ORDER_KIND = 'official';
 const DRAFT_ORDER_KIND = 'draft';
 const RETURN_WORKBENCH_VIEW = 'return-staging';
+const RETURN_FOLLOWUP_VIEW = 'return-followup';
 const QUICK_SELECT_DUPLICATE_MESSAGE = 'Mã này đang trùng, cần nhập thêm ký tự để xác định chính xác.';
 const SHIPPING_ALERTS_ENABLED = false;
 const CANCEL_DISPATCH_ALLOWED_SHIPMENT_STATUSES = new Set([
@@ -365,6 +514,8 @@ const CANCEL_DISPATCH_BLOCKED_ORDER_STATUSES = new Set([
     'completed',
     'pending_return',
     'returned',
+    ORDER_STATUS_EXCHANGE_COMPLETED,
+    ORDER_TYPE_PARTIAL_DELIVERY,
     'cancelled',
 ]);
 const CANCEL_DISPATCH_STATUS_LABELS = {
@@ -396,9 +547,14 @@ const OUTSIDE_DELIVERY_TYPE_LABELS = OUTSIDE_DELIVERY_TYPE_OPTIONS.reduce((accum
 const isDraftOrder = (orderKind) => String(orderKind || MAIN_ORDER_KIND) === DRAFT_ORDER_KIND;
 const getOrderDisplayTimestamp = (order) => order?.displayed_at || order?.created_at || null;
 const getTargetListView = (orderKind) => (isDraftOrder(orderKind) ? 'draft' : 'main');
+const getOrderListViewFromParams = (params) => {
+    const view = params?.get('view');
+    return ['draft', 'trash', RETURN_FOLLOWUP_VIEW, RETURN_WORKBENCH_VIEW].includes(view) ? view : 'main';
+};
 const buildOrderListUrl = (view = 'main') => {
     if (view === 'draft') return '/admin/orders?view=draft';
     if (view === 'trash') return '/admin/orders?view=trash';
+    if (view === RETURN_FOLLOWUP_VIEW) return `/admin/orders?view=${RETURN_FOLLOWUP_VIEW}`;
     if (view === RETURN_WORKBENCH_VIEW) return `/admin/orders?view=${RETURN_WORKBENCH_VIEW}`;
     return '/admin/orders';
 };
@@ -431,6 +587,26 @@ const parseOrderListRouteScope = (search = '') => {
         batchReturnDocumentNumber: String(params.get('batch_return_document_number') || '').trim(),
     };
 };
+const normalizeOrderTypeFilterValues = (value) => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : String(value || '').split(',');
+    const seen = new Set();
+
+    return rawValues.reduce((result, item) => {
+        const normalized = normalizeOrderType(item);
+        if (normalized === ORDER_TYPE_STANDARD && String(item || '').trim() !== ORDER_TYPE_STANDARD) {
+            return result;
+        }
+        if (seen.has(normalized)) {
+            return result;
+        }
+
+        seen.add(normalized);
+        result.push(normalized);
+        return result;
+    }, []);
+};
 const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     search_terms: parseKeywordTokens(search),
     search_input: '',
@@ -440,7 +616,7 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     created_at_from: '',
     created_at_to: '',
     customer_phone: '',
-    order_type: '',
+    order_type: [],
     shipping_address: '',
     shipping_carrier_code: '',
     export_slip_state: '',
@@ -451,9 +627,205 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     order_ids: parseOrderIdList(orderIds),
 });
 
+const normalizeOrderListFilterValues = (value) => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : String(value || '').split(',');
+    const seen = new Set();
+
+    return rawValues.reduce((result, item) => {
+        const normalized = String(item || '').trim();
+        if (!normalized) {
+            return result;
+        }
+
+        if (seen.has(normalized)) {
+            return result;
+        }
+
+        seen.add(normalized);
+        result.push(normalized);
+        return result;
+    }, []);
+};
+
+const normalizeOrderListAttributeFilters = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+
+    return Object.entries(value).reduce((result, [attributeId, attributeValues]) => {
+        const normalizedValues = normalizeOrderListFilterValues(attributeValues);
+        if (!normalizedValues.length) {
+            return result;
+        }
+
+        result[attributeId] = normalizedValues;
+        return result;
+    }, {});
+};
+
+const normalizeStoredOrderFilters = (value, fallbackSearch = '', orderIds = []) => {
+    const defaults = createDefaultOrderFilters(fallbackSearch, orderIds);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return defaults;
+    }
+
+    return {
+        ...defaults,
+        search_terms: parseKeywordTokens(value.search_terms),
+        search_input: String(value.search_input || ''),
+        status: normalizeOrderListFilterValues(value.status),
+        customer_name: String(value.customer_name || ''),
+        order_number: String(value.order_number || ''),
+        created_at_from: String(value.created_at_from || ''),
+        created_at_to: String(value.created_at_to || ''),
+        customer_phone: String(value.customer_phone || ''),
+        order_type: normalizeOrderTypeFilterValues(value.order_type),
+        shipping_address: String(value.shipping_address || ''),
+        shipping_carrier_code: String(value.shipping_carrier_code || ''),
+        export_slip_state: String(value.export_slip_state || ''),
+        return_slip_state: String(value.return_slip_state || ''),
+        shipping_dispatched_from: String(value.shipping_dispatched_from || ''),
+        shipping_dispatched_to: String(value.shipping_dispatched_to || ''),
+        attributes: normalizeOrderListAttributeFilters(value.attributes),
+        order_ids: orderIds.length ? parseOrderIdList(orderIds) : parseOrderIdList(value.order_ids),
+    };
+};
+
+const normalizeStoredOrderPagination = (value) => ({
+    current_page: Math.max(1, Number.parseInt(value?.current_page, 10) || 1),
+    last_page: 1,
+    total: 0,
+    per_page: Math.max(1, Number.parseInt(value?.per_page, 10) || 20),
+});
+
+const readPersistedOrderListState = ({ expectedView = 'main', fallbackSearch = '', orderIds = [] } = {}) => {
+    const fallbackState = {
+        filters: createDefaultOrderFilters(fallbackSearch, orderIds),
+        pagination: normalizeStoredOrderPagination(),
+        hasState: false,
+    };
+
+    if (typeof window === 'undefined' || orderIds.length > 0) {
+        return fallbackState;
+    }
+
+    try {
+        const rawValue = window.sessionStorage.getItem(ORDER_LIST_VIEW_STATE_STORAGE_KEY);
+        if (!rawValue) {
+            return fallbackState;
+        }
+
+        const parsedValue = JSON.parse(rawValue);
+        if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) {
+            return fallbackState;
+        }
+
+        const storedView = String(parsedValue.view || 'main');
+        if (storedView !== expectedView) {
+            return fallbackState;
+        }
+
+        return {
+            filters: normalizeStoredOrderFilters(parsedValue.filters, fallbackSearch, orderIds),
+            pagination: normalizeStoredOrderPagination(parsedValue.pagination),
+            hasState: true,
+        };
+    } catch (error) {
+        console.warn('Cannot restore persisted order list state.', error);
+        try {
+            window.sessionStorage.removeItem(ORDER_LIST_VIEW_STATE_STORAGE_KEY);
+        } catch {
+            // Ignore storage cleanup errors.
+        }
+        return fallbackState;
+    }
+};
+
+const writePersistedOrderListState = ({ view = 'main', filters, pagination } = {}) => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.sessionStorage.setItem(ORDER_LIST_VIEW_STATE_STORAGE_KEY, JSON.stringify({
+            view,
+            filters: normalizeStoredOrderFilters(filters),
+            pagination: normalizeStoredOrderPagination(pagination),
+            updated_at: new Date().toISOString(),
+        }));
+    } catch (error) {
+        console.warn('Cannot persist order list state.', error);
+    }
+};
+
+const clearPersistedOrderListState = () => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    try {
+        window.sessionStorage.removeItem(ORDER_LIST_VIEW_STATE_STORAGE_KEY);
+    } catch {
+        // Ignore storage cleanup errors.
+    }
+};
+
 const buildOrderSearchTerms = (filters = {}) => (
     buildActiveKeywordTokens(filters?.search_terms, filters?.search_input)
 );
+
+const ensureOrderListFinancialColumnPreference = () => {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    const columnOrderStorageKey = `${ORDER_LIST_STORAGE_KEY}_column_order`;
+    const savedOrderRaw = window.localStorage.getItem(columnOrderStorageKey);
+
+    if (!savedOrderRaw) {
+        return;
+    }
+
+    try {
+        const savedOrder = JSON.parse(savedOrderRaw);
+
+        if (!Array.isArray(savedOrder)) {
+            return;
+        }
+
+        const nextOrder = [...savedOrder];
+        let hasChanges = false;
+
+        const insertMissingColumn = (columnId, anchorColumnIds = []) => {
+            if (nextOrder.includes(columnId)) {
+                return;
+            }
+
+            let insertAt = nextOrder.length;
+            for (const anchorColumnId of anchorColumnIds) {
+                const anchorIndex = nextOrder.indexOf(anchorColumnId);
+                if (anchorIndex !== -1) {
+                    insertAt = anchorIndex + 1;
+                    break;
+                }
+            }
+
+            nextOrder.splice(insertAt, 0, columnId);
+            hasChanges = true;
+        };
+
+        insertMissingColumn(ORDER_COST_TOTAL_COLUMN_ID, ['total_price']);
+        insertMissingColumn(SHIPPING_FEE_COLUMN_ID, [ORDER_COST_TOTAL_COLUMN_ID, 'total_price']);
+
+        if (hasChanges) {
+            window.localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder));
+        }
+    } catch {
+        // Ignore invalid persisted table preferences and fall back to defaults.
+    }
+};
 
 const normalizeQuickDispatchMode = (value) => (
     value === QUICK_DISPATCH_MODE_OUTSIDE ? QUICK_DISPATCH_MODE_OUTSIDE : QUICK_DISPATCH_MODE_MANUAL
@@ -495,6 +867,36 @@ const formatOutsideDeliverySummary = (value) => {
     }
 
     return parts.join(' · ');
+};
+
+const resolveOrderInternalShippingFee = (order) => {
+    const outsideMeta = normalizeOutsideDeliveryMeta(order?.external_delivery_meta);
+    const directValue = Number(order?.internal_shipping_fee);
+    const activeShipmentValue = Number(order?.active_shipment?.shipping_cost);
+    const outsideValue = Number(outsideMeta?.shipping_cost);
+
+    if (Number.isFinite(directValue) && directValue > 0) {
+        return directValue;
+    }
+
+    if (Number.isFinite(activeShipmentValue) && activeShipmentValue > 0) {
+        return activeShipmentValue;
+    }
+
+    if (Number.isFinite(outsideValue) && outsideValue > 0) {
+        return outsideValue;
+    }
+
+    return Math.max(
+        0,
+        Number.isFinite(directValue)
+            ? directValue
+            : Number.isFinite(activeShipmentValue)
+                ? activeShipmentValue
+                : Number.isFinite(outsideValue)
+                    ? outsideValue
+                    : 0
+    );
 };
 
 const hasLegacyQuickDispatchMarker = (order) => Boolean(
@@ -590,7 +992,7 @@ const buildOrderListRequestParams = ({
     if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
     if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
     if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
-    if (filters.order_type) params.order_type = filters.order_type;
+    if (filters.order_type?.length) params.order_type = normalizeOrderTypeFilterValues(filters.order_type).join(',');
     if (filters.shipping_address?.trim()) params.shipping_address = filters.shipping_address.trim();
     if (filters.created_at_from) params.created_at_from = filters.created_at_from;
     if (filters.created_at_to) params.created_at_to = filters.created_at_to;
@@ -683,6 +1085,13 @@ const LIST_VIEW_META = {
         emptyTitle: 'Thùng rác đang trống',
         emptyDescription: 'Các đơn đã chuyển vào thùng rác sẽ hiển thị tại đây',
         selectedLabel: 'đơn trong thùng rác',
+        createTitle: 'Tạo đơn hàng mới',
+    },
+    [RETURN_FOLLOWUP_VIEW]: {
+        listTitle: 'Rà soát đơn treo hoàn',
+        emptyTitle: 'Chưa có đơn treo cần rà soát',
+        emptyDescription: 'Các đơn treo hoàn 10 ngày trở lên sẽ hiển thị tại đây',
+        selectedLabel: 'đơn treo',
         createTitle: 'Tạo đơn hàng mới',
     },
     [RETURN_WORKBENCH_VIEW]: {
@@ -780,6 +1189,535 @@ const ShippingAlertsPopover = ({ alerts, unreadCount, onClose, onOpenOrder, onMa
         </div>
     </div>
 );
+
+const ImportCostRefreshModal = ({
+    open,
+    submitting,
+    scope,
+    dateFrom,
+    dateTo,
+    onScopeChange,
+    onDateChange,
+    onClose,
+    onSubmit,
+}) => {
+    if (!open) return null;
+
+    const isDateRangeScope = scope === IMPORT_COST_REFRESH_SCOPE_RANGE;
+    const canSubmit = !submitting && (!isDateRangeScope || Boolean(dateFrom || dateTo));
+
+    return createPortal(
+        <div className="fixed inset-0 z-[125] flex items-start justify-center overflow-y-auto p-4 sm:items-center sm:p-6">
+            <div className="absolute inset-0 bg-primary/40 backdrop-blur-[2px]" onClick={submitting ? undefined : onClose} />
+            <div className="relative my-4 flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-sm border border-primary/10 bg-white shadow-2xl">
+                <div className="flex items-center justify-between gap-4 border-b border-primary/10 bg-primary/[0.02] px-6 py-4">
+                    <div className="flex items-center gap-4">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-sm border border-primary/10 bg-primary/5">
+                            <span className="material-symbols-outlined text-[22px] text-primary">price_change</span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Cập nhật giá nhập</p>
+                            <h3 className="mt-1 text-[18px] font-black text-primary">Đồng bộ giá nhập từ bảng sản phẩm sang đơn hàng</h3>
+                        </div>
+                    </div>
+                    <button type="button" onClick={submitting ? undefined : onClose} className="text-primary/30 hover:text-primary">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6">
+                    <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-900">
+                        Hệ thống sẽ lấy giá nhập hiện tại của sản phẩm, cập nhật lại từng dòng hàng trong đơn chính, rồi tính lại giá vốn và lãi lỗ báo cáo.
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <button
+                            type="button"
+                            onClick={() => onScopeChange(IMPORT_COST_REFRESH_SCOPE_RANGE)}
+                            className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                isDateRangeScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                            }`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Theo khoảng ngày</div>
+                                    <div className="mt-1 text-[12px] text-primary/50">Chỉ cập nhật các đơn trong mốc ngày bạn chọn.</div>
+                                </div>
+                                <span className="material-symbols-outlined text-primary">{isDateRangeScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onScopeChange(IMPORT_COST_REFRESH_SCOPE_ALL)}
+                            className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                !isDateRangeScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                            }`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Từ đầu tới cuối</div>
+                                    <div className="mt-1 text-[12px] text-primary/50">Cập nhật toàn bộ lịch sử đơn chính hiện có.</div>
+                                </div>
+                                <span className="material-symbols-outlined text-primary">{!isDateRangeScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                            </div>
+                        </button>
+                    </div>
+
+                    <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${isDateRangeScope ? '' : 'opacity-60'}`}>
+                        <div>
+                            <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/50">Từ ngày</label>
+                            <input
+                                type="date"
+                                value={dateFrom}
+                                disabled={!isDateRangeScope || submitting}
+                                onChange={(event) => onDateChange('date_from', event.target.value)}
+                                className="h-11 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50"
+                            />
+                        </div>
+                        <div>
+                            <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/50">Đến ngày</label>
+                            <input
+                                type="date"
+                                value={dateTo}
+                                disabled={!isDateRangeScope || submitting}
+                                onChange={(event) => onDateChange('date_to', event.target.value)}
+                                className="h-11 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50"
+                            />
+                        </div>
+                    </div>
+
+                    {isDateRangeScope && (
+                        <div className="rounded-sm border border-primary/10 bg-[#fcfcfa] px-4 py-3 text-[12px] font-semibold text-primary/55">
+                            Có thể nhập một đầu mốc hoặc cả hai đầu mốc. Nếu danh sách đơn đang lọc sẵn theo ngày, popup này sẽ lấy mốc đó làm mặc định.
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex shrink-0 items-center justify-end gap-3 border-t border-primary/10 bg-white px-6 py-4">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={submitting}
+                        className="h-10 rounded-sm border border-primary/20 px-4 text-[12px] font-black uppercase tracking-wide text-primary hover:bg-primary/5 disabled:opacity-50"
+                    >
+                        Đóng
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onSubmit}
+                        disabled={!canSubmit}
+                        className="h-10 rounded-sm bg-primary px-5 text-[12px] font-black uppercase tracking-wide text-white hover:bg-primary/90 disabled:opacity-50"
+                    >
+                        {submitting ? 'Đang cập nhật...' : 'Cập nhật giá nhập'}
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
+const ImportCostRefreshProductModal = ({
+    open,
+    submitting,
+    scope,
+    dateFrom,
+    dateTo,
+    productScope,
+    selectedProducts,
+    onScopeChange,
+    onDateChange,
+    onProductScopeChange,
+    onSelectedProductsChange,
+    onClose,
+    onSubmit,
+}) => {
+    const [productSearchTerm, setProductSearchTerm] = useState('');
+    const [productSearchLoading, setProductSearchLoading] = useState(false);
+    const [productSearchResults, setProductSearchResults] = useState([]);
+
+    const normalizedSelectedProducts = Array.isArray(selectedProducts) ? selectedProducts : [];
+    const isDateRangeScope = scope === IMPORT_COST_REFRESH_SCOPE_RANGE;
+    const isSelectedProductScope = productScope === IMPORT_COST_REFRESH_PRODUCT_SCOPE_SELECTED;
+    const selectedProductIds = useMemo(() => new Set(
+        normalizedSelectedProducts
+            .map((product) => Number(product?.target_product_id ?? product?.id ?? 0))
+            .filter((productId) => Number.isFinite(productId) && productId > 0)
+    ), [normalizedSelectedProducts]);
+    const canSubmit = !submitting
+        && (!isDateRangeScope || Boolean(dateFrom || dateTo))
+        && (!isSelectedProductScope || selectedProductIds.size > 0);
+
+    useEffect(() => {
+        if (open) {
+            return;
+        }
+
+        setProductSearchTerm('');
+        setProductSearchLoading(false);
+        setProductSearchResults([]);
+    }, [open]);
+
+    useEffect(() => {
+        if (!open || !isSelectedProductScope) {
+            setProductSearchLoading(false);
+            setProductSearchResults([]);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        let cancelled = false;
+        const timerId = window.setTimeout(() => {
+            setProductSearchLoading(true);
+
+            productApi.getAll({
+                picker: 1,
+                per_page: 20,
+                search: productSearchTerm.trim() || undefined,
+            }, controller.signal)
+                .then((response) => {
+                    if (cancelled) return;
+
+                    setProductSearchResults(buildImportCostRefreshProductEntries(response?.data?.data || []));
+                })
+                .catch((error) => {
+                    if (cancelled || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') {
+                        return;
+                    }
+
+                    console.error('Error fetching products for import cost refresh', error);
+                    setProductSearchResults([]);
+                })
+                .finally(() => {
+                    if (!cancelled) {
+                        setProductSearchLoading(false);
+                    }
+                });
+        }, productSearchTerm.trim() ? 250 : 0);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+            controller.abort();
+        };
+    }, [isSelectedProductScope, open, productSearchTerm]);
+
+    const handleToggleSelectedProduct = useCallback((product) => {
+        const productId = Number(product?.target_product_id ?? product?.id ?? 0);
+        if (!Number.isFinite(productId) || productId <= 0) {
+            return;
+        }
+
+        const isSelected = normalizedSelectedProducts.some(
+            (entry) => Number(entry?.target_product_id ?? entry?.id ?? 0) === productId
+        );
+
+        if (isSelected) {
+            onSelectedProductsChange(
+                normalizedSelectedProducts.filter(
+                    (entry) => Number(entry?.target_product_id ?? entry?.id ?? 0) !== productId
+                )
+            );
+            return;
+        }
+
+        onSelectedProductsChange([
+            ...normalizedSelectedProducts,
+            {
+                ...product,
+                target_product_id: productId,
+            },
+        ]);
+    }, [normalizedSelectedProducts, onSelectedProductsChange]);
+
+    const handleRemoveSelectedProduct = useCallback((productId) => {
+        onSelectedProductsChange(
+            normalizedSelectedProducts.filter(
+                (entry) => Number(entry?.target_product_id ?? entry?.id ?? 0) !== Number(productId)
+            )
+        );
+    }, [normalizedSelectedProducts, onSelectedProductsChange]);
+
+    const buildProductMeta = useCallback((product) => {
+        const metaParts = [];
+
+        const productSku = String(product?.display_sku ?? '').trim();
+        if (productSku) {
+            metaParts.push(productSku);
+        }
+
+        if (product?.entry_kind === 'variation' && product?.parent_product_name) {
+            metaParts.push(`Biến thể của ${product.parent_product_name}`);
+        } else if (Number(product?.variation_count) > 0) {
+            metaParts.push(`${formatNumber(product.variation_count)} biến thể`);
+        }
+
+        return metaParts.join(' • ');
+    }, []);
+
+    if (!open) return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[125] flex items-start justify-center overflow-y-auto p-4 sm:items-center sm:p-6">
+            <div className="absolute inset-0 bg-primary/40 backdrop-blur-[2px]" onClick={submitting ? undefined : onClose} />
+            <div className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-sm border border-primary/10 bg-white shadow-2xl">
+                <div className="flex items-center justify-between gap-4 border-b border-primary/10 bg-primary/[0.02] px-6 py-4">
+                    <div className="flex items-center gap-4">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-sm border border-primary/10 bg-primary/5">
+                            <span className="material-symbols-outlined text-[22px] text-primary">price_change</span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/40">Cập nhật giá nhập</p>
+                            <h3 className="mt-1 text-[18px] font-black text-primary">Đồng bộ giá nhập từ bảng sản phẩm sang đơn hàng</h3>
+                        </div>
+                    </div>
+                    <button type="button" onClick={submitting ? undefined : onClose} className="text-primary/30 hover:text-primary">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-6">
+                    <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-900">
+                        Hệ thống sẽ lấy giá nhập hiện tại của sản phẩm, cập nhật lại từng dòng hàng trong đơn chính, rồi tính lại giá vốn và lãi lỗ báo cáo.
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <button
+                            type="button"
+                            onClick={() => onScopeChange(IMPORT_COST_REFRESH_SCOPE_RANGE)}
+                            className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                isDateRangeScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                            }`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Theo khoảng ngày</div>
+                                    <div className="mt-1 text-[12px] text-primary/50">Chỉ cập nhật các đơn trong mốc ngày bạn chọn.</div>
+                                </div>
+                                <span className="material-symbols-outlined text-primary">{isDateRangeScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                            </div>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => onScopeChange(IMPORT_COST_REFRESH_SCOPE_ALL)}
+                            className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                !isDateRangeScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                            }`}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Từ đầu tới cuối</div>
+                                    <div className="mt-1 text-[12px] text-primary/50">Cập nhật toàn bộ lịch sử đơn chính hiện có.</div>
+                                </div>
+                                <span className="material-symbols-outlined text-primary">{!isDateRangeScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                            </div>
+                        </button>
+                    </div>
+
+                    <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${isDateRangeScope ? '' : 'opacity-60'}`}>
+                        <div>
+                            <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/50">Từ ngày</label>
+                            <input
+                                type="date"
+                                value={dateFrom}
+                                disabled={!isDateRangeScope || submitting}
+                                onChange={(event) => onDateChange('date_from', event.target.value)}
+                                className="h-11 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50"
+                            />
+                        </div>
+                        <div>
+                            <label className="mb-2 block text-[11px] font-black uppercase tracking-[0.16em] text-primary/50">Đến ngày</label>
+                            <input
+                                type="date"
+                                value={dateTo}
+                                disabled={!isDateRangeScope || submitting}
+                                onChange={(event) => onDateChange('date_to', event.target.value)}
+                                className="h-11 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50"
+                            />
+                        </div>
+                    </div>
+
+                    {isDateRangeScope && (
+                        <div className="rounded-sm border border-primary/10 bg-[#fcfcfa] px-4 py-3 text-[12px] font-semibold text-primary/55">
+                            Có thể nhập một đầu mốc hoặc cả hai đầu mốc. Nếu danh sách đơn đang lọc sẵn theo ngày, popup này sẽ lấy mốc đó làm mặc định.
+                        </div>
+                    )}
+
+                    <div className="space-y-4 border-t border-primary/10 pt-5">
+                        <div>
+                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50">Phạm vi sản phẩm</p>
+                            <p className="mt-1 text-[12px] font-semibold text-primary/55">Có thể cập nhật tất cả sản phẩm hoặc chỉ những sản phẩm bạn chọn.</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <button
+                                type="button"
+                                onClick={() => onProductScopeChange(IMPORT_COST_REFRESH_PRODUCT_SCOPE_ALL)}
+                                className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                    !isSelectedProductScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-[13px] font-black text-primary">Tất cả sản phẩm</div>
+                                        <div className="mt-1 text-[12px] text-primary/50">Cập nhật các dòng hàng khớp phạm vi ngày bạn đã chọn.</div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-primary">{!isSelectedProductScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                                </div>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onProductScopeChange(IMPORT_COST_REFRESH_PRODUCT_SCOPE_SELECTED)}
+                                className={`rounded-sm border px-4 py-4 text-left transition-all ${
+                                    isSelectedProductScope ? 'border-primary bg-primary/[0.04] shadow-sm' : 'border-primary/10 hover:border-primary/30'
+                                }`}
+                            >
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="text-[13px] font-black text-primary">Chọn sản phẩm</div>
+                                        <div className="mt-1 text-[12px] text-primary/50">Chọn 1, nhiều sản phẩm, hoặc một nhóm sản phẩm cần đồng bộ.</div>
+                                    </div>
+                                    <span className="material-symbols-outlined text-primary">{isSelectedProductScope ? 'radio_button_checked' : 'radio_button_unchecked'}</span>
+                                </div>
+                            </button>
+                        </div>
+
+                        {isSelectedProductScope && (
+                            <div className="space-y-4 rounded-sm border border-primary/10 bg-[#fcfcfa] p-4">
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                                    <div className="relative flex-1">
+                                        <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/25">search</span>
+                                        <input
+                                            type="text"
+                                            value={productSearchTerm}
+                                            disabled={submitting}
+                                            onChange={(event) => setProductSearchTerm(event.target.value)}
+                                            placeholder="Tìm theo mã hoặc tên sản phẩm..."
+                                            className="h-11 w-full rounded-sm border border-primary/20 bg-white pl-10 pr-3 text-[13px] font-bold text-primary focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-50"
+                                        />
+                                    </div>
+                                    <div className="rounded-sm border border-primary/10 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">
+                                        Đã chọn {formatNumber(selectedProductIds.size)} sản phẩm
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-primary/10 bg-white">
+                                    <div className="border-b border-primary/10 px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-primary/45">
+                                        Danh sách sản phẩm sẽ cập nhật
+                                    </div>
+                                    {selectedProductIds.size === 0 ? (
+                                        <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
+                                            Chưa chọn sản phẩm nào. Có thể chọn 1 sản phẩm, nhiều sản phẩm, hoặc thêm dần từ kết quả bên dưới.
+                                        </div>
+                                    ) : (
+                                        <div className="flex max-h-[128px] flex-wrap gap-2 overflow-y-auto custom-scrollbar px-4 py-4">
+                                            {normalizedSelectedProducts.map((product) => {
+                                                const productId = Number(product?.target_product_id ?? product?.id ?? 0);
+                                                const productMeta = buildProductMeta(product);
+
+                                                return (
+                                                    <div
+                                                        key={productId}
+                                                        className="inline-flex max-w-full items-center gap-2 rounded-sm border border-primary/15 bg-primary/[0.04] px-3 py-2"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[12px] font-black text-primary">{product?.display_name}</div>
+                                                            {productMeta && (
+                                                                <div className="truncate text-[11px] font-semibold text-primary/45">{productMeta}</div>
+                                                            )}
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveSelectedProduct(productId)}
+                                                            disabled={submitting}
+                                                            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-primary/35 transition-all hover:bg-white hover:text-primary disabled:cursor-not-allowed"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">close</span>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="rounded-sm border border-primary/10 bg-white">
+                                    <div className="border-b border-primary/10 px-4 py-3 text-[11px] font-black uppercase tracking-[0.16em] text-primary/45">
+                                        Kết quả tìm kiếm
+                                    </div>
+                                    <div className="max-h-[220px] overflow-y-auto custom-scrollbar">
+                                        {productSearchLoading ? (
+                                            <div className="flex items-center justify-center px-4 py-10">
+                                                <div className="h-8 w-8 animate-refresh-spin rounded-full border-4 border-primary/10 border-t-primary" />
+                                            </div>
+                                        ) : productSearchResults.length === 0 ? (
+                                            <div className="px-4 py-8 text-center text-[12px] font-semibold text-primary/45">
+                                                Không có sản phẩm khớp từ khóa tìm kiếm hiện tại.
+                                            </div>
+                                        ) : (
+                                            productSearchResults.map((product) => {
+                                                const productId = Number(product?.target_product_id ?? product?.id ?? 0);
+                                                const isSelected = selectedProductIds.has(productId);
+                                                const productMeta = buildProductMeta(product);
+
+                                                return (
+                                                    <button
+                                                        key={productId}
+                                                        type="button"
+                                                        onClick={() => handleToggleSelectedProduct(product)}
+                                                        disabled={submitting}
+                                                        className={`flex w-full items-start justify-between gap-3 border-b border-primary/5 px-4 py-3 text-left transition-all last:border-b-0 ${
+                                                            isSelected ? 'bg-primary/[0.05]' : 'hover:bg-primary/[0.03]'
+                                                        }`}
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[13px] font-black text-primary">{product?.display_name}</div>
+                                                            {productMeta && (
+                                                                <div className="mt-1 truncate text-[11px] font-semibold text-primary/45">{productMeta}</div>
+                                                            )}
+                                                        </div>
+                                                        <div className="shrink-0 text-right">
+                                                            <div className="text-[11px] font-black text-primary/55">{formatMoney(product?.cost_price || 0)}</div>
+                                                            <div className={`mt-2 inline-flex items-center rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${
+                                                                isSelected ? 'bg-primary text-white' : 'bg-primary/[0.06] text-primary/55'
+                                                            }`}>
+                                                                {isSelected ? 'Đã chọn' : 'Chọn'}
+                                                            </div>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="flex shrink-0 items-center justify-end gap-3 border-t border-primary/10 bg-white px-6 py-4">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={submitting}
+                        className="h-10 rounded-sm border border-primary/20 px-4 text-[12px] font-black uppercase tracking-wide text-primary hover:bg-primary/5 disabled:opacity-50"
+                    >
+                        Đóng
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onSubmit}
+                        disabled={!canSubmit}
+                        className="h-10 rounded-sm bg-primary px-5 text-[12px] font-black uppercase tracking-wide text-white hover:bg-primary/90 disabled:opacity-50"
+                    >
+                        {submitting ? 'Đang cập nhật...' : 'Cập nhật giá nhập'}
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
 
 const ShippingDispatchModal = ({
     open,
@@ -1262,10 +2200,15 @@ const OrderList = () => {
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
     const routeOrderIdsKey = routeOrderScope.orderIds.join(',');
-    const [currentView, setCurrentView] = useState(() => {
-        const view = initialListParams.get('view');
-        return ['draft', 'trash', RETURN_WORKBENCH_VIEW].includes(view) ? view : 'main';
-    });
+    const initialView = useMemo(() => getOrderListViewFromParams(initialListParams), [initialListParams]);
+    const initialStoredListState = useMemo(() => readPersistedOrderListState({
+        expectedView: initialView,
+        fallbackSearch: routeOrderScope.orderIds.length
+            ? ''
+            : (typeof window === 'undefined' ? '' : (window.localStorage.getItem('order_list_search_current') || '')),
+        orderIds: routeOrderScope.orderIds,
+    }), [initialView, routeOrderIdsKey, routeOrderScope.orderIds]);
+    const [currentView, setCurrentView] = useState(() => initialView);
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
@@ -1276,6 +2219,15 @@ const OrderList = () => {
         mode: 'create',
         documentId: null,
         orderIds: [],
+    });
+    const [importCostRefreshModal, setImportCostRefreshModal] = useState({
+        open: false,
+        scope: IMPORT_COST_REFRESH_SCOPE_RANGE,
+        date_from: '',
+        date_to: '',
+        product_scope: IMPORT_COST_REFRESH_PRODUCT_SCOPE_ALL,
+        selected_products: [],
+        submitting: false,
     });
     const productPopupAnchorRef = useRef(null);
     const statusMenuAnchorRef = useRef(null);
@@ -1335,23 +2287,28 @@ const OrderList = () => {
     const [showSearchHistory, setShowSearchHistory] = useState(false);
     const [tempFilters, setTempFilters] = useState(null);
     const [openAttrId, setOpenAttrId] = useState(null);
+    const [returnFollowupRefreshKey, setReturnFollowupRefreshKey] = useState(0);
     const searchContainerRef = useRef(null);
     const shippingAlertRef = useRef(null);
     const previousUnreadRef = useRef([]);
     const orderRequestAbortRef = useRef(null);
     const suppressSearchSyncRef = useRef(false);
     const previousSearchDraftRef = useRef('');
+    const pendingPersistedStateHydrationRef = useRef(initialStoredListState.hasState);
+    const initialRestoredPageRef = useRef(initialStoredListState.pagination.current_page || 1);
+    const hasInitializedCurrentViewRef = useRef(false);
 
-    const [pagination, setPagination] = useState({ current_page: 1, last_page: 1, total: 0, per_page: 20 });
-    const [filters, setFilters] = useState(() => createDefaultOrderFilters(
-        routeOrderScope.orderIds.length ? '' : (localStorage.getItem('order_list_search_current') || ''),
-        routeOrderScope.orderIds
-    ));
+    const [pagination, setPagination] = useState(() => initialStoredListState.pagination);
+    const [filters, setFilters] = useState(() => initialStoredListState.filters);
 
     const [sortConfig, setSortConfig] = useState(() => {
         const saved = localStorage.getItem('order_list_sort');
         return saved ? JSON.parse(saved) : { key: 'created_at', direction: 'desc', phase: 1 };
     });
+
+    useEffect(() => {
+        ensureOrderListFinancialColumnPreference();
+    }, []);
 
     const {
         visibleColumns,
@@ -1373,6 +2330,7 @@ const OrderList = () => {
     const isTrashView = currentView === 'trash';
     const isDraftView = currentView === 'draft';
     const isMainView = currentView === 'main';
+    const isReturnFollowupView = currentView === RETURN_FOLLOWUP_VIEW;
     const isReturnWorkbenchView = currentView === RETURN_WORKBENCH_VIEW;
     const canQuickSelect = (isMainView || isReturnWorkbenchView) && !routeOrderIdsKey;
     const canCreateBatchReturn = isMainView || isReturnWorkbenchView;
@@ -1443,7 +2401,7 @@ const OrderList = () => {
                 mode: normalizeQuickDispatchMode(previousRow.mode),
                 tracking_number: previousRow.tracking_number ?? '',
                 carrier_name: previousRow.carrier_name ?? order?.shipping_carrier_name ?? '',
-                shipping_cost: previousRow.shipping_cost ?? '',
+                shipping_cost: previousRow.shipping_cost ?? (resolveOrderInternalShippingFee(order) > 0 ? String(Math.round(resolveOrderInternalShippingFee(order))) : ''),
                 outside_delivery_type: previousRow.outside_delivery_type ?? outsideMeta?.delivery_type ?? '',
                 outside_contact_name: previousRow.outside_contact_name ?? outsideMeta?.contact_name ?? '',
                 outside_note: previousRow.outside_note ?? outsideMeta?.note ?? '',
@@ -1635,9 +2593,23 @@ const OrderList = () => {
     };
 
     const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig) => {
+        if (isReturnFollowupView) {
+            orderRequestAbortRef.current?.abort();
+            setLoading(false);
+            return;
+        }
+
+        const nextPage = Math.max(1, Number(page) || 1);
+        const normalizedPerPage = Math.max(1, Number(perPage) || pagination.per_page || 20);
+
         orderRequestAbortRef.current?.abort();
         const controller = new AbortController();
         orderRequestAbortRef.current = controller;
+        setPagination((current) => ({
+            ...current,
+            current_page: nextPage,
+            per_page: normalizedPerPage,
+        }));
         setLoading(true);
         try {
             const selectedOnlyIds = showSelectedOnlyRef.current
@@ -1663,8 +2635,8 @@ const OrderList = () => {
             const params = buildOrderListRequestParams({
                 filters: currentFilters,
                 sortConfig: currentSort,
-                page,
-                perPage,
+                page: nextPage,
+                perPage: normalizedPerPage,
                 isDraftView,
                 isTrashView,
                 scopedOrderIds,
@@ -1686,7 +2658,7 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [filters, isDraftView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+    }, [filters, isDraftView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
 
     const handleBatchReturnSaved = useCallback(async (payload) => {
         closeBatchReturnModal();
@@ -1907,7 +2879,7 @@ const OrderList = () => {
     useEffect(() => {
         const params = new URLSearchParams(location.search);
         const nextView = params.get('view');
-        setCurrentView(['draft', 'trash', RETURN_WORKBENCH_VIEW].includes(nextView) ? nextView : 'main');
+        setCurrentView(['draft', 'trash', RETURN_FOLLOWUP_VIEW, RETURN_WORKBENCH_VIEW].includes(nextView) ? nextView : 'main');
     }, [location.search]);
 
     useEffect(() => {
@@ -1935,7 +2907,7 @@ const OrderList = () => {
         setFilters((prev) => (
             areOrderIdListsEqual(prev.order_ids, nextFilters.order_ids) && !prev.search_terms?.length && !prev.search_input && !prev.status?.length
                 && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
-                && !prev.customer_phone && !prev.order_type && !prev.shipping_address
+                && !prev.customer_phone && !prev.order_type?.length && !prev.shipping_address
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
                 && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
                 && Object.keys(prev.attributes || {}).length === 0
@@ -1949,6 +2921,23 @@ const OrderList = () => {
         setInventorySlipOrderId(null);
         fetchOrders(1, nextFilters);
     }, [routeOrderIdsKey]);
+
+    useEffect(() => {
+        if (!pendingPersistedStateHydrationRef.current || routeOrderIdsKey) {
+            return;
+        }
+
+        suppressSearchSyncRef.current = true;
+
+        const restoredSearchValue = serializeKeywordTokens(buildOrderSearchTerms(initialStoredListState.filters));
+        if (restoredSearchValue) {
+            localStorage.setItem('order_list_search_current', restoredSearchValue);
+        } else {
+            localStorage.removeItem('order_list_search_current');
+        }
+
+        pendingPersistedStateHydrationRef.current = false;
+    }, [initialStoredListState.filters, routeOrderIdsKey]);
 
     useEffect(() => {
         if (suppressSearchSyncRef.current) {
@@ -1984,15 +2973,29 @@ const OrderList = () => {
     useEffect(() => {
         if (!routeOrderIdsKey) {
             const nextFilters = { ...filters, order_ids: [] };
+            const targetPage = hasInitializedCurrentViewRef.current ? 1 : initialRestoredPageRef.current;
+            hasInitializedCurrentViewRef.current = true;
 
             if (filters.order_ids?.length) {
                 setFilters(nextFilters);
                 setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
             }
 
-            fetchOrders(1, nextFilters);
+            fetchOrders(targetPage, nextFilters);
         }
     }, [currentView]);
+
+    useEffect(() => {
+        if (routeOrderIdsKey) {
+            return;
+        }
+
+        writePersistedOrderListState({
+            view: currentView,
+            filters,
+            pagination,
+        });
+    }, [currentView, filters, pagination, routeOrderIdsKey]);
 
     useEffect(() => {
         return () => {
@@ -2123,6 +3126,7 @@ const OrderList = () => {
     const applyFilters = () => {
         const nextFilters = {
             ...tempFilters,
+            order_type: normalizeOrderTypeFilterValues(tempFilters?.order_type),
             search_terms: filters.search_terms,
             search_input: filters.search_input,
         };
@@ -2145,6 +3149,7 @@ const OrderList = () => {
             let nf = { ...prev };
             if (key === 'attributes') { nf.attributes = { ...prev.attributes }; delete nf.attributes[value.attrId]; }
             else if (key === 'status') { nf.status = []; }
+            else if (key === 'order_type') { nf.order_type = []; }
             else if (key === 'date') { nf.created_at_from = ''; nf.created_at_to = ''; }
             else if (key === 'shipping_date') { nf.shipping_dispatched_from = ''; nf.shipping_dispatched_to = ''; }
             else { nf[key] = ''; }
@@ -2159,6 +3164,7 @@ const OrderList = () => {
         setTempFilters((prev) => (prev ? rf : prev));
         setSortConfig({ key: 'created_at', direction: 'desc', phase: 1 });
         setQuickSelectResult(null);
+        clearPersistedOrderListState();
         localStorage.removeItem('order_list_search_current');
         fetchOrders(1, rf);
         if (routeOrderIdsKey) {
@@ -2166,7 +3172,134 @@ const OrderList = () => {
         }
     };
 
-    const handleRefresh = () => fetchOrders(1);
+    const handleRefresh = () => {
+        if (isReturnFollowupView) {
+            setReturnFollowupRefreshKey((current) => current + 1);
+            return;
+        }
+
+        fetchOrders(1);
+    };
+
+    const openImportCostRefreshModal = useCallback(() => {
+        setImportCostRefreshModal({
+            open: true,
+            scope: filters.created_at_from || filters.created_at_to
+                ? IMPORT_COST_REFRESH_SCOPE_RANGE
+                : IMPORT_COST_REFRESH_SCOPE_ALL,
+            date_from: filters.created_at_from || '',
+            date_to: filters.created_at_to || '',
+            product_scope: IMPORT_COST_REFRESH_PRODUCT_SCOPE_ALL,
+            selected_products: [],
+            submitting: false,
+        });
+    }, [filters.created_at_from, filters.created_at_to]);
+
+    const closeImportCostRefreshModal = useCallback(() => {
+        setImportCostRefreshModal((current) => (
+            current.submitting
+                ? current
+                : { ...current, open: false }
+        ));
+    }, []);
+
+    const handleImportCostRefreshScopeChange = useCallback((scope) => {
+        setImportCostRefreshModal((current) => ({
+            ...current,
+            scope,
+        }));
+    }, []);
+
+    const handleImportCostRefreshDateChange = useCallback((field, value) => {
+        setImportCostRefreshModal((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    }, []);
+
+    const handleImportCostRefreshProductScopeChange = useCallback((productScope) => {
+        setImportCostRefreshModal((current) => ({
+            ...current,
+            product_scope: productScope,
+        }));
+    }, []);
+
+    const handleImportCostRefreshSelectedProductsChange = useCallback((selectedProducts) => {
+        setImportCostRefreshModal((current) => ({
+            ...current,
+            selected_products: Array.isArray(selectedProducts) ? selectedProducts : [],
+        }));
+    }, []);
+
+    const handleRefreshImportCosts = useCallback(async () => {
+        if (importCostRefreshModal.submitting) return;
+
+        const isDateRangeScope = importCostRefreshModal.scope === IMPORT_COST_REFRESH_SCOPE_RANGE;
+        const isSelectedProductScope = importCostRefreshModal.product_scope === IMPORT_COST_REFRESH_PRODUCT_SCOPE_SELECTED;
+        const selectedProductIds = Array.from(new Set(
+            (Array.isArray(importCostRefreshModal.selected_products) ? importCostRefreshModal.selected_products : [])
+                .map((product) => Number(product?.target_product_id ?? product?.id ?? 0))
+                .filter((productId) => Number.isFinite(productId) && productId > 0)
+        ));
+        const payload = isDateRangeScope
+            ? {
+                date_from: importCostRefreshModal.date_from || undefined,
+                date_to: importCostRefreshModal.date_to || undefined,
+            }
+            : { all_history: true };
+
+        if (isDateRangeScope && !payload.date_from && !payload.date_to) {
+            setNotification({
+                type: 'error',
+                message: 'Vui lòng chọn ít nhất một mốc ngày hoặc chuyển sang cập nhật toàn bộ lịch sử.',
+            });
+            return;
+        }
+
+        if (isSelectedProductScope && selectedProductIds.length === 0) {
+            setNotification({
+                type: 'error',
+                message: 'Vui lÃ²ng chá»n Ã­t nháº¥t 1 sáº£n pháº©m cáº§n cáº­p nháº­t giÃ¡ nháº­p.',
+            });
+            return;
+        }
+
+        if (isSelectedProductScope) {
+            payload.product_ids = selectedProductIds;
+        }
+
+        setImportCostRefreshModal((current) => ({
+            ...current,
+            submitting: true,
+        }));
+
+        try {
+            const response = await orderApi.refreshImportCosts(payload);
+            const result = response?.data || {};
+
+            setNotification({
+                type: (result.updated_orders || 0) > 0 ? 'success' : 'error',
+                message: result.message
+                    || `Đã cập nhật giá nhập cho ${(result.updated_orders || 0)} đơn, ${(result.updated_items || 0)} dòng sản phẩm.`,
+            });
+
+            setImportCostRefreshModal((current) => ({
+                ...current,
+                open: false,
+                submitting: false,
+            }));
+            await fetchOrders(pagination.current_page || 1);
+        } catch (error) {
+            setImportCostRefreshModal((current) => ({
+                ...current,
+                submitting: false,
+            }));
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể cập nhật giá nhập cho phạm vi đã chọn.',
+            });
+        }
+    }, [fetchOrders, importCostRefreshModal, pagination.current_page]);
 
     const handleDispatchCarrierChange = (carrierCode) => {
         setSelectedCarrierCode(carrierCode);
@@ -2410,7 +3543,7 @@ const OrderList = () => {
 
     const handleSort = (colId) => {
         let key = colId === 'customer' ? 'customer_name' : colId;
-        const valid = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'status'];
+        const valid = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'cost_total', 'shipping_fee', 'status'];
         if (!valid.includes(key)) return;
         let ns;
         if (sortConfig.key !== key) ns = { key, direction: 'desc', phase: 1 };
@@ -2569,6 +3702,17 @@ const OrderList = () => {
     }, [closePrintConfirmation, fetchOrders, filters, pagination.current_page, pagination.per_page, printConfirmState.ids, printConfirmState.submitting, sortConfig]);
 
     const currentListUrl = useMemo(() => `${location.pathname}${location.search}`, [location.pathname, location.search]);
+    const persistCurrentOrderListState = useCallback((overrides = {}) => {
+        if (routeOrderIdsKey) {
+            return;
+        }
+
+        writePersistedOrderListState({
+            view: currentView,
+            filters: overrides.filters || filters,
+            pagination: overrides.pagination || pagination,
+        });
+    }, [currentView, filters, pagination, routeOrderIdsKey]);
 
     const navigateToListView = useCallback((nextView = 'main') => {
         navigate(buildOrderListUrl(nextView));
@@ -2611,18 +3755,21 @@ const OrderList = () => {
 
     const handleCreateOrder = useCallback(() => {
         orderApi.preloadBootstrap({ mode: 'form' });
+        persistCurrentOrderListState();
         navigate(buildNewOrderUrl());
-    }, [buildNewOrderUrl, navigate]);
+    }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
 
     const handleCreateDraftOrder = useCallback(() => {
         orderApi.preloadBootstrap({ mode: 'form' });
+        persistCurrentOrderListState();
         navigate(buildNewOrderUrl(DRAFT_ORDER_KIND));
-    }, [buildNewOrderUrl, navigate]);
+    }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
 
     const handleCreateMainOrder = useCallback(() => {
         orderApi.preloadBootstrap({ mode: 'form' });
+        persistCurrentOrderListState();
         navigate(buildNewOrderUrl(MAIN_ORDER_KIND));
-    }, [buildNewOrderUrl, navigate]);
+    }, [buildNewOrderUrl, navigate, persistCurrentOrderListState]);
 
     const warmOrderEditor = useCallback((orderId) => {
         orderApi.preloadBootstrap({ mode: 'form' });
@@ -2635,8 +3782,9 @@ const OrderList = () => {
         const returnTo = options.returnTo || currentListUrl;
 
         warmOrderEditor(orderId);
+        persistCurrentOrderListState();
         navigate(`/admin/orders/edit/${orderId}?return_to=${encodeURIComponent(returnTo)}`);
-    }, [currentListUrl, navigate, warmOrderEditor]);
+    }, [currentListUrl, navigate, persistCurrentOrderListState, warmOrderEditor]);
 
     const handleBulkDelete = async () => {
         if (!selectedIds.length) return;
@@ -2831,7 +3979,7 @@ const OrderList = () => {
         if (filters.customer_name) c++;
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
-        if (filters.order_type) c++;
+        if (filters.order_type?.length) c++;
         if (filters.shipping_carrier_code) c++;
         INVENTORY_SLIP_FILTERS.forEach(({ key }) => {
             if (filters[key]) c++;
@@ -2900,7 +4048,7 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-4 gap-2 lg:hidden">
+                    <div className="grid grid-cols-5 gap-2 lg:hidden">
                         <button type="button" onClick={() => navigateToListView('main')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isMainView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">receipt_long</span>
                             Đơn
@@ -2908,6 +4056,14 @@ const OrderList = () => {
                         <button type="button" onClick={() => navigateToListView('draft')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isDraftView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                             Nháp
+                        </button>
+                        <button type="button" onClick={() => navigateToListView('trash')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isTrashView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                            Rác
+                        </button>
+                        <button type="button" onClick={() => navigateToListView(RETURN_FOLLOWUP_VIEW)} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isReturnFollowupView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
+                            <span className="material-symbols-outlined text-[18px]">fact_check</span>
+                            Treo hoàn
                         </button>
                         <button type="button" onClick={() => navigateToListView(RETURN_WORKBENCH_VIEW)} className={`relative inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isReturnWorkbenchView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">inbox</span>
@@ -2918,33 +4074,43 @@ const OrderList = () => {
                                 </span>
                             )}
                         </button>
-                        <button type="button" onClick={() => navigateToListView('trash')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isTrashView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                            Rác
-                        </button>
                     </div>
 
                     <div className="flex items-center gap-2 lg:hidden">
-                        <button
-                            type="button"
-                            data-filter-btn
-                            onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }}
-                            className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${showFilters || activeCount() > 0 ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
-                        >
-                            <span className="material-symbols-outlined text-[18px]">filter_alt</span>
-                            Lọc
-                        </button>
-                        {canQuickSelect && (
-                            <button
-                                type="button"
-                                onClick={() => setQuickSelectPanelOpen((current) => !current)}
-                                className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${quickSelectPanelOpen || quickSelectResult ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
-                            >
-                                <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
-                                Chọn nhanh
-                            </button>
+                        {!isReturnFollowupView && (
+                            <>
+                                <button
+                                    type="button"
+                                    data-filter-btn
+                                    onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }}
+                                    className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${showFilters || activeCount() > 0 ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">filter_alt</span>
+                                    Lọc
+                                </button>
+                                {canQuickSelect && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setQuickSelectPanelOpen((current) => !current)}
+                                        className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${quickSelectPanelOpen || quickSelectResult ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
+                                        Chọn nhanh
+                                    </button>
+                                )}
+                                {isMainView && (
+                                    <button
+                                        type="button"
+                                        onClick={openImportCostRefreshModal}
+                                        className="inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">price_change</span>
+                                        Giá nhập
+                                    </button>
+                                )}
+                            </>
                         )}
-                        <button onClick={handleRefresh} disabled={loading} className="ml-auto inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
+                        <button onClick={handleRefresh} disabled={loading} className={`${!isReturnFollowupView ? 'ml-auto ' : ''}inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]`}>
                             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span>
                             Làm mới
                         </button>
@@ -2973,6 +4139,12 @@ const OrderList = () => {
                             <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isDraftView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                             </button>
+                            <button type="button" onClick={() => navigateToListView('trash')} title="Thùng rác" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                            </button>
+                            <button type="button" onClick={() => navigateToListView(RETURN_FOLLOWUP_VIEW)} title="Rà soát đơn treo hoàn" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isReturnFollowupView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
+                                <span className="material-symbols-outlined text-[18px]">fact_check</span>
+                            </button>
                             <button type="button" onClick={() => navigateToListView(RETURN_WORKBENCH_VIEW)} title="Mục tạm hoàn" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isReturnWorkbenchView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">inbox</span>
                                 {workbenchOrderCount > 0 && (
@@ -2980,9 +4152,6 @@ const OrderList = () => {
                                         {workbenchOrderCount > 99 ? '99+' : workbenchOrderCount}
                                     </span>
                                 )}
-                            </button>
-                            <button type="button" onClick={() => navigateToListView('trash')} title="Thùng rác" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
-                                <span className="material-symbols-outlined text-[18px]">delete</span>
                             </button>
                         </div>
 
@@ -2998,6 +4167,17 @@ const OrderList = () => {
                                 title="Chọn nhanh nhiều đơn"
                             >
                                 <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
+                            </button>
+                        )}
+                        {isMainView && (
+                            <button
+                                type="button"
+                                onClick={openImportCostRefreshModal}
+                                title="Cập nhật giá nhập theo khoảng ngày hoặc toàn bộ lịch sử"
+                                className="h-9 px-3 rounded-sm border border-primary/15 bg-white text-primary flex items-center gap-1.5 transition-all hover:bg-primary hover:text-white shadow-sm"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">price_change</span>
+                                <span className="text-[12px] font-semibold whitespace-nowrap">Cập nhật giá nhập</span>
                             </button>
                         )}
                         {isMainView && (
@@ -3136,34 +4316,34 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    <div className="flex-1 relative" ref={searchContainerRef}>
-                        <MultiKeywordSearchInput
-                            keywords={filters.search_terms}
-                            draftValue={filters.search_input}
-                            placeholder="Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm"
-                            onFocus={() => setShowSearchHistory(true)}
-                            onChange={({ keywords, draftValue }) => {
-                                setFilters((prev) => ({
-                                    ...prev,
-                                    search_terms: keywords,
-                                    search_input: draftValue,
-                                }));
-                            }}
-                        />
-                        {showSearchHistory && searchHistory.length > 0 && (
-                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
-                                <div className="max-h-56 overflow-y-auto custom-scrollbar">
-                                    {searchHistory.map((h, i) => (
-                                        <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters((prev) => ({ ...prev, search_terms: parseKeywordTokens(h), search_input: '' })); setShowSearchHistory(false); }}>
-                                            <div className="flex items-center gap-2 overflow-hidden"><span className="material-symbols-outlined text-[16px] text-primary/30">history</span><span className="text-[13px] text-[#0F172A] truncate font-medium">{h}</span></div>
-                                            <button onClick={(e) => { e.stopPropagation(); const updated = searchHistory.filter(x => x !== h); setSearchHistory(updated); localStorage.setItem('order_search_history', JSON.stringify(updated)); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                                        </div>
-                                    ))}
+                        <div className="flex-1 relative" ref={searchContainerRef}>
+                            <MultiKeywordSearchInput
+                                keywords={filters.search_terms}
+                                draftValue={filters.search_input}
+                                placeholder="Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm"
+                                onFocus={() => setShowSearchHistory(true)}
+                                onChange={({ keywords, draftValue }) => {
+                                    setFilters((prev) => ({
+                                        ...prev,
+                                        search_terms: keywords,
+                                        search_input: draftValue,
+                                    }));
+                                }}
+                            />
+                            {showSearchHistory && searchHistory.length > 0 && (
+                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                                    <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
+                                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                                        {searchHistory.map((h, i) => (
+                                            <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters((prev) => ({ ...prev, search_terms: parseKeywordTokens(h), search_input: '' })); setShowSearchHistory(false); }}>
+                                                <div className="flex items-center gap-2 overflow-hidden"><span className="material-symbols-outlined text-[16px] text-primary/30">history</span><span className="text-[13px] text-[#0F172A] truncate font-medium">{h}</span></div>
+                                                <button onClick={(e) => { e.stopPropagation(); const updated = searchHistory.filter(x => x !== h); setSearchHistory(updated); localStorage.setItem('order_search_history', JSON.stringify(updated)); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
+                            )}
+                        </div>
                 </div>
             </div>
 
@@ -3332,28 +4512,27 @@ const OrderList = () => {
                                     <option value="">Tất cả</option>
                                     {orderStatuses.map(s => <option key={s.id} value={s.code}>{s.name}</option>)}
                                 </select>
-                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
-                                    expand_more
-                                </span>
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Loại đơn</label>
                             <div className="relative">
-                                <select
-                                    name="order_type"
-                                    className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none"
-                                    value={tempFilters.order_type || ''}
-                                    onChange={handleTempFilterChange}
-                                >
-                                    <option value="">Tất cả</option>
-                                    {ORDER_TYPE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                </select>
-                                <span className="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 pointer-events-none text-[18px]">
-                                    expand_more
-                                </span>
+                                <AdminMultiSelect
+                                    className="w-full"
+                                    compact
+                                    portal
+                                    options={ORDER_TYPE_OPTIONS}
+                                    value={normalizeOrderTypeFilterValues(tempFilters.order_type)}
+                                    onChange={(orderTypes) => setTempFilters((prev) => ({
+                                        ...prev,
+                                        order_type: normalizeOrderTypeFilterValues(orderTypes),
+                                    }))}
+                                    placeholder="Tất cả"
+                                    searchPlaceholder="Tìm loại đơn..."
+                                    emptyLabel="Không có loại đơn"
+                                    getOptionValue={(option) => option.value}
+                                    getOptionLabel={(option) => option.label}
+                                />
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
@@ -3425,13 +4604,13 @@ const OrderList = () => {
                                     <div key={a.id} className="p-4 space-y-2.5 border-r border-b border-primary/10 relative">
                                         <label className="text-[11px] font-bold text-stone-500 uppercase tracking-[0.15em]">{a.name}</label>
                                         <div className="relative" data-attr-dropdown>
-                                            <button 
+                                            <button
                                                 onClick={() => setOpenAttrId(openAttrId === a.id ? null : a.id)}
                                                 className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === a.id ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
                                             >
                                                 <span className="truncate text-[13px] font-bold text-primary">
-                                                    {(tempFilters.attributes[a.id] || []).length > 0 
-                                                        ? `${a.name}: ${(tempFilters.attributes[a.id] || []).length}` 
+                                                    {(tempFilters.attributes[a.id] || []).length > 0
+                                                        ? `${a.name}: ${(tempFilters.attributes[a.id] || []).length}`
                                                         : `Chọn ${a.name}...`}
                                                 </span>
                                                 <span className={`material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-primary/30 transition-transform duration-300 ${openAttrId === a.id ? 'rotate-180' : ''}`}>
@@ -3443,7 +4622,7 @@ const OrderList = () => {
                                                 <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
                                                     <div className="max-h-64 overflow-y-auto custom-scrollbar">
                                                         {(tempFilters.attributes[a.id] || []).length > 0 && (
-                                                            <button 
+                                                            <button
                                                                 className="w-full px-3 py-2 text-left text-[11px] font-black text-brick hover:bg-brick/5 border-b border-primary/5 mb-1 uppercase tracking-widest flex items-center gap-2"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -3459,14 +4638,14 @@ const OrderList = () => {
                                                         )}
                                                         {a.options?.length > 0 ? (
                                                             a.options.map(opt => (
-                                                                <label 
+                                                                <label
                                                                     key={opt.id}
                                                                     className="px-3 py-2.5 hover:bg-primary/5 cursor-pointer flex items-center gap-3 group transition-colors select-none"
                                                                     onClick={(e) => e.stopPropagation()}
                                                                 >
                                                                     <div className="relative flex items-center">
-                                                                        <input 
-                                                                            type="checkbox" 
+                                                                        <input
+                                                                            type="checkbox"
                                                                             checked={(tempFilters.attributes[a.id] || []).includes(opt.value)}
                                                                             onChange={() => handleTempAttributeFilterChange(a.id, opt.value)}
                                                                             className="w-4 h-4 accent-primary cursor-pointer rounded-sm border-2 border-primary/20"
@@ -3492,109 +4671,120 @@ const OrderList = () => {
                 </div>
             )}
 
-            {isReturnWorkbenchView && (
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
-                    <div>
-                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/75">Mục tạm hoàn</div>
-                        <div className="mt-1 text-[14px] font-black text-amber-900">
-                            {workbenchOrderCount > 0
-                                ? `Đang giữ ${formatNumber(workbenchOrderCount)} đơn để xử lý hoàn nhanh.`
-                                : 'Mục tạm đang trống. Chọn đơn ở bảng chính rồi bấm “Đưa vào mục tạm”.'}
+            {isReturnFollowupView ? (
+                <OrderReturnFollowupPanel
+                    statusMap={statusMap}
+                    onOpenOrder={openOrderEditor}
+                    refreshToken={returnFollowupRefreshKey}
+                    searchTerms={activeSearchTerms}
+                />
+            ) : (
+                <>
+                    {isReturnWorkbenchView && (
+                        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-200 bg-amber-50 px-4 py-3">
+                            <div>
+                                <div className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/75">Mục tạm hoàn</div>
+                                <div className="mt-1 text-[14px] font-black text-amber-900">
+                                    {workbenchOrderCount > 0
+                                        ? `Đang giữ ${formatNumber(workbenchOrderCount)} đơn để xử lý hoàn nhanh.`
+                                        : 'Mục tạm đang trống. Chọn đơn ở bảng chính rồi bấm “Đưa vào mục tạm”.'}
+                                </div>
+                            </div>
+                            {workbenchOrderCount > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={handleClearReturnWorkbench}
+                                    className="inline-flex h-9 items-center gap-2 rounded-sm border border-amber-300 bg-white px-3 text-[12px] font-black text-amber-800 transition hover:bg-amber-600 hover:text-white"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">inbox_customize</span>
+                                    Làm trống mục tạm
+                                </button>
+                            )}
                         </div>
-                    </div>
-                    {workbenchOrderCount > 0 && (
-                        <button
-                            type="button"
-                            onClick={handleClearReturnWorkbench}
-                            className="inline-flex h-9 items-center gap-2 rounded-sm border border-amber-300 bg-white px-3 text-[12px] font-black text-amber-800 transition hover:bg-amber-600 hover:text-white"
-                        >
-                            <span className="material-symbols-outlined text-[18px]">inbox_customize</span>
-                            Làm trống mục tạm
-                        </button>
                     )}
-                </div>
-            )}
 
-            {activeCount() > 0 && (
-                <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
-                    <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
-                    {filters.order_ids?.length > 0 && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">{routeOrderScope.batchReturnDocumentNumber ? 'Đơn nguồn:' : 'Chọn nhanh:'}</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">
-                                {routeOrderScope.batchReturnDocumentNumber || `${formatNumber(filters.order_ids.length)} đơn đã khoanh`}
-                            </span>
-                            <span className="text-[11px] font-bold text-primary/45">{formatNumber(filters.order_ids.length)} đơn</span>
-                            <button onClick={() => removeFilter('order_ids')} className="text-primary/40 hover:text-brick">
-                                <span className="material-symbols-outlined text-[14px]">close</span>
-                            </button>
+                    {activeCount() > 0 && (
+                        <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
+                            <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
+                            {filters.order_ids?.length > 0 && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">{routeOrderScope.batchReturnDocumentNumber ? 'Đơn nguồn:' : 'Chọn nhanh:'}</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">
+                                        {routeOrderScope.batchReturnDocumentNumber || `${formatNumber(filters.order_ids.length)} đơn đã khoanh`}
+                                    </span>
+                                    <span className="text-[11px] font-bold text-primary/45">{formatNumber(filters.order_ids.length)} đơn</span>
+                                    <button onClick={() => removeFilter('order_ids')} className="text-primary/40 hover:text-brick">
+                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            )}
+                            {filters.status?.length > 0 && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Trạng thái:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{filters.status.map((s) => statusMap.get(String(s))?.name || s).join(', ')}</span>
+                                    <button onClick={() => removeFilter('status')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {filters.customer_name && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Khách:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{filters.customer_name}</span>
+                                    <button onClick={() => removeFilter('customer_name')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {filters.order_type?.length > 0 && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Loại đơn:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">
+                                        {normalizeOrderTypeFilterValues(filters.order_type).map((type) => getOrderTypeMeta(type).label).join(', ')}
+                                    </span>
+                                    <button onClick={() => removeFilter('order_type')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {(filters.created_at_from || filters.created_at_to) && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Ngày:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} → {filters.created_at_to || '?'}</span>
+                                    <button onClick={() => removeFilter('date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {filters.shipping_carrier_code && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Vận chuyển:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{carrierMap.get(String(filters.shipping_carrier_code))?.carrier_name || filters.shipping_carrier_code}</span>
+                                    <button onClick={() => removeFilter('shipping_carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {INVENTORY_SLIP_FILTERS.map(({ key, label, options }) => (
+                                filters[key] ? (
+                                    <div key={key} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                        <span className="text-[11px] text-primary/40">{label}:</span>
+                                        <span className="text-[13px] font-bold text-[#0F172A]">{options.find((option) => option.value === filters[key])?.label || filters[key]}</span>
+                                        <button onClick={() => removeFilter(key)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                    </div>
+                                ) : null
+                            ))}
+                            {(filters.shipping_dispatched_from || filters.shipping_dispatched_to) && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Ngày gửi VC:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{filters.shipping_dispatched_from || '?'} → {filters.shipping_dispatched_to || '?'}</span>
+                                    <button onClick={() => removeFilter('shipping_date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {filters.attributes && Object.entries(filters.attributes).map(([id, v]) => {
+                                if (!v) return null;
+                                const a = attributeMap.get(parseInt(id, 10));
+                                return (
+                                    <div key={id} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                        <span className="text-[11px] text-primary/40">{a?.name}:</span>
+                                        <span className="text-[13px] font-bold text-[#0F172A]">{v}</span>
+                                        <button onClick={() => removeFilter('attributes', { attrId: id })} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                    </div>
+                                );
+                            })}
+                            <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">Xóa tất cả bộ lọc</button>
                         </div>
                     )}
-                    {filters.status?.length > 0 && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Trạng thái:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.status.map((s) => statusMap.get(String(s))?.name || s).join(', ')}</span>
-                            <button onClick={() => removeFilter('status')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {filters.customer_name && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Khách:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.customer_name}</span>
-                            <button onClick={() => removeFilter('customer_name')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {filters.order_type && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Loại đơn:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{getOrderTypeMeta(filters.order_type).label}</span>
-                            <button onClick={() => removeFilter('order_type')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {(filters.created_at_from || filters.created_at_to) && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Ngày:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} → {filters.created_at_to || '?'}</span>
-                            <button onClick={() => removeFilter('date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {filters.shipping_carrier_code && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Vận chuyển:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{carrierMap.get(String(filters.shipping_carrier_code))?.carrier_name || filters.shipping_carrier_code}</span>
-                            <button onClick={() => removeFilter('shipping_carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {INVENTORY_SLIP_FILTERS.map(({ key, label, options }) => (
-                        filters[key] ? (
-                            <div key={key} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                                <span className="text-[11px] text-primary/40">{label}:</span>
-                                <span className="text-[13px] font-bold text-[#0F172A]">{options.find((option) => option.value === filters[key])?.label || filters[key]}</span>
-                                <button onClick={() => removeFilter(key)} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                            </div>
-                        ) : null
-                    ))}
-                    {(filters.shipping_dispatched_from || filters.shipping_dispatched_to) && (
-                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                            <span className="text-[11px] text-primary/40">Ngày gửi VC:</span>
-                            <span className="text-[13px] font-bold text-[#0F172A]">{filters.shipping_dispatched_from || '?'} → {filters.shipping_dispatched_to || '?'}</span>
-                            <button onClick={() => removeFilter('shipping_date')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                        </div>
-                    )}
-                    {filters.attributes && Object.entries(filters.attributes).map(([id, v]) => {
-                        if (!v) return null;
-                        const a = attributeMap.get(parseInt(id, 10));
-                        return (
-                            <div key={id} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
-                                <span className="text-[11px] text-primary/40">{a?.name}:</span>
-                                <span className="text-[13px] font-bold text-[#0F172A]">{v}</span>
-                                <button onClick={() => removeFilter('attributes', { attrId: id })} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                            </div>
-                        );
-                    })}
-                    <button onClick={handleReset} className="ml-auto text-[13px] font-bold text-brick hover:underline px-2 pr-1 border-primary/20">Xóa tất cả bộ lọc</button>
-                </div>
-            )}
 
             {showColumnSettings && <div ref={columnSettingsRef}><TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey="order_list" /></div>}
 
@@ -3608,12 +4798,13 @@ const OrderList = () => {
                     orders.map((o) => {
                         const isDraftRow = isDraftOrder(o.order_kind);
                         const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
-                const dateDisplay = formatDateTimeParts(getOrderDisplayTimestamp(o));
+                        const dateDisplay = formatDateTimeParts(getOrderDisplayTimestamp(o));
                         const isFocusedRouteRow = Number(o.id) === Number(routeOrderScope.focusOrderId);
                         const itemPreview = Array.isArray(o.items) ? o.items.slice(0, 2) : [];
                         const remainingItemCount = Math.max((o.items?.length || 0) - itemPreview.length, 0);
                         const addressText = String(o.shipping_address || [o.ward, o.province].filter(Boolean).join(', ') || '').trim();
                         const trackingCode = o.shipping_tracking_code || o.active_shipment?.carrier_tracking_code || '';
+                        const shippingFee = resolveOrderInternalShippingFee(o);
 
                         return (
                             <div
@@ -3666,6 +4857,8 @@ const OrderList = () => {
                                             <div className="shrink-0 text-right">
                                                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Tổng tiền</div>
                                                 <div className="mt-1 text-[18px] font-black leading-none text-brick">{formatMoney(o.total_price || 0)}</div>
+                                                <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-sky-700/80">Giá vốn nhập {formatMoney(o.cost_total || 0)}</div>
+                                                <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-primary/55">Phí ship {formatMoney(shippingFee)}</div>
                                                 <div className="mt-1 text-[11px] font-semibold text-primary/45">{dateDisplay.date}</div>
                                             </div>
                                         </div>
@@ -3877,7 +5070,7 @@ const OrderList = () => {
                                                         </button>
                                                     </div>
                                                     <div className="flex items-center justify-between group/phone_c">
-                                                        <span className={`text-[11px] font-black truncate ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone}</span>
+                                                        <span className={`text-[13px] font-black truncate ${getOrderCustomerPhoneTextClass(o)}`}>{o.customer_phone}</span>
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(o.customer_phone, e); }} className={`opacity-0 group-hover/phone_c:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === o.customer_phone ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[12px]">{copiedText === o.customer_phone ? 'check' : 'content_copy'}</span>
                                                         </button>
@@ -4000,6 +5193,46 @@ const OrderList = () => {
                                                         <span>{formattedPrice}₫</span>
                                                         <button onClick={(e) => { e.stopPropagation(); handleCopy(formattedPrice.replace(/\./g, ''), e); }} className={`opacity-0 group-hover/price:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === formattedPrice.replace(/\./g, '') ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                             <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            );
+                                        }
+                                        if (c.id === 'cost_total') {
+                                            const costTotal = Number(o.cost_total || 0);
+                                            const costTotalCopyValue = String(Math.round(costTotal));
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 font-black text-sky-700 group/cost_total relative">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="truncate">{formatMoney(costTotal)}</span>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleCopy(costTotalCopyValue, e);
+                                                            }}
+                                                            className={`opacity-0 group-hover/cost_total:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === costTotalCopyValue ? 'text-green-500 opacity-100' : 'text-primary/20'}`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">{copiedText === costTotalCopyValue ? 'check' : 'content_copy'}</span>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            );
+                                        }
+                                        if (c.id === 'shipping_fee') {
+                                            const shippingFee = resolveOrderInternalShippingFee(o);
+                                            const shippingFeeCopyValue = String(Math.round(shippingFee));
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 font-black text-stone-600 group/shipping_fee relative">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="truncate">{formatMoney(shippingFee)}</span>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleCopy(shippingFeeCopyValue, e);
+                                                            }}
+                                                            className={`opacity-0 group-hover/shipping_fee:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === shippingFeeCopyValue ? 'text-green-500 opacity-100' : 'text-primary/20'}`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">{copiedText === shippingFeeCopyValue ? 'check' : 'content_copy'}</span>
                                                         </button>
                                                     </div>
                                                 </td>
@@ -4273,6 +5506,8 @@ const OrderList = () => {
                     </div>
                 </div>
             )}
+                </>
+            )}
 
             <PrintCompletionConfirmModal
                 open={printConfirmState.open}
@@ -4292,6 +5527,21 @@ const OrderList = () => {
                 statusMenuRef={statusMenuRef}
             />
             <OrderProductsPortal items={activeProductPopupOrder?.items || []} copiedText={copiedText} onCopy={handleCopy} anchorRef={productPopupAnchorRef} visible={!!productPopupOrderId} onClose={() => setProductPopupOrderId(null)} />
+            <ImportCostRefreshProductModal
+                open={importCostRefreshModal.open}
+                submitting={importCostRefreshModal.submitting}
+                scope={importCostRefreshModal.scope}
+                dateFrom={importCostRefreshModal.date_from}
+                dateTo={importCostRefreshModal.date_to}
+                productScope={importCostRefreshModal.product_scope}
+                selectedProducts={importCostRefreshModal.selected_products}
+                onScopeChange={handleImportCostRefreshScopeChange}
+                onDateChange={handleImportCostRefreshDateChange}
+                onProductScopeChange={handleImportCostRefreshProductScopeChange}
+                onSelectedProductsChange={handleImportCostRefreshSelectedProductsChange}
+                onClose={closeImportCostRefreshModal}
+                onSubmit={handleRefreshImportCosts}
+            />
             <ShippingDispatchModal
                 open={dispatchModalOpen}
                 carriers={connectedCarriers}

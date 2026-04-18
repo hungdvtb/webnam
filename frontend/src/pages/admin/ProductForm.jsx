@@ -103,6 +103,26 @@ const normalizeSelectedSuperAttributes = (items = []) => sortAttributesBySortOrd
     default_value: item?.default_value ?? null,
 }));
 
+const normalizeVariantSelectionValues = (values = []) => Array.from(new Set(
+    (Array.isArray(values) ? values : [])
+        .map((value) => String(value ?? '').trim())
+        .filter(Boolean)
+));
+
+const summarizeVariantSelectionValues = (values = [], emptyLabel = 'Chưa chọn giá trị') => {
+    const normalizedValues = normalizeVariantSelectionValues(values);
+
+    if (normalizedValues.length === 0) {
+        return emptyLabel;
+    }
+
+    if (normalizedValues.length <= 3) {
+        return normalizedValues.join(', ');
+    }
+
+    return `${normalizedValues.slice(0, 3).join(', ')} +${normalizedValues.length - 3}`;
+};
+
 const isTemporaryProductImageId = (imageId) => {
     const normalizedId = String(imageId || '');
     return normalizedId.startsWith('temp_') || normalizedId.startsWith('opt_');
@@ -300,18 +320,18 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
     );
 };
 
-const DraggableBundleItem = ({ 
-    index, 
-    optionId, 
-    item, 
-    moveBundleItem, 
-    handleSetDefaultInOption, 
-    handleUpdateBundleItemVariant, 
-    bundleItemVariants, 
-    handleUpdateBundleItemQty, 
-    handleRemoveItemFromOption, 
+const DraggableBundleItem = ({
+    index,
+    optionId,
+    item,
+    moveBundleItem,
+    handleSetDefaultInOption,
+    handleUpdateBundleItemVariant,
+    bundleItemVariants,
+    handleUpdateBundleItemQty,
+    handleRemoveItemFromOption,
     formatNumberOutput,
-    isSortingMode 
+    isSortingMode
 }) => {
     const ref = useRef(null);
     const { showToast } = useUI();
@@ -345,7 +365,7 @@ const DraggableBundleItem = ({
     drag(drop(ref));
 
     return (
-        <tr 
+        <tr
             ref={ref}
             className={`border-b border-stone/5 transition-colors group/row ${isDragging ? 'opacity-30 bg-gold/5' : 'hover:bg-gold/[0.02]'} ${isSortingMode ? 'cursor-move' : ''}`}
         >
@@ -374,7 +394,7 @@ const DraggableBundleItem = ({
                     <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1">
                             <p className="text-[13px] font-bold text-black truncate" title={item.name}>{item.name}</p>
-                            <button 
+                            <button
                                 type="button"
                                 onClick={() => {
                                     navigator.clipboard.writeText(item.name);
@@ -388,7 +408,7 @@ const DraggableBundleItem = ({
                         </div>
                         <div className="flex items-center gap-1">
                             <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
-                            <button 
+                            <button
                                 type="button"
                                 onClick={() => {
                                     navigator.clipboard.writeText(item.sku);
@@ -1876,6 +1896,7 @@ const ProductForm = () => {
     const [variants, setVariants] = useState([]);
     const [serverValidationErrors, setServerValidationErrors] = useState({});
     const [selectedSuperAttributes, setSelectedSuperAttributes] = useState([]);
+    const [existingVariantSuperAttributes, setExistingVariantSuperAttributes] = useState([]);
     const [selectedVariantIds, setSelectedVariantIds] = useState([]);
     const [variantImagePicker, setVariantImagePicker] = useState({
         index: null,
@@ -2023,12 +2044,75 @@ const ProductForm = () => {
         return normalizeWholeMoneyDraft(value);
     };
 
+    const normalizeExistingVariantSuperAttributes = useCallback((items = []) => (
+        normalizeSelectedSuperAttributes(items).map((item) => ({
+            ...item,
+            selected_values: normalizeVariantSelectionValues(item?.selected_values),
+            default_value: null,
+        }))
+    ), []);
+
     const variantReadyAttributes = useMemo(() => (
         allAttributes.filter((attribute) => (
             attribute.entity_type === 'product'
+            && Boolean(attribute.is_variant)
             && (attribute.frontend_type === 'select' || attribute.frontend_type === 'multiselect')
         ))
     ), [allAttributes]);
+
+    const existingVariantSuperAttributeIdSet = useMemo(
+        () => new Set(existingVariantSuperAttributes.map((attribute) => String(attribute.id))),
+        [existingVariantSuperAttributes]
+    );
+
+    const selectedSuperAttributeIdSet = useMemo(
+        () => new Set(selectedSuperAttributes.map((attribute) => String(attribute.id))),
+        [selectedSuperAttributes]
+    );
+
+    const removedExistingVariantAttributes = useMemo(
+        () => existingVariantSuperAttributes.filter(
+            (attribute) => !selectedSuperAttributeIdSet.has(String(attribute.id))
+        ),
+        [existingVariantSuperAttributes, selectedSuperAttributeIdSet]
+    );
+
+    const sanitizeSelectedSuperAttributes = useCallback((items = []) => (
+        normalizeSelectedSuperAttributes(items).map((item) => {
+            const selectedValues = normalizeVariantSelectionValues(item?.selected_values);
+            const isExistingVariantAttribute = existingVariantSuperAttributeIdSet.has(String(item?.id));
+            const rawDefaultValue = String(item?.default_value ?? '').trim();
+
+            return {
+                ...item,
+                selected_values: selectedValues,
+                default_value: isExistingVariantAttribute
+                    ? null
+                    : (selectedValues.find((value) => value === rawDefaultValue) || selectedValues[0] || null),
+            };
+        })
+    ), [existingVariantSuperAttributeIdSet]);
+
+    const toggleSuperAttributeSelection = useCallback((attribute) => {
+        setSelectedSuperAttributes((prev) => {
+            const alreadySelected = prev.some((item) => String(item.id) === String(attribute.id));
+
+            if (alreadySelected) {
+                return sanitizeSelectedSuperAttributes(
+                    prev.filter((item) => String(item.id) !== String(attribute.id))
+                );
+            }
+
+            return sanitizeSelectedSuperAttributes([
+                ...prev,
+                {
+                    ...attribute,
+                    selected_values: normalizeVariantSelectionValues(attribute?.selected_values),
+                    default_value: attribute?.default_value ?? null,
+                },
+            ]);
+        });
+    }, [sanitizeSelectedSuperAttributes]);
 
     const selectedConvertAttribute = useMemo(() => {
         if (convertToConfigurableForm.attribute_source !== 'existing') {
@@ -2897,14 +2981,14 @@ const ProductForm = () => {
             if (file) {
                 try {
                     const url = await uploadImageViaMediaApi(file);
-                    
+
                     let quill;
                     try {
                         quill = quillRef.current.getEditor();
                     } catch (e) { return; }
                     const range = quill.getSelection();
                     quill.insertEmbed(range.index, 'image', url);
-                    
+
                     // Set default width to 100% or allow resizing later
                     quill.setSelection(range.index + 1);
                 } catch (error) {
@@ -2925,13 +3009,13 @@ const ProductForm = () => {
         if (!url) return;
 
         let embedUrl = url;
-        
+
         // Detect YouTube
         const ytMatch = url.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]+)/);
         if (ytMatch) {
             embedUrl = `https://www.youtube.com/embed/${ytMatch[1]}`;
         }
-        
+
         // Detect Facebook
         const fbMatch = url.match(/(?:https?:\/\/)?(?:www\.)?facebook\.com\/(?:watch\/\?v=|.*\/videos\/|video\.php\?v=)(\d+)/);
         if (fbMatch || url.includes('facebook.com')) {
@@ -3062,7 +3146,7 @@ const ProductForm = () => {
 
         const handleEditorClick = (e) => {
             const target = e.target;
-            
+
             // Remove popup if clicking elsewhere
             if (target.tagName !== 'IMG' && !target.closest('.ql-image-actions-popup')) {
                 removeExistingPopups();
@@ -3073,18 +3157,18 @@ const ProductForm = () => {
                 e.preventDefault();
                 e.stopPropagation();
                 removeExistingPopups();
-                
+
                 const popup = document.createElement('div');
                 popup.className = 'ql-image-actions-popup';
-                
+
                 // Position relative to the editor container for better stability
                 const rect = target.getBoundingClientRect();
                 const containerRect = editorContainer.getBoundingClientRect();
-                
+
                 // Position calculations
                 const top = rect.top - containerRect.top - 50;
                 const left = rect.left - containerRect.left + (rect.width / 2);
-                
+
                 popup.style.top = `${top}px`;
                 popup.style.left = `${left}px`;
                 popup.style.position = 'absolute';
@@ -3152,7 +3236,7 @@ const ProductForm = () => {
                 popup.appendChild(btnView);
                 popup.appendChild(btnEdit);
                 popup.appendChild(btnDelete);
-                
+
                 if (editorContainer) {
                     editorContainer.style.position = 'relative';
                     editorContainer.appendChild(popup);
@@ -3182,7 +3266,7 @@ const ProductForm = () => {
 
         editorRoot.addEventListener('click', handleEditorClick);
         editorRoot.addEventListener('dblclick', handleEditorDblClick);
-        
+
         return () => {
             editorRoot.removeEventListener('click', handleEditorClick);
             editorRoot.removeEventListener('dblclick', handleEditorDblClick);
@@ -3244,6 +3328,7 @@ const ProductForm = () => {
         } else {
             setProductMeta({ originalType: '', parentConfigurable: null });
             setConvertToConfigurableForm(buildInitialConvertToConfigurableForm());
+            setExistingVariantSuperAttributes([]);
         }
         fetchBlogPosts();
         fetchDomains();
@@ -3541,7 +3626,7 @@ const ProductForm = () => {
         const hasSearch = query.length > 0;
         const hasCategory = relatedCategory !== 'all';
         const hasAttrs = Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '');
-        
+
         setSearchingRelated(true);
         try {
             // Sử dụng bộ tham số tối giản nhất tương tự OrderForm để đảm bảo tìm thấy sản phẩm
@@ -3625,6 +3710,22 @@ const ProductForm = () => {
             const response = await attributeApi.getAll({ active_only: true });
             setAllAttributes(sortAttributesBySortOrder(response.data || []));
 
+            if (existingVariantSuperAttributes.length > 0) {
+                setExistingVariantSuperAttributes((prev) => {
+                    const synced = prev.map((selected) => {
+                        const updated = (response.data || []).find((attribute) => attribute.id === selected.id);
+                        return updated
+                            ? {
+                                ...updated,
+                                selected_values: selected.selected_values,
+                            }
+                            : selected;
+                    });
+
+                    return normalizeExistingVariantSuperAttributes(synced);
+                });
+            }
+
             // Sync current selection if attributes were updated
             if (selectedSuperAttributes.length > 0) {
                 setSelectedSuperAttributes(prev => {
@@ -3638,7 +3739,7 @@ const ProductForm = () => {
                             }
                             : selected;
                     });
-                    return normalizeSelectedSuperAttributes(synced);
+                    return sanitizeSelectedSuperAttributes(synced);
                 });
             }
             showModal({ title: 'Thành công', content: 'Đã cập nhật danh sách thuộc tính mới nhất.', type: 'success', autoClose: 2000 });
@@ -3762,9 +3863,9 @@ const ProductForm = () => {
                             .filter(l => l.trim())
                             .map(l => {
                                 const parts = l.split(':');
-                                return { 
-                                    label: parts[0]?.trim() || 'Thông số', 
-                                    value: parts.slice(1).join(':').trim() || l 
+                                return {
+                                    label: parts[0]?.trim() || 'Thông số',
+                                    value: parts.slice(1).join(':').trim() || l
                                 };
                             });
                     }
@@ -3892,7 +3993,7 @@ const ProductForm = () => {
 
             const initialIds = Array.from(new Set((regularLinks || []).map(p => p.id)));
             const initialData = Array.from(new Map((regularLinks || []).map(p => [p.id, p])).values());
-            
+
             setFormData(prev => ({
                 ...prev,
                 linked_product_ids: initialIds
@@ -3955,8 +4056,12 @@ const ProductForm = () => {
                     };
                 });
 
-                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(superAttrs));
+                const normalizedSuperAttrs = normalizeExistingVariantSuperAttributes(superAttrs);
+                setExistingVariantSuperAttributes(normalizedSuperAttrs);
+                setSelectedSuperAttributes(normalizedSuperAttrs);
                 setShowVariantConfig(true); // Tự động hiển thị danh sách biến thể / bảng cấu hình
+            } else {
+                setExistingVariantSuperAttributes([]);
             }
         } catch (error) {
             alert('Không thể tải thông tin sản phẩm.');
@@ -5215,7 +5320,7 @@ const ProductForm = () => {
                 showToast({ message: 'Sản phẩm này đã có trong tùy chọn.', type: 'info' });
                 return o;
             }
-            
+
             const primaryImage = product.images?.find(img => img.is_primary) || product.images?.[0];
             const newItem = {
                 entry_id: createBundleItemEntryId(),
@@ -5282,7 +5387,7 @@ const ProductForm = () => {
     const handleUpdateBundleItemVariant = (optionId, entryId, variantId) => {
         setBundleOptions(prev => prev.map(o => {
             if (o.id !== optionId) return o;
-            
+
             return {
                 ...o,
                 items: o.items.map(it => {
@@ -5421,16 +5526,16 @@ const ProductForm = () => {
             const allItems = bundleOptions.flatMap(opt => opt.items);
             const parentItemMap = {};
             const variantItemMap = {};
-            
+
             // Collect unique product IDs to fetch
             const productIds = [...new Set(allItems.map(it => getBundleItemProductId(it)).filter(Boolean))];
-            
+
             await Promise.all(productIds.map(async (pId) => {
                 try {
                     const res = await productApi.getOne(pId);
                     const product = res.data;
                     const primaryImage = resolveBundleItemImage(product);
-                    
+
                     parentItemMap[pId] = {
                         product_name: product.name,
                         product_sku: product.sku,
@@ -5504,7 +5609,7 @@ const ProductForm = () => {
             if (before.includes('src=') || before.includes('href=')) {
                 return match;
             }
-            
+
             if (url.includes('youtube.com') || url.includes('youtu.be')) {
                 const idMatch = url.match(/(?:\/watch\?v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]+)/);
                 if (idMatch) {
@@ -5574,7 +5679,7 @@ const ProductForm = () => {
                 } else if (key === 'linked_product_ids') {
                     if (selectedProductsData.length === 0) {
                         // Gửi tham số tường minh để Backend thực hiện detach/sync
-                        submitData.append('clear_linked_products', '1'); 
+                        submitData.append('clear_linked_products', '1');
                     } else {
                         selectedProductsData.forEach((v, idx) => {
                             submitData.append(`linked_product_ids[${idx}][id]`, v.id);
@@ -5950,7 +6055,7 @@ const ProductForm = () => {
                                     {formData.sku ? `SKU: ${formData.sku}` : 'Cấu hình thông tin sản phẩm và thương mại'}
                                 </p>
                                 <div className="flex items-center gap-1">
-                                    <button 
+                                    <button
                                         type="button"
                                         onClick={() => {
                                             setTempSlug(formData.slug || (formData.name ? formData.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-') : ''));
@@ -6324,7 +6429,7 @@ const ProductForm = () => {
                                     <div className="flex justify-between items-center bg-stone/5 p-2 rounded-sm border border-stone/10">
                                         <span className="text-[12px] font-bold text-primary uppercase">Bảng thông số kĩ thuật</span>
                                         <div className="flex items-center gap-1.5">
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={copySpecifications}
                                                 className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
@@ -6333,7 +6438,7 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">content_copy</span>
                                                 Copy
                                             </button>
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={pasteSpecifications}
                                                 className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
@@ -6342,8 +6447,8 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">content_paste</span>
                                                 Paste
                                             </button>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={addSpecRow}
                                                 className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
                                             >
@@ -6355,20 +6460,20 @@ const ProductForm = () => {
                                         {formData.specifications.map((spec, idx) => (
                                             <div key={idx} className="flex gap-2 items-center group animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
                                                 <div className="flex-1 grid grid-cols-2 gap-2 border border-stone/15 rounded-sm p-1.5 bg-white shadow-sm transition-all hover:border-primary/30">
-                                                    <input 
-                                                        placeholder="Nhãn (VD: Kích thước)" 
+                                                    <input
+                                                        placeholder="Nhãn (VD: Kích thước)"
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
                                                         value={spec.label ?? ''}
                                                         onChange={(e) => updateSpecRow(idx, 'label', e.target.value)}
                                                     />
-                                                    <input 
-                                                        placeholder="Giá trị (VD: 20x30cm)" 
+                                                    <input
+                                                        placeholder="Giá trị (VD: 20x30cm)"
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] text-stone placeholder:opacity-40"
                                                         value={spec.value ?? ''}
                                                         onChange={(e) => updateSpecRow(idx, 'value', e.target.value)}
                                                     />
                                                 </div>
-                                                <button 
+                                                <button
                                                     type="button"
                                                     onClick={() => removeSpecRow(idx)}
                                                     className="size-8 bg-brick/5 text-brick rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brick hover:text-white transition-all shadow-sm shrink-0"
@@ -6395,7 +6500,7 @@ const ProductForm = () => {
                                             <span className="text-[12px] font-bold text-primary uppercase">Thông tin bổ sung</span>
                                         </div>
                                         <div className="flex items-center gap-1.5">
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={copyAdditionalInfo}
                                                 className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
@@ -6404,7 +6509,7 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">content_copy</span>
                                                 Copy
                                             </button>
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={pasteAdditionalInfo}
                                                 className="h-8 px-2.5 bg-white border border-stone/20 text-stone hover:text-primary hover:border-primary flex items-center gap-1.5 rounded-sm transition-all text-[10px] font-bold uppercase"
@@ -6413,8 +6518,8 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">content_paste</span>
                                                 Paste
                                             </button>
-                                            <button 
-                                                type="button" 
+                                            <button
+                                                type="button"
                                                 onClick={addAdditionalInfoRow}
                                                 className="size-8 bg-primary text-white flex items-center justify-center rounded-sm hover:bg-gold transition-colors shadow-sm"
                                             >
@@ -6553,13 +6658,13 @@ const ProductForm = () => {
                                             })() /*
                                             <div key={idx} className="flex gap-2 items-start group animate-fade-in-up" style={{ animationDelay: `${idx * 0.05}s` }}>
                                                 <div className="flex-1 grid grid-cols-2 gap-2 border border-stone/15 rounded-sm p-1.5 bg-white shadow-sm transition-all hover:border-primary/30">
-                                                    <input 
-                                                        placeholder="Tiêu đề mục (VD: Hướng dẫn sử dụng)" 
+                                                    <input
+                                                        placeholder="Tiêu đề mục (VD: Hướng dẫn sử dụng)"
                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[13px] font-bold text-primary border-r border-stone/10 placeholder:font-normal placeholder:opacity-30 pr-2"
                                                         value={info.title ?? ''}
                                                         onChange={(e) => updateAdditionalInfoRow(idx, 'title', e.target.value)}
                                                     />
-                                                    
+
                                                     Blog Post Selector
                                                     <div className="relative">
                                                         <div className="flex items-center gap-2 px-2 py-0.5 min-h-[28px]">
@@ -6568,7 +6673,7 @@ const ProductForm = () => {
                                                                     <span className="text-[12px] font-bold text-gold truncate mr-2" title={info.post_title}>
                                                                         {info.post_title}
                                                                     </span>
-                                                                    <button 
+                                                                    <button
                                                                         type="button"
                                                                         onClick={() => updateAdditionalInfoRow(idx, 'post_id', '', { post_title: '' })}
                                                                         className="text-stone/40 hover:text-brick shrink-0"
@@ -6578,8 +6683,8 @@ const ProductForm = () => {
                                                                 </div>
                                                             ) : (
                                                                 <div className="flex-1 relative">
-                                                                    <input 
-                                                                        placeholder="Tìm bài viết trên web..." 
+                                                                    <input
+                                                                        placeholder="Tìm bài viết trên web..."
                                                                         className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[12px] text-stone italic placeholder:opacity-40"
                                                                         value={blogSearchQuery[idx] || ''}
                                                                         onChange={(e) => {
@@ -6591,11 +6696,11 @@ const ProductForm = () => {
                                                                     {isSearchingBlog[idx] && (
                                                                         <span className="absolute right-0 top-1/2 -translate-y-1/2 material-symbols-outlined text-[12px] animate-spin text-gold">refresh</span>
                                                                     )}
-                                                                    
+
                                                                     {blogResults[idx]?.length > 0 && !info.post_id && (
                                                                         <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-stone/15 shadow-xl rounded-sm z-[100] max-h-[200px] overflow-y-auto custom-scrollbar">
                                                                             {blogResults[idx].map(post => (
-                                                                                <div 
+                                                                                <div
                                                                                     key={post.id}
                                                                                     onClick={() => {
                                                                                         updateAdditionalInfoRow(idx, 'post_id', post.id, { post_title: post.title });
@@ -6615,7 +6720,7 @@ const ProductForm = () => {
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <button 
+                                                <button
                                                     type="button"
                                                     onClick={() => removeAdditionalInfoRow(idx)}
                                                     className="size-8 bg-brick/5 text-brick rounded-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-brick hover:text-white transition-all shadow-sm shrink-0"
@@ -6695,27 +6800,69 @@ const ProductForm = () => {
 
                                 {showVariantConfig && (
                                     <div className="mb-8 p-4 bg-purple-50/50 border border-purple-100 rounded-sm space-y-6 animate-fade-in">
+                                        {existingVariantSuperAttributes.length > 0 && (
+                                            <div className="rounded-sm border border-emerald-200 bg-emerald-50 px-4 py-3">
+                                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-emerald-700">Biến thể hiện tại đang dùng</p>
+                                                        <p className="mt-1 text-[12px] text-emerald-900/70">
+                                                            Giữ lại các thuộc tính gốc này nếu bạn chỉ đang mở rộng thêm biến thể mới.
+                                                        </p>
+                                                    </div>
+                                                    {removedExistingVariantAttributes.length > 0 && (
+                                                        <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700">
+                                                            Đang bỏ chọn: {removedExistingVariantAttributes.map((attribute) => attribute.name).join(', ')}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="mt-3 flex flex-wrap gap-2">
+                                                    {existingVariantSuperAttributes.map((attribute) => {
+                                                        const isSelected = selectedSuperAttributeIdSet.has(String(attribute.id));
+                                                        return (
+                                                            <div
+                                                                key={`variant-summary-${attribute.id}`}
+                                                                className={`rounded-full border px-3 py-1.5 text-[11px] font-bold ${isSelected ? 'border-emerald-300 bg-white text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-700'}`}
+                                                            >
+                                                                {attribute.name}: {summarizeVariantSelectionValues(attribute.selected_values)}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                             <div className="space-y-4">
                                                 <label className="text-[11px] font-black uppercase tracking-widest text-purple-900/40">1. Chọn thuộc tính tạo biến thể</label>
-                                                <div className="grid grid-cols-2 gap-2">
-                                                    {allAttributes.filter(a => a.frontend_type === 'select' || a.frontend_type === 'multiselect').map(attr => {
-                                                        const isSelected = selectedSuperAttributes.some(sa => sa.id === attr.id);
+                                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                                    {variantReadyAttributes.map((attr) => {
+                                                        const isSelected = selectedSuperAttributeIdSet.has(String(attr.id));
+                                                        const isExistingVariantAttribute = existingVariantSuperAttributeIdSet.has(String(attr.id));
+                                                        const existingAttribute = existingVariantSuperAttributes.find((attribute) => String(attribute.id) === String(attr.id));
+                                                        const selectedDraft = selectedSuperAttributes.find((attribute) => String(attribute.id) === String(attr.id));
+                                                        const helperText = isExistingVariantAttribute
+                                                            ? `Gốc: ${summarizeVariantSelectionValues(existingAttribute?.selected_values)}`
+                                                            : (isSelected
+                                                                ? `Đã chọn: ${summarizeVariantSelectionValues(selectedDraft?.selected_values)}`
+                                                                : `Có ${normalizeVariantSelectionValues((attr.options || []).map((option) => option.value)).length} giá trị sẵn có`);
+
                                                         return (
                                                             <button
                                                                 key={attr.id}
                                                                 type="button"
-                                                                onClick={() => {
-                                                                    if (isSelected) {
-                                                                        setSelectedSuperAttributes(prev => prev.filter(sa => sa.id !== attr.id));
-                                                                    } else {
-                                                                        setSelectedSuperAttributes(prev => normalizeSelectedSuperAttributes([...prev, { ...attr, selected_values: [] }]));
-                                                                    }
-                                                                }}
-                                                                className={`flex items-center gap-2 p-2 border rounded-sm text-[12px] font-bold transition-all ${isSelected ? 'bg-purple-600 border-purple-600 text-white shadow-md' : 'bg-white border-stone/20 text-stone hover:border-purple-300'}`}
+                                                                onClick={() => toggleSuperAttributeSelection(existingAttribute || attr)}
+                                                                className={`flex items-start gap-3 p-3 border rounded-sm text-left transition-all ${isSelected ? (isExistingVariantAttribute ? 'bg-emerald-500 border-emerald-500 text-white shadow-md' : 'bg-purple-600 border-purple-600 text-white shadow-md') : (isExistingVariantAttribute ? 'bg-white border-emerald-200 text-emerald-900 hover:border-emerald-400' : 'bg-white border-stone/20 text-stone hover:border-purple-300')}`}
                                                             >
-                                                                <span className="material-symbols-outlined text-[18px]">{isSelected ? 'check_box' : 'check_box_outline_blank'}</span>
-                                                                {attr.name}
+                                                                <span className="material-symbols-outlined mt-0.5 text-[18px]">{isSelected ? 'check_box' : 'check_box_outline_blank'}</span>
+                                                                <span className="min-w-0 flex-1">
+                                                                    <span className="block text-[12px] font-black">{attr.name}</span>
+                                                                    <span className={`mt-1 block text-[10px] ${isSelected ? 'text-white/80' : (isExistingVariantAttribute ? 'text-emerald-900/65' : 'text-stone/55')}`}>
+                                                                        {helperText}
+                                                                    </span>
+                                                                </span>
+                                                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isSelected ? 'bg-white/15 text-white' : (isExistingVariantAttribute ? 'bg-emerald-50 text-emerald-700' : 'bg-purple-50 text-purple-700')}`}>
+                                                                    {isExistingVariantAttribute ? 'Gốc' : 'Thêm'}
+                                                                </span>
                                                             </button>
                                                         );
                                                     })}
@@ -6737,8 +6884,8 @@ const ProductForm = () => {
                                                                             type="button"
                                                                             onClick={() => {
                                                                                 const updated = [...selectedSuperAttributes];
-                                                                                updated[idx].selected_values = (attr.options || []).map(o => o.value);
-                                                                                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
+                                                                                updated[idx].selected_values = normalizeVariantSelectionValues((attr.options || []).map((option) => option.value));
+                                                                                setSelectedSuperAttributes(sanitizeSelectedSuperAttributes(updated));
                                                                             }}
                                                                             className="px-2 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 hover:bg-purple-200 rounded transition-colors"
                                                                         >
@@ -6749,7 +6896,7 @@ const ProductForm = () => {
                                                                             onClick={() => {
                                                                                 const updated = [...selectedSuperAttributes];
                                                                                 updated[idx].selected_values = [];
-                                                                                setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
+                                                                                setSelectedSuperAttributes(sanitizeSelectedSuperAttributes(updated));
                                                                             }}
                                                                             className="px-2 py-0.5 text-[10px] font-bold bg-stone-100 text-stone-600 hover:bg-stone-200 rounded transition-colors"
                                                                         >
@@ -6757,40 +6904,97 @@ const ProductForm = () => {
                                                                         </button>
                                                                     </div>
                                                                 </div>
-                                                                <div className="flex flex-wrap gap-2">
-                                                                    {(attr.options || []).map(opt => {
-                                                                        const isValSelected = attr.selected_values?.includes(opt.value);
-                                                                        const isDefault = attr.default_value === opt.value;
-                                                                        return (
-                                                                            <div key={opt.id} className="relative group/opt">
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => {
-                                                                                        const updated = [...selectedSuperAttributes];
-                                                                                        if (isValSelected) {
-                                                                                            updated[idx].default_value = isDefault ? null : opt.value;
-                                                                                        } else {
-                                                                                            updated[idx].selected_values = [...(updated[idx].selected_values || []), opt.value];
-                                                                                        }
-                                                                                        setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
-                                                                                    }}
-                                                                                    className={"px-3 py-1 text-[11px] font-bold rounded-full border transition-all flex items-center gap-1.5 " + (isValSelected
-                                                                                        ? (isDefault ? 'bg-purple-600 border-purple-700 text-white shadow-md' : 'bg-purple-100 border-purple-400 text-purple-800')
-                                                                                        : 'bg-stone/5 border-transparent text-stone/60 hover:bg-stone/10')}
-                                                                                >
-                                                                                    {isDefault && <span className="material-symbols-outlined text-[13px]">anchor</span>}
-                                                                                    {opt.value}
-                                                                                    {isValSelected && !isDefault && (
-                                                                                        <span className="material-symbols-outlined text-[14px] opacity-40 hover:opacity-100" onClick={(e) => {
-                                                                                            e.stopPropagation();
-                                                                                            const updated = [...selectedSuperAttributes];
-                                                                                            updated[idx].selected_values = updated[idx].selected_values.filter(v => v !== opt.value);
-                                                                                            if (updated[idx].default_value === opt.value) updated[idx].default_value = null;
-                                                                                            setSelectedSuperAttributes(normalizeSelectedSuperAttributes(updated));
-                                                                                        }}>close</span>
-                                                                                    )}
-                                                                                </button>
+                                                                {(() => {
+                                                                    const isExistingVariantAttribute = existingVariantSuperAttributeIdSet.has(String(attr.id));
+                                                                    const selectedValues = normalizeVariantSelectionValues(attr.selected_values);
+                                                                    const mappedDefaultValue = isExistingVariantAttribute
+                                                                        ? ''
+                                                                        : (selectedValues.find((value) => value === String(attr.default_value ?? '').trim()) || selectedValues[0] || '');
+                                                                    const originalAttribute = existingVariantSuperAttributes.find((attribute) => String(attribute.id) === String(attr.id));
+
+                                                                    return (
+                                                                        <>
+                                                                            <div className="mb-3">
+                                                                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-purple-900/45">
+                                                                                    {isExistingVariantAttribute ? 'Thuộc tính gốc' : 'Thuộc tính mới thêm'}
+                                                                                </p>
+                                                                                <p className="mt-1 text-[11px] text-stone/55">
+                                                                                    {isExistingVariantAttribute
+                                                                                        ? `Giá trị đang có: ${summarizeVariantSelectionValues(originalAttribute?.selected_values)}`
+                                                                                        : (existingVariantSuperAttributes.length > 0
+                                                                                            ? 'Chọn một giá trị gốc để dữ liệu của biến thể cũ bám đúng nhánh khi mở rộng.'
+                                                                                            : 'Chọn các giá trị sẽ dùng để sinh tổ hợp biến thể.')}
+                                                                                </p>
                                                                             </div>
+
+                                                                            {!isExistingVariantAttribute && existingVariantSuperAttributes.length > 0 && (
+                                                                                selectedValues.length > 0 ? (
+                                                                                    <div className="mb-3 rounded-sm border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                                                                        <label className="block text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700">
+                                                                                            Giá trị gốc để map biến thể cũ
+                                                                                        </label>
+                                                                                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                                                            <select
+                                                                                                value={mappedDefaultValue}
+                                                                                                onChange={(event) => {
+                                                                                                    const updated = [...selectedSuperAttributes];
+                                                                                                    updated[idx].default_value = event.target.value;
+                                                                                                    setSelectedSuperAttributes(sanitizeSelectedSuperAttributes(updated));
+                                                                                                }}
+                                                                                                className="rounded-sm border border-emerald-300 bg-white px-3 py-2 text-[12px] font-bold text-emerald-900 focus:border-emerald-400 focus:outline-none"
+                                                                                            >
+                                                                                                {selectedValues.map((value) => (
+                                                                                                    <option key={`${attr.id}-${value}`} value={value}>{value}</option>
+                                                                                                ))}
+                                                                                            </select>
+                                                                                            <span className="text-[11px] text-emerald-900/75">
+                                                                                                Dữ liệu của biến thể cũ sẽ giữ lại ở nhánh này.
+                                                                                            </span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                ) : (
+                                                                                    <p className="mb-3 rounded-sm border border-dashed border-stone/20 bg-stone-50 px-3 py-2 text-[11px] text-stone/55">
+                                                                                        Chọn ít nhất một giá trị trước, rồi đặt giá trị gốc cho biến thể cũ.
+                                                                                    </p>
+                                                                                )
+                                                                            )}
+                                                                        </>
+                                                                    );
+                                                                })()}
+
+                                                                <div className="flex flex-wrap gap-2">
+                                                                    {(attr.options || []).map((opt) => {
+                                                                        const optionValue = String(opt.value ?? '').trim();
+                                                                        const selectedValues = normalizeVariantSelectionValues(attr.selected_values);
+                                                                        const isExistingVariantAttribute = existingVariantSuperAttributeIdSet.has(String(attr.id));
+                                                                        const mappedDefaultValue = isExistingVariantAttribute
+                                                                            ? ''
+                                                                            : (selectedValues.find((value) => value === String(attr.default_value ?? '').trim()) || selectedValues[0] || '');
+                                                                        const isValSelected = selectedValues.includes(optionValue);
+                                                                        const isMappedFromExisting = !isExistingVariantAttribute && mappedDefaultValue === optionValue;
+
+                                                                        return (
+                                                                            <button
+                                                                                key={opt.id}
+                                                                                type="button"
+                                                                                onClick={() => {
+                                                                                    const updated = [...selectedSuperAttributes];
+                                                                                    updated[idx].selected_values = isValSelected
+                                                                                        ? selectedValues.filter((value) => value !== optionValue)
+                                                                                        : [...selectedValues, optionValue];
+                                                                                    setSelectedSuperAttributes(sanitizeSelectedSuperAttributes(updated));
+                                                                                }}
+                                                                                className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-bold transition-all ${isValSelected
+                                                                                    ? (isMappedFromExisting ? 'border-emerald-500 bg-emerald-100 text-emerald-900' : 'border-purple-400 bg-purple-100 text-purple-800')
+                                                                                    : 'border-transparent bg-stone/5 text-stone/60 hover:bg-stone/10'}`}
+                                                                            >
+                                                                                {opt.value}
+                                                                                {isMappedFromExisting && (
+                                                                                    <span className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-white">
+                                                                                        Gốc
+                                                                                    </span>
+                                                                                )}
+                                                                            </button>
                                                                         );
                                                                     })}
                                                                 </div>
@@ -7156,9 +7360,9 @@ const ProductForm = () => {
                         {/* Grouped Product Management */}
                         {formData.type === 'grouped' && (
                             <div className="bg-white border border-gold/20 p-5 shadow-premium-sm rounded-sm animate-fade-in mb-8">
-                                <SectionTitle 
-                                    icon="group_work" 
-                                    title="Thiết lập nhóm sản phẩm thành phần" 
+                                <SectionTitle
+                                    icon="group_work"
+                                    title="Thiết lập nhóm sản phẩm thành phần"
                                 />
 
                                 <div className="mb-6">
@@ -7319,7 +7523,7 @@ const ProductForm = () => {
                                                 <div className="col-span-4 min-w-0">
                                                     <div className="flex items-center gap-1">
                                                         <p className="text-[13px] font-bold text-primary truncate" title={item.name}>{item.name}</p>
-                                                        <button 
+                                                        <button
                                                             type="button"
                                                             onClick={() => {
                                                                 navigator.clipboard.writeText(item.name);
@@ -7333,7 +7537,7 @@ const ProductForm = () => {
                                                     </div>
                                                     <div className="flex items-center gap-1">
                                                         <p className="text-[10px] font-mono text-gold uppercase">{item.sku}</p>
-                                                        <button 
+                                                        <button
                                                             type="button"
                                                             onClick={() => {
                                                                 navigator.clipboard.writeText(item.sku);
@@ -7467,13 +7671,13 @@ const ProductForm = () => {
                                         </div>
                                     ) : (
                                         bundleOptions.map((option, optIdx) => (
-                                            <div 
-                                                key={option.id} 
+                                            <div
+                                                key={option.id}
                                                 ref={(node) => registerBundleOptionCardRef(option.id, node)}
                                                 className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${showBundleSearch === option.id ? 'relative z-[80]' : 'relative z-10'}`}
                                             >
                                                 <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
-                                                     <div 
+                                                     <div
                                                          className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0 cursor-pointer hover:bg-gold/20 hover:scale-105 transition-all text-gold flex-col"
                                                          onClick={() => toggleBundleOptionExpanded(option.id)}
                                                          title={expandedBundleOptions[option.id] ? "Thu gọn danh sách" : "Mở rộng danh sách"}
@@ -7617,7 +7821,7 @@ const ProductForm = () => {
                                                                                 </div>
                                                                                 <div className="flex items-center gap-2">
                                                                                     <p className="text-[11px] font-black text-brick">{formatNumberOutput(p.price)}₫</p>
-                                                                                    <button 
+                                                                                    <button
                                                                                         type="button"
                                                                                         onClick={(e) => {
                                                                                             e.stopPropagation();
@@ -7657,7 +7861,7 @@ const ProductForm = () => {
                                                             </thead>
                                                             <tbody>
                                                                 {option.items.map((item, idx) => (
-                                                                    <DraggableBundleItem 
+                                                                    <DraggableBundleItem
                                                                         key={item.entry_id || item.id}
                                                                         index={idx}
                                                                         optionId={option.id}
@@ -7719,7 +7923,7 @@ const ProductForm = () => {
                                     </label>
                                 </div>
                             </div>
-                            
+
                             {/* Image Grid */}
                             <div
                                 className="flex flex-nowrap overflow-x-auto gap-3 min-h-[140px] p-3 bg-stone/5 border-2 border-dashed border-gold/10 rounded-sm items-start custom-scrollbar"
@@ -7882,7 +8086,7 @@ const ProductForm = () => {
                                             <span className="material-symbols-outlined">edit_note</span>
                                             <span className="font-bold uppercase tracking-tight text-sm">Chế độ soạn thảo toàn màn hình</span>
                                         </div>
-                                        <button 
+                                        <button
                                             onClick={() => setIsEditorFullscreen(false)}
                                             className="flex items-center gap-1 px-3 py-1 bg-white/10 hover:bg-white/20 rounded transition-all text-xs font-bold"
                                         >
@@ -7919,15 +8123,15 @@ const ProductForm = () => {
                                 </div>
                             </div>
                             <div className="relative">
-                                <input 
-                                    type="checkbox" 
-                                    name="status" 
-                                    checked={formData.status} 
-                                    onChange={handleChange} 
-                                    className="sr-only peer" 
+                                <input
+                                    type="checkbox"
+                                    name="status"
+                                    checked={formData.status}
+                                    onChange={handleChange}
+                                    className="sr-only peer"
                                     id="main-status-toggle"
                                 />
-                                <label 
+                                <label
                                     htmlFor="main-status-toggle"
                                     className="block w-14 h-7 bg-stone/20 rounded-full cursor-pointer transition-all duration-300 peer-checked:bg-green-500 relative shadow-[inset_0_2px_4px_rgba(0,0,0,0.1)] overflow-hidden"
                                 >
@@ -8111,8 +8315,8 @@ const ProductForm = () => {
                                                 {/* Filterable Attributes */}
                                                 {allAttributes
                                                     .filter(a => [
-                                                        'Chứng chỉ chất lượng', 'Ngày ra lò', 'Đường kính', 
-                                                        'Giấy chứng nhận', 'Phí bảo hiểm vận chuyển', 
+                                                        'Chứng chỉ chất lượng', 'Ngày ra lò', 'Đường kính',
+                                                        'Giấy chứng nhận', 'Phí bảo hiểm vận chuyển',
                                                         'Hàng phi mậu dịch', 'Câu chuyện sản phẩm', 'Loại men'
                                                     ].includes(a.name))
                                                     .map(attr => (
@@ -8230,8 +8434,8 @@ const ProductForm = () => {
                                         <>
                                             <div className="flex justify-between items-center px-1 mb-2">
                                                 <span className="text-[10px] font-black uppercase tracking-widest text-stone/50">
-                                                    {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '') 
-                                                        ? 'Gợi ý tương đương' 
+                                                    {!relatedQuery && relatedCategory === 'all' && !Object.values(relatedAttrFilter).some(v => v !== 'all' && v !== '')
+                                                        ? 'Gợi ý tương đương'
                                                         : `Kết quả (${filteredSuggestedProducts.length})`}
                                                 </span>
                                                 <div className="flex items-center gap-3">
@@ -8365,7 +8569,7 @@ const ProductForm = () => {
                                     Hu?ng d?n th�m chi?u bi?n th?
                                 </h3>
                             </div>
-                            
+
                             <div className="space-y-4 text-[13px] text-stone leading-relaxed">
                                 <p className="font-bold text-[14px]">
                                     �? m? r?ng th�m thu?c t�nh (VD: �ang c� K�ch Thu?c, mu?n th�m Lo?i Men) m� KH�NG L�M M?T d? li?u bi?n th? cu, vui l�ng l�m chu?n 3 bu?c:
@@ -8394,7 +8598,7 @@ const ProductForm = () => {
                                     </div>
                                 </div>
                             </div>
-                            
+
                             <div className="mt-2 flex justify-end gap-3 pt-4 border-t border-stone/10">
                                 <button
                                     type="button"
@@ -9313,14 +9517,14 @@ const ProductForm = () => {
             <AnimatePresence>
                 {showSlugModal && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             onClick={() => setShowSlugModal(false)}
                             className="absolute inset-0 bg-primary/40 backdrop-blur-sm"
                         />
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0, scale: 0.95, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -9338,7 +9542,7 @@ const ProductForm = () => {
                             <div className="p-6">
                                 <div className="mb-6">
                                     <label className="block text-[11px] font-black uppercase text-stone/40 mb-2 tracking-widest">Xem trước URL sản phẩm</label>
-                                    <div 
+                                    <div
                                         className="p-4 bg-stone/5 border border-gold/10 rounded-sm flex items-center justify-between group/link cursor-pointer hover:bg-gold/5 transition-all"
                                         onClick={handleCopyLink}
                                         title="Click để sao chép link"
@@ -9397,7 +9601,7 @@ const ProductForm = () => {
                                         <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-gold tracking-widest leading-none uppercase">
                                             Chọn Tên Miền Hiển Thị
                                         </label>
-                                        <select 
+                                        <select
                                             name="site_domain_id"
                                             value={formData.site_domain_id || ''}
                                             onChange={(e) => setFormData(prev => ({ ...prev, site_domain_id: e.target.value }))}
@@ -9415,7 +9619,7 @@ const ProductForm = () => {
                                             Chỉnh sửa Slug
                                         </label>
                                         <div className="flex items-center gap-2 pt-2">
-                                            <input 
+                                            <input
                                                 type="text"
                                                 value={tempSlug}
                                                 onChange={(e) => {
@@ -9437,13 +9641,13 @@ const ProductForm = () => {
                                 </div>
                             </div>
                             <div className="p-4 bg-stone/5 border-t border-stone/10 flex justify-end gap-3">
-                                <button 
+                                <button
                                     onClick={() => setShowSlugModal(false)}
                                     className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone hover:text-primary transition-all"
                                 >
                                     Hủy bỏ
                                 </button>
-                                <button 
+                                <button
                                     onClick={() => {
                                         if (!tempSlug.trim()) {
                                             setSlugError('Đường dẫn không được để trống.');

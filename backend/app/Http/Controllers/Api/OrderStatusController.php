@@ -14,7 +14,7 @@ class OrderStatusController extends Controller
     {
         $accountId = (int) $request->header('X-Account-Id');
         if ($accountId > 0) {
-            OrderStatusCatalog::ensurePrintedStatus($accountId);
+            OrderStatusCatalog::ensureDefaultSystemStatuses($accountId);
         }
 
         $query = OrderStatus::where('account_id', $accountId);
@@ -78,7 +78,7 @@ class OrderStatusController extends Controller
         ]);
 
         $accountId = $request->header('X-Account-Id');
-        
+
         DB::transaction(function () use ($request, $accountId) {
             foreach ($request->ids as $index => $id) {
                 OrderStatus::where('id', $id)

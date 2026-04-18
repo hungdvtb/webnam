@@ -108,6 +108,7 @@ const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_for
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
 const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
 const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
+const ORDER_FORM_REQUIRED_VISIBLE_COLUMN_IDS = ['available_to_sell'];
 const ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH = 44;
 const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
     stt: 48,
@@ -115,36 +116,195 @@ const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
     name: 280,
     quantity: 68,
     unit: 72,
-    available_to_sell: 92,
+    available_to_sell: 108,
     price: 126,
     cost_price: 126,
     total: 138,
     actions: 68,
 };
-const ORDER_FORM_COLUMN_MIN_WIDTHS = {
-    stt: 48,
-    sku: 104,
-    name: 220,
-    quantity: 62,
-    unit: 62,
-    available_to_sell: 84,
-    price: 108,
-    cost_price: 108,
-    total: 122,
-    actions: 68,
+const ORDER_FORM_TABLE_DENSITY_METRICS = {
+    comfortable: {
+        defaultWidths: ORDER_FORM_DEFAULT_COLUMN_WIDTHS,
+        minWidths: {
+            stt: 48,
+            sku: 104,
+            name: 220,
+            quantity: 62,
+            unit: 62,
+            available_to_sell: 96,
+            price: 114,
+            cost_price: 114,
+            total: 132,
+            actions: 68,
+        },
+        growWeights: {
+            stt: 0,
+            sku: 0.62,
+            name: 4.1,
+            quantity: 0.4,
+            unit: 0.32,
+            available_to_sell: 0.9,
+            price: 1.12,
+            cost_price: 1.06,
+            total: 1.28,
+            actions: 0,
+        },
+    },
+    compact: {
+        defaultWidths: {
+            stt: 44,
+            sku: 112,
+            name: 238,
+            quantity: 64,
+            unit: 62,
+            available_to_sell: 100,
+            price: 118,
+            cost_price: 118,
+            total: 132,
+            actions: 60,
+        },
+        minWidths: {
+            stt: 42,
+            sku: 92,
+            name: 176,
+            quantity: 56,
+            unit: 54,
+            available_to_sell: 90,
+            price: 102,
+            cost_price: 102,
+            total: 116,
+            actions: 56,
+        },
+        growWeights: {
+            stt: 0,
+            sku: 0.5,
+            name: 3.25,
+            quantity: 0.3,
+            unit: 0.25,
+            available_to_sell: 0.85,
+            price: 1.18,
+            cost_price: 1.08,
+            total: 1.34,
+            actions: 0,
+        },
+    },
+    tight: {
+        defaultWidths: {
+            stt: 40,
+            sku: 104,
+            name: 210,
+            quantity: 58,
+            unit: 56,
+            available_to_sell: 96,
+            price: 112,
+            cost_price: 112,
+            total: 124,
+            actions: 56,
+        },
+        minWidths: {
+            stt: 38,
+            sku: 84,
+            name: 148,
+            quantity: 50,
+            unit: 50,
+            available_to_sell: 88,
+            price: 96,
+            cost_price: 96,
+            total: 108,
+            actions: 50,
+        },
+        growWeights: {
+            stt: 0,
+            sku: 0.4,
+            name: 2.65,
+            quantity: 0.24,
+            unit: 0.22,
+            available_to_sell: 0.75,
+            price: 1.2,
+            cost_price: 1.1,
+            total: 1.38,
+            actions: 0,
+        },
+    },
 };
-const ORDER_FORM_COLUMN_GROW_WEIGHTS = {
-    stt: 0,
-    sku: 0.7,
-    name: 4.8,
-    quantity: 0.45,
-    unit: 0.35,
-    available_to_sell: 0.7,
-    price: 0.9,
-    cost_price: 0.9,
-    total: 1.05,
-    actions: 0,
+const ORDER_FORM_TABLE_DENSITY_PRESETS = {
+    comfortable: {
+        headerFontSize: 12,
+        headerLetterSpacing: '0.08em',
+        bodyFontSize: 13,
+        bodyMetaFontSize: 11,
+        bodyMetaMarginTop: 4,
+        bodyPaddingX: 12,
+        bodyPaddingY: 10,
+        quantityInputWidth: 54,
+        quantityInputHeight: 32,
+        actionButtonSize: 28,
+        actionIconSize: 24,
+        rowIconSize: 16,
+        copyIconSize: 14,
+        badgeFontSize: 9,
+        badgePaddingX: 8,
+        badgePaddingY: 2,
+    },
+    compact: {
+        headerFontSize: 12,
+        headerLetterSpacing: '0.08em',
+        bodyFontSize: 13,
+        bodyMetaFontSize: 11,
+        bodyMetaMarginTop: 4,
+        bodyPaddingX: 10,
+        bodyPaddingY: 9,
+        quantityInputWidth: 54,
+        quantityInputHeight: 32,
+        actionButtonSize: 28,
+        actionIconSize: 24,
+        rowIconSize: 16,
+        copyIconSize: 14,
+        badgeFontSize: 9,
+        badgePaddingX: 8,
+        badgePaddingY: 2,
+    },
+    tight: {
+        headerFontSize: 12,
+        headerLetterSpacing: '0.08em',
+        bodyFontSize: 13,
+        bodyMetaFontSize: 11,
+        bodyMetaMarginTop: 4,
+        bodyPaddingX: 8,
+        bodyPaddingY: 8,
+        quantityInputWidth: 54,
+        quantityInputHeight: 32,
+        actionButtonSize: 28,
+        actionIconSize: 24,
+        rowIconSize: 16,
+        copyIconSize: 14,
+        badgeFontSize: 9,
+        badgePaddingX: 8,
+        badgePaddingY: 2,
+    },
 };
+const resolveOrderFormTableDensityKey = ({ containerWidth, visibleColumnIds }) => {
+    const normalizedContainerWidth = Number(containerWidth) || 0;
+    const visibleColumnCount = Array.isArray(visibleColumnIds) ? visibleColumnIds.length : 0;
+
+    if (normalizedContainerWidth > 0) {
+        if (normalizedContainerWidth <= 980 || (normalizedContainerWidth <= 1100 && visibleColumnCount >= 9)) {
+            return 'tight';
+        }
+
+        if (normalizedContainerWidth <= 1240 || (normalizedContainerWidth <= 1360 && visibleColumnCount >= 9)) {
+            return 'compact';
+        }
+    }
+
+    return 'comfortable';
+};
+const getOrderFormDensityMetrics = (densityKey = 'comfortable') => (
+    ORDER_FORM_TABLE_DENSITY_METRICS[densityKey] || ORDER_FORM_TABLE_DENSITY_METRICS.comfortable
+);
+const getOrderFormDensityPreset = (densityKey = 'comfortable') => (
+    ORDER_FORM_TABLE_DENSITY_PRESETS[densityKey] || ORDER_FORM_TABLE_DENSITY_PRESETS.comfortable
+);
 const autoOpenSupplementItemOrderTypes = new Set([
     ORDER_TYPE_EXCHANGE_RETURN,
     ORDER_TYPE_PARTIAL_DELIVERY,
@@ -215,8 +375,6 @@ const insertOrderFormColumnAfter = (columnIds, columnId, afterColumnId) => {
 };
 const normalizeStoredOrderFormColumnOrder = (value) => {
     const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
-    const hasUnitColumn = nextColumnIds.includes('unit');
-    const hasAvailableToSellColumn = nextColumnIds.includes('available_to_sell');
 
     ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
         if (!['unit', 'available_to_sell'].includes(columnId) && !nextColumnIds.includes(columnId)) {
@@ -224,12 +382,15 @@ const normalizeStoredOrderFormColumnOrder = (value) => {
         }
     });
 
-    if (!hasUnitColumn) {
-        return insertOrderFormColumnAfter(nextColumnIds, 'unit', 'quantity');
+    if (!nextColumnIds.includes('unit')) {
+        const targetIndex = nextColumnIds.indexOf('quantity');
+        nextColumnIds.splice(targetIndex >= 0 ? targetIndex + 1 : nextColumnIds.length, 0, 'unit');
     }
 
-    if (!hasAvailableToSellColumn) {
-        return insertOrderFormColumnAfter(nextColumnIds, 'available_to_sell', nextColumnIds.includes('unit') ? 'unit' : 'quantity');
+    if (!nextColumnIds.includes('available_to_sell')) {
+        const afterColumnId = nextColumnIds.includes('unit') ? 'unit' : 'quantity';
+        const targetIndex = nextColumnIds.indexOf(afterColumnId);
+        nextColumnIds.splice(targetIndex >= 0 ? targetIndex + 1 : nextColumnIds.length, 0, 'available_to_sell');
     }
 
     return nextColumnIds;
@@ -252,9 +413,28 @@ const normalizeStoredOrderFormVisibleColumns = (value) => {
     }
 
     const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
-    return value.length > 0 && nextColumnIds.length === 0
+    const normalizedColumnIds = value.length > 0 && nextColumnIds.length === 0
         ? [...ORDER_FORM_DEFAULT_COLUMN_IDS]
         : nextColumnIds;
+
+    let ensuredColumnIds = [...normalizedColumnIds];
+    const hasUnitColumn = ensuredColumnIds.includes('unit');
+
+    ORDER_FORM_REQUIRED_VISIBLE_COLUMN_IDS.forEach((columnId) => {
+        if (ensuredColumnIds.includes(columnId)) {
+            return;
+        }
+
+        ensuredColumnIds = insertOrderFormColumnAfter(
+            ensuredColumnIds,
+            columnId,
+            columnId === 'available_to_sell'
+                ? (hasUnitColumn || ensuredColumnIds.includes('unit') ? 'unit' : 'quantity')
+                : 'quantity'
+        );
+    });
+
+    return ensuredColumnIds;
 };
 const normalizeStoredOrderFormColumnWidths = (value) => {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -306,13 +486,25 @@ const getStoredOrderFormVisibleColumns = () => {
 const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
     readOrderFormStorageJson(orderFormColumnWidthsStorageKey, ORDER_FORM_DEFAULT_COLUMN_WIDTHS)
 );
-const getOrderFormPreferredColumnWidth = (columnId, widthMap = ORDER_FORM_DEFAULT_COLUMN_WIDTHS) => {
-    const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60;
+const getOrderFormPreferredColumnWidth = (
+    columnId,
+    widthMap = ORDER_FORM_DEFAULT_COLUMN_WIDTHS,
+    columnMetrics = ORDER_FORM_TABLE_DENSITY_METRICS.comfortable
+) => {
+    const densityMetrics = columnMetrics && typeof columnMetrics === 'object'
+        ? columnMetrics
+        : ORDER_FORM_TABLE_DENSITY_METRICS.comfortable;
+    const minWidth = densityMetrics.minWidths?.[columnId] ?? 60;
     const candidateWidth = Number(widthMap?.[columnId]);
+    const densityDefaultWidth = Number(densityMetrics.defaultWidths?.[columnId]);
     const fallbackWidth = Number(ORDER_FORM_DEFAULT_COLUMN_WIDTHS[columnId]);
 
     if (Number.isFinite(candidateWidth) && candidateWidth > 0) {
         return Math.max(minWidth, candidateWidth);
+    }
+
+    if (Number.isFinite(densityDefaultWidth) && densityDefaultWidth > 0) {
+        return Math.max(minWidth, densityDefaultWidth);
     }
 
     if (Number.isFinite(fallbackWidth) && fallbackWidth > 0) {
@@ -321,17 +513,25 @@ const getOrderFormPreferredColumnWidth = (columnId, widthMap = ORDER_FORM_DEFAUL
 
     return minWidth;
 };
-const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, preferredWidths }) => {
+const fitOrderFormColumnsToViewport = ({
+    containerWidth,
+    visibleColumnIds,
+    preferredWidths,
+    columnMetrics = ORDER_FORM_TABLE_DENSITY_METRICS.comfortable,
+}) => {
     const orderedColumnIds = (Array.isArray(visibleColumnIds) ? visibleColumnIds : [])
         .map((columnId) => String(columnId || '').trim())
         .filter((columnId) => ORDER_FORM_DEFAULT_COLUMN_IDS.includes(columnId));
+    const densityMetrics = columnMetrics && typeof columnMetrics === 'object'
+        ? columnMetrics
+        : ORDER_FORM_TABLE_DENSITY_METRICS.comfortable;
 
     if (orderedColumnIds.length === 0) {
         return {};
     }
 
     const fallbackWidths = Object.fromEntries(
-        orderedColumnIds.map((columnId) => [columnId, getOrderFormPreferredColumnWidth(columnId, preferredWidths)])
+        orderedColumnIds.map((columnId) => [columnId, getOrderFormPreferredColumnWidth(columnId, preferredWidths, densityMetrics)])
     );
     const normalizedContainerWidth = Number(containerWidth);
 
@@ -340,7 +540,7 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
     }
 
     const minimumTableWidth = orderedColumnIds.reduce(
-        (sum, columnId) => sum + (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60),
+        (sum, columnId) => sum + (densityMetrics.minWidths?.[columnId] ?? 60),
         0
     );
     const targetTableWidth = Math.max(
@@ -355,13 +555,13 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
 
     if (preferredTableWidth > targetTableWidth) {
         const totalShrinkCapacity = orderedColumnIds.reduce((sum, columnId) => (
-            sum + Math.max(0, nextWidths[columnId] - (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? nextWidths[columnId]))
+            sum + Math.max(0, nextWidths[columnId] - (densityMetrics.minWidths?.[columnId] ?? nextWidths[columnId]))
         ), 0);
 
         if (totalShrinkCapacity > 0) {
             const overflowWidth = preferredTableWidth - targetTableWidth;
             orderedColumnIds.forEach((columnId) => {
-                const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? nextWidths[columnId];
+                const minWidth = densityMetrics.minWidths?.[columnId] ?? nextWidths[columnId];
                 const shrinkCapacity = Math.max(0, nextWidths[columnId] - minWidth);
                 const shrinkWidth = overflowWidth * (shrinkCapacity / totalShrinkCapacity);
                 nextWidths[columnId] = Math.max(minWidth, nextWidths[columnId] - shrinkWidth);
@@ -369,14 +569,14 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
         }
     } else if (preferredTableWidth < targetTableWidth) {
         const totalGrowWeight = orderedColumnIds.reduce(
-            (sum, columnId) => sum + (ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0),
+            (sum, columnId) => sum + (densityMetrics.growWeights?.[columnId] ?? 0),
             0
         );
 
         if (totalGrowWeight > 0) {
             const remainingWidth = targetTableWidth - preferredTableWidth;
             orderedColumnIds.forEach((columnId) => {
-                const growWeight = ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0;
+                const growWeight = densityMetrics.growWeights?.[columnId] ?? 0;
                 if (growWeight > 0) {
                     nextWidths[columnId] += remainingWidth * (growWeight / totalGrowWeight);
                 }
@@ -387,7 +587,7 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
     const roundedWidths = Object.fromEntries(
         orderedColumnIds.map((columnId) => [
             columnId,
-            Math.max(ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60, Math.round(nextWidths[columnId]))
+            Math.max(densityMetrics.minWidths?.[columnId] ?? 60, Math.round(nextWidths[columnId]))
         ])
     );
     const roundedTableWidth = orderedColumnIds.reduce((sum, columnId) => sum + roundedWidths[columnId], 0);
@@ -395,9 +595,9 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
 
     if (remainingDelta !== 0) {
         const adjustableColumnIds = remainingDelta > 0
-            ? orderedColumnIds.filter((columnId) => (ORDER_FORM_COLUMN_GROW_WEIGHTS[columnId] ?? 0) > 0)
+            ? orderedColumnIds.filter((columnId) => (densityMetrics.growWeights?.[columnId] ?? 0) > 0)
             : orderedColumnIds.filter((columnId) => (
-                roundedWidths[columnId] > (ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? roundedWidths[columnId])
+                roundedWidths[columnId] > (densityMetrics.minWidths?.[columnId] ?? roundedWidths[columnId])
             ));
 
         if (adjustableColumnIds.length > 0) {
@@ -408,7 +608,7 @@ const fitOrderFormColumnsToViewport = ({ containerWidth, visibleColumnIds, prefe
                 const columnId = adjustableColumnIds[cursor % adjustableColumnIds.length];
                 const step = remainingDelta > 0 ? 1 : -1;
                 const nextWidth = roundedWidths[columnId] + step;
-                const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[columnId] ?? 60;
+                const minWidth = densityMetrics.minWidths?.[columnId] ?? 60;
 
                 if (step > 0 || nextWidth >= minWidth) {
                     roundedWidths[columnId] = nextWidth;
@@ -2181,7 +2381,7 @@ const getOrderFormHeaderJustifyClass = (align = 'left') => {
 
 const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
     <div className="relative inline-flex items-center group/tooltip">
-        <span className="block whitespace-nowrap text-[12px] leading-none text-primary font-black uppercase tracking-[0.08em]">{label}</span>
+        <span className="order-form-header-label block whitespace-nowrap leading-none text-primary font-black uppercase">{label}</span>
         {tooltip ? (
             <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 w-max max-w-[240px] -translate-x-1/2 rounded-sm border border-slate-200 bg-white px-2.5 py-2 text-[11px] font-semibold normal-case tracking-normal text-slate-700 opacity-0 shadow-[0_16px_32px_rgba(15,23,42,0.16)] transition-all duration-150 group-hover/tooltip:opacity-100">
                 {tooltip}
@@ -2763,18 +2963,76 @@ const OrderForm = () => {
     const [columnOrder, setColumnOrder] = useState(() => getStoredOrderFormColumnOrder());
     const [visibleColumns, setVisibleColumns] = useState(() => getStoredOrderFormVisibleColumns());
     const [columnWidths, setColumnWidths] = useState(() => getStoredOrderFormColumnWidths());
+    useEffect(() => {
+        const normalizedColumnOrder = normalizeStoredOrderFormColumnOrder(columnOrder);
+        const hasChanged = normalizedColumnOrder.length !== columnOrder.length
+            || normalizedColumnOrder.some((columnId, index) => columnId !== columnOrder[index]);
+
+        if (!hasChanged) {
+            return;
+        }
+
+        setColumnOrder(normalizedColumnOrder);
+        writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizedColumnOrder);
+    }, [columnOrder]);
+    useEffect(() => {
+        const normalizedVisibleColumns = normalizeStoredOrderFormVisibleColumns(visibleColumns);
+        const hasChanged = normalizedVisibleColumns.length !== visibleColumns.length
+            || normalizedVisibleColumns.some((columnId, index) => columnId !== visibleColumns[index]);
+
+        if (!hasChanged) {
+            return;
+        }
+
+        setVisibleColumns(normalizedVisibleColumns);
+        writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizedVisibleColumns);
+    }, [visibleColumns]);
     const desktopVisibleColumnIds = useMemo(
         () => columnOrder.filter((id) => visibleColumns.includes(id)),
         [columnOrder, visibleColumns]
+    );
+    const desktopTableDensityKey = useMemo(
+        () => resolveOrderFormTableDensityKey({
+            containerWidth: orderFormTableViewportWidth,
+            visibleColumnIds: desktopVisibleColumnIds,
+        }),
+        [desktopVisibleColumnIds, orderFormTableViewportWidth]
+    );
+    const desktopTableMetrics = useMemo(
+        () => getOrderFormDensityMetrics(desktopTableDensityKey),
+        [desktopTableDensityKey]
+    );
+    const desktopTableDensity = useMemo(
+        () => getOrderFormDensityPreset(desktopTableDensityKey),
+        [desktopTableDensityKey]
     );
     const desktopAutoColumnWidths = useMemo(
         () => fitOrderFormColumnsToViewport({
             containerWidth: orderFormTableViewportWidth,
             visibleColumnIds: desktopVisibleColumnIds,
             preferredWidths: columnWidths,
+            columnMetrics: desktopTableMetrics,
         }),
-        [columnWidths, desktopVisibleColumnIds, orderFormTableViewportWidth]
+        [columnWidths, desktopTableMetrics, desktopVisibleColumnIds, orderFormTableViewportWidth]
     );
+    const desktopTableStyleVars = useMemo(() => ({
+        '--order-form-header-font-size': `${desktopTableDensity.headerFontSize}px`,
+        '--order-form-header-letter-spacing': desktopTableDensity.headerLetterSpacing,
+        '--order-form-body-font-size': `${desktopTableDensity.bodyFontSize}px`,
+        '--order-form-body-meta-font-size': `${desktopTableDensity.bodyMetaFontSize}px`,
+        '--order-form-body-meta-margin-top': `${desktopTableDensity.bodyMetaMarginTop}px`,
+        '--order-form-cell-padding-x': `${desktopTableDensity.bodyPaddingX}px`,
+        '--order-form-cell-padding-y': `${desktopTableDensity.bodyPaddingY}px`,
+        '--order-form-quantity-input-width': `${desktopTableDensity.quantityInputWidth}px`,
+        '--order-form-quantity-input-height': `${desktopTableDensity.quantityInputHeight}px`,
+        '--order-form-action-button-size': `${desktopTableDensity.actionButtonSize}px`,
+        '--order-form-action-icon-size': `${desktopTableDensity.actionIconSize}px`,
+        '--order-form-row-icon-size': `${desktopTableDensity.rowIconSize}px`,
+        '--order-form-copy-icon-size': `${desktopTableDensity.copyIconSize}px`,
+        '--order-form-badge-font-size': `${desktopTableDensity.badgeFontSize}px`,
+        '--order-form-badge-padding-x': `${desktopTableDensity.badgePaddingX}px`,
+        '--order-form-badge-padding-y': `${desktopTableDensity.badgePaddingY}px`,
+    }), [desktopTableDensity]);
 
     const [formData, setFormData] = useState({
         customer_name: '',
@@ -2833,33 +3091,71 @@ const OrderForm = () => {
         () => mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems),
         [activeProductQuickSetupItems, productQuickSetupProducts]
     );
-    useLayoutEffect(() => {
+    const syncOrderFormTableViewportWidth = useCallback(() => {
         const viewportNode = orderFormTableViewportRef.current;
-        if (!viewportNode || typeof window === 'undefined') {
+        if (!viewportNode) return;
+
+        const nextWidth = Math.round(viewportNode.getBoundingClientRect().width || viewportNode.clientWidth || 0);
+        setOrderFormTableViewportWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
+    }, []);
+
+    useLayoutEffect(() => {
+        if (typeof window === 'undefined') {
             return undefined;
         }
 
-        const updateViewportWidth = () => {
-            setOrderFormTableViewportWidth(viewportNode.clientWidth || 0);
-        };
+        const viewportNode = orderFormTableViewportRef.current;
+        if (!viewportNode) {
+            return undefined;
+        }
 
-        updateViewportWidth();
+        syncOrderFormTableViewportWidth();
+
+        const rafId = window.requestAnimationFrame(syncOrderFormTableViewportWidth);
+        const timeoutId = window.setTimeout(syncOrderFormTableViewportWidth, 160);
 
         let resizeObserver;
         if (typeof ResizeObserver !== 'undefined') {
             resizeObserver = new ResizeObserver(() => {
-                updateViewportWidth();
+                syncOrderFormTableViewportWidth();
             });
             resizeObserver.observe(viewportNode);
+            if (viewportNode.parentElement) {
+                resizeObserver.observe(viewportNode.parentElement);
+            }
         }
 
-        window.addEventListener('resize', updateViewportWidth);
+        window.addEventListener('resize', syncOrderFormTableViewportWidth);
 
         return () => {
-            window.removeEventListener('resize', updateViewportWidth);
+            window.cancelAnimationFrame(rafId);
+            window.clearTimeout(timeoutId);
+            window.removeEventListener('resize', syncOrderFormTableViewportWidth);
             resizeObserver?.disconnect();
         };
-    }, []);
+    }, [syncOrderFormTableViewportWidth]);
+
+    useLayoutEffect(() => {
+        if (typeof window === 'undefined' || isCompactOrderMobileLayout) {
+            return undefined;
+        }
+
+        const rafId = window.requestAnimationFrame(syncOrderFormTableViewportWidth);
+        const timeoutId = window.setTimeout(syncOrderFormTableViewportWidth, 180);
+
+        return () => {
+            window.cancelAnimationFrame(rafId);
+            window.clearTimeout(timeoutId);
+        };
+    }, [
+        desktopVisibleColumnIds,
+        formData.items.length,
+        isCompactOrderMobileLayout,
+        searchTerm,
+        showActualProductSection,
+        showColumnConfig,
+        syncOrderFormTableViewportWidth,
+    ]);
 
     const captureProductQuickSetupViewport = useCallback(() => {
         if (!showProductQuickSetupPanel) return;
@@ -4084,7 +4380,7 @@ const OrderForm = () => {
         e.preventDefault();
         const startX = e.clientX;
         const startWidth = columnWidths[id] || (e.currentTarget.parentElement.offsetWidth);
-        const minWidth = ORDER_FORM_COLUMN_MIN_WIDTHS[id] ?? 50;
+        const minWidth = desktopTableMetrics.minWidths?.[id] ?? 50;
 
         const onMouseMove = (moveEvent) => {
             const newWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
@@ -4624,7 +4920,7 @@ const OrderForm = () => {
 
             setOrderKind(isDuplicating ? requestedOrderKind : nextOrderKind);
             setRegionType(order.district ? 'old' : 'new');
-            const shouldUseCurrentProductCost = (isDuplicating ? requestedOrderKind : nextOrderKind) === MAIN_ORDER_KIND;
+            const shouldUseCurrentProductCost = isDuplicating && requestedOrderKind === MAIN_ORDER_KIND;
             const mappedItems = order.items?.map(item => ({
                 product_id: item.product_id,
                 actual_product_id: !isDuplicating && hasActualOrderProductOverride(item) ? item.actual_product_id : null,
@@ -6603,6 +6899,21 @@ const OrderForm = () => {
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
                 .admin-header-title { font-size: 18px !important; font-weight: 800 !important; color: #1B365D !important; letter-spacing: -0.01em !important; line-height: 1.4 !important; }
                 .admin-table-header { font-size: 12px !important; font-weight: 700 !important; color: #1B365D !important; letter-spacing: 0 !important; background-color: #F0F4F8 !important; }
+                .order-form-table { --order-form-header-font-size: 12px; --order-form-header-letter-spacing: 0.08em; --order-form-body-font-size: 13px; --order-form-body-meta-font-size: 11px; --order-form-body-meta-margin-top: 4px; --order-form-cell-padding-x: 12px; --order-form-cell-padding-y: 10px; --order-form-quantity-input-width: 54px; --order-form-quantity-input-height: 32px; --order-form-action-button-size: 28px; --order-form-action-icon-size: 14px; --order-form-row-icon-size: 16px; --order-form-copy-icon-size: 14px; --order-form-badge-font-size: 9px; --order-form-badge-padding-x: 8px; --order-form-badge-padding-y: 2px; }
+                .order-form-table .order-form-header-cell { padding: var(--order-form-cell-padding-y) var(--order-form-cell-padding-x); }
+                .order-form-table .order-form-header-cell-tight { padding-left: calc(var(--order-form-cell-padding-x) - 3px); padding-right: calc(var(--order-form-cell-padding-x) - 3px); }
+                .order-form-table .order-form-header-label { font-size: var(--order-form-header-font-size); letter-spacing: var(--order-form-header-letter-spacing); }
+                .order-form-table .order-form-cell { padding: var(--order-form-cell-padding-y) var(--order-form-cell-padding-x); font-size: var(--order-form-body-font-size); }
+                .order-form-table .order-form-cell-tight { padding-left: calc(var(--order-form-cell-padding-x) - 2px); padding-right: calc(var(--order-form-cell-padding-x) - 2px); }
+                .order-form-table .order-form-cell-number { white-space: nowrap; }
+                .order-form-table .order-form-cell-meta { margin-top: var(--order-form-body-meta-margin-top); font-size: var(--order-form-body-meta-font-size); line-height: 1.35; }
+                .order-form-table .order-form-cell-copy-icon { font-size: var(--order-form-copy-icon-size); }
+                .order-form-table .order-form-row-icon { font-size: var(--order-form-row-icon-size); }
+                .order-form-table .order-form-badge { padding: var(--order-form-badge-padding-y) var(--order-form-badge-padding-x); font-size: var(--order-form-badge-font-size); }
+                .order-form-table .order-form-quantity-input { height: var(--order-form-quantity-input-height); max-width: var(--order-form-quantity-input-width); font-size: var(--order-form-body-font-size); }
+                .order-form-table .order-form-money-input { height: var(--order-form-quantity-input-height); font-size: var(--order-form-body-font-size); }
+                .order-form-table .order-form-action-button { width: var(--order-form-action-button-size); height: var(--order-form-action-button-size); }
+                .order-form-table .order-form-action-icon { font-size: var(--order-form-action-icon-size); }
                 .order-form-table::-webkit-scrollbar { width: 10px; height: 10px; }
                 .order-form-table::-webkit-scrollbar-track { background: #F0F4F8; }
                 .order-form-table::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
@@ -7474,14 +7785,14 @@ const OrderForm = () => {
 
                         {/* Captured Area for Screenshot */}
                         <div ref={captureRef} className="mt-[10px] hidden overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl lg:block">
-                            <div ref={orderFormTableViewportRef} className="relative min-h-[400px] overflow-y-auto overflow-x-hidden order-form-table">
+                            <div ref={orderFormTableViewportRef} className="relative min-h-[400px] overflow-y-auto overflow-x-hidden order-form-table" style={desktopTableStyleVars}>
                                 <table className="w-full min-w-0 text-left border-collapse table-fixed">
                                     <colgroup>
                                         <col style={{ width: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px` }} />
                                         {desktopVisibleColumnIds.map((colId) => (
                                             <col
                                                 key={`order-form-col-${colId}`}
-                                                style={{ width: `${desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths)}px` }}
+                                                style={{ width: `${desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths, desktopTableMetrics)}px` }}
                                             />
                                         ))}
                                     </colgroup>
@@ -7489,7 +7800,7 @@ const OrderForm = () => {
                                         <tr>
                                             {/* Column Config Header */}
                                             <th
-                                                className="border border-primary/10 bg-[#F0F4F8] shrink-0 relative text-center sticky top-0 z-30"
+                                                className="order-form-header-cell order-form-header-cell-tight border border-primary/10 bg-[#F0F4F8] shrink-0 relative text-center sticky top-0 z-30"
                                                 style={{
                                                     width: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px`,
                                                     minWidth: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px`,
@@ -7524,10 +7835,16 @@ const OrderForm = () => {
                                                                                         <span className="material-symbols-outlined text-[16px] text-primary/20 group-hover:text-primary/40">drag_indicator</span>
                                                                                         <span className="text-[12px] font-bold text-primary">{COLUMN_DEFS[colId].label}</span>
                                                                                     </div>
+                                                                                    {(() => {
+                                                                                        const isRequiredVisibleColumn = ORDER_FORM_REQUIRED_VISIBLE_COLUMN_IDS.includes(colId);
+                                                                                        return (
                                                                                     <button
                                                                                         type="button"
                                                                                         onClick={(e) => {
                                                                                             e.stopPropagation();
+                                                                                            if (isRequiredVisibleColumn) {
+                                                                                                return;
+                                                                                            }
                                                                                             if (visibleColumns.includes(colId)) {
                                                                                                 const nextVisibleColumns = normalizeStoredOrderFormVisibleColumns(visibleColumns.filter(c => c !== colId));
                                                                                                 setVisibleColumns(nextVisibleColumns);
@@ -7538,10 +7855,14 @@ const OrderForm = () => {
                                                                                                 writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, nextVisibleColumns);
                                                                                             }
                                                                                         }}
-                                                                                        className={`material-symbols-outlined text-lg ${visibleColumns.includes(colId) ? 'text-primary' : 'text-primary/10'}`}
+                                                                                        disabled={isRequiredVisibleColumn}
+                                                                                        title={isRequiredVisibleColumn ? 'Cột bắt buộc hiển thị' : 'Bật/tắt cột'}
+                                                                                        className={`material-symbols-outlined text-lg ${isRequiredVisibleColumn ? 'cursor-not-allowed text-primary/25' : visibleColumns.includes(colId) ? 'text-primary' : 'text-primary/10'}`}
                                                                                     >
                                                                                         {visibleColumns.includes(colId) ? 'visibility' : 'visibility_off'}
                                                                                     </button>
+                                                                                        );
+                                                                                    })()}
                                                                                 </Reorder.Item>
                                                                             ))}
                                                                         </Reorder.Group>
@@ -7568,12 +7889,12 @@ const OrderForm = () => {
                                             </th>
                                             {desktopVisibleColumnIds.map((colId) => {
                                                 const def = COLUMN_DEFS[colId];
-                                                const width = desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths);
+                                                const width = desktopAutoColumnWidths[colId] || getOrderFormPreferredColumnWidth(colId, columnWidths, desktopTableMetrics);
                                                 const isActionColumn = colId === 'actions';
                                                 return (
                                                     <th
                                                         key={colId}
-                                                        className={`py-2.5 px-3 border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
+                                                        className={`order-form-header-cell border border-primary/10 text-${def.align} relative group/header sticky top-0 z-30 bg-[#F0F4F8]`}
                                                         style={{
                                                             width: `${width}px`,
                                                             minWidth: `${width}px`,
@@ -7587,10 +7908,10 @@ const OrderForm = () => {
                                                                     onClick={handleRemoveAllItems}
                                                                     onMouseDown={(event) => event.stopPropagation()}
                                                                     disabled={formData.items.length === 0}
-                                                                    className="inline-flex size-7 items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
+                                                                    className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
                                                                     title="Xóa toàn bộ sản phẩm trong đơn"
                                                                 >
-                                                                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                                                    <span className="order-form-action-icon material-symbols-outlined">delete_sweep</span>
                                                                 </button>
                                                             ) : (
                                                                 <OrderFormHeaderLabel label={def.label} tooltip={def.tooltip} />
@@ -7615,18 +7936,18 @@ const OrderForm = () => {
                                                 onClick={() => handleSelectOrderLine(item.line_id)}
                                                 className={`transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 ${hasActualOrderProductOverride(item) ? 'bg-rose-50/60 hover:bg-rose-50/80' : isPendingOrderAiItem(item) ? 'bg-amber-50/50 hover:bg-amber-50/70' : isOrderAiItem(item) ? 'bg-sky-50/40 hover:bg-sky-50/60' : 'bg-white hover:bg-primary/[0.01]'} ${normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id) ? 'ring-2 ring-inset ring-primary/15' : ''}`}
                                             >
-                                                <td className="border border-primary/10 bg-primary/5 text-center">
-                                                    <span className="material-symbols-outlined text-[16px] text-primary/10 group-hover:text-primary/30 font-bold">drag_indicator</span>
+                                                <td className="order-form-cell order-form-cell-tight border border-primary/10 bg-primary/5 text-center">
+                                                    <span className="order-form-row-icon material-symbols-outlined text-primary/10 group-hover:text-primary/30 font-bold">drag_indicator</span>
                                                 </td>
                                                 {desktopVisibleColumnIds.map(colId => {
                                                     switch (colId) {
                                                         case 'stt':
-                                                            return <td key={colId} className="py-2.5 text-center text-primary/30 font-sans text-[12px] font-bold border border-primary/10">{index + 1}</td>;
+                                                            return <td key={colId} className="order-form-cell order-form-cell-tight text-center text-primary/30 font-sans font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10 relative group/cell">
+                                                                <td key={colId} className="order-form-cell border border-primary/10 relative group/cell">
                                                                     <div className="flex items-center justify-between gap-2">
-                                                                        <p className={`font-sans text-[13px] font-bold leading-none truncate flex-1 min-w-0 ${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'}`}>{item.sku || '---'}</p>
+                                                                        <p className={`font-sans font-bold leading-none truncate flex-1 min-w-0 ${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'}`}>{item.sku || '---'}</p>
                                                                         {item.sku && (
                                                                             <button
                                                                                 type="button"
@@ -7635,7 +7956,7 @@ const OrderForm = () => {
                                                                                 className={`${copiedText === `${item.line_id || item.product_id}-sku-${index}` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép mã SP"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === `${item.line_id || item.product_id}-sku-${index}` ? 'check' : 'content_copy'}</span>
+                                                                                <span className="order-form-cell-copy-icon material-symbols-outlined">{copiedText === `${item.line_id || item.product_id}-sku-${index}` ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
@@ -7653,7 +7974,7 @@ const OrderForm = () => {
                                                             return (
                                                                 <td
                                                                     key={colId}
-                                                                    className="py-2.5 px-3 border border-primary/10 relative group/cell"
+                                                                    className="order-form-cell border border-primary/10 relative group/cell"
                                                                     onMouseEnter={() => updateActiveTruncatedNameCell(itemNameCellKey)}
                                                                     onMouseLeave={() => clearActiveTruncatedNameCell(itemNameCellKey)}
                                                                 >
@@ -7661,37 +7982,37 @@ const OrderForm = () => {
                                                                         <div className="flex-1 min-w-0">
                                                                             <p
                                                                                 ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
-                                                                                className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} font-bold text-[13px] leading-tight truncate`}
+                                                                                className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} font-bold leading-tight truncate`}
                                                                             >
                                                                                 {item.name}
                                                                             </p>
                                                                             {hasActualOrderProductOverride(item) ? (
-                                                                                <div className="mt-1 truncate text-[11px] font-semibold text-rose-700">
+                                                                                <div className="order-form-cell-meta truncate font-semibold text-rose-700">
                                                                                     {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
                                                                                 </div>
                                                                             ) : null}
                                                                             {isOrderAiItem(item) && (
-                                                                                <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                                                                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
+                                                                                <div className="order-form-cell-meta flex flex-wrap items-center gap-1.5">
+                                                                                    <span className={`order-form-badge inline-flex items-center rounded-full border font-black uppercase tracking-[0.12em] ${isPendingOrderAiItem(item) ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                                                                                         {isPendingOrderAiItem(item) ? 'AI chờ duyệt' : 'AI'}
                                                                                     </span>
-                                                                                    <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/60">
+                                                                                    <span className="order-form-badge inline-flex items-center rounded-full border border-primary/10 bg-white font-bold uppercase tracking-[0.08em] text-primary/60">
                                                                                         {item.ai_meta?.confidence_label || 'AI'} {Number(item.ai_meta?.confidence || 0) > 0 ? `${item.ai_meta.confidence}%` : ''}
                                                                                     </span>
                                                                                     {item.ai_meta?.matched_rule_label && (
-                                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
+                                                                                        <span className="order-form-badge inline-flex items-center rounded-full border border-primary/10 bg-white font-bold uppercase tracking-[0.08em] text-primary/55">
                                                                                             Bản {item.ai_meta.matched_rule_label}
                                                                                         </span>
                                                                                     )}
                                                                                     {item.ai_meta?.matched_rule_context && (
-                                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-primary/55">
+                                                                                        <span className="order-form-badge inline-flex items-center rounded-full border border-primary/10 bg-white font-bold uppercase tracking-[0.08em] text-primary/55">
                                                                                             {item.ai_meta.matched_rule_context}
                                                                                         </span>
                                                                                     )}
                                                                                 </div>
                                                                             )}
                                                                             {item.options?.bundle_parent_name || item.options?.bundle_option_title ? (
-                                                                                <div className="mt-1 truncate text-[11px] font-semibold text-primary/55">
+                                                                                <div className="order-form-cell-meta truncate font-semibold text-primary/55">
                                                                                     {item.options?.bundle_parent_name ? `Từ bundle: ${item.options.bundle_parent_name}` : 'Từ bundle'}
                                                                                     {item.options?.bundle_option_title ? ` - ${item.options.bundle_option_title}` : ''}
                                                                                 </div>
@@ -7705,7 +8026,7 @@ const OrderForm = () => {
                                                                                 className={`${copiedText === nameCopyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép tên SP"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
+                                                                                <span className="order-form-cell-copy-icon material-symbols-outlined">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
                                                                     </div>
@@ -7736,19 +8057,19 @@ const OrderForm = () => {
                                                         }
                                                         case 'quantity':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-2.5 border border-primary/10 text-center">
+                                                                <td key={colId} className="order-form-cell order-form-cell-tight border border-primary/10 text-center">
                                                                     <input
                                                                         type="number"
                                                                         value={item.quantity}
                                                                         onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
-                                                                        className="h-8 w-full max-w-[54px] min-w-0 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none text-[13px] font-bold rounded-sm shadow-inner text-slate-900"
+                                                                        className="order-form-quantity-input w-full min-w-0 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none font-bold rounded-sm shadow-inner text-slate-900"
                                                                     />
                                                                 </td>
                                                             );
                                                         case 'unit':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-2.5 border border-primary/10 text-center">
-                                                                    <span className="font-sans text-[13px] font-bold text-primary/65">{getOrderUnitDisplay(item)}</span>
+                                                                <td key={colId} className="order-form-cell order-form-cell-tight border border-primary/10 text-center">
+                                                                    <span className="font-sans font-bold text-primary/65">{getOrderUnitDisplay(item)}</span>
                                                                 </td>
                                                             );
                                                         case 'available_to_sell': {
@@ -7757,10 +8078,10 @@ const OrderForm = () => {
                                                             return (
                                                                 <td
                                                                     key={colId}
-                                                                    className="py-2.5 px-2.5 border border-primary/10 text-center"
+                                                                    className="order-form-cell order-form-cell-tight border border-primary/10 text-center"
                                                                     title={buildAvailableToSellCellTitle(item)}
                                                                 >
-                                                                    <span className={`font-sans text-[13px] font-black ${getAvailableToSellTextClass(availableToSell)}`}>
+                                                                    <span className={`font-sans font-black ${getAvailableToSellTextClass(availableToSell)}`}>
                                                                         {availableToSell !== null ? formatOrderFormQuantity(availableToSell) : '...'}
                                                                     </span>
                                                                 </td>
@@ -7768,7 +8089,7 @@ const OrderForm = () => {
                                                         }
                                                         case 'price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10">
+                                                                <td key={colId} className="order-form-cell order-form-cell-number border border-primary/10">
                                                                     <div className="flex items-center justify-end">
                                                                         <input
                                                                             type="text"
@@ -7777,7 +8098,7 @@ const OrderForm = () => {
                                                                                 const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
                                                                                 updateItem(index, 'price', parseInt(val) || 0);
                                                                             }}
-                                                                            className="w-full h-8 bg-transparent border-none text-right font-sans text-[13px] font-bold text-slate-900 border-b border-blue-100 focus:border-blue-300 transition-all rounded-none px-1"
+                                                                            className="order-form-money-input w-full min-w-0 bg-transparent border-none text-right font-sans font-bold text-slate-900 border-b border-blue-100 focus:border-blue-300 transition-all rounded-none px-1"
                                                                         />
                                                                         <span className="font-bold text-slate-900/30 text-[11px] ml-1">₫</span>
                                                                     </div>
@@ -7785,7 +8106,7 @@ const OrderForm = () => {
                                                             );
                                                         case 'cost_price':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3 border border-primary/10">
+                                                                <td key={colId} className="order-form-cell order-form-cell-number border border-primary/10">
                                                                     <div className="flex items-center justify-end">
                                                                         <input
                                                                             type="text"
@@ -7793,7 +8114,7 @@ const OrderForm = () => {
                                                                             onChange={(e) => {
                                                                                 updateItem(index, 'cost_price', normalizeRoundedImportCostNumber(e.target.value) ?? 0);
                                                                             }}
-                                                                            className="w-full bg-transparent border-none text-right font-sans text-[13px] font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
+                                                                            className="order-form-money-input w-full min-w-0 bg-transparent border-none text-right font-sans font-bold text-primary/30 border-b border-primary/5 focus:border-primary/10 transition-all rounded-none px-1"
                                                                         />
                                                                         <span className="font-bold text-primary text-[10px] ml-1 opacity-10">₫</span>
                                                                     </div>
@@ -7801,15 +8122,15 @@ const OrderForm = () => {
                                                             );
                                                         case 'total':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-3.5 border border-primary/10 text-right bg-blue-50/30">
-                                                                    <p className="truncate font-sans text-[13px] font-extrabold text-slate-900 tracking-tight">
+                                                                <td key={colId} className="order-form-cell order-form-cell-number border border-primary/10 text-right bg-blue-50/30">
+                                                                    <p className="font-sans font-extrabold text-slate-900 tracking-tight whitespace-nowrap">
                                                                         {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(item.price * item.quantity)}<span className="text-[11px] ml-0.5 opacity-40">₫</span>
                                                                     </p>
                                                                 </td>
                                                             );
                                                         case 'actions':
                                                             return (
-                                                                <td key={colId} className="py-2.5 px-1.5 text-center border border-primary/10 align-top">
+                                                                <td key={colId} className="order-form-cell order-form-cell-tight text-center border border-primary/10 align-top">
                                                                     <div className="flex justify-center">
                                                                         <div className="flex items-center gap-1">
                                                                             <button
@@ -7820,19 +8141,19 @@ const OrderForm = () => {
                                                                                     item.ai_meta?.source_phrase || item.name || item.sku || '',
                                                                                     event.currentTarget
                                                                                 )}
-                                                                                className="inline-flex size-7 items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 opacity-0 translate-x-1 pointer-events-none transition-all hover:border-sky-300 hover:bg-sky-100 group-hover:translate-x-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+                                                                                className="order-form-action-button inline-flex items-center justify-center rounded-sm border border-sky-200 bg-sky-50 text-sky-700 opacity-0 translate-x-1 pointer-events-none transition-all hover:border-sky-300 hover:bg-sky-100 group-hover:translate-x-0 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:translate-x-0 group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
                                                                                 title={isOrderAiItem(item) ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm'}
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
+                                                                                <span className="order-form-action-icon material-symbols-outlined">swap_horiz</span>
                                                                             </button>
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(event) => event.stopPropagation()}
                                                                                 onClick={() => removeItem(item.line_id)}
-                                                                                className="inline-flex size-7 items-center justify-center rounded-sm text-primary/20 transition-all hover:bg-rose-50 hover:text-brick"
+                                                                                className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/20 transition-all hover:bg-rose-50 hover:text-brick"
                                                                                 title="Xóa dòng"
                                                                             >
-                                                                                <span className="material-symbols-outlined text-[16px]">delete_outline</span>
+                                                                                <span className="order-form-action-icon material-symbols-outlined">delete_outline</span>
                                                                             </button>
                                                                         </div>
                                                                     </div>
@@ -7846,7 +8167,7 @@ const OrderForm = () => {
                                         ))}
                                         {formData.items.length === 0 && (
                                             <tr>
-                                                <td colSpan={desktopVisibleColumnIds.length + 1} className="py-16 text-center italic text-primary/30 text-[12px] font-bold border border-primary/10 bg-primary/5">Phần này để hiển thị sản phẩm đã chọn...</td>
+                                                <td colSpan={desktopVisibleColumnIds.length + 1} className="order-form-cell border border-primary/10 bg-primary/5 py-16 text-center italic text-primary/30 font-bold">Phần này để hiển thị sản phẩm đã chọn...</td>
                                             </tr>
                                         )}
                                     </Reorder.Group>

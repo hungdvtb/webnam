@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { Link, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventoryNavigation';
@@ -231,7 +231,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/customers')) return 'customers';
         if (path.startsWith('/admin/inventory')) return 'inventory';
         if (path.startsWith('/admin/reports')) return 'reports';
-        if (path.startsWith('/admin/finance')) return 'reports';
+        if (path.startsWith('/admin/finance/daily-profit')) return 'reports';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
         if (path.startsWith('/admin/ai-training')) return 'orders';
@@ -484,7 +484,7 @@ const AdminLayout = () => {
                                 </div>
                                 <span className={`${chevronClass} ${isOrdersOpen ? 'rotate-180 text-gold' : 'text-stone'}`}>expand_more</span>
                             </button>
-                            
+
                             {isOrdersOpen && isSidebarExpanded && (
                                 <div className="animate-in space-y-1 pl-4 slide-in-from-top-2 duration-200">
                                     {canAccessLeadBoard && (
@@ -640,47 +640,62 @@ const AdminLayout = () => {
                         <SidebarSectionLabel isExpanded={isSidebarExpanded}>Báo cáo & Phân tích</SidebarSectionLabel>
                     </div>
                     <Link
+                        to="/admin/finance/daily-profit"
+                        aria-label="Báo cáo lãi lỗ ngày"
+                        title={collapsedTitle('Báo cáo lãi lỗ ngày')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/daily-profit' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/daily-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>query_stats</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Báo cáo lãi lỗ ngày
+                        </SidebarText>
+                    </Link>
+
+                    <Link
                         to="/admin/reports"
                         aria-label="Hàng đi hàng ngày"
                         title={collapsedTitle('Hàng đi hàng ngày')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/reports') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
                     >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/reports') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>table_chart</span>
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>table_chart</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
                             Hàng đi hàng ngày
                         </SidebarText>
                     </Link>
+
                     <Link
-                        to="/admin/finance"
-                        aria-label="Quản lý tiền"
-                        title={collapsedTitle('Quản lý tiền')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
-                    >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_balance_wallet</span>
-                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Quản lý tiền
-                        </SidebarText>
-                    </Link>
-                    <Link
-                        to="/admin/finance/fixed-expenses"
+                        to="/admin/finance/fixed-costs"
                         aria-label="Chi phí cố định"
                         title={collapsedTitle('Chi phí cố định')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/fixed-costs' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
                     >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/finance/fixed-expenses') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>receipt_long</span>
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/fixed-costs' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_balance_wallet</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
                             Chi phí cố định
                         </SidebarText>
                     </Link>
+
                     <Link
-                        to="/admin/finance/daily-profit"
-                        aria-label="Lãi lỗ theo ngày"
-                        title={collapsedTitle('Lãi lỗ theo ngày')}
-                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                        to="/admin/finance/funds"
+                        aria-label="Sổ cái (Dòng tiền)"
+                        title={collapsedTitle('Sổ cái (Dòng tiền)')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/funds' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
                     >
-                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/finance/daily-profit') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/funds' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>savings</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                            Lãi lỗ theo ngày
+                            Sổ cái (Dòng tiền)
+                        </SidebarText>
+                    </Link>
+
+                    <Link
+                        to="/admin/finance/debts"
+                        aria-label="Sổ nợ"
+                        title={collapsedTitle('Sổ nợ')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/debts' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/debts' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>assignment_ind</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Sổ nợ
                         </SidebarText>
                     </Link>
                 </nav>

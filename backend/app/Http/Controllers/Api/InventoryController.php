@@ -20,6 +20,7 @@ use App\Services\Inventory\InventoryService;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
@@ -3483,7 +3484,11 @@ class InventoryController extends Controller
                     ->whereNull('orders.type')
                     ->orWhere('orders.type', '!=', 'inventory_export');
             })
-            ->whereIn('orders.status', ['pending_return', 'returned']);
+            ->whereIn('orders.status', [
+                'pending_return',
+                'returned',
+                OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+            ]);
 
         $this->orderInventorySlipService->applyReturnSlipStateFilter($query, 'missing');
         $this->applyDateRange($query, 'orders.created_at', $request);

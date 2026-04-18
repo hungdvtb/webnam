@@ -67,7 +67,7 @@ class ShipmentController extends Controller
         $query = $this->applyFilters(
             Shipment::query()
             ->with([
-                'order:id,order_number,order_kind,customer_name,customer_email,customer_phone,status,total_price,source,type,notes,shipping_fee,discount,cost_total,profit_total,shipping_status,shipping_status_source,shipping_carrier_code,shipping_carrier_name,shipping_tracking_code,shipping_dispatched_at,shipping_issue_code,shipping_issue_message,created_at,updated_at',
+                'order:id,order_number,order_kind,customer_name,customer_email,customer_phone,status,total_price,source,type,notes,shipping_fee,internal_shipping_fee,discount,cost_total,profit_total,shipping_status,shipping_status_source,shipping_carrier_code,shipping_carrier_name,shipping_tracking_code,shipping_dispatched_at,shipping_issue_code,shipping_issue_message,created_at,updated_at',
                 'warehouse:id,name',
                 'carrier:id,code,name,logo',
                 'integration:id,carrier_code,carrier_name,connection_status',
@@ -322,7 +322,9 @@ class ShipmentController extends Controller
             }
 
             $codAmount = $request->cod_amount ?? $order->total_price;
-            $shippingCost = $request->shipping_cost ?? $order->shipping_fee ?? 0;
+            $shippingCost = $request->filled('shipping_cost')
+                ? (float) $request->shipping_cost
+                : max(0, round((float) data_get($order, 'internal_shipping_fee', 0), 2));
 
             $shipment = Shipment::create([
                 'order_id' => $order->id,

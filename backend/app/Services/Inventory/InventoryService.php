@@ -377,7 +377,7 @@ class InventoryService
         });
     }
 
-    public function attachInventoryToOrder(Order $order, array $rawItems): array
+    public function attachInventoryToOrder(Order $order, array $rawItems, bool $preferSubmittedCostPrice = false): array
     {
         $normalizedItems = collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
@@ -424,7 +424,12 @@ class InventoryService
             $avgUnitCost = $quantity > 0
                 ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
                 : 0;
-            $roundedCostTotal = ImportCostRounding::lineTotal($avgUnitCost, $quantity);
+            $reportedUnitCost = $preferSubmittedCostPrice
+                && array_key_exists('cost_price', $item)
+                && is_numeric($item['cost_price'])
+                ? ImportCostRounding::roundUnitCost((float) $item['cost_price'])
+                : $avgUnitCost;
+            $roundedCostTotal = ImportCostRounding::lineTotal($reportedUnitCost, $quantity);
             $revenue = round($sellingPrice * $quantity, 2);
             $profit = round($revenue - $roundedCostTotal, 2);
 
@@ -443,7 +448,7 @@ class InventoryService
                 'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,
                 'price' => $sellingPrice,
-                'cost_price' => $avgUnitCost,
+                'cost_price' => $reportedUnitCost,
                 'cost_total' => $roundedCostTotal,
                 'profit_total' => $profit,
                 'options' => $item['options'] ?? null,
@@ -527,12 +532,15 @@ class InventoryService
             $avgUnitCost = $quantity > 0
                 ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
                 : 0;
-            $roundedCostTotal = ImportCostRounding::lineTotal($avgUnitCost, $quantity);
+            $reportedUnitCost = $item->cost_price !== null && $item->cost_price !== ''
+                ? ImportCostRounding::roundUnitCost((float) $item->cost_price)
+                : $avgUnitCost;
+            $roundedCostTotal = ImportCostRounding::lineTotal($reportedUnitCost, $quantity);
             $lineTotalPrice = round($sellingPrice * $quantity, 2);
             $lineProfit = round($lineTotalPrice - $roundedCostTotal, 2);
 
             $item->forceFill([
-                'cost_price' => $avgUnitCost,
+                'cost_price' => $reportedUnitCost,
                 'cost_total' => $roundedCostTotal,
                 'profit_total' => $lineProfit,
             ])->save();

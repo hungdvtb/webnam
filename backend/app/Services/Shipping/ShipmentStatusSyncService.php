@@ -7,9 +7,11 @@ use App\Models\Order;
 use App\Models\OrderStatusLog;
 use App\Models\Shipment;
 use App\Models\ShipmentStatusLog;
+use App\Support\OrderStatusCatalog;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ShipmentStatusSyncService
 {
@@ -181,7 +183,11 @@ class ShipmentStatusSyncService
         $oldOrderStatus = $order->status;
         $shouldSyncOrderStatus = $syncOrderStatus && ($orderSync['should_sync_order_status'] ?? false);
         $newOrderStatus = $shouldSyncOrderStatus
-            ? ($orderSync['order_status'] ?? $oldOrderStatus)
+            ? $this->resolveOrderStatusForSpecialOrderType(
+                $order,
+                (string) $shipment->shipment_status,
+                (string) ($orderSync['order_status'] ?? $oldOrderStatus)
+            )
             : $oldOrderStatus;
         $oldShippingStatus = $order->shipping_status;
         $newShippingStatus = $shipment->shipment_status;
@@ -193,6 +199,9 @@ class ShipmentStatusSyncService
         [$problemCode, $problemMessage] = $this->resolveProblemSummary($shipment);
         $trackingCode = $shipment->carrier_tracking_code ?: $shipment->tracking_number;
         $expectedDispatchedAt = $shipment->shipped_at ?: $order->shipping_dispatched_at;
+        $expectedInternalShippingFee = (string) $shipment->shipment_status === 'canceled'
+            ? 0.0
+            : max(0, round((float) ($shipment->shipping_cost ?? 0), 2));
         $dispatchedMatches = (!$expectedDispatchedAt && !$order->shipping_dispatched_at)
             || (
                 $expectedDispatchedAt
@@ -209,6 +218,10 @@ class ShipmentStatusSyncService
             && $order->shipping_carrier_code === $shipment->carrier_code
             && $order->shipping_carrier_name === $shipment->carrier_name
             && $dispatchedMatches
+            && (
+                !Schema::hasColumn('orders', 'internal_shipping_fee')
+                || abs((float) ($order->internal_shipping_fee ?? 0) - $expectedInternalShippingFee) < 0.01
+            )
         ) {
             return false;
         }
@@ -237,6 +250,10 @@ class ShipmentStatusSyncService
             'shipping_issue_detected_at' => $problemCode ? ($shipment->problem_detected_at ?: now()) : null,
         ];
 
+        if (Schema::hasColumn('orders', 'internal_shipping_fee')) {
+            $updateData['internal_shipping_fee'] = $expectedInternalShippingFee;
+        }
+
         if ($statusChanged) {
             $updateData['status'] = $newOrderStatus;
         }
@@ -259,6 +276,39 @@ class ShipmentStatusSyncService
         $order->update($updateData);
 
         return true;
+    }
+
+    private function resolveOrderStatusForSpecialOrderType(
+        Order $order,
+        string $shipmentStatus,
+        string $mappedOrderStatus
+    ): string {
+        $currentStatus = trim((string) $order->status);
+        $normalizedOrderType = $order->getNormalizedOrderType();
+
+        if ($normalizedOrderType === Order::TYPE_EXCHANGE_RETURN) {
+            if (in_array($shipmentStatus, ['returning', 'returned'], true)) {
+                return $currentStatus === OrderStatusCatalog::EXCHANGE_COMPLETED_CODE
+                    ? $currentStatus
+                    : 'pending_return';
+            }
+
+            return $mappedOrderStatus;
+        }
+
+        if ($normalizedOrderType === Order::TYPE_PARTIAL_DELIVERY) {
+            if ($shipmentStatus === 'returned') {
+                return OrderStatusCatalog::PARTIAL_DELIVERY_CODE;
+            }
+
+            if ($shipmentStatus === 'returning') {
+                return $currentStatus === OrderStatusCatalog::PARTIAL_DELIVERY_CODE
+                    ? $currentStatus
+                    : 'pending_return';
+            }
+        }
+
+        return $mappedOrderStatus;
     }
 
     public function canManuallyEditOrderShipping(Order $order): array

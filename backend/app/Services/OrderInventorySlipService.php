@@ -431,7 +431,7 @@ class OrderInventorySlipService
                 $this->inventoryService->restoreDocument($adjustmentDocument);
             }
 
-            $this->syncManagedReturnOrdersToReturned(
+            $this->syncManagedReturnOrdersToResolvedStatuses(
                 collect($this->extractManagedReturnOrderIds($managedDocument))->map(fn ($id) => ['id' => $id]),
                 (string) $managedDocument->document_number,
                 null
@@ -709,6 +709,26 @@ class OrderInventorySlipService
                 $this->inventoryService->refreshProducts($touchedProductIds);
             }
 
+            if ($type === 'return') {
+                $lockedOrder = Order::query()
+                    ->whereKey($order->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $statusTransition = $this->applyCompletedReturnStatusToOrder(
+                    $lockedOrder,
+                    (string) $document->document_number,
+                    $userId
+                );
+
+                $document->forceFill([
+                    'meta' => array_merge((array) ($document->meta ?? []), [
+                        'order_status_snapshot' => $statusTransition['snapshot'],
+                        'applied_order_status' => $statusTransition['applied_status'],
+                    ]),
+                ])->save();
+            }
+
             return $document->fresh([
                 'creator:id,name',
                 'items.product:id,sku,name',
@@ -788,10 +808,88 @@ class OrderInventorySlipService
 
             $document->delete();
 
+            if ($document->type === 'return') {
+                $this->restoreOrderStatusAfterReturnSlipDeletion($order, $document);
+            }
+
             if ($document->type === 'return' && !empty($touchedProductIds)) {
                 $this->inventoryService->refreshProducts($touchedProductIds);
             }
         });
+    }
+
+    private function applyCompletedReturnStatusToOrder(
+        Order $order,
+        string $documentNumber,
+        ?int $userId = null
+    ): array {
+        OrderStatusCatalog::ensureStatusForCompletedReturn($order);
+
+        $targetStatus = OrderStatusCatalog::resolvedStatusForCompletedReturn($order);
+        $oldStatus = trim((string) $order->status);
+        $snapshot = $oldStatus !== '' ? $oldStatus : null;
+
+        if ($oldStatus !== $targetStatus) {
+            OrderStatusLog::create([
+                'order_id' => (int) $order->id,
+                'from_status' => $snapshot,
+                'to_status' => $targetStatus,
+                'source' => 'system',
+                'changed_by' => $userId,
+                'reason' => "Tu dong cap nhat tu phieu hoan {$documentNumber}",
+            ]);
+
+            $order->forceFill([
+                'status' => $targetStatus,
+            ])->save();
+        }
+
+        return [
+            'snapshot' => $oldStatus !== $targetStatus ? $snapshot : null,
+            'applied_status' => $targetStatus,
+        ];
+    }
+
+    private function restoreOrderStatusAfterReturnSlipDeletion(
+        Order $order,
+        InventoryDocument $document,
+        ?int $userId = null
+    ): void {
+        $snapshot = $this->normalizeManagedReturnOrderStatusValue(
+            data_get((array) ($document->meta ?? []), 'order_status_snapshot')
+        );
+        $appliedStatus = trim((string) data_get((array) ($document->meta ?? []), 'applied_order_status'));
+
+        if ($snapshot === null || $appliedStatus === '' || $snapshot === $appliedStatus) {
+            return;
+        }
+
+        $lockedOrder = Order::query()
+            ->whereKey($order->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$lockedOrder) {
+            return;
+        }
+
+        $currentStatus = trim((string) $lockedOrder->status);
+        if ($currentStatus !== $appliedStatus) {
+            return;
+        }
+
+        OrderStatusLog::create([
+            'order_id' => (int) $lockedOrder->id,
+            'from_status' => $currentStatus !== '' ? $currentStatus : null,
+            'to_status' => $snapshot,
+            'source' => 'system',
+            'changed_by' => $userId,
+            'reason' => "Khoi phuc trang thai truoc khi xoa phieu hoan {$document->document_number}",
+        ]);
+
+        $lockedOrder->forceFill([
+            'status' => $snapshot,
+        ])->save();
     }
 
     private function buildDetailPayload(
@@ -2184,7 +2282,8 @@ class OrderInventorySlipService
         );
 
         $existingStatusSnapshots = $this->storedManagedReturnOrderStatusSnapshots($document);
-        $updatedStatusSnapshots = $this->syncManagedReturnOrdersToReturned(
+        $existingAppliedStatuses = $this->storedManagedReturnOrderStatusApplied($document);
+        $updatedStatusTransition = $this->syncManagedReturnOrdersToResolvedStatuses(
             $orders,
             (string) $document->document_number,
             $userId
@@ -2200,7 +2299,12 @@ class OrderInventorySlipService
                 'order_status_snapshots' => $this->mergeManagedReturnOrderStatusSnapshots(
                     $selectedOrders,
                     $existingStatusSnapshots,
-                    $updatedStatusSnapshots
+                    $updatedStatusTransition['snapshots']
+                ),
+                'order_status_applied' => $this->mergeManagedReturnOrderStatusApplied(
+                    $selectedOrders,
+                    $existingAppliedStatuses,
+                    $updatedStatusTransition['applied']
                 ),
             ]),
         ])->save();
@@ -2212,7 +2316,7 @@ class OrderInventorySlipService
         return $this->loadManagedReturnDocument($document);
     }
 
-    private function syncManagedReturnOrdersToReturned(
+    private function syncManagedReturnOrdersToResolvedStatuses(
         Collection $orders,
         string $documentNumber,
         ?int $userId
@@ -2237,6 +2341,7 @@ class OrderInventorySlipService
 
         $ensuredAccounts = [];
         $snapshots = [];
+        $appliedStatuses = [];
 
         foreach ($orderIds as $orderId) {
             $order = $lockedOrders->get((int) $orderId);
@@ -2247,12 +2352,16 @@ class OrderInventorySlipService
 
             $accountId = (int) ($order->account_id ?? 0);
             if ($accountId > 0 && !isset($ensuredAccounts[$accountId])) {
+                OrderStatusCatalog::ensureDefaultSystemStatuses($accountId);
                 OrderStatusCatalog::ensureReturnedStatus($accountId);
                 $ensuredAccounts[$accountId] = true;
             }
 
+            $targetStatus = OrderStatusCatalog::resolvedStatusForCompletedReturn($order);
+            $appliedStatuses[(string) $order->id] = $targetStatus;
+
             $oldStatus = trim((string) $order->status);
-            if ($oldStatus === OrderStatusCatalog::RETURNED_CODE) {
+            if ($oldStatus === $targetStatus) {
                 continue;
             }
 
@@ -2261,18 +2370,21 @@ class OrderInventorySlipService
             OrderStatusLog::create([
                 'order_id' => (int) $order->id,
                 'from_status' => $oldStatus !== '' ? $oldStatus : null,
-                'to_status' => OrderStatusCatalog::RETURNED_CODE,
+                'to_status' => $targetStatus,
                 'source' => 'system',
                 'changed_by' => $userId,
                 'reason' => "Tu dong cap nhat tu phieu hoan {$documentNumber}",
             ]);
 
             $order->forceFill([
-                'status' => OrderStatusCatalog::RETURNED_CODE,
+                'status' => $targetStatus,
             ])->save();
         }
 
-        return $snapshots;
+        return [
+            'snapshots' => $snapshots,
+            'applied' => $appliedStatuses,
+        ];
     }
 
     private function restoreManagedReturnOrdersToPreviousStatus(InventoryDocument $document, ?int $userId = null): void
@@ -2283,6 +2395,7 @@ class OrderInventorySlipService
         }
 
         $snapshots = $this->resolveManagedReturnOrderStatusSnapshots($document, $orderIds);
+        $appliedStatuses = $this->resolveManagedReturnOrderStatusApplied($document, $orderIds);
         if (empty($snapshots)) {
             return;
         }
@@ -2300,17 +2413,20 @@ class OrderInventorySlipService
             }
 
             $currentStatus = trim((string) $order->status);
-            if ($currentStatus !== OrderStatusCatalog::RETURNED_CODE) {
-                continue;
-            }
-
             $snapshotKey = (string) $orderId;
             if (!array_key_exists($snapshotKey, $snapshots)) {
                 continue;
             }
 
+            $expectedAppliedStatus = $appliedStatuses[$snapshotKey]
+                ?? (OrderStatusCatalog::isAutoReturnWorkflowStatus($currentStatus) ? $currentStatus : null);
+
+            if ($expectedAppliedStatus === null || $currentStatus !== $expectedAppliedStatus) {
+                continue;
+            }
+
             $targetStatus = $snapshots[$snapshotKey];
-            if ($targetStatus === OrderStatusCatalog::RETURNED_CODE) {
+            if ($targetStatus === $expectedAppliedStatus) {
                 continue;
             }
 
@@ -2378,6 +2494,28 @@ class OrderInventorySlipService
         return $snapshots;
     }
 
+    private function storedManagedReturnOrderStatusApplied(InventoryDocument $document): array
+    {
+        $rawApplied = data_get((array) ($document->meta ?? []), 'order_status_applied', []);
+        if (!is_array($rawApplied)) {
+            return [];
+        }
+
+        $appliedStatuses = [];
+        foreach ($rawApplied as $orderId => $status) {
+            $normalizedOrderId = (int) $orderId;
+            $normalizedStatus = trim((string) ($status ?? ''));
+
+            if ($normalizedOrderId <= 0 || $normalizedStatus === '') {
+                continue;
+            }
+
+            $appliedStatuses[(string) $normalizedOrderId] = $normalizedStatus;
+        }
+
+        return $appliedStatuses;
+    }
+
     private function mergeManagedReturnOrderStatusSnapshots(
         Collection $orders,
         array $existingSnapshots,
@@ -2408,6 +2546,36 @@ class OrderInventorySlipService
         return $merged;
     }
 
+    private function mergeManagedReturnOrderStatusApplied(
+        Collection $orders,
+        array $existingApplied,
+        array $updatedApplied
+    ): array {
+        $merged = [];
+        $orderIds = $orders
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        foreach ($orderIds as $orderId) {
+            $snapshotKey = (string) $orderId;
+
+            if (array_key_exists($snapshotKey, $updatedApplied)) {
+                $merged[$snapshotKey] = $updatedApplied[$snapshotKey];
+                continue;
+            }
+
+            if (array_key_exists($snapshotKey, $existingApplied)) {
+                $merged[$snapshotKey] = $existingApplied[$snapshotKey];
+            }
+        }
+
+        return $merged;
+    }
+
     private function resolveManagedReturnOrderStatusSnapshots(InventoryDocument $document, array $orderIds): array
     {
         $snapshots = array_filter(
@@ -2428,7 +2596,7 @@ class OrderInventorySlipService
         $logsByOrderId = OrderStatusLog::query()
             ->whereIn('order_id', $missingOrderIds)
             ->where('source', 'system')
-            ->where('to_status', OrderStatusCatalog::RETURNED_CODE)
+            ->whereIn('to_status', OrderStatusCatalog::AUTO_RETURN_WORKFLOW_CODES)
             ->orderByDesc('id')
             ->get()
             ->groupBy(fn (OrderStatusLog $log) => (int) $log->order_id);
@@ -2455,6 +2623,15 @@ class OrderInventorySlipService
         }
 
         return $snapshots;
+    }
+
+    private function resolveManagedReturnOrderStatusApplied(InventoryDocument $document, array $orderIds): array
+    {
+        return array_filter(
+            $this->storedManagedReturnOrderStatusApplied($document),
+            fn ($orderId) => in_array((int) $orderId, $orderIds, true),
+            ARRAY_FILTER_USE_KEY
+        );
     }
 
     private function normalizeManagedReturnOrderStatusValue(mixed $value): ?string

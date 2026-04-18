@@ -49,6 +49,39 @@ class SimpleXlsxService
     }
 
     /**
+     * Write raw 2D array to XLSX without header mapping.
+     *
+     * @param  array<int, array<int, mixed>>  $rows
+     */
+    public function writeRaw(string $absolutePath, array $rows, string $sheetName = 'Sheet1'): void
+    {
+        $directory = dirname($absolutePath);
+        if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
+            throw new RuntimeException('Unable to create XLSX directory.');
+        }
+
+        $zip = new ZipArchive();
+        if ($zip->open($absolutePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            throw new RuntimeException('Unable to create XLSX archive.');
+        }
+
+        $sheetRows = [];
+        foreach ($rows as $row) {
+            $sheetRows[] = array_map(fn ($cell) => $this->stringifyCellValue($cell), array_values($row));
+        }
+
+        $zip->addFromString('[Content_Types].xml', $this->contentTypesXml());
+        $zip->addFromString('_rels/.rels', $this->rootRelationshipsXml());
+        $zip->addFromString('docProps/app.xml', $this->appPropertiesXml($sheetName));
+        $zip->addFromString('docProps/core.xml', $this->corePropertiesXml());
+        $zip->addFromString('xl/workbook.xml', $this->workbookXml($sheetName));
+        $zip->addFromString('xl/_rels/workbook.xml.rels', $this->workbookRelationshipsXml());
+        $zip->addFromString('xl/styles.xml', $this->stylesXml());
+        $zip->addFromString('xl/worksheets/sheet1.xml', $this->worksheetXml($sheetRows));
+        $zip->close();
+    }
+
+    /**
      * @return array{headers: array<int, string>, rows: array<int, array<string, string>>}
      */
     public function read(string $absolutePath): array
@@ -106,6 +139,37 @@ class SimpleXlsxService
             'headers' => $headers,
             'rows' => $dataRows,
         ];
+    }
+
+    /**
+     * @return array<int, array<int, string>>
+     */
+    public function readRaw(string $absolutePath): array
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($absolutePath) !== true) {
+            throw new RuntimeException('Unable to open XLSX archive.');
+        }
+
+        $workbookXml = $zip->getFromName('xl/workbook.xml');
+        $relsXml = $zip->getFromName('xl/_rels/workbook.xml.rels');
+        $sharedStringsXml = $zip->getFromName('xl/sharedStrings.xml');
+
+        if ($workbookXml === false || $relsXml === false) {
+            $zip->close();
+            throw new RuntimeException('Invalid XLSX structure.');
+        }
+
+        $sheetPath = $this->resolveFirstWorksheetPath($workbookXml, $relsXml);
+        $worksheetXml = $zip->getFromName($sheetPath);
+        $zip->close();
+
+        if ($worksheetXml === false) {
+            throw new RuntimeException('Worksheet not found in XLSX archive.');
+        }
+
+        $sharedStrings = $this->readSharedStrings($sharedStringsXml ?: null);
+        return $this->readWorksheetRows($worksheetXml, $sharedStrings);
     }
 
     private function stringifyCellValue(mixed $value): string

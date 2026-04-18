@@ -519,6 +519,7 @@ export const orderApi = {
     getShippingAlerts: (params) => api.get('/orders/shipping-alerts', { params }),
     getReturnFollowups: (params, signal) => api.get('/orders/return-followups', { params, signal }),
     getConnectedCarriers: () => api.get('/orders/connected-carriers'),
+    exportViettelPost: (ids, goodsName) => api.post('/orders/export-viettelpost', { ids, goods_name: goodsName }, { responseType: 'blob' }),
 };
 
 export const orderAiTrainingApi = {

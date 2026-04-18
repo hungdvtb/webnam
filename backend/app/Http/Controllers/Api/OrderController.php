@@ -5157,4 +5157,70 @@ class OrderController extends Controller
 
         return response()->json($this->loadConnectedCarriers($accountId));
     }
+
+    public function exportViettelPost(Request $request)
+    {
+        $validated = $request->validate([
+            'ids'        => 'required|array|min:1',
+            'ids.*'      => 'integer',
+            'goods_name' => 'required|string|max:255',
+        ]);
+
+        $ids = collect($validated['ids'])
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
+        }
+
+        $orders = $this->scopedOrderQuery($request)
+            ->whereIn('id', $ids->all())
+            ->where(function ($query) {
+                $query
+                    ->where('order_kind', self::ORDER_KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json(['message' => 'Không tìm thấy đơn hàng hợp lệ.'], 404);
+        }
+
+        // Generate the Excel file
+        $exportService = app(\App\Services\Shipping\ViettelPostExportService::class);
+        $tmpDir  = storage_path('app/tmp');
+        if (!is_dir($tmpDir) && !mkdir($tmpDir, 0755, true) && !is_dir($tmpDir)) {
+            return response()->json(['message' => 'Không thể tạo thư mục tạm.'], 500);
+        }
+        $filename   = 'VTP_don_hang_' . now()->format('d_m_Y_His') . '.xlsx';
+        $outputPath = $tmpDir . DIRECTORY_SEPARATOR . $filename;
+
+        $exportService->export($orders, $validated['goods_name'], $outputPath);
+
+        // Update order statuses to 'dispatched'
+        DB::transaction(function () use ($orders) {
+            foreach ($orders as $order) {
+                // Only change status if it is 'printed' (Đã in) - don't override shipping/done statuses
+                if (in_array($order->status, ['new', 'printed', 'confirmed'], true)) {
+                    \App\Models\OrderStatusLog::create([
+                        'order_id'    => $order->id,
+                        'from_status' => $order->status,
+                        'to_status'   => 'dispatched',
+                        'source'      => 'system',
+                        'changed_by'  => auth()->id(),
+                        'reason'      => 'Tự động cập nhật sau khi xuất Excel gửi Viettel Post',
+                    ]);
+                    $order->update(['status' => 'dispatched']);
+                }
+            }
+        });
+
+        return response()->download($outputPath, $filename, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
 }

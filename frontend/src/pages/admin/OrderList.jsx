@@ -2236,6 +2236,9 @@ const OrderList = () => {
     const [notification, setNotification] = useState(null);
     const [printingOrders, setPrintingOrders] = useState(false);
     const [exportingPdf, setExportingPdf] = useState(false);
+    const [vtpExportOpen, setVtpExportOpen] = useState(false);
+    const [vtpExporting, setVtpExporting] = useState(false);
+    const [vtpGoodsName, setVtpGoodsName] = useState('Gốm sứ dễ vỡ');
     const [printConfirmState, setPrintConfirmState] = useState({
         open: false,
         ids: [],
@@ -3640,6 +3643,34 @@ const OrderList = () => {
         }
     };
 
+    const handleExportViettelPost = async () => {
+        if (!selectedIds.length || vtpExporting) return;
+        const ids = [...selectedIds];
+        const goodsName = vtpGoodsName.trim() || 'Gốm sứ dễ vỡ';
+        try {
+            setVtpExporting(true);
+            const response = await orderApi.exportViettelPost(ids, goodsName);
+            const blob = new Blob([response.data], {
+                type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `VTP_don_hang_${ids.length}_don_${new Date().toLocaleDateString('vi-VN').replace(/\//g, '_')}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            setVtpExportOpen(false);
+            setNotification({ type: 'success', message: `Đã xuất Excel ${ids.length} đơn hàng và chuyển trạng thái sang "Đã tạo đơn" thành công!` });
+            fetchOrders();
+        } catch (error) {
+            setNotification({ type: 'error', message: error?.response?.data?.message || error.message || 'Không thể xuất Excel Viettel Post.' });
+        } finally {
+            setVtpExporting(false);
+        }
+    };
+
     const closePrintConfirmation = useCallback(() => {
         closePrintSession(printConfirmState.session);
         setPrintConfirmState((prev) => ({
@@ -4211,6 +4242,99 @@ const OrderList = () => {
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkExportPdf} disabled={selectedIds.length === 0 || exportingPdf} title="Tải PDF đơn hàng về máy" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !exportingPdf ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-refresh-spin' : ''}`}>{exportingPdf ? 'progress_activity' : 'picture_as_pdf'}</span></button>
+                                {/* ViettelPost Export Button */}
+                                <div className="relative">
+                                    <button
+                                        id="vtp-export-btn"
+                                        onClick={() => setVtpExportOpen(true)}
+                                        disabled={selectedIds.length === 0 || vtpExporting}
+                                        title="Xuất Excel gửi Viettel Post"
+                                        className={`h-9 px-2.5 rounded-sm border flex items-center gap-1.5 transition-all text-[12px] font-bold ${
+                                            selectedIds.length > 0 && !vtpExporting
+                                                ? 'bg-violet-50 text-violet-700 border-violet-300 hover:bg-violet-600 hover:text-white shadow-sm'
+                                                : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                        }`}
+                                    >
+                                        <span className={`material-symbols-outlined text-[16px] ${vtpExporting ? 'animate-refresh-spin' : ''}`}>
+                                            {vtpExporting ? 'progress_activity' : 'local_shipping'}
+                                        </span>
+                                        <span className="hidden sm:inline">Xuất VTP</span>
+                                    </button>
+
+                                    {/* VTP Export Modal */}
+                                    {vtpExportOpen && (
+                                        <div className="fixed inset-0 z-[99999] flex items-center justify-center">
+                                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !vtpExporting && setVtpExportOpen(false)} />
+                                            <div className="relative bg-white rounded-sm shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+                                                {/* Header */}
+                                                <div className="px-6 py-4 border-b border-violet-100 bg-gradient-to-r from-violet-600 to-purple-700 flex items-center justify-between">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="material-symbols-outlined text-white text-[22px]">local_shipping</span>
+                                                        <div>
+                                                            <p className="text-[10px] font-black text-violet-200 uppercase tracking-[0.2em]">Xuất file</p>
+                                                            <h3 className="text-[15px] font-extrabold text-white">Tạo đơn hàng Viettel Post</h3>
+                                                        </div>
+                                                    </div>
+                                                    <button onClick={() => !vtpExporting && setVtpExportOpen(false)} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-white transition-all">
+                                                        <span className="material-symbols-outlined text-[18px]">close</span>
+                                                    </button>
+                                                </div>
+
+                                                {/* Body */}
+                                                <div className="px-6 py-5">
+                                                    <div className="mb-4 p-3.5 rounded-sm bg-violet-50 border border-violet-100 flex items-start gap-2.5">
+                                                        <span className="material-symbols-outlined text-violet-500 text-[18px] mt-0.5 shrink-0">info</span>
+                                                        <p className="text-[12px] text-violet-700 leading-relaxed">
+                                                            Hệ thống sẽ xuất file Excel <strong>{selectedIds.length} đơn</strong> theo mẫu Viettel Post và tự động chuyển các đơn sang trạng thái <strong>"Đã tạo đơn"</strong>.
+                                                        </p>
+                                                    </div>
+
+                                                    <label className="block mb-1.5 text-[11px] font-black text-primary/60 uppercase tracking-widest">
+                                                        Tên hàng hóa khai báo <span className="text-brick">*</span>
+                                                    </label>
+                                                    <input
+                                                        id="vtp-goods-name-input"
+                                                        type="text"
+                                                        value={vtpGoodsName}
+                                                        onChange={(e) => setVtpGoodsName(e.target.value)}
+                                                        placeholder="VD: Gốm sứ cao cấp dễ vỡ, Bộ đồ thờ..."
+                                                        className="w-full h-10 px-3 border border-primary/20 rounded-sm text-[14px] focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 transition-all"
+                                                        onKeyDown={(e) => e.key === 'Enter' && !vtpExporting && handleExportViettelPost()}
+                                                        autoFocus
+                                                    />
+                                                    <p className="mt-1.5 text-[11px] text-primary/40">Tên này sẽ được điền vào cột "Tên hàng hóa" cho tất cả đơn trong file xuất ra.</p>
+                                                </div>
+
+                                                {/* Footer */}
+                                                <div className="px-6 py-4 border-t border-primary/10 bg-primary/3 flex items-center justify-end gap-3">
+                                                    <button
+                                                        onClick={() => !vtpExporting && setVtpExportOpen(false)}
+                                                        disabled={vtpExporting}
+                                                        className="h-9 px-4 rounded-sm border border-primary/20 text-[13px] font-bold text-primary/60 hover:bg-primary/5 transition-all disabled:opacity-50"
+                                                    >
+                                                        Hủy
+                                                    </button>
+                                                    <button
+                                                        id="vtp-export-confirm-btn"
+                                                        onClick={handleExportViettelPost}
+                                                        disabled={vtpExporting || !vtpGoodsName.trim()}
+                                                        className={`h-9 px-5 rounded-sm text-[13px] font-bold transition-all flex items-center gap-2 ${
+                                                            vtpExporting || !vtpGoodsName.trim()
+                                                                ? 'bg-violet-200 text-violet-400 cursor-not-allowed'
+                                                                : 'bg-violet-600 hover:bg-violet-700 text-white shadow-sm'
+                                                        }`}
+                                                    >
+                                                        {vtpExporting ? (
+                                                            <><span className="material-symbols-outlined text-[16px] animate-refresh-spin">progress_activity</span>Đang xuất...</>
+                                                        ) : (
+                                                            <><span className="material-symbols-outlined text-[16px]">file_download</span>Tải xuống Excel</>
+                                                        )}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                                 <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
                                 {canCreateBatchReturn && (
                                     <button

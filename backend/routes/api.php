@@ -192,6 +192,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/orders/bulk-restore', [\App\Http\Controllers\Api\OrderController::class , 'bulkRestore']);
     Route::post('/orders/bulk-convert', [\App\Http\Controllers\Api\OrderController::class , 'bulkConvert']);
     Route::post('/orders/bulk-duplicate', [\App\Http\Controllers\Api\OrderController::class , 'bulkDuplicate']);
+    Route::post('/orders/export-viettelpost', [\App\Http\Controllers\Api\OrderController::class , 'exportViettelPost']);
 
     // Order Statuses
     Route::get('/order-statuses', [\App\Http\Controllers\Api\OrderStatusController::class , 'index']);

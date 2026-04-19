@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import axios from 'axios';
+import { shipmentApi } from '../../services/api';
 
 const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
     const [file, setFile] = useState(null);
@@ -32,13 +32,7 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
         setResult(null);
 
         try {
-            const token = localStorage.getItem('token');
-            const response = await axios.post('/api/shipments/import-tracking/viettel-post', formData, {
-                headers: {
-                    'Content-Type': 'multipart/form-data',
-                    'Authorization': `Bearer ${token}`
-                }
-            });
+            const response = await shipmentApi.importTrackingViettelPost(formData);
 
             setResult(response.data);
             if (onRefresh) onRefresh();

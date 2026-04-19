@@ -836,6 +836,8 @@ export const shipmentApi = {
     getCarriers: () => api.get('/shipments/carriers'),
     bulkUpdateStatus: (data) => api.post('/shipments/bulk-status', data),
     sync: (data) => api.post('/shipments/sync', data),
+    importTrackingViettelPost: (data) => api.post('/shipments/import-tracking/viettel-post', data, multipartConfig(data)),
+    reconcileViettelPost: (data) => api.post('/shipments/reconcile/viettel-post', data, multipartConfig(data)),
 };
 
 export const shippingApi = {

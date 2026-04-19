@@ -175,24 +175,27 @@ class ViettelPostTrackingImportService
                     'reason' => 'Khởi tạo từ file Excel kết quả VTP'
                 ]);
             } else {
-                // If shipment exists, only update if it DOESN'T have a tracking number yet
+                // If shipment exists, update it
+                $shipmentData = [
+                    'shipping_cost' => $shippingFee,
+                    'actual_received_amount' => $shipment->cod_amount - $shippingFee,
+                ];
+
                 if (empty($shipment->tracking_number)) {
-                    $shipment->update([
-                        'tracking_number' => $trackingNumber,
-                        'carrier_tracking_code' => $trackingNumber,
-                        'shipping_cost' => $shippingFee,
-                        'actual_received_amount' => $shipment->cod_amount - $shippingFee,
-                    ]);
-                } else {
-                    // Skip if tracking number is already set
-                    return;
+                    $shipmentData['tracking_number'] = $trackingNumber;
+                    $shipmentData['carrier_tracking_code'] = $trackingNumber;
                 }
+
+                $shipment->update($shipmentData);
             }
 
             // Sync back to order
             $order->update([
+                'status' => 'dispatched',
                 'shipping_status' => 'confirmed',
                 'shipping_tracking_code' => $trackingNumber,
+                'shipping_fee' => $shippingFee,
+                'internal_shipping_fee' => $shippingFee,
                 'shipping_dispatched_at' => now(),
             ]);
         });

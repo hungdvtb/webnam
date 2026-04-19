@@ -26,37 +26,71 @@ class ViettelPostTrackingImportService
     public function processFile(string $filePath, int $userId): array
     {
         try {
-            $data = $this->xlsxService->read($filePath);
-            $rows = $data['rows'];
+            $allRows = $this->xlsxService->readRaw($filePath);
             
-            if (empty($rows)) {
+            if (empty($allRows)) {
                 return ['success' => false, 'message' => 'File Excel không có dữ liệu.'];
             }
 
+            // Find the header row (the one containing 'Mã vận đơn' or 'Mã đơn hàng')
+            $headerIndex = -1;
+            $headerRow = [];
+            
+            foreach ($allRows as $index => $row) {
+                $isHeader = false;
+                foreach ($row as $cell) {
+                    $cellLower = mb_strtolower(trim((string)$cell));
+                    if (str_contains($cellLower, 'mã đơn hàng') || str_contains($cellLower, 'mã vận đơn')) {
+                        $isHeader = true;
+                        break;
+                    }
+                }
+                
+                if ($isHeader) {
+                    $headerIndex = $index;
+                    $headerRow = $row;
+                    break;
+                }
+            }
+
+            if ($headerIndex === -1) {
+                return ['success' => false, 'message' => 'Không tìm thấy dòng tiêu đề (Mã đơn hàng/Mã vận đơn) trong file Excel.'];
+            }
+
+            // Extract data rows (everything after headerIndex)
+            $dataRows = array_slice($allRows, $headerIndex + 1);
+            
+            // Map header names to indices
+            $headerMap = [];
+            foreach ($headerRow as $i => $h) {
+                $cleanHeader = mb_strtolower(str_replace([' ', '_', '(', ')', '*', ' ', "\xC2\xA0"], '', trim((string)$h)), 'UTF-8');
+                $headerMap[$cleanHeader] = $i;
+            }
+
+            if (empty($dataRows)) {
+                return ['success' => false, 'message' => 'Không tìm thấy dữ liệu đơn hàng bên dưới dòng tiêu đề.'];
+            }
+
             $summary = [
-                'total_rows' => count($rows),
+                'total_rows' => count($dataRows),
                 'success' => 0,
                 'failed' => 0,
                 'not_found' => 0,
                 'errors' => [],
             ];
 
-            foreach ($rows as $index => $row) {
-                // Normalize keys
-                $normalizedRow = [];
-                foreach ($row as $key => $value) {
-                    $cleanKey = strtolower(str_replace([' ', '_', '(', ')', '*'], '', (string)$key));
-                    $normalizedRow[$cleanKey] = $value;
-                }
-
-                // Identify columns
-                $orderNumber = $this->findValue($normalizedRow, ['madonhang', 'ordercode', 'madonhangkhach', 'reference']);
-                $trackingNumber = $this->findValue($normalizedRow, ['mabưuphẩm', 'mavandon', 'mavandonvtp', 'trackingnumber', 'mabuguithanhcong']);
-                $shippingFee = (float)$this->findValue($normalizedRow, ['tongcuoc', 'moneytotal', 'cuocphi', 'cuoc_tong'], 0);
+            foreach ($dataRows as $index => $row) {
+                // Identify values using indices
+                $orderNumber = $this->findInRow($row, $headerMap, ['madonhang', 'ordercode', 'madonhangkhach', 'reference', 'mãđơnhàng', 'mãđơnhàngkhách']);
+                $trackingNumber = $this->findInRow($row, $headerMap, ['mabưuphẩm', 'mavandon', 'mavandonvtp', 'trackingnumber', 'mabuguithanhcong', 'mãvậnđơn', 'mãbưuphẩm']);
+                $shippingFee = (float)$this->findInRow($row, $headerMap, ['tongcuoc', 'moneytotal', 'cuocphi', 'cuoc_tong', 'tổngcước', 'tổngtiềncước'], 0);
 
                 if (!$orderNumber) {
+                    // Skip empty rows
+                    if (empty(array_filter($row))) continue;
+                    
                     $summary['failed']++;
-                    $summary['errors'][] = "Dòng " . ($index + 2) . ": Không tìm thấy cột Mã đơn hàng.";
+                    $summary['errors'][] = "Dòng " . ($headerIndex + $index + 2) . ": Không tìm thấy cột Mã đơn hàng.";
                     continue;
                 }
 
@@ -68,7 +102,7 @@ class ViettelPostTrackingImportService
                 $order = Order::where('order_number', $orderNumber)->first();
                 if (!$order) {
                     $summary['not_found']++;
-                    $summary['errors'][] = "Dòng " . ($index + 2) . ": Không tìm thấy đơn hàng #{$orderNumber} trên hệ thống.";
+                    $summary['errors'][] = "Dòng " . ($headerIndex + $index + 2) . ": Không tìm thấy đơn hàng #{$orderNumber} trên hệ thống.";
                     continue;
                 }
 
@@ -86,6 +120,17 @@ class ViettelPostTrackingImportService
             Log::error("VTP Tracking Import Error: " . $e->getMessage());
             return ['success' => false, 'message' => $e->getMessage()];
         }
+    }
+
+    private function findInRow(array $row, array $headerMap, array $keys, $default = null)
+    {
+        foreach ($keys as $key) {
+            if (isset($headerMap[$key])) {
+                $idx = $headerMap[$key];
+                return isset($row[$idx]) ? trim((string)$row[$idx]) : $default;
+            }
+        }
+        return $default;
     }
 
     private function syncOrderToShipment(Order $order, string $trackingNumber, float $shippingFee, int $userId): void
@@ -151,13 +196,5 @@ class ViettelPostTrackingImportService
                 'shipping_dispatched_at' => now(),
             ]);
         });
-    }
-
-    private function findValue(array $row, array $keys, $default = null)
-    {
-        foreach ($keys as $key) {
-            if (isset($row[$key])) return $row[$key];
-        }
-        return $default;
     }
 }

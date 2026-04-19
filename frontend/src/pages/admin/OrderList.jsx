@@ -4244,7 +4244,7 @@ const OrderList = () => {
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkExportPdf} disabled={selectedIds.length === 0 || exportingPdf} title="Tải PDF đơn hàng về máy" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !exportingPdf ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-refresh-spin' : ''}`}>{exportingPdf ? 'progress_activity' : 'picture_as_pdf'}</span></button>
                                 {/* ViettelPost Export Button */}
-                                <div className="relative">
+                                <div className="relative flex items-center gap-1">
                                     <button
                                         id="vtp-export-btn"
                                         onClick={() => setVtpExportOpen(true)}

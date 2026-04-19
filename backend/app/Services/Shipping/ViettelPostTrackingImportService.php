@@ -63,7 +63,9 @@ class ViettelPostTrackingImportService
             // Map header names to indices
             $headerMap = [];
             foreach ($headerRow as $i => $h) {
-                $cleanHeader = mb_strtolower(str_replace([' ', '_', '(', ')', '*', ' ', "\xC2\xA0"], '', trim((string)$h)), 'UTF-8');
+                // Keep only unicode letters and numbers
+                $cleanHeader = preg_replace('/[^\p{L}\p{N}]/u', '', trim((string)$h));
+                $cleanHeader = mb_strtolower($cleanHeader, 'UTF-8');
                 $headerMap[$cleanHeader] = $i;
             }
 
@@ -83,7 +85,9 @@ class ViettelPostTrackingImportService
                 // Identify values using indices
                 $orderNumber = $this->findInRow($row, $headerMap, ['madonhang', 'ordercode', 'madonhangkhach', 'reference', 'mãđơnhàng', 'mãđơnhàngkhách']);
                 $trackingNumber = $this->findInRow($row, $headerMap, ['mabưuphẩm', 'mavandon', 'mavandonvtp', 'trackingnumber', 'mabuguithanhcong', 'mãvậnđơn', 'mãbưuphẩm']);
-                $shippingFee = (float)$this->findInRow($row, $headerMap, ['tongcuoc', 'moneytotal', 'cuocphi', 'cuoc_tong', 'tổngcước', 'tổngtiềncước'], 0);
+                
+                // For "Tổng phí (9)= (3)+(5)+(6)+(7)-(8)", our regex produces "tổngphí935678"
+                $shippingFee = (float)$this->findInRow($row, $headerMap, ['tổngphí935678', 'tổngphí', 'tongcuoc', 'moneytotal', 'cuocphi', 'cuoc_tong', 'tổngcước', 'tổngtiềncước'], 0);
 
                 if (!$orderNumber) {
                     // Skip empty rows
@@ -191,7 +195,7 @@ class ViettelPostTrackingImportService
 
             // Sync back to order
             $order->update([
-                'status' => 'dispatched',
+                'status' => 'shipping',
                 'shipping_status' => 'confirmed',
                 'shipping_tracking_code' => $trackingNumber,
                 'shipping_fee' => $shippingFee,

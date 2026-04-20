@@ -1,20 +1,22 @@
-/**
- * orderPrint.js — Luồng in đơn hàng tin cậy
- *
- * Logic:
- * 1. Mở popup window
- * 2. Ghi HTML vào popup
- * 3. Chờ tài nguyên load (ảnh, font)
- * 4. Gọi popup.print() — trình duyệt sẽ hiện hộp thoại in chuẩn
- * 5. Chờ sự kiện afterprint (hoặc timeout 10 phút) rồi resolve
- * 6. KHÔNG bao giờ tự báo "in không thành công" do heuristic sai
- */
+const PRINT_RESOURCE_TIMEOUT_MS = 12_000;
+const PRINT_DIALOG_TIMEOUT_MS = 90_000;
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const PRINT_RESOURCE_TIMEOUT_MS = 12_000;   // max chờ load ảnh/font
-const PRINT_SESSION_TIMEOUT_MS  = 10 * 60 * 1000; // 10 phút — fallback nếu afterprint không fire
+const A4_WIDTH_MM = 210;
+const A4_HEIGHT_MM = 297;
+const PAGE_MARGIN_TOP_MM = 10;
+const PAGE_MARGIN_RIGHT_MM = 9;
+const PAGE_MARGIN_BOTTOM_MM = 12;
+const PAGE_MARGIN_LEFT_MM = 9;
+const CONTENT_WIDTH_MM = A4_WIDTH_MM - PAGE_MARGIN_LEFT_MM - PAGE_MARGIN_RIGHT_MM;
+const CONTENT_HEIGHT_MM = A4_HEIGHT_MM - PAGE_MARGIN_TOP_MM - PAGE_MARGIN_BOTTOM_MM;
+const MM_TO_PX_FACTOR = 96 / 25.4;
+const CONTENT_WIDTH_PX = Math.floor(CONTENT_WIDTH_MM * MM_TO_PX_FACTOR);
+const CONTENT_HEIGHT_PX = Math.floor(CONTENT_HEIGHT_MM * MM_TO_PX_FACTOR);
+const PAGE_FIT_BUFFER_PX = 8;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+const PRINT_FRAME_ID = '__order_print_frame__';
+const PDF_FRAME_ID = '__order_pdf_frame__';
+const MEASURE_FRAME_ID = '__order_measure_frame__';
 
 const formatCurrency = (value) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' })
@@ -22,8 +24,10 @@ const formatCurrency = (value) =>
 
 const formatDateTime = (value) => {
     if (!value) return '';
+
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
+
     return `${date.toLocaleDateString('vi-VN')} ${date.toLocaleTimeString('vi-VN', {
         hour: '2-digit',
         minute: '2-digit',
@@ -46,9 +50,21 @@ const withTimeout = (promise, ms) =>
         delay(ms),
     ]);
 
-// ─── Resource helpers ────────────────────────────────────────────────────────
+const getOrderItems = (order = {}) =>
+    (Array.isArray(order.items) ? order.items : []).map((item) => {
+        const quantity = Number(item?.quantity ?? 0);
+        const unitPrice = Number(item?.unit_price ?? item?.price ?? 0);
+        const lineTotal = Number(item?.line_total ?? (quantity * unitPrice) ?? 0);
 
-/** Chờ tất cả ảnh trong một window load xong. */
+        return {
+            name: item?.name || '-',
+            sku: item?.sku || '',
+            quantity,
+            unit_price: unitPrice,
+            line_total: lineTotal,
+        };
+    });
+
 const waitForImages = async (targetWindow) => {
     const images = Array.from(targetWindow.document?.images || []);
     if (!images.length) return;
@@ -57,20 +73,32 @@ const waitForImages = async (targetWindow) => {
         images.map(
             (img) =>
                 new Promise((resolve) => {
-                    if (img.complete) { resolve(); return; }
+                    if (img.complete) {
+                        resolve();
+                        return;
+                    }
 
-                    let done = false;
-                    const finish = () => { if (!done) { done = true; resolve(); } };
-                    const tid = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+                    let settled = false;
+                    const finish = () => {
+                        if (settled) return;
+                        settled = true;
+                        resolve();
+                    };
 
-                    img.addEventListener('load',  () => { clearTimeout(tid); finish(); }, { once: true });
-                    img.addEventListener('error', () => { clearTimeout(tid); finish(); }, { once: true });
+                    const timeoutId = setTimeout(finish, PRINT_RESOURCE_TIMEOUT_MS);
+                    img.addEventListener('load', () => {
+                        clearTimeout(timeoutId);
+                        finish();
+                    }, { once: true });
+                    img.addEventListener('error', () => {
+                        clearTimeout(timeoutId);
+                        finish();
+                    }, { once: true });
                 })
         )
     );
 };
 
-/** Chờ font load xong. */
 const waitForFonts = async (targetWindow) => {
     const fonts = targetWindow.document?.fonts;
     if (fonts?.ready) {
@@ -78,7 +106,6 @@ const waitForFonts = async (targetWindow) => {
     }
 };
 
-/** Chờ 1 frame paint để đảm bảo layout đã render. */
 const waitForPaint = (targetWindow) =>
     new Promise((resolve) => {
         const raf = targetWindow?.requestAnimationFrame?.bind(targetWindow);
@@ -86,459 +113,1077 @@ const waitForPaint = (targetWindow) =>
             setTimeout(resolve, 60);
             return;
         }
+
         raf(() => raf(resolve));
     });
 
-// ─── Main-window print với visibility trick ──────────────────────────────────
-
-/**
- * In bằng cách gọi window.print() trên chính trang admin.
- *
- * Cơ chế:
- * 1. Parse HTML đơn hàng → lấy CSS + body content
- * 2. Inject content container vào DOM (off-screen, KHÔNG dùng display:none
- *    vì display:none inline không thể override bằng CSS stylesheet)
- * 3. Inject @media print CSS: ẩn React app (visibility:hidden),
- *    hiện container đơn hàng (visibility:visible + position:fixed)
- * 4. Gọi window.print() — tương đương Ctrl+P
- * 5. Dọn dẹp sau afterprint
- */
-const printWithMainWindow = async (html, ownerWin = window) => {
-    const ownerDoc = ownerWin.document;
-
-    const STYLE_ID   = '__order_print_style__';
-    const CONTENT_ID = '__order_print_content__';
-
-    // Dọn injection cũ nếu còn
-    ownerDoc.getElementById(STYLE_ID)?.remove();
-    ownerDoc.getElementById(CONTENT_ID)?.remove();
-
-    // Parse HTML để tách <style> và <body> content
-    const parsed = new DOMParser().parseFromString(html, 'text/html');
-
-    // Lấy toàn bộ CSS từ HTML đơn hàng
-    const rawCss = Array.from(parsed.querySelectorAll('style'))
-        .map((s) => s.textContent)
-        .join('\n');
-
-    // Tách @page rules ra riêng — Chrome không cho phép @page lồng trong @media print
-    const pageRules  = [];
-    const otherCss   = rawCss.replace(/@page\s*\{[^}]*\}/g, (m) => { pageRules.push(m); return ''; });
-
-    // Inject style block vào <head>
-    const styleEl = ownerDoc.createElement('style');
-    styleEl.id = STYLE_ID;
-    styleEl.textContent = `
-        /* @page phải ở top-level (không được lồng trong @media print) */
-        ${pageRules.join('\n')}
-
-        @media print {
-            /* 1. Ẩn toàn bộ React app bằng visibility (KHÔNG dùng display:none
-               vì display:none có thể làm mất layout và gây lỗi render) */
-            html, body { visibility: hidden !important; }
-
-            /* 2. Hiện ONLY container đơn hàng — children kế thừa visibility:visible */
-            #${CONTENT_ID},
-            #${CONTENT_ID} * { visibility: visible !important; }
-
-            #${CONTENT_ID} {
-                position: fixed !important;
-                left: 0 !important;
-                top: 0 !important;
-                right: 0 !important;
-                bottom: auto !important;
-                width: 100% !important;
-                height: auto !important;
-                overflow: visible !important;
-                background: #ffffff !important;
-            }
-
-            /* 3. CSS nội dung đơn hàng (fonts, tables, v.v.) */
-            ${otherCss}
-        }
-    `;
-    ownerDoc.head.appendChild(styleEl);
-
-    // Inject body content — KHÔNG dùng display:none (inline style không thể override bằng CSS)
-    // Thay vào đó: đặt ra ngoài viewport bình thường, @media print sẽ kéo về position:fixed
-    const contentEl = ownerDoc.createElement('div');
-    contentEl.id = CONTENT_ID;
-    contentEl.style.cssText = [
+const createHiddenIframe = (frameId) => {
+    const iframe = document.createElement('iframe');
+    iframe.id = frameId;
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = [
         'position:fixed',
-        'left:-210mm',     // nằm ngoài màn hình bên trái
+        'left:-10000px',
         'top:0',
-        'width:210mm',
-        'overflow:visible',
-        // KHÔNG dùng display:none hay visibility:hidden
-        // để @media print có thể override được
+        `width:${Math.max(CONTENT_WIDTH_PX + 64, 820)}px`,
+        `height:${Math.max(CONTENT_HEIGHT_PX + 64, 1180)}px`,
+        'border:0',
+        'opacity:0',
+        'pointer-events:none',
+        'background:#ffffff',
+        'z-index:-99999',
     ].join(';');
-    contentEl.innerHTML = parsed.body?.innerHTML || '';
-    ownerDoc.body.appendChild(contentEl);
 
-    // Chờ DOM update
-    await delay(200);
-
-    const cleanup = () => {
-        try { ownerDoc.getElementById(STYLE_ID)?.remove(); }   catch (_) { /* ignore */ }
-        try { ownerDoc.getElementById(CONTENT_ID)?.remove(); } catch (_) { /* ignore */ }
-    };
-
-    // Gọi window.print() — tương đương Ctrl+P, driver luôn nhận
-    const printResult = await new Promise((resolve) => {
-        let settled = false;
-        let timeoutId = null;
-
-        const finish = (reason) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeoutId);
-            try { ownerWin.removeEventListener('afterprint', handleAfterPrint); } catch (_) { /* ignore */ }
-            resolve({ reason });
-        };
-
-        const handleAfterPrint = () => finish('afterprint');
-        ownerWin.addEventListener('afterprint', handleAfterPrint);
-        timeoutId = setTimeout(() => finish('timeout'), 90_000);
-
-        setTimeout(() => {
-            try {
-                ownerWin.print();
-            } catch (err) {
-                finish('print-error');
-            }
-        }, 0);
-    });
-
-    cleanup();
-
-    return { close: () => { /* nothing */ }, reason: printResult.reason };
+    document.body.appendChild(iframe);
+    return iframe;
 };
 
-// ─── HTML builders ───────────────────────────────────────────────────────────
+const removeIframe = (frameId) => {
+    document.getElementById(frameId)?.remove();
+};
 
-const renderOrderRows = (items = []) => {
+const loadHtmlIntoIframe = async (iframe, html) => {
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    const iframeWin = iframe.contentWindow;
+
+    if (!iframeDoc || !iframeWin) {
+        throw new Error('Khong the khoi tao khung in PDF.');
+    }
+
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+
+    await new Promise((resolve) => {
+        const startedAt = Date.now();
+
+        const finish = () => resolve();
+        const checkReadyState = () => {
+            if (iframeDoc.readyState === 'complete') {
+                finish();
+                return;
+            }
+
+            if (Date.now() - startedAt >= PRINT_RESOURCE_TIMEOUT_MS) {
+                finish();
+                return;
+            }
+
+            setTimeout(checkReadyState, 30);
+        };
+
+        checkReadyState();
+    });
+
+    await waitForImages(iframeWin);
+    await waitForFonts(iframeWin);
+    await waitForPaint(iframeWin);
+    await delay(40);
+
+    return { iframeDoc, iframeWin };
+};
+
+const renderOrderRows = (items = [], startIndex = 0, measurement = false) => {
     if (!items.length) {
-        return `<tr><td colspan="5" class="empty-state">Đơn hàng không có sản phẩm.</td></tr>`;
+        return `<tr><td colspan="5" class="empty-state">Don hang khong co san pham.</td></tr>`;
     }
 
     return items
-        .map(
-            (item, index) => `
-        <tr>
-            <td class="col-index">${index + 1}</td>
+        .map((item, index) => `
+        <tr${measurement ? ' data-measure-row="true"' : ''}>
+            <td class="col-index"><div class="cell-center"><span class="cell-text">${startIndex + index + 1}</span></div></td>
             <td class="col-name">
-                <div class="product-name">${escapeHtml(item.name || '-')}</div>
-                ${item.sku ? `<div class="product-sku">SKU: ${escapeHtml(item.sku)}</div>` : ''}
+                <div class="product-cell">
+                    <div class="product-name"><span class="product-text">${escapeHtml(item.name || '-')}</span></div>
+                    ${item.sku ? `<div class="product-sku"><span class="product-sku-text">SKU: ${escapeHtml(item.sku)}</span></div>` : ''}
+                </div>
             </td>
-            <td class="col-qty">${escapeHtml(item.quantity ?? 0)}</td>
-            <td class="col-money">${escapeHtml(formatCurrency(item.unit_price))}</td>
-            <td class="col-money">${escapeHtml(formatCurrency(item.line_total))}</td>
-        </tr>`
-        )
+            <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
+            <td class="col-money"><div class="cell-money"><span class="cell-text">${escapeHtml(formatCurrency(item.unit_price))}</span></div></td>
+            <td class="col-money"><div class="cell-money cell-money--total"><span class="cell-text">${escapeHtml(formatCurrency(item.line_total))}</span></div></td>
+        </tr>`)
         .join('');
 };
 
-export const buildOrderPrintDocument = (orders = []) => {
-    const printedAt = formatDateTime(new Date().toISOString());
+const renderTableHead = (measurement = false) => `
+    <thead${measurement ? ' data-measure-table-head="true"' : ''}>
+        <tr>
+            <th class="col-index"><div class="head-cell"><span class="head-text">STT</span></div></th>
+            <th class="col-name"><div class="head-cell"><span class="head-text">San pham</span></div></th>
+            <th class="col-qty"><div class="head-cell"><span class="head-text">So luong</span></div></th>
+            <th class="col-money"><div class="head-cell"><span class="head-text">Don gia</span></div></th>
+            <th class="col-money"><div class="head-cell"><span class="head-text">Thanh tien</span></div></th>
+        </tr>
+    </thead>`;
 
-    const sections = orders
-        .map(
-            (order, orderIndex) => `
-        <section class="order-sheet ${orderIndex === orders.length - 1 ? 'order-sheet-last' : ''}">
-            <div class="order-sheet__inner">
-                <header class="sheet-header">
-                    <div>
-                        <div class="sheet-kicker">In đơn hàng</div>
-                        <h1 class="sheet-title">Đơn #${escapeHtml(order.order_number || '-')}</h1>
+const renderFullHeader = (order, printedAt, pageNumber, pageCount, measurement = false) => `
+    <div class="page-top page-top--full"${measurement ? ' data-measure-top="first"' : ''}>
+        <div class="page-header">
+            <div class="page-header__main">
+                <div class="page-kicker">IN DON HANG</div>
+                <h1 class="page-order-code">Don #${escapeHtml(order.order_number || '-')}</h1>
+            </div>
+            <div class="page-header__meta">
+                <div class="page-meta-block">
+                    <span class="page-meta-label">Ngay in</span>
+                    <span class="page-meta-value">${escapeHtml(printedAt || '-')}</span>
+                </div>
+                ${pageCount > 1 ? `
+                    <div class="page-meta-block">
+                        <span class="page-meta-label">Trang</span>
+                        <span class="page-meta-value">${pageNumber}/${pageCount}</span>
+                    </div>` : ''}
+            </div>
+        </div>
+
+        <div class="detail-stack">
+            <div class="detail-row detail-row--contact">
+                <div class="detail-split">
+                    <div class="detail-inline detail-inline--grow">
+                        <div class="detail-label"><span class="detail-text">Khach hang</span></div>
+                        <div class="detail-value detail-value--truncate"><span class="detail-text detail-text--value">${escapeHtml(order.customer_name || '-')}</span></div>
                     </div>
-                    <div class="sheet-meta">
-                        <div><span>Ngày in:</span> ${escapeHtml(printedAt || '-')}</div>
-                        <div><span>Khách hàng:</span> ${escapeHtml(order.customer_name || '-')}</div>
-                    </div>
-                </header>
-
-                <section class="info-grid">
-                    <article class="info-card">
-                        <div class="info-label">Mã đơn</div>
-                        <div class="info-value">${escapeHtml(order.order_number || '-')}</div>
-                    </article>
-                    <article class="info-card">
-                        <div class="info-label">Tên khách hàng</div>
-                        <div class="info-value">${escapeHtml(order.customer_name || '-')}</div>
-                    </article>
-                    <article class="info-card">
-                        <div class="info-label">Số điện thoại</div>
-                        <div class="info-value">${escapeHtml(order.customer_phone || '-')}</div>
-                    </article>
-                    <article class="info-card info-card-wide">
-                        <div class="info-label">Địa chỉ</div>
-                        <div class="info-value info-value-wrap">${escapeHtml(order.shipping_address || '-')}</div>
-                    </article>
-                    <article class="info-card info-card-full">
-                        <div class="info-label">Ghi chú đơn hàng</div>
-                        <div class="info-value info-value-wrap">${escapeHtml(order.notes || 'Không có ghi chú.')}</div>
-                    </article>
-                </section>
-
-                <table class="items-table">
-                    <thead>
-                        <tr>
-                            <th class="col-index">STT</th>
-                            <th class="col-name">Sản phẩm</th>
-                            <th class="col-qty">Số lượng</th>
-                            <th class="col-money">Đơn giá</th>
-                            <th class="col-money">Thành tiền</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${renderOrderRows(order.items)}
-                    </tbody>
-                </table>
-
-                <div class="summary-row">
-                    <div class="summary-box">
-                        <div class="summary-label">Tổng thanh toán</div>
-                        <div class="summary-value">${escapeHtml(formatCurrency(order.total_payment))}</div>
+                    <div class="detail-inline detail-inline--phone">
+                        <div class="detail-divider" aria-hidden="true"></div>
+                        <div class="detail-label"><span class="detail-text">SDT</span></div>
+                        <div class="detail-value detail-value--phone"><span class="detail-text detail-text--value">${escapeHtml(order.customer_phone || '-')}</span></div>
                     </div>
                 </div>
             </div>
-        </section>`
-        )
-        .join('');
+            <div class="detail-row detail-row--text">
+                <div class="detail-label"><span class="detail-text">Dia chi</span></div>
+                <div class="detail-value detail-value--wrap"><span class="detail-text detail-text--value">${escapeHtml(order.shipping_address || '-')}</span></div>
+            </div>
+            <div class="detail-row detail-row--text">
+                <div class="detail-label"><span class="detail-text">Ghi chu</span></div>
+                <div class="detail-value detail-value--wrap"><span class="detail-text detail-text--value">${escapeHtml(order.notes || 'Khong co ghi chu.')}</span></div>
+            </div>
+        </div>
+    </div>`;
 
-    return `<!DOCTYPE html>
+const renderContinuationHeader = (order, pageNumber, pageCount, measurement = false) => `
+    <div class="page-top page-top--continuation"${measurement ? ' data-measure-top="continuation"' : ''}>
+        <span class="continue-code">Don #${escapeHtml(order.order_number || '-')}</span>
+        <span class="continue-meta">Trang ${pageNumber}/${pageCount}</span>
+    </div>`;
+
+const renderSummary = (order, measurement = false) => `
+    <div class="summary-row"${measurement ? ' data-measure-summary="true"' : ''}>
+        <div class="summary-box">
+            <div class="summary-label"><span class="summary-text">Tong thanh toan:</span></div>
+            <div class="summary-value"><span class="summary-text summary-text--value">${escapeHtml(formatCurrency(order.total_payment))}</span></div>
+        </div>
+    </div>`;
+
+const renderOrderPage = ({
+    order,
+    printedAt,
+    items,
+    startIndex,
+    isFirstPage,
+    isLastPage,
+    pageNumber,
+    pageCount,
+    isDocumentLast,
+    measurementPageType = '',
+}) => {
+    const measurement = Boolean(measurementPageType);
+    const pageClasses = [
+        'print-page',
+        isDocumentLast ? 'print-page--last' : '',
+    ].filter(Boolean).join(' ');
+
+    const pageAttrs = measurementPageType
+        ? ` data-measure-page="${measurementPageType}"`
+        : '';
+
+    return `
+        <section class="${pageClasses}"${pageAttrs}>
+            <div class="page-shell">
+                ${isFirstPage
+                    ? renderFullHeader(order, printedAt, pageNumber, pageCount, measurement)
+                    : renderContinuationHeader(order, pageNumber, pageCount, measurement)}
+                <div class="table-wrap">
+                    <table class="items-table">
+                        ${renderTableHead(measurement)}
+                        <tbody>
+                            ${renderOrderRows(items, startIndex, measurement)}
+                        </tbody>
+                    </table>
+                </div>
+                ${isLastPage ? renderSummary(order, measurement) : ''}
+            </div>
+        </section>`;
+};
+
+const getOrderPrintStyles = () => `
+    :root {
+        color-scheme: light;
+        --page-width: ${CONTENT_WIDTH_MM}mm;
+        --page-height: ${CONTENT_HEIGHT_MM}mm;
+        --page-bg: #ffffff;
+        --page-text: #0f172a;
+        --page-muted: #64748b;
+        --page-border: #d7dde5;
+        --page-border-strong: #111827;
+        --page-header-bg: #f8fafc;
+        --page-row-bg: #fcfcfd;
+    }
+
+    * {
+        box-sizing: border-box;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        background: #f1f5f9;
+        color: var(--page-text);
+        font-family: "Segoe UI", Arial, sans-serif;
+        font-size: 11px;
+        line-height: 1.35;
+    }
+
+    body {
+        padding: 12px;
+    }
+
+    body.measurement-mode {
+        padding: 0;
+        background: #ffffff;
+    }
+
+    .print-document {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .print-page {
+        width: var(--page-width);
+        height: var(--page-height);
+        margin: 0 auto;
+        background: var(--page-bg);
+        box-shadow: 0 16px 40px -30px rgba(15, 23, 42, 0.35);
+        overflow: hidden;
+    }
+
+    .page-shell {
+        height: var(--page-height);
+        display: flex;
+        flex-direction: column;
+    }
+
+    body.measurement-mode .print-document {
+        gap: 0;
+    }
+
+    body.measurement-mode .print-page {
+        height: auto;
+        min-height: auto;
+        margin: 0 0 12px 0;
+        box-shadow: none;
+        break-after: auto;
+        page-break-after: auto;
+    }
+
+    body.measurement-mode .page-shell {
+        height: auto;
+        min-height: 0;
+    }
+
+    .page-top {
+        flex: 0 0 auto;
+    }
+
+    .page-top--full {
+        margin-bottom: 8px;
+    }
+
+    .page-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        padding-bottom: 9px;
+        border-bottom: 1.4px solid var(--page-border-strong);
+    }
+
+    .page-header__main {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .page-kicker {
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--page-muted);
+    }
+
+    .page-order-code {
+        margin: 4px 0 0;
+        padding: 1px 0 3px;
+        font-size: 20px;
+        line-height: 1.12;
+        font-weight: 800;
+        letter-spacing: -0.03em;
+        white-space: nowrap;
+        overflow: visible;
+    }
+
+    .page-header__meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        flex: 0 0 auto;
+        white-space: nowrap;
+        text-align: right;
+    }
+
+    .page-meta-block {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .page-meta-label {
+        font-size: 8px;
+        font-weight: 700;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--page-muted);
+    }
+
+    .page-meta-value {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--page-text);
+    }
+
+    .detail-stack {
+        display: grid;
+        gap: 5px;
+        margin-top: 6px;
+    }
+
+    .detail-row {
+        border: 1px solid var(--page-border);
+        padding: 4px 7px;
+        min-height: 29px;
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+    }
+
+    .detail-row--text {
+        align-items: center;
+    }
+
+    .detail-row--contact {
+        align-items: center;
+    }
+
+    .detail-split {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 12px;
+        align-items: stretch;
+    }
+
+    .detail-inline {
+        display: flex;
+        align-items: stretch;
+        gap: 7px;
+        min-width: 0;
+        min-height: 100%;
+    }
+
+    .detail-inline--grow {
+        flex: 1 1 62%;
+        align-items: center;
+    }
+
+    .detail-inline--phone {
+        flex: 0 1 auto;
+        align-self: stretch;
+    }
+
+    .detail-divider {
+        width: 1px;
+        height: 14px;
+        background: var(--page-border);
+        flex: 0 0 1px;
+    }
+
+    .detail-label {
+        font-size: 8.4px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--page-muted);
+        white-space: nowrap;
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        align-self: stretch;
+    }
+
+    .detail-value {
+        min-width: 0;
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        align-self: stretch;
+        font-size: 10.8px;
+        font-weight: 700;
+        color: var(--page-text);
+        line-height: 1.22;
+    }
+
+    .detail-text {
+        display: block;
+        line-height: 1;
+        transform: translateY(-0.06em);
+    }
+
+    .detail-text--value {
+        line-height: 1.14;
+        transform: translateY(-0.04em);
+    }
+
+    .detail-value--truncate {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+        line-height: 1.22;
+    }
+
+    .detail-value--phone {
+        flex: 0 0 auto;
+        white-space: nowrap;
+    }
+
+    .detail-value--wrap {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    .page-top--continuation {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        padding-bottom: 6px;
+        margin-bottom: 8px;
+        border-bottom: 1px solid #cbd5e1;
+    }
+
+    .continue-code {
+        min-width: 0;
+        font-size: 13px;
+        line-height: 1.12;
+        font-weight: 800;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .continue-meta {
+        flex: 0 0 auto;
+        font-size: 8.4px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--page-muted);
+        white-space: nowrap;
+    }
+
+    .table-wrap {
+        flex: 0 0 auto;
+    }
+
+    .items-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+
+    .items-table thead {
+        display: table-header-group;
+    }
+
+    .items-table tbody tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+
+    .items-table th,
+    .items-table td {
+        border: 1px solid var(--page-border);
+        vertical-align: middle;
+    }
+
+    .items-table th {
+        padding: 0;
+        background: var(--page-header-bg);
+        font-size: 8px;
+        font-weight: 700;
+        line-height: 1.15;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #475569;
+    }
+
+    .items-table td {
+        padding: 0;
+        font-size: 10.5px;
+        line-height: 1.18;
+        vertical-align: middle;
+    }
+
+    .items-table tbody tr:nth-child(even) td {
+        background: var(--page-row-bg);
+    }
+
+    .col-index {
+        width: 6.5%;
+        text-align: center;
+    }
+
+    .col-name {
+        width: 50.5%;
+    }
+
+    .col-qty {
+        width: 11.5%;
+        text-align: center;
+    }
+
+    .col-money {
+        width: 15.75%;
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    .head-cell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 25px;
+        padding: 5px 6px;
+        width: 100%;
+    }
+
+    .head-text {
+        display: block;
+        line-height: 1;
+        transform: translateY(-0.05em);
+    }
+
+    .cell-center {
+        display: flex;
+        width: 100%;
+        min-height: 28px;
+        padding: 5px 6px;
+        box-sizing: border-box;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+    }
+
+    .cell-money {
+        display: flex;
+        width: 100%;
+        min-height: 28px;
+        padding: 5px 6px;
+        box-sizing: border-box;
+        align-items: center;
+        justify-content: flex-end;
+        font-weight: 700;
+    }
+
+    .cell-text {
+        display: block;
+        line-height: 1;
+        transform: translateY(-0.06em);
+    }
+
+    .cell-money--total {
+        font-weight: 800;
+    }
+
+    .product-cell {
+        display: flex;
+        width: 100%;
+        flex-direction: column;
+        justify-content: center;
+        gap: 2px;
+        min-height: 28px;
+        padding: 5px 6px;
+        box-sizing: border-box;
+    }
+
+    .product-name {
+        font-weight: 700;
+        overflow-wrap: anywhere;
+    }
+
+    .product-text {
+        display: block;
+        line-height: 1.16;
+        transform: translateY(-0.04em);
+    }
+
+    .product-sku {
+        font-size: 8.1px;
+        line-height: 1.15;
+        color: var(--page-muted);
+        overflow-wrap: anywhere;
+    }
+
+    .product-sku-text {
+        display: block;
+        line-height: 1.05;
+        transform: translateY(-0.03em);
+    }
+
+    .empty-state {
+        padding: 14px 10px;
+        text-align: center;
+        font-style: italic;
+        color: var(--page-muted);
+    }
+
+    .summary-row {
+        margin-top: auto;
+        padding-top: 10px;
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    body.measurement-mode .summary-row {
+        margin-top: 10px;
+        padding-top: 0;
+    }
+
+    .summary-box {
+        max-width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1.8px solid var(--page-border-strong);
+        padding: 8px 12px;
+        min-height: 36px;
+        white-space: nowrap;
+    }
+
+    .summary-label {
+        display: flex;
+        align-items: center;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--page-text);
+    }
+
+    .summary-value {
+        display: flex;
+        align-items: center;
+        font-size: 19px;
+        line-height: 1;
+        font-weight: 800;
+        color: var(--page-text);
+    }
+
+    .summary-text {
+        display: block;
+        line-height: 1;
+        transform: translateY(-0.05em);
+    }
+
+    .summary-text--value {
+        transform: translateY(-0.04em);
+    }
+
+    @page {
+        size: A4 portrait;
+        margin: ${PAGE_MARGIN_TOP_MM}mm ${PAGE_MARGIN_RIGHT_MM}mm ${PAGE_MARGIN_BOTTOM_MM}mm ${PAGE_MARGIN_LEFT_MM}mm;
+    }
+
+    @media print {
+        html,
+        body {
+            padding: 0;
+            background: #ffffff;
+        }
+
+        .print-document {
+            display: block;
+        }
+
+        .print-page {
+            margin: 0 auto;
+            box-shadow: none;
+            break-after: page;
+            page-break-after: always;
+        }
+
+        .print-page--last {
+            break-after: auto;
+            page-break-after: auto;
+        }
+    }
+
+    @media screen and (max-width: 860px) {
+        body {
+            padding: 8px;
+        }
+
+        .print-page {
+            width: 100%;
+            height: auto;
+            min-height: auto;
+        }
+
+        .page-shell {
+            height: auto;
+            min-height: 0;
+        }
+
+        .page-header {
+            flex-wrap: wrap;
+        }
+
+        .page-header__meta {
+            align-items: flex-start;
+            text-align: left;
+        }
+
+        .detail-split {
+            grid-template-columns: 1fr;
+        }
+
+        .detail-inline--phone {
+            justify-content: flex-start;
+        }
+
+        .detail-divider {
+            display: none;
+        }
+
+        .page-order-code,
+        .continue-code {
+            white-space: normal;
+        }
+
+        .items-table {
+            table-layout: auto;
+        }
+
+        .col-index,
+        .col-name,
+        .col-qty,
+        .col-money {
+            width: auto;
+        }
+
+        .summary-box {
+            width: 100%;
+            justify-content: space-between;
+        }
+    }
+`;
+
+const buildHtmlDocument = (pages = [], { measurement = false } = {}) => `<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>In đơn hàng</title>
-    <style>
-        :root { color-scheme: light; }
-
-        * { box-sizing: border-box; }
-
-        html, body {
-            margin: 0;
-            padding: 0;
-            font-family: "Segoe UI", Arial, sans-serif;
-            color: #111827;
-            background: #ffffff;
-            font-size: 12px;
-            line-height: 1.5;
-        }
-
-        /* ── Page setup ── */
-        @page {
-            margin: 12mm 10mm;
-        }
-
-        /* ── Order sheets ── */
-        .order-sheet {
-            page-break-after: always;
-            break-after: page;
-        }
-        .order-sheet-last {
-            page-break-after: auto;
-            break-after: auto;
-        }
-        .order-sheet__inner {
-            padding: 0;
-        }
-
-        /* ── Header ── */
-        .sheet-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 14px;
-            flex-wrap: wrap;
-            margin-bottom: 12px;
-            border-bottom: 2px solid #111827;
-            padding-bottom: 10px;
-        }
-        .sheet-kicker {
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.2em;
-            color: #6b7280;
-            margin-bottom: 4px;
-        }
-        .sheet-title {
-            margin: 0;
-            font-size: 24px;
-            line-height: 1.1;
-            font-weight: 800;
-        }
-        .sheet-meta {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            min-width: 220px;
-            text-align: right;
-            font-size: 11px;
-            line-height: 1.45;
-        }
-        .sheet-meta span {
-            font-weight: 700;
-            color: #6b7280;
-        }
-
-        /* ── Info grid ── */
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-        .info-card {
-            border: 1px solid #d1d5db;
-            padding: 8px 10px;
-            min-height: 60px;
-        }
-        .info-card-wide  { grid-column: span 2; }
-        .info-card-full  { grid-column: 1 / -1; min-height: 76px; }
-        .info-label {
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            color: #6b7280;
-            margin-bottom: 5px;
-        }
-        .info-value {
-            font-size: 13px;
-            font-weight: 700;
-            line-height: 1.45;
-            overflow-wrap: anywhere;
-        }
-        .info-value-wrap {
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-        }
-
-        /* ── Items table ── */
-        .items-table {
-            width: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-        }
-        .items-table thead { display: table-header-group; }
-        .items-table tr    { break-inside: avoid; page-break-inside: avoid; }
-        .items-table th,
-        .items-table td {
-            border: 1px solid #d1d5db;
-            padding: 7px 8px;
-            vertical-align: top;
-        }
-        .items-table th {
-            background: #f8fafc;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
-            color: #374151;
-        }
-        .col-index { width: 7%;  text-align: center; }
-        .col-name  { width: 49%; }
-        .col-qty   { width: 12%; text-align: center; }
-        .col-money { width: 16%; text-align: right; white-space: nowrap; }
-        .product-name { font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
-        .product-sku  { margin-top: 3px; font-size: 10px; color: #6b7280; }
-        .empty-state  { padding: 16px 12px; text-align: center; color: #6b7280; font-style: italic; }
-
-        /* ── Summary ── */
-        .summary-row  { display: flex; justify-content: flex-end; margin-top: 12px; }
-        .summary-box  { width: min(100%, 320px); border: 2px solid #111827; padding: 10px 12px; margin-left: auto; }
-        .summary-label {
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.14em;
-            color: #6b7280;
-            margin-bottom: 4px;
-        }
-        .summary-value {
-            font-size: 22px;
-            font-weight: 800;
-            text-align: right;
-            line-height: 1.2;
-        }
-
-        /* ── Screen-only decoration ── */
-        @media screen {
-            html, body { background: #eef2f7; }
-            body { padding: 16px; }
-            .order-sheet {
-                max-width: 1180px;
-                margin: 0 auto 16px;
-                border: 1px solid #d1d5db;
-                background: #ffffff;
-                box-shadow: 0 24px 60px -40px rgba(15,23,42,.35);
-            }
-            .order-sheet__inner { padding: 16px 18px 18px; }
-        }
-
-        /* ── Print overrides ── */
-        @media print {
-            html, body { background: #ffffff; padding: 0; }
-            .order-sheet { margin: 0; border: none; box-shadow: none; background: transparent; }
-        }
-
-        /* ── Responsive (screen only) ── */
-        @media (max-width: 900px) {
-            .sheet-meta { min-width: 0; width: 100%; text-align: left; }
-            .info-grid  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .info-card-wide, .info-card-full { grid-column: span 2; }
-        }
-        @media (max-width: 640px) {
-            .info-grid  { grid-template-columns: 1fr; }
-            .info-card-wide, .info-card-full { grid-column: auto; }
-            .items-table { table-layout: auto; }
-            .col-index, .col-name, .col-qty, .col-money { width: auto; }
-            .summary-box { width: 100%; }
-        }
-    </style>
+    <title>In don hang</title>
+    <style>${getOrderPrintStyles()}</style>
 </head>
-<body>
-    ${sections}
+<body class="${measurement ? 'measurement-mode' : ''}">
+    <main class="print-document">
+        ${pages.join('')}
+    </main>
 </body>
 </html>`;
+
+const measureOrderLayout = async (order, printedAt) => {
+    removeIframe(MEASURE_FRAME_ID);
+    const iframe = createHiddenIframe(MEASURE_FRAME_ID);
+
+    try {
+        const items = getOrderItems(order);
+        const measurementHtml = buildHtmlDocument([
+            renderOrderPage({
+                order,
+                printedAt,
+                items,
+                startIndex: 0,
+                isFirstPage: true,
+                isLastPage: true,
+                pageNumber: 1,
+                pageCount: 1,
+                isDocumentLast: false,
+                measurementPageType: 'first',
+            }),
+            renderOrderPage({
+                order,
+                printedAt,
+                items: [],
+                startIndex: 0,
+                isFirstPage: false,
+                isLastPage: true,
+                pageNumber: 2,
+                pageCount: 2,
+                isDocumentLast: true,
+                measurementPageType: 'continuation',
+            }),
+        ], { measurement: true });
+
+        const { iframeDoc } = await loadHtmlIntoIframe(iframe, measurementHtml);
+
+        const firstPage = iframeDoc.querySelector('[data-measure-page="first"]');
+        const continuationPage = iframeDoc.querySelector('[data-measure-page="continuation"]');
+
+        if (!firstPage || !continuationPage) {
+            throw new Error('Khong the do kich thuoc trang in.');
+        }
+
+        const firstTop = firstPage.querySelector('[data-measure-top="first"]');
+        const continuationTop = continuationPage.querySelector('[data-measure-top="continuation"]');
+        const tableHead = firstPage.querySelector('[data-measure-table-head="true"]');
+        const summary = firstPage.querySelector('[data-measure-summary="true"]');
+
+        if (!firstTop || !continuationTop || !tableHead || !summary) {
+            throw new Error('Khong the do kich thuoc bo cuc don hang.');
+        }
+
+        const rowHeights = Array.from(firstPage.querySelectorAll('[data-measure-row="true"]'))
+            .map((row) => Math.ceil(row.getBoundingClientRect().height));
+
+        return {
+            fullHeaderHeight: Math.ceil(firstTop.getBoundingClientRect().height),
+            continuationHeaderHeight: Math.ceil(continuationTop.getBoundingClientRect().height),
+            tableHeadHeight: Math.ceil(tableHead.getBoundingClientRect().height),
+            summaryHeight: Math.ceil(summary.getBoundingClientRect().height),
+            rowHeights,
+        };
+    } finally {
+        iframe.remove();
+    }
 };
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+const sumRange = (prefix, start, end) => prefix[end + 1] - prefix[start];
 
-/**
- * Mở cửa sổ in chuẩn của trình duyệt với danh sách đơn hàng.
- *
- * @param {Array}  orders          - mảng đơn hàng từ API
- * @param {Object} [options]
- * @param {Window} [options.ownerWindow] - parent window (mặc định: global window)
- * @returns {{ close: () => void, reason: string }}
- * @throws {Error} chỉ khi popup bị chặn
- */
+const paginateOrder = (order, metrics, printedAt) => {
+    const items = getOrderItems(order);
+    if (!items.length) {
+        return [{
+            order,
+            printedAt,
+            items: [],
+            startIndex: 0,
+            isFirstPage: true,
+            isLastPage: true,
+            pageNumber: 1,
+            pageCount: 1,
+        }];
+    }
+
+    const rowHeights = metrics.rowHeights.length
+        ? metrics.rowHeights
+        : items.map(() => 32);
+
+    const safeSinglePageCapacity = Math.max(
+        1,
+        CONTENT_HEIGHT_PX - metrics.fullHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+    );
+    const safeFirstPageCapacity = Math.max(
+        1,
+        CONTENT_HEIGHT_PX - metrics.fullHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+    );
+    const safeContinuationCapacity = Math.max(
+        1,
+        CONTENT_HEIGHT_PX - metrics.continuationHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+    );
+    const safeLastContinuationCapacity = Math.max(
+        1,
+        CONTENT_HEIGHT_PX - metrics.continuationHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+    );
+
+    const prefix = [0];
+    rowHeights.forEach((height) => {
+        prefix.push(prefix[prefix.length - 1] + height);
+    });
+
+    const memo = new Map();
+    const lastIndex = rowHeights.length - 1;
+
+    const solve = (startIndex, isFirstPage) => {
+        const memoKey = `${startIndex}-${isFirstPage ? 1 : 0}`;
+        if (memo.has(memoKey)) {
+            return memo.get(memoKey);
+        }
+
+        if (startIndex > lastIndex) {
+            const emptyResult = [];
+            memo.set(memoKey, emptyResult);
+            return emptyResult;
+        }
+
+        const lastPageCapacity = isFirstPage
+            ? safeSinglePageCapacity
+            : safeLastContinuationCapacity;
+
+        if (sumRange(prefix, startIndex, lastIndex) <= lastPageCapacity) {
+            const singleResult = [{ start: startIndex, end: lastIndex }];
+            memo.set(memoKey, singleResult);
+            return singleResult;
+        }
+
+        const currentPageCapacity = isFirstPage
+            ? safeFirstPageCapacity
+            : safeContinuationCapacity;
+
+        let usedHeight = 0;
+        let bestResult = null;
+
+        for (let endIndex = startIndex; endIndex < lastIndex; endIndex += 1) {
+            usedHeight += rowHeights[endIndex];
+
+            if (usedHeight > currentPageCapacity && endIndex > startIndex) {
+                break;
+            }
+
+            if (usedHeight > currentPageCapacity && endIndex === startIndex) {
+                const forcedTail = solve(endIndex + 1, false);
+                const forcedResult = [{ start: startIndex, end: endIndex }, ...forcedTail];
+                memo.set(memoKey, forcedResult);
+                return forcedResult;
+            }
+
+            const tail = solve(endIndex + 1, false);
+            if (tail) {
+                bestResult = [{ start: startIndex, end: endIndex }, ...tail];
+            }
+        }
+
+        const fallbackResult = bestResult || [{ start: startIndex, end: lastIndex }];
+        memo.set(memoKey, fallbackResult);
+        return fallbackResult;
+    };
+
+    const ranges = solve(0, true);
+
+    return ranges.map((range, index) => ({
+        order,
+        printedAt,
+        items: items.slice(range.start, range.end + 1),
+        startIndex: range.start,
+        isFirstPage: index === 0,
+        isLastPage: index === ranges.length - 1,
+        pageNumber: index + 1,
+        pageCount: ranges.length,
+    }));
+};
+
+const buildPaginatedPages = async (orders = []) => {
+    const printedAt = formatDateTime(new Date().toISOString());
+    const allPages = [];
+
+    for (const order of orders) {
+        const metrics = await measureOrderLayout(order, printedAt);
+        const orderPages = paginateOrder(order, metrics, printedAt);
+        allPages.push(...orderPages);
+    }
+
+    return allPages;
+};
+
+export const buildOrderPrintDocument = async (orders = []) => {
+    const pages = await buildPaginatedPages(orders);
+    const htmlPages = pages.map((page, index) =>
+        renderOrderPage({
+            ...page,
+            isDocumentLast: index === pages.length - 1,
+        })
+    );
+
+    return buildHtmlDocument(htmlPages);
+};
+
+const printWithIframe = async (html) => {
+    removeIframe(PRINT_FRAME_ID);
+    const iframe = createHiddenIframe(PRINT_FRAME_ID);
+
+    try {
+        const { iframeWin } = await loadHtmlIntoIframe(iframe, html);
+
+        const printResult = await new Promise((resolve) => {
+            let settled = false;
+            let timeoutId = null;
+
+            const finish = (reason) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                try {
+                    iframeWin.removeEventListener('afterprint', handleAfterPrint);
+                } catch (_) {
+                    // Ignore cleanup errors.
+                }
+                resolve({ reason });
+            };
+
+            const handleAfterPrint = () => finish('afterprint');
+
+            iframeWin.addEventListener('afterprint', handleAfterPrint);
+            timeoutId = setTimeout(() => finish('timeout'), PRINT_DIALOG_TIMEOUT_MS);
+
+            setTimeout(() => {
+                try {
+                    iframeWin.focus();
+                    iframeWin.print();
+                } catch (_) {
+                    finish('print-error');
+                }
+            }, 0);
+        });
+
+        return {
+            reason: printResult.reason,
+            close: () => removeIframe(PRINT_FRAME_ID),
+        };
+    } catch (error) {
+        iframe.remove();
+        throw error;
+    }
+};
+
 export const printOrders = async (orders = [], options = {}) => {
     if (!Array.isArray(orders) || orders.length === 0) {
-        throw new Error('Không có dữ liệu đơn hàng để in.');
+        throw new Error('Khong co du lieu don hang de in.');
     }
 
     const ownerWindow = options.ownerWindow || window;
+    if (ownerWindow !== window) {
+        // The current implementation always prints from the active browser window.
+    }
 
-    const primaryOrder = orders[0] || {};
-    const _title =
-        orders.length > 1
-            ? `In ${orders.length} đơn hàng`
-            : `In đơn #${primaryOrder.order_number || ''}`.trim();
-
-    const html = buildOrderPrintDocument(orders);
-
-    // Dùng main window print — tương đương Ctrl+P, tin cậy nhất với mọi driver
-    return printWithMainWindow(html, ownerWindow);
+    const html = await buildOrderPrintDocument(orders);
+    return printWithIframe(html);
 };
 
-/**
- * Đóng session in (iframe cleanup).
- */
 export const closePrintSession = (session) => {
     if (!session) return;
     if (typeof session.close === 'function') {
@@ -546,145 +1191,100 @@ export const closePrintSession = (session) => {
     }
 };
 
-/**
- * (Legacy / không dùng trong luồng chính)
- */
 export const printCurrentPage = async (sourceWindow = window) => {
     const ownerDoc = sourceWindow.document || document;
-    const title = ownerDoc?.title || 'In đơn hàng';
+    const title = ownerDoc?.title || 'In don hang';
 
-    return printHtmlInIframe(
+    return printWithIframe(
         `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${
             ownerDoc.body?.innerHTML || ''
-        }</body></html>`,
-        ownerDoc
+        }</body></html>`
     );
 };
 
-/**
- * (Legacy) — Chuẩn bị popup trước rồi dùng sau.
- * Giữ export để không break import cũ — nhưng giờ chỉ trả về null
- * vì luồng mới không cần pre-warm popup.
- */
 export const preparePrintPopupWindow = () => null;
 
-// ─── PDF Export ───────────────────────────────────────────────────────────────
-
-/**
- * Tạo file PDF từ danh sách đơn hàng và download luôn về máy.
- *
- * Cách hoạt động:
- * 1. Build HTML document giống như in
- * 2. Render vào hidden iframe (kích thước A4)
- * 3. Dùng html2canvas chụp từng trang
- * 4. Ghép vào PDF bằng jsPDF
- * 5. Auto download file .pdf
- *
- * @param {Array}  orders    - mảng đơn hàng từ API
- * @param {string} [filename]
- */
 export const exportOrderPdf = async (orders = [], filename) => {
     if (!Array.isArray(orders) || orders.length === 0) {
-        throw new Error('Không có dữ liệu đơn hàng để xuất PDF.');
+        throw new Error('Khong co du lieu don hang de xuat PDF.');
     }
 
-    // Lazy-load libraries để không làm nặng bundle khi không dùng
     const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
         import('jspdf'),
         import('html2canvas'),
     ]);
 
-    const html = buildOrderPrintDocument(orders);
+    const html = await buildOrderPrintDocument(orders);
 
-    // Tạo iframe ẩn kích thước A4 để render HTML
-    const iframeId = '__order_pdf_export_frame__';
-    document.getElementById(iframeId)?.remove();
+    removeIframe(PDF_FRAME_ID);
+    const iframe = createHiddenIframe(PDF_FRAME_ID);
 
-    const iframe = document.createElement('iframe');
-    iframe.id = iframeId;
-    // A4 at 96 DPI: 794 x 1123 px
-    iframe.style.cssText = [
-        'position:fixed',
-        'left:-900px',
-        'top:0',
-        'width:794px',
-        'height:1123px',
-        'border:none',
-        'overflow:hidden',
-        'z-index:-99999',
-    ].join(';');
-    document.body.appendChild(iframe);
+    try {
+        const { iframeDoc } = await loadHtmlIntoIframe(iframe, html);
+        const pages = Array.from(iframeDoc.querySelectorAll('.print-page'));
 
-    // Ghi HTML vào iframe
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!iframeDoc) { iframe.remove(); throw new Error('Không thể khởi tạo iframe PDF.'); }
-    iframeDoc.open();
-    iframeDoc.write(html);
-    iframeDoc.close();
+        if (!pages.length) {
+            throw new Error('Khong tim thay noi dung don hang de xuat PDF.');
+        }
 
-    // Chờ load xong
-    await new Promise((resolve) => {
-        if (iframeDoc.readyState === 'complete') { resolve(); return; }
-        iframe.addEventListener('load', resolve, { once: true });
-        setTimeout(resolve, 12_000);
-    });
-    await delay(300);
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
 
-    // Tìm tất cả các trang đơn hàng trong iframe
-    const iframeWin = iframe.contentWindow;
-    const sheets = Array.from(iframeDoc.querySelectorAll('.order-sheet, .order-sheet-last'));
-    if (!sheets.length) {
+        for (let index = 0; index < pages.length; index += 1) {
+            const page = pages[index];
+            const renderWidthPx = Math.max(
+                Math.ceil(page.offsetWidth || 0),
+                Math.ceil(page.clientWidth || 0),
+                Math.ceil(page.scrollWidth || 0),
+                CONTENT_WIDTH_PX
+            );
+            const renderHeightPx = Math.max(
+                Math.ceil(page.offsetHeight || 0),
+                Math.ceil(page.clientHeight || 0),
+                Math.ceil(page.scrollHeight || 0),
+                CONTENT_HEIGHT_PX
+            );
+            const canvas = await html2canvas(page, {
+                scale: 2,
+                useCORS: true,
+                allowTaint: true,
+                backgroundColor: '#ffffff',
+                width: renderWidthPx,
+                height: renderHeightPx,
+                windowWidth: renderWidthPx,
+                windowHeight: renderHeightPx,
+                scrollX: 0,
+                scrollY: 0,
+                logging: false,
+                foreignObjectRendering: false,
+            });
+
+            if (index > 0) {
+                pdf.addPage();
+            }
+
+            const renderHeightMm = Math.min(
+                CONTENT_HEIGHT_MM,
+                (canvas.height * CONTENT_WIDTH_MM) / canvas.width
+            );
+
+            pdf.addImage(
+                canvas.toDataURL('image/png'),
+                'PNG',
+                PAGE_MARGIN_LEFT_MM,
+                PAGE_MARGIN_TOP_MM,
+                CONTENT_WIDTH_MM,
+                renderHeightMm,
+                undefined,
+                'FAST'
+            );
+        }
+
+        const defaultName = orders.length === 1
+            ? `don-hang-${orders[0].order_number || 'unknown'}.pdf`
+            : `don-hang-${orders.length}-orders.pdf`;
+
+        pdf.save(filename || defaultName);
+    } finally {
         iframe.remove();
-        throw new Error('Không tìm thấy nội dung đơn hàng để xuất PDF.');
     }
-
-    // Khởi tạo jsPDF với khổ A4
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-    const pdfW = pdf.internal.pageSize.getWidth();
-    const pdfH = pdf.internal.pageSize.getHeight();
-
-    for (let i = 0; i < sheets.length; i++) {
-        const sheet = sheets[i];
-
-        // Chụp từng trang bằng html2canvas
-        const canvas = await html2canvas(sheet, {
-            scale:         2,              // 2x để ảnh nét hơn
-            useCORS:       true,
-            allowTaint:    true,
-            backgroundColor: '#ffffff',
-            windowWidth:   794,
-            windowHeight:  1123,
-            scrollX:       0,
-            scrollY:       0,
-            logging:       false,
-            foreignObjectRendering: false,
-            onclone: (cloneDoc) => {
-                // Đảm bảo tất cả nội dung hiện khi chụp
-                cloneDoc.querySelectorAll('*').forEach((el) => {
-                    el.style.visibility = 'visible';
-                });
-            },
-        });
-
-        const imgData = canvas.toDataURL('image/jpeg', 0.92);
-
-        // Thêm trang mới (trừ trang đầu tiên)
-        if (i > 0) pdf.addPage();
-
-        // Scale ảnh vừa khổ A4, giữ tỉ lệ
-        const imgW = pdfW;
-        const imgH = (canvas.height * imgW) / canvas.width;
-        const finalH = Math.min(imgH, pdfH);
-
-        pdf.addImage(imgData, 'JPEG', 0, 0, imgW, finalH);
-    }
-
-    iframe.remove();
-
-    // Tên file
-    const defaultName = orders.length === 1
-        ? `don-hang-${orders[0].order_number || 'unknown'}.pdf`
-        : `don-hang-${orders.length}-orders.pdf`;
-
-    pdf.save(filename || defaultName);
 };

@@ -3634,6 +3634,15 @@ const OrderList = () => {
                 : `don-hang-${printableOrders.length}-orders.pdf`;
 
             await exportOrderPdf(printableOrders, filename);
+
+            // Mark as printed and refresh
+            try {
+                await orderApi.markPrinted(ids);
+                await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
+                setSelectedIds([]);
+            } catch (markError) {
+                console.error('Failed to mark as printed after PDF export', markError);
+            }
         } catch (error) {
             console.error('Export PDF error', error);
             setNotification({

@@ -907,7 +907,32 @@ const createEmptyVariantQuickUpdateForm = () => ({
     inventory_unit_id: '',
 });
 
+const cloneVariantDraft = (variant = {}) => ({
+    ...variant,
+    attributes: { ...(variant?.attributes || {}) },
+});
+
 const SIMPLE_TO_CONFIG_PRESET_ATTRIBUTES = ['Mẫu', 'Kích thước', 'Loại men'];
+const isConvertedSimpleSourceVariant = (variant, parentId) => {
+    const numericVariantId = Number(variant?.id);
+    const numericParentId = Number(parentId);
+
+    return (
+        String(variant?.pivot?.link_type || '') === 'super_link'
+        && Number(variant?.pivot?.position ?? -1) === 0
+        && Number.isFinite(numericVariantId)
+        && Number.isFinite(numericParentId)
+        && numericVariantId > 0
+        && numericParentId > 0
+        && numericVariantId < numericParentId
+    );
+};
+
+const isLocalDraftVariantId = (variantId) => {
+    const normalizedVariantId = String(variantId || '');
+    return normalizedVariantId.startsWith('new_') || normalizedVariantId.startsWith('manual_');
+};
+
 const areOrderedIdsEqual = (left = [], right = []) => (
     left.length === right.length
     && left.every((value, index) => String(value) === String(right[index]))
@@ -1908,6 +1933,7 @@ const ProductForm = () => {
     const [showVariantQuickUpdateModal, setShowVariantQuickUpdateModal] = useState(false);
     const [variantQuickUpdateScope, setVariantQuickUpdateScope] = useState('all');
     const [variantQuickUpdateForm, setVariantQuickUpdateForm] = useState(createEmptyVariantQuickUpdateForm);
+    const [lastDeletedVariantBatch, setLastDeletedVariantBatch] = useState(null);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, post_id, post_title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
@@ -2831,9 +2857,15 @@ const ProductForm = () => {
         ), 0),
         [getVariantSelectionKey, selectedVariantIdSet, variants]
     );
+    const hasLocalDraftVariants = useMemo(
+        () => variants.some((variant) => isLocalDraftVariantId(variant?.id)),
+        [variants]
+    );
     const isAllVariantsSelected = variants.length > 0 && selectedVariantCount === variants.length;
     const hasPartialVariantSelection = selectedVariantCount > 0 && !isAllVariantsSelected;
     const variantQuickUpdateTargetCount = variantQuickUpdateScope === 'selected' ? selectedVariantCount : variants.length;
+    const lastDeletedVariantCount = lastDeletedVariantBatch?.items?.length || 0;
+    const hasRestorableDeletedVariantBatch = lastDeletedVariantCount > 0;
     const canApplyVariantQuickUpdate = useMemo(
         () => variantQuickUpdateTargetCount > 0 && Object.values(variantQuickUpdateForm).some((value) => value !== ''),
         [variantQuickUpdateForm, variantQuickUpdateTargetCount]
@@ -3773,6 +3805,7 @@ const ProductForm = () => {
                 onAction: () => {
                     setVariants([]);
                     setSelectedVariantIds([]);
+                    setLastDeletedVariantBatch(null);
                     setSelectedSuperAttributes([]);
                     setShowVariantConfig(true);
                     clearServerValidationErrors(['variants.']);
@@ -3784,6 +3817,7 @@ const ProductForm = () => {
         }
         setVariants([]);
         setSelectedVariantIds([]);
+        setLastDeletedVariantBatch(null);
         setSelectedSuperAttributes([]);
         setShowVariantConfig(true);
         clearServerValidationErrors(['variants.']);
@@ -3799,11 +3833,14 @@ const ProductForm = () => {
             weight: formData.weight,
             inventory_unit_id: formData.inventory_unit_id || '',
             attributes: {},
+            isExistingSourceVariant: false,
+            isConvertedSourceVariant: false,
             library_image_id: null,
             image_preview_owned: false,
             label: 'Biến thể tùy chỉnh',
             sku_auto: true,
         };
+        setLastDeletedVariantBatch(null);
         setVariants(prev => buildAutoVariantSkuList(formData.sku, [...prev, newV]));
         clearServerValidationErrors(['variants.']);
     };
@@ -4011,6 +4048,8 @@ const ProductForm = () => {
                     const primaryImage = v.images?.find(img => img.is_primary) || v.images?.[0];
                     return {
                         ...v,
+                        isExistingSourceVariant: !isDuplicate,
+                        isConvertedSourceVariant: !isDuplicate && isConvertedSimpleSourceVariant(v, data.id),
                         price: normalizeMoneyValue(v.price),
                         expected_cost: normalizeImportCostValue(v.expected_cost),
                         current_cost: resolveDuplicateSafeCost(v.cost_price),
@@ -4034,6 +4073,7 @@ const ProductForm = () => {
                         }))
                     : baseLoadedVariants;
 
+                setLastDeletedVariantBatch(null);
                 setVariants(loadedVariants);
                 if (isDuplicate) {
                     duplicateDraftDefaultsRef.current = {
@@ -4812,6 +4852,8 @@ const ProductForm = () => {
             if (matchedVariant) {
                 return {
                     ...matchedVariant,
+                    isExistingSourceVariant: Boolean(matchedVariant?.isExistingSourceVariant),
+                    isConvertedSourceVariant: Boolean(matchedVariant?.isConvertedSourceVariant),
                     attributes: combo,
                     label: `${formData.name} - ${attrLabel}`
                 };
@@ -4826,6 +4868,8 @@ const ProductForm = () => {
                 weight: formData.weight,
                 inventory_unit_id: formData.inventory_unit_id || '',
                 attributes: combo,
+                isExistingSourceVariant: false,
+                isConvertedSourceVariant: false,
                 library_image_id: null,
                 image_preview_owned: false,
                 label: `${formData.name} - ${attrLabel}`,
@@ -4833,6 +4877,7 @@ const ProductForm = () => {
             };
         });
 
+        setLastDeletedVariantBatch(null);
         setVariants(buildAutoVariantSkuList(formData.sku, newVariants));
         clearServerValidationErrors(['variants.']);
         setShowVariantConfig(false);
@@ -4965,7 +5010,7 @@ const ProductForm = () => {
         }
     }, [clearServerValidationErrors, closeVariantImagePicker, variantImagePicker.index]);
 
-    const removeVariant = (index) => {
+    /*
         if (variants[index]?.id && !String(variants[index].id).startsWith('new_')) {
             if (!window.confirm("BẠN CÓ CHẮC MUỐN XÓA BIẾN THỂ NÀY? SKU và Tồn kho của mã này sẽ bị mất khỏi hệ thống sau khi Lưu.")) {
                 return;
@@ -4973,7 +5018,140 @@ const ProductForm = () => {
         }
         setVariants(variants.filter((_, i) => i !== index));
         clearServerValidationErrors(['variants.']);
-    };
+    */
+
+    const deleteVariantBatch = useCallback((indices = [], options = {}) => {
+        const normalizedIndices = Array.from(new Set(
+            (Array.isArray(indices) ? indices : [])
+                .map((value) => Number(value))
+                .filter((value) => Number.isInteger(value) && value >= 0 && value < variants.length)
+        )).sort((left, right) => left - right);
+
+        if (normalizedIndices.length === 0) {
+            return false;
+        }
+
+        if (options.confirmMessage && !window.confirm(options.confirmMessage)) {
+            return false;
+        }
+
+        const deletedEntries = normalizedIndices
+            .map((index) => {
+                const variant = variants[index];
+                if (!variant) {
+                    return null;
+                }
+
+                return {
+                    index,
+                    selectionKey: getVariantSelectionKey(variant, index),
+                    variant: cloneVariantDraft(variant),
+                };
+            })
+            .filter(Boolean);
+
+        if (deletedEntries.length === 0) {
+            return false;
+        }
+
+        const deletedIndexSet = new Set(deletedEntries.map((entry) => entry.index));
+        const deletedSelectionKeySet = new Set(deletedEntries.map((entry) => entry.selectionKey));
+
+        setVariants((prev) => prev.filter((_, index) => !deletedIndexSet.has(index)));
+        setSelectedVariantIds((prev) => prev.filter((selectionKey) => !deletedSelectionKeySet.has(selectionKey)));
+        setLastDeletedVariantBatch({ items: deletedEntries });
+        closeVariantImagePicker();
+        clearServerValidationErrors(['variants.']);
+
+        if (options.successMessage) {
+            showToast({
+                type: 'success',
+                message: options.successMessage,
+            });
+        }
+
+        return true;
+    }, [clearServerValidationErrors, closeVariantImagePicker, getVariantSelectionKey, showToast, variants]);
+
+    const removeVariant = useCallback((index) => {
+        const targetVariant = variants[index];
+        if (!targetVariant) {
+            return;
+        }
+
+        const isPersistedVariant = targetVariant.id
+            && !String(targetVariant.id).startsWith('new_')
+            && !String(targetVariant.id).startsWith('manual_');
+
+        deleteVariantBatch([index], {
+            confirmMessage: isPersistedVariant
+                ? 'BẠN CÓ CHẮC MUỐN XÓA BIẾN THỂ NÀY? SKU và tồn kho của mã này sẽ bị mất khỏi hệ thống sau khi Lưu.'
+                : '',
+            successMessage: 'Đã xóa biến thể khỏi danh sách. Có thể bấm "Khôi phục vừa xóa" để hoàn tác ngay.',
+        });
+    }, [deleteVariantBatch, variants]);
+
+    const handleDeleteSelectedVariants = useCallback(() => {
+        if (selectedVariantCount === 0) {
+            showToast({
+                type: 'warning',
+                message: 'Hãy chọn ít nhất một biến thể trước khi xóa hàng loạt.',
+            });
+            return;
+        }
+
+        const selectedIndices = variants.reduce((results, variant, index) => {
+            if (selectedVariantIdSet.has(getVariantSelectionKey(variant, index))) {
+                results.push(index);
+            }
+            return results;
+        }, []);
+
+        const persistedVariantCount = selectedIndices.reduce((count, index) => {
+            const variantId = variants[index]?.id;
+            const isPersistedVariant = variantId
+                && !String(variantId).startsWith('new_')
+                && !String(variantId).startsWith('manual_');
+            return isPersistedVariant ? count + 1 : count;
+        }, 0);
+
+        deleteVariantBatch(selectedIndices, {
+            confirmMessage: persistedVariantCount > 0
+                ? `BẠN CÓ CHẮC MUỐN XÓA ${selectedVariantCount} BIẾN THỂ ĐÃ CHỌN? Các biến thể đã tồn tại sẽ bị xóa khỏi hệ thống sau khi Lưu.`
+                : `Bạn có chắc muốn xóa ${selectedVariantCount} biến thể đã chọn khỏi danh sách này không?`,
+            successMessage: `Đã xóa ${selectedVariantCount} biến thể đã chọn. Có thể bấm "Khôi phục vừa xóa" để hoàn tác ngay.`,
+        });
+    }, [deleteVariantBatch, getVariantSelectionKey, selectedVariantCount, selectedVariantIdSet, showToast, variants]);
+
+    const handleRestoreLastDeletedVariants = useCallback(() => {
+        const deletedItems = Array.isArray(lastDeletedVariantBatch?.items)
+            ? [...lastDeletedVariantBatch.items].sort((left, right) => left.index - right.index)
+            : [];
+
+        if (deletedItems.length === 0) {
+            return;
+        }
+
+        setVariants((prev) => {
+            const next = [...prev];
+            deletedItems.forEach((entry) => {
+                const insertIndex = Math.max(0, Math.min(entry.index, next.length));
+                next.splice(insertIndex, 0, cloneVariantDraft(entry.variant));
+            });
+            return next;
+        });
+        setSelectedVariantIds((prev) => Array.from(new Set([
+            ...prev,
+            ...deletedItems.map((entry) => entry.selectionKey).filter(Boolean),
+        ])));
+        setLastDeletedVariantBatch(null);
+        closeVariantImagePicker();
+        clearServerValidationErrors(['variants.']);
+        showToast({
+            type: 'success',
+            message: `Đã khôi phục ${deletedItems.length} biến thể vừa xóa.`,
+        });
+    }, [clearServerValidationErrors, closeVariantImagePicker, lastDeletedVariantBatch, showToast]);
 
     const toggleVariantSelection = useCallback((selectionKey) => {
         setSelectedVariantIds((prev) => (
@@ -7036,7 +7214,7 @@ const ProductForm = () => {
                                 )}
 
                                 {variants.length > 0 ? (
-                                    <>
+                                    <div className="space-y-3">
                                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-purple-100 bg-purple-50/40 px-4 py-3">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700 shadow-sm">
@@ -7049,6 +7227,27 @@ const ProductForm = () => {
                                                     Tồn kho không chỉnh tại đây, chỉ cập nhật giá và thông tin biến thể.
                                                 </span>
                                             </div>
+                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleDeleteSelectedVariants}
+                                                    disabled={selectedVariantCount === 0}
+                                                    className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] transition-all ${selectedVariantCount > 0 ? 'border-brick/20 bg-white text-brick hover:border-brick hover:bg-brick hover:text-white shadow-sm' : 'cursor-not-allowed border-stone/15 bg-white text-stone/30'}`}
+                                                    title={selectedVariantCount > 0 ? `Xóa nhanh ${selectedVariantCount} biến thể đã chọn` : 'Chọn biến thể trước khi xóa hàng loạt'}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">delete_sweep</span>
+                                                    Xóa biến thể đã chọn
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleRestoreLastDeletedVariants}
+                                                    disabled={!hasRestorableDeletedVariantBatch}
+                                                    className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] transition-all ${hasRestorableDeletedVariantBatch ? 'border-emerald-200 bg-white text-emerald-700 hover:border-emerald-600 hover:bg-emerald-600 hover:text-white shadow-sm' : 'cursor-not-allowed border-stone/15 bg-white text-stone/30'}`}
+                                                    title={hasRestorableDeletedVariantBatch ? `Khôi phục ${lastDeletedVariantCount} biến thể vừa xóa` : 'Chưa có batch biến thể nào để khôi phục'}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">undo</span>
+                                                    Khôi phục vừa xóa
+                                                </button>
                                             <button
                                                 type="button"
                                                 onClick={toggleSelectAllVariants}
@@ -7059,6 +7258,7 @@ const ProductForm = () => {
                                                 </span>
                                                 {isAllVariantsSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
                                             </button>
+                                        </div>
                                         </div>
                                         <div className="overflow-x-auto border border-stone/10 rounded-sm custom-scrollbar bg-white">
                                         <table className="w-full text-left border-collapse" style={{ tableLayout: 'fixed' }}>
@@ -7117,11 +7317,24 @@ const ProductForm = () => {
                                                     const displayImageUrl = v.image_url || parentPrimaryImage?.image_url;
                                                     const variantSelectionKey = getVariantSelectionKey(v, index);
                                                     const isVariantSelected = selectedVariantIdSet.has(variantSelectionKey);
+                                                    const isConvertedSourceVariant = Boolean(v.isConvertedSourceVariant);
+                                                    const shouldHighlightExistingVariant = Boolean(
+                                                        isConvertedSourceVariant
+                                                        || (hasLocalDraftVariants && v.isExistingSourceVariant)
+                                                    );
+                                                    const variantOriginLabel = isConvertedSourceVariant ? 'Biến thể gốc' : 'Biến thể cũ';
                                                     const isImagePickerOpenForRow = variantImagePicker.index === index;
                                                     const hasVariantLibraryImages = variantImageLibraryItems.length > 0;
+                                                    const variantRowClassName = shouldHighlightExistingVariant
+                                                        ? (isVariantSelected
+                                                            ? 'bg-[#fdf0d8] hover:bg-[#fae7c2]'
+                                                            : 'bg-[#fff9ef] hover:bg-[#fff1dc]')
+                                                        : (isVariantSelected
+                                                            ? 'bg-purple-50/50 hover:bg-purple-50/70'
+                                                            : 'hover:bg-purple-50/30');
 
                                                     return (
-                                                        <tr key={v.id} className={`transition-colors ${isVariantSelected ? 'bg-purple-50/50 hover:bg-purple-50/70' : 'hover:bg-purple-50/30'}`}>
+                                                        <tr key={v.id} className={`transition-colors ${variantRowClassName}`}>
                                                             <td className="px-3 py-3 border-r border-stone/20 text-center align-top">
                                                                 <button
                                                                     type="button"
@@ -7211,6 +7424,14 @@ const ProductForm = () => {
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="relative group/vname">
+                                                                    {shouldHighlightExistingVariant ? (
+                                                                        <div className="mb-2 flex justify-center">
+                                                                            <span className="inline-flex items-center gap-1.5 rounded-full border border-gold/25 bg-gold/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-gold">
+                                                                                <span className="inline-block size-1.5 rounded-full bg-gold" />
+                                                                                {variantOriginLabel}
+                                                                            </span>
+                                                                        </div>
+                                                                    ) : null}
                                                                     <textarea
                                                                         rows={1}
                                                                         className="w-full bg-stone/5 border border-transparent focus:border-purple-300 focus:bg-white px-2 py-1.5 rounded text-[12px] font-bold text-primary text-center transition-all resize-none overflow-hidden min-h-[32px] custom-scrollbar h-auto"
@@ -7346,7 +7567,7 @@ const ProductForm = () => {
                                             </tbody>
                                         </table>
                                     </div>
-                                    </>
+                                    </div>
                                 ) : (
                                     <div className="flex flex-col items-center justify-center py-12 bg-stone/5 border-2 border-dashed border-purple-100 rounded-sm">
                                         <span className="material-symbols-outlined text-4xl text-purple-200 mb-3">account_tree</span>

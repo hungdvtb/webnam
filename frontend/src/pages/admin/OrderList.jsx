@@ -21,6 +21,7 @@ import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
 import ViettelPostTrackingImportModal from '../../components/admin/ViettelPostTrackingImportModal';
 import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
+import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import OrderReturnFollowupPanel from '../../components/admin/OrderReturnFollowupPanel';
 import MultiKeywordSearchInput, {
     buildActiveKeywordTokens,
@@ -39,6 +40,7 @@ import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
 } from '../../utils/orderItemDisplay';
+import { getStatusBadgeStyle } from '../../utils/statusBadge';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -499,6 +501,7 @@ const getStatusDisplayLines = (label) => {
 
 const MAIN_ORDER_KIND = 'official';
 const DRAFT_ORDER_KIND = 'draft';
+const DRAFT_ORDER_STATUS_COLOR = '#0369a1';
 const RETURN_WORKBENCH_VIEW = 'return-staging';
 const RETURN_FOLLOWUP_VIEW = 'return-followup';
 const QUICK_SELECT_DUPLICATE_MESSAGE = 'Mã này đang trùng, cần nhập thêm ký tự để xác định chính xác.';
@@ -3934,7 +3937,7 @@ const OrderList = () => {
 
     const getStatusStyle = (s) => {
         const f = statusMap.get(String(s));
-        return f ? { backgroundColor: `${f.color}15`, color: f.color, borderColor: `${f.color}30` } : {};
+        return getStatusBadgeStyle(f?.color);
     };
 
     const areAllVisibleOrdersSelected = orders.length > 0
@@ -4990,9 +4993,11 @@ const OrderList = () => {
                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
                                                         {getOrderTypeMeta(o.order_type).shortLabel}
                                                     </span>
-                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
-                                                        {statusName}
-                                                    </span>
+                                                    <AdminStatusBadge
+                                                        label={statusName}
+                                                        color={isDraftRow ? DRAFT_ORDER_STATUS_COLOR : statusMap.get(String(o.status))?.color}
+                                                        className="text-[10px] font-black shadow-sm"
+                                                    />
                                                 </div>
                                             </div>
 
@@ -5437,37 +5442,34 @@ const OrderList = () => {
                                             const isDraftRow = isDraftOrder(o.order_kind);
                                             const statusName = isDraftRow ? 'Đơn nháp' : (statusMap.get(String(o.status))?.name || o.status);
                                             const statusDisplayLines = getStatusDisplayLines(statusName);
-                                            const isMultiLineStatus = statusDisplayLines.length > 1;
-                                            const statusBadgeTextClassName = isMultiLineStatus
-                                                ? 'admin-order-status-badge__text admin-order-status-badge__text--multiline'
-                                                : 'admin-order-status-badge__text whitespace-nowrap';
                                             const printCountLabel = formatPrintCountLabel(o.print_count);
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-left group/status relative">
                                                     <div className="flex flex-col items-start gap-1">
                                                         <div className="flex items-center justify-start gap-1">
                                                             {!isTrashView && !isDraftRow ? (
-                                                                <button
+                                                                <AdminStatusBadge
+                                                                    as="button"
+                                                                    type="button"
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         statusMenuAnchorRef.current = e.currentTarget;
                                                                         setStatusMenuOrderId(o.id);
                                                                     }}
                                                                     data-status-edit-btn
-                                                                    className="admin-order-status-badge rounded-sm border text-[11px] font-black shadow-sm transition-all hover:scale-105 active:scale-95 group/status-btn"
-                                                                    style={getStatusStyle(o.status)}
+                                                                    color={statusMap.get(String(o.status))?.color}
+                                                                    lines={statusDisplayLines}
+                                                                    icon="expand_more"
+                                                                    className="group/status-btn text-[11px] font-black shadow-sm transition-all hover:scale-105 active:scale-95"
+                                                                    iconClassName="text-[16px] leading-none transition-opacity group-hover/status-btn:opacity-100"
                                                                 >
-                                                                    <span className={statusBadgeTextClassName}>
-                                                                        {statusDisplayLines.map((line, index) => <span key={`${line}-${index}`} className="whitespace-nowrap">{line}</span>)}
-                                                                    </span>
-                                                                    <span className="admin-order-status-badge__icon material-symbols-outlined text-[16px] leading-none opacity-40 transition-opacity group-hover/status-btn:opacity-100">expand_more</span>
-                                                                </button>
+                                                                </AdminStatusBadge>
                                                             ) : (
-                                                                <span className={`admin-order-status-badge rounded-sm border text-[11px] font-black shadow-sm ${isDraftRow ? 'border-sky-200 bg-sky-50 text-sky-700' : ''}`} style={isDraftRow ? undefined : getStatusStyle(o.status)}>
-                                                                    <span className={statusBadgeTextClassName}>
-                                                                        {statusDisplayLines.map((line, index) => <span key={`${line}-${index}`} className="whitespace-nowrap">{line}</span>)}
-                                                                    </span>
-                                                                </span>
+                                                                <AdminStatusBadge
+                                                                    color={isDraftRow ? DRAFT_ORDER_STATUS_COLOR : statusMap.get(String(o.status))?.color}
+                                                                    lines={statusDisplayLines}
+                                                                    className="text-[11px] font-black shadow-sm"
+                                                                />
                                                             )}
                                                             <button onClick={(e) => { e.stopPropagation(); handleCopy(statusName, e); }} className={`opacity-0 group-hover/status:opacity-100 p-0.5 hover:text-primary transition-all ${copiedText === statusName ? 'text-green-500 opacity-100' : 'text-primary/20'}`}>
                                                                 <span className="material-symbols-outlined text-[13px]">content_copy</span>

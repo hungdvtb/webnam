@@ -19,7 +19,7 @@ class Shipment extends Model
         'carrier_status_raw', 'carrier_status_mapped', 'carrier_status_code', 'carrier_status_text',
         'cod_amount', 'shipping_cost', 'service_fee', 'return_fee', 'insurance_fee', 'other_fee',
         'reconciled_amount', 'actual_received_amount', 'reconciliation_diff_amount',
-        'reconciliation_status', 'cod_status',
+        'reconciliation_status', 'return_status', 'cod_status',
         'attempt_delivery_count', 'failed_reason', 'failed_reason_code',
         'internal_note', 'notes', 'risk_flag', 'priority_level', 'problem_code', 'problem_message',
         'created_by', 'assigned_to',

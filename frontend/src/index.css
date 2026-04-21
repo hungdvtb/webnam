@@ -179,14 +179,26 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        gap: 8px;
-        padding: 6px 10px;
+        max-width: 100%;
+        min-height: 26px;
+        gap: 6px;
+        padding: 4px 10px;
+        border: 0;
+        border-radius: 999px;
+        overflow: hidden;
+        color: #fff;
         text-align: center;
+        line-height: 1.1;
         vertical-align: middle;
+        box-shadow: 0 6px 14px rgba(15, 23, 42, 0.12);
     }
 
     .admin-order-status-badge__text {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         min-width: 0;
+        max-width: 100%;
     }
 
     .admin-order-status-badge__text--multiline {
@@ -195,16 +207,42 @@
         align-items: center;
         justify-content: center;
         text-align: center;
-        line-height: 1.5;
+        line-height: 1.05;
     }
 
     .admin-order-status-badge__text--multiline > span + span {
-        margin-top: 3px;
+        margin-top: 1px;
     }
 
     .admin-order-status-badge__icon {
         flex-shrink: 0;
         align-self: center;
+        color: inherit;
+        opacity: 0.78;
+    }
+
+    .admin-order-status-badge--select {
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        cursor: pointer;
+        padding-right: 36px;
+    }
+
+    .admin-order-status-badge--select:disabled {
+        cursor: not-allowed;
+    }
+
+    .admin-order-status-badge--select option {
+        color: #0f172a;
+    }
+
+    @media (max-width: 640px) {
+        .admin-order-status-badge {
+            min-height: 24px;
+            padding: 4px 9px;
+            gap: 5px;
+        }
     }
 
     /* Decorative Divider */

@@ -1,6 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { shipmentApi } from '../../services/api';
 
+const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
+
 const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
     const [file, setFile] = useState(null);
     const [uploading, setUploading] = useState(false);
@@ -23,17 +25,13 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
 
     const handleUpload = async () => {
         if (!file) return;
-
         const formData = new FormData();
         formData.append('file', file);
-
         setUploading(true);
         setError(null);
         setResult(null);
-
         try {
             const response = await shipmentApi.reconcileViettelPost(formData);
-
             setResult(response.data);
             if (onRefresh) onRefresh();
         } catch (err) {
@@ -51,14 +49,16 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
+    const s = result; // shorthand
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
-            <div 
+            <div
                 className="absolute inset-0 bg-primary/40 backdrop-blur-md animate-in fade-in duration-300"
                 onClick={() => !uploading && onClose()}
             />
-            
-            <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl animate-in zoom-in-95 duration-300">
+
+            <div className="relative w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl animate-in zoom-in-95 duration-300">
                 {/* Header */}
                 <div className="bg-gradient-to-r from-violet-600 to-indigo-700 p-6 text-white">
                     <div className="flex items-center justify-between">
@@ -71,51 +71,35 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                                 <p className="text-sm text-violet-100 opacity-80 uppercase tracking-widest font-black text-[10px] mt-0.5">Import bảng kê Excel</p>
                             </div>
                         </div>
-                        <button 
-                            onClick={onClose}
-                            className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10 transition-colors"
-                        >
+                        <button onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-white/10 transition-colors">
                             <span className="material-symbols-outlined">close</span>
                         </button>
                     </div>
                 </div>
 
-                <div className="p-8">
+                <div className="p-8 max-h-[80vh] overflow-y-auto custom-scrollbar">
                     {!result ? (
                         <div className="space-y-6">
                             {/* Upload Area */}
-                            <div 
+                            <div
                                 onClick={() => !uploading && fileInputRef.current?.click()}
                                 className={`group relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 transition-all cursor-pointer ${
-                                    file 
-                                    ? 'border-violet-400 bg-violet-50/50' 
+                                    file
+                                    ? 'border-violet-400 bg-violet-50/50'
                                     : 'border-slate-200 bg-slate-50 hover:border-violet-300 hover:bg-violet-50/30'
                                 }`}
                             >
-                                <input 
-                                    type="file" 
-                                    ref={fileInputRef}
-                                    onChange={handleFileChange}
-                                    className="hidden" 
-                                    accept=".xlsx,.xls"
-                                />
-                                
+                                <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".xlsx,.xls" />
                                 <div className={`mb-4 flex h-16 w-16 items-center justify-center rounded-full transition-all duration-500 ${
                                     file ? 'bg-violet-500 text-white scale-110 shadow-lg' : 'bg-white text-slate-400 group-hover:text-violet-500 group-hover:scale-105 shadow-sm'
                                 }`}>
-                                    <span className="material-symbols-outlined text-[32px]">
-                                        {file ? 'description' : 'upload_file'}
-                                    </span>
+                                    <span className="material-symbols-outlined text-[32px]">{file ? 'description' : 'upload_file'}</span>
                                 </div>
-                                
                                 {file ? (
                                     <div className="text-center animate-in slide-in-from-bottom-2">
                                         <p className="font-bold text-slate-700 mb-1">{file.name}</p>
                                         <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
-                                        <button 
-                                            onClick={(e) => { e.stopPropagation(); resetModal(); }}
-                                            className="mt-4 text-xs font-bold text-rose-500 hover:underline"
-                                        >Thay đổi file</button>
+                                        <button onClick={(e) => { e.stopPropagation(); resetModal(); }} className="mt-4 text-xs font-bold text-rose-500 hover:underline">Thay đổi file</button>
                                     </div>
                                 ) : (
                                     <div className="text-center">
@@ -126,7 +110,7 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                             </div>
 
                             {error && (
-                                <div className="flex items-center gap-2 rounded-xl bg-rose-50 p-4 text-sm font-medium text-rose-600 border border-rose-100 animate-in shake-2">
+                                <div className="flex items-center gap-2 rounded-xl bg-rose-50 p-4 text-sm font-medium text-rose-600 border border-rose-100">
                                     <span className="material-symbols-outlined text-[18px]">error</span>
                                     {error}
                                 </div>
@@ -136,8 +120,8 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                                 onClick={handleUpload}
                                 disabled={!file || uploading}
                                 className={`group relative flex h-14 w-full items-center justify-center overflow-hidden rounded-xl font-bold transition-all ${
-                                    !file || uploading 
-                                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                                    !file || uploading
+                                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                                     : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-xl shadow-indigo-200'
                                 }`}
                             >
@@ -155,35 +139,103 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                             </button>
                         </div>
                     ) : (
-                        /* Result Area */
-                        <div className="space-y-6 animate-in fade-in duration-500">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="rounded-2xl bg-slate-50 border border-slate-100 p-5 text-center">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Tổng dòng</p>
-                                    <p className="text-3xl font-black text-slate-800">{result.total_rows}</p>
+                        /* ─── Result Area ─────────────────────────────────── */
+                        <div className="space-y-4 animate-in fade-in duration-500">
+
+                            {/* Total rows */}
+                            <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 flex items-center justify-between">
+                                <p className="text-[10px] uppercase tracking-widest font-black text-slate-400">Tổng dòng đọc</p>
+                                <p className="text-2xl font-black text-slate-800">{s.total_rows}</p>
+                            </div>
+
+                            {/* Row 1: Matched + In-progress */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4 text-center">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-emerald-500 mb-1">✓ Khớp chuẩn</p>
+                                    <p className="text-3xl font-black text-emerald-700">{s.reconciled}</p>
                                 </div>
-                                <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-5 text-center">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-emerald-500 mb-1">Khớp chuẩn</p>
-                                    <p className="text-3xl font-black text-emerald-700">{result.reconciled}</p>
-                                </div>
-                                <div className="rounded-2xl bg-amber-50 border border-amber-100 p-5 text-center">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-amber-500 mb-1">Lệch tiền</p>
-                                    <p className="text-3xl font-black text-amber-700">{result.mismatch}</p>
-                                </div>
-                                <div className="rounded-2xl bg-rose-50 border border-rose-100 p-5 text-center">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-rose-500 mb-1">Không thấy</p>
-                                    <p className="text-3xl font-black text-rose-700">{result.not_found}</p>
+                                <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 text-center">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-blue-400 mb-1">⏳ Đang xử lý</p>
+                                    <p className="text-3xl font-black text-blue-600">{s.in_progress ?? 0}</p>
                                 </div>
                             </div>
 
-                            {result.errors?.length > 0 && (
+                            {/* Mismatch block — expanded with +/- details */}
+                            <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-amber-500">⚠ Lệch tiền</p>
+                                    <span className="text-2xl font-black text-amber-700">{s.mismatch}</span>
+                                </div>
+                                {s.mismatch > 0 && (
+                                    <div className="space-y-2 pt-2 border-t border-amber-100">
+                                        {(s.mismatch_positive ?? 0) > 0 && (
+                                            <div className="flex items-center justify-between text-sm">
+                                                <span className="font-semibold text-emerald-600 flex items-center gap-1">
+                                                    <span className="material-symbols-outlined text-[14px]">arrow_upward</span>
+                                                    Lệch dương ({s.mismatch_positive} đơn)
+                                                </span>
+                                                <span className="font-black text-emerald-600">+{fmt(s.mismatch_pos_amount)}đ</span>
+                                            </div>
+                                        )}
+                                        {(s.mismatch_negative ?? 0) > 0 && (
+                                            <div className="flex items-center justify-between text-sm">
+                                                <span className="font-semibold text-rose-600 flex items-center gap-1">
+                                                    <span className="material-symbols-outlined text-[14px]">arrow_downward</span>
+                                                    Lệch âm ({s.mismatch_negative} đơn)
+                                                </span>
+                                                <span className="font-black text-rose-600">-{fmt(s.mismatch_neg_amount)}đ</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Not found */}
+                            <div className="rounded-2xl bg-rose-50 border border-rose-100 p-4 flex items-center justify-between">
+                                <p className="text-[10px] uppercase tracking-widest font-black text-rose-500">✗ Không thấy trong hệ thống</p>
+                                <p className="text-2xl font-black text-rose-700">{s.not_found}</p>
+                            </div>
+
+                            {/* Return block — DH + 1P1 with cost */}
+                            {((s.return_exchange ?? 0) + (s.return_partial ?? 0)) > 0 && (
+                                <div className="rounded-2xl border border-purple-100 bg-purple-50 p-4">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-purple-500 mb-3">↩ Đơn đổi / Hoàn 1 phần</p>
+                                    <div className="space-y-2">
+                                        {(s.return_exchange ?? 0) > 0 && (
+                                            <div className="flex items-center justify-between text-sm">
+                                                <span className="font-semibold text-purple-700">
+                                                    Đổi hàng (DH) — {s.return_exchange} đơn
+                                                </span>
+                                                <span className="font-black text-rose-600">-{fmt(s.return_exchange_cost)}đ</span>
+                                            </div>
+                                        )}
+                                        {(s.return_partial ?? 0) > 0 && (
+                                            <div className="flex items-center justify-between text-sm">
+                                                <span className="font-semibold text-purple-700">
+                                                    Giao 1 phần (1P1) — {s.return_partial} đơn
+                                                </span>
+                                                <span className="font-black text-rose-600">-{fmt(s.return_partial_cost)}đ</span>
+                                            </div>
+                                        )}
+                                        <div className="pt-2 border-t border-purple-100 flex items-center justify-between text-sm">
+                                            <span className="text-slate-500 text-xs">Tổng chi phí hoàn</span>
+                                            <span className="font-black text-rose-600 text-base">
+                                                -{fmt((s.return_exchange_cost ?? 0) + (s.return_partial_cost ?? 0))}đ
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Errors */}
+                            {s.errors?.length > 0 && (
                                 <div className="max-h-40 overflow-y-auto rounded-xl bg-orange-50 border border-orange-100 p-4 custom-scrollbar">
                                     <p className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1">
                                         <span className="material-symbols-outlined text-[16px]">warning</span>
                                         Các lỗi phát sinh:
                                     </p>
                                     <ul className="space-y-1">
-                                        {result.errors.map((err, i) => (
+                                        {s.errors.map((err, i) => (
                                             <li key={i} className="text-[12px] text-orange-600 font-medium whitespace-pre-wrap leading-relaxed">• {err}</li>
                                         ))}
                                     </ul>

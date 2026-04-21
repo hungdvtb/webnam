@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Pagination from '../Pagination';
+import AdminStatusBadge from './AdminStatusBadge';
 import { orderApi } from '../../services/api';
 import { getOrderTypeMeta } from '../../config/orderTypes';
 
@@ -89,17 +90,6 @@ const getRelevantDateCaption = (mode) => (
         ? 'Vào Chờ hoàn'
         : 'Ngày gửi đi'
 );
-
-const getStatusStyle = (status, statusMap) => {
-    const matchedStatus = statusMap?.get(String(status));
-    return matchedStatus
-        ? {
-            backgroundColor: `${matchedStatus.color}15`,
-            color: matchedStatus.color,
-            borderColor: `${matchedStatus.color}30`,
-        }
-        : {};
-};
 
 const normalizeSearchTerms = (terms = []) => (
     Array.isArray(terms)
@@ -347,12 +337,11 @@ const OrderReturnFollowupPanel = ({
                                                     {record.customer_phone || '-'}
                                                 </td>
                                                 <td className="border border-primary/10 px-3 py-3 align-top">
-                                                    <span
-                                                        className="inline-flex rounded-sm border px-2.5 py-1 text-[11px] font-black"
-                                                        style={getStatusStyle(record.status, statusMap)}
-                                                    >
-                                                        {statusName}
-                                                    </span>
+                                                    <AdminStatusBadge
+                                                        label={statusName}
+                                                        color={statusMap?.get(String(record.status))?.color}
+                                                        className="text-[11px] font-black shadow-sm"
+                                                    />
                                                 </td>
                                                 <td className="border border-primary/10 px-3 py-3 align-top">
                                                     <div className="flex flex-col gap-1">
@@ -442,12 +431,11 @@ const OrderReturnFollowupPanel = ({
                                 </div>
 
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
-                                    <span
-                                        className="inline-flex rounded-full border px-2.5 py-1 text-[10px] font-black"
-                                        style={getStatusStyle(record.status, statusMap)}
-                                    >
-                                        {statusName}
-                                    </span>
+                                    <AdminStatusBadge
+                                        label={statusName}
+                                        color={statusMap?.get(String(record.status))?.color}
+                                        className="text-[10px] font-black shadow-sm"
+                                    />
                                     <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-black ${FOLLOWUP_CATEGORY_BADGES[record.followup_category] || FOLLOWUP_CATEGORY_BADGES.pending_return}`}>
                                         {FOLLOWUP_CATEGORY_LABELS[record.followup_category] || record.followup_category}
                                     </span>

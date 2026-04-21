@@ -29,6 +29,16 @@ const RECONCILIATION_STATUSES = [
     { code: 'pending', label: 'Chưa đối soát', color: '#9ca3af' },
     { code: 'reconciled', label: 'Đã đối soát', color: '#16a34a' },
     { code: 'mismatch', label: 'Lệch tiền', color: '#ef4444' },
+    { code: 'return_exchange', label: 'Đổi hàng (DH)', color: '#7c3aed' },
+    { code: 'return_partial', label: 'Hoàn 1 phần (1P1)', color: '#7c3aed' },
+    { code: 'return_adjustment', label: 'Điều chỉnh hoàn', color: '#7c3aed' },
+];
+
+const RETURN_STATUSES = [
+    { code: 'not_returned', label: 'Chưa hoàn', color: '#9ca3af' },
+    { code: 'exchanged', label: 'Đã đổi hàng', color: '#7c3aed' },
+    { code: 'partial_returned', label: 'Hoàn 1 phần', color: '#f59e0b' },
+    { code: 'returned', label: 'Đã hoàn toàn', color: '#ef4444' },
 ];
 
 const DEFAULT_COLUMNS = [
@@ -63,6 +73,7 @@ const DEFAULT_FILTERS = {
     customer_address: '',
     carrier_code: '',
     reconciliation_status: '',
+    return_status: '',
     created_at_from: '',
     created_at_to: '',
     shipping_dispatched_from: '',
@@ -107,6 +118,7 @@ const FILTER_QUERY_KEYS = [
     'customer_address',
     'carrier_code',
     'reconciliation_status',
+    'return_status',
     'created_at_from',
     'created_at_to',
     'shipping_dispatched_from',
@@ -169,6 +181,7 @@ const normalizeShipmentFilters = (raw = {}) => {
         customer_address: String(raw?.customer_address ?? ''),
         carrier_code: String(raw?.carrier_code ?? ''),
         reconciliation_status: String(raw?.reconciliation_status ?? ''),
+        return_status: String(raw?.return_status ?? ''),
         created_at_from: normalizeDateFilter(raw?.created_at_from),
         created_at_to: normalizeDateFilter(raw?.created_at_to),
         shipping_dispatched_from: normalizeDateFilter(raw?.shipping_dispatched_from),
@@ -201,6 +214,7 @@ const hasAnyShipmentFilter = (filters) => Boolean(
     || filters.customer_address
     || filters.carrier_code
     || filters.reconciliation_status
+    || filters.return_status
     || filters.created_at_from
     || filters.created_at_to
     || filters.shipping_dispatched_from
@@ -221,6 +235,7 @@ const buildShipmentRequestParams = (filters) => {
     if (filters.customer_address?.trim()) params.customer_address = filters.customer_address.trim();
     if (filters.carrier_code) params.carrier_code = filters.carrier_code;
     if (filters.reconciliation_status) params.reconciliation_status = filters.reconciliation_status;
+    if (filters.return_status) params.return_status = filters.return_status;
     if (filters.created_at_from) params.created_at_from = filters.created_at_from;
     if (filters.created_at_to) params.created_at_to = filters.created_at_to;
     if (filters.shipping_dispatched_from) params.shipping_dispatched_from = filters.shipping_dispatched_from;
@@ -263,6 +278,7 @@ const loadFiltersFromUrl = () => {
         customer_address: params.get('customer_address') || '',
         carrier_code: params.get('carrier_code') || '',
         reconciliation_status: params.get('reconciliation_status') || '',
+        return_status: params.get('return_status') || '',
         created_at_from: params.get('created_at_from') || '',
         created_at_to: params.get('created_at_to') || '',
         shipping_dispatched_from: params.get('shipping_dispatched_from') || '',
@@ -1767,6 +1783,7 @@ const ShipmentList = () => {
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Trạng thái đơn hàng</label><div className="relative"><select className="h-10 w-full appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.order_status?.[0] || ''} onChange={(event) => setTempFilters((previous) => normalizeShipmentFilters({ ...previous, order_status: event.target.value ? [event.target.value] : [] }))}><option value="">Tất cả</option>{orderStatuses.map((status) => <option key={status.id} value={status.code}>{status.name}</option>)}</select><span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span></div></div>
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Trạng thái vận đơn</label><div className="relative"><select className="h-10 w-full appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.shipment_status?.[0] || ''} onChange={(event) => setTempFilters((previous) => normalizeShipmentFilters({ ...previous, shipment_status: event.target.value ? [event.target.value] : [] }))}><option value="">Tất cả</option>{SHIPMENT_STATUSES.map((status) => <option key={status.code} value={status.code}>{status.label}</option>)}</select><span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span></div></div>
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Đối soát</label><div className="relative"><select name="reconciliation_status" className="h-10 w-full appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.reconciliation_status} onChange={handleTempFilterChange}><option value="">Tất cả</option>{RECONCILIATION_STATUSES.map((status) => <option key={status.code} value={status.code}>{status.label}</option>)}</select><span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span></div></div>
+                            <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Đổi trả / Hoàn</label><div className="relative"><select name="return_status" className="h-10 w-full appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.return_status} onChange={handleTempFilterChange}><option value="">Tất cả</option>{RETURN_STATUSES.map((s) => <option key={s.code} value={s.code}>{s.label}</option>)}</select><span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span></div></div>
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Đơn vị vận chuyển</label><div className="relative"><select name="carrier_code" className="h-10 w-full appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.carrier_code} onChange={handleTempFilterChange}><option value="">Tất cả</option>{carriers.map((carrier) => <option key={carrier.code} value={carrier.code}>{carrier.name}</option>)}</select><span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span></div></div>
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Ngày tạo</label><div className="flex h-10 items-center gap-2"><input name="created_at_from" type="date" className="h-full flex-1 cursor-pointer rounded-sm border border-primary/10 bg-white px-2 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.created_at_from} onChange={handleTempFilterChange} /><span className="text-primary/20">-</span><input name="created_at_to" type="date" className="h-full flex-1 cursor-pointer rounded-sm border border-primary/10 bg-white px-2 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.created_at_to} onChange={handleTempFilterChange} /></div></div>
                             <div className="space-y-1.5 border-b border-r border-primary/10 p-4"><label className="text-[13px] font-medium text-stone-600">Ngày gửi vận chuyển</label><div className="flex h-10 items-center gap-2"><input name="shipping_dispatched_from" type="date" className="h-full flex-1 cursor-pointer rounded-sm border border-primary/10 bg-white px-2 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.shipping_dispatched_from} onChange={handleTempFilterChange} /><span className="text-primary/20">-</span><input name="shipping_dispatched_to" type="date" className="h-full flex-1 cursor-pointer rounded-sm border border-primary/10 bg-white px-2 text-[13px] font-bold text-[#0F172A] focus:border-primary focus:outline-none" value={tempFilters.shipping_dispatched_to} onChange={handleTempFilterChange} /></div></div>
@@ -1788,6 +1805,7 @@ const ShipmentList = () => {
                         {filters.customer_address && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Địa chỉ:</span><span className="text-[13px] font-bold text-[#0F172A]">{filters.customer_address}</span><button type="button" onClick={() => removeFilter('customer_address')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                         {filters.carrier_code && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Vận chuyển:</span><span className="text-[13px] font-bold text-[#0F172A]">{carrierMap.get(String(filters.carrier_code))?.name || filters.carrier_code}</span><button type="button" onClick={() => removeFilter('carrier_code')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                         {filters.reconciliation_status && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Đối soát:</span><span className="text-[13px] font-bold text-[#0F172A]">{getStatus(filters.reconciliation_status, RECONCILIATION_STATUSES).label}</span><button type="button" onClick={() => removeFilter('reconciliation_status')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
+                        {filters.return_status && <div className="flex items-center gap-2 rounded-sm border border-purple-200 bg-purple-50 px-2 py-1 shadow-sm"><span className="text-[11px] text-purple-400">↩ Đổi/Hoàn:</span><span className="text-[13px] font-bold text-purple-700">{getStatus(filters.return_status, RETURN_STATUSES).label}</span><button type="button" onClick={() => removeFilter('return_status')} className="text-purple-300 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                         {(filters.created_at_from || filters.created_at_to) && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Ngày tạo:</span><span className="text-[13px] font-bold text-[#0F172A]">{filters.created_at_from || '?'} → {filters.created_at_to || '?'}</span><button type="button" onClick={() => removeFilter('created_at')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                         {filters.quick_range && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Nhanh:</span><span className="text-[13px] font-bold text-[#0F172A]">{getQuickRangeLabel(filters.quick_range)}</span><button type="button" onClick={() => removeFilter('quick_range')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                         {!filters.quick_range && (filters.shipping_dispatched_from || filters.shipping_dispatched_to) && <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm"><span className="text-[11px] text-primary/40">Ngày gửi VC:</span><span className="text-[13px] font-bold text-[#0F172A]">{filters.shipping_dispatched_from || '?'} → {filters.shipping_dispatched_to || '?'}</span><button type="button" onClick={() => removeFilter('shipping_dispatched_at')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}

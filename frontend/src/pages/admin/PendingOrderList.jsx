@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { orderApi, orderStatusApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
+import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
 import { useAuth } from '../../context/AuthContext';
 import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
@@ -98,11 +99,6 @@ const PendingOrderList = () => {
         }
     };
 
-    const getStatusStyle = (status) => {
-        const found = orderStatuses.find(s => s.code === status);
-        return found ? { backgroundColor: `${found.color}15`, color: found.color, borderColor: `${found.color}30` } : {};
-    };
-
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] p-6 w-full h-full overflow-hidden animate-fade-in">
             <style>{`.sticky-col { position: sticky; left: 0; z-index: 10; background: #fcfcfa; }`}</style>
@@ -145,7 +141,7 @@ const PendingOrderList = () => {
                                     if (col.id === 'order_number') return <td key={col.id} style={cellStyle} className="p-4 font-ui font-bold text-primary sticky-col">#{order.order_number}</td>;
                                     if (col.id === 'customer') return <td key={col.id} style={cellStyle} className="p-4"><div className="flex flex-col"><span className="font-bold text-sm">{order.customer_name}</span><span className="text-[10px] text-stone font-ui">{order.customer_phone}</span></div></td>;
                                     if (col.id === 'total_price') return <td key={col.id} style={cellStyle} className="p-4 font-bold text-brick">{new Intl.NumberFormat('vi-VN').format(Math.floor(order.total_price))}₫</td>;
-                                    if (col.id === 'status') return <td key={col.id} style={cellStyle} className="p-4 text-center"><span style={getStatusStyle(order.status)} className="px-2 py-1 text-[9px] font-bold uppercase border">{orderStatuses.find(s=>s.code===order.status)?.name || order.status}</span></td>;
+                                    if (col.id === 'status') return <td key={col.id} style={cellStyle} className="p-4 text-center"><AdminStatusBadge label={orderStatuses.find(s=>s.code===order.status)?.name || order.status} color={orderStatuses.find(s=>s.code===order.status)?.color} className="text-[9px] font-black" /></td>;
                                     if (col.id === 'actions') return <td key={col.id} style={cellStyle} className="p-4 text-right sticky-col right-0"><div className="flex items-center justify-end gap-3"><button onClick={() => handleUpdateStatus(order.id, 'confirmed')} className="text-green-600 font-bold text-[10px] uppercase hover:opacity-70">Xác nhận</button><button onClick={() => handleUpdateStatus(order.id, 'cancelled')} className="text-brick font-bold text-[10px] uppercase hover:opacity-70">Hủy</button></div></td>;
                                     if (col.id === 'created_at') {
                                         const displayedAt = getOrderDisplayTimestamp(order);

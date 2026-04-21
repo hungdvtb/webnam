@@ -242,6 +242,9 @@ class ShipmentController extends Controller
         if ($request->filled('reconciliation_status')) {
             $query->where('reconciliation_status', $request->input('reconciliation_status'));
         }
+        if ($request->filled('return_status')) {
+            $query->where('return_status', $request->input('return_status'));
+        }
         if ($request->filled('cod_status')) {
             $query->where('cod_status', $request->input('cod_status'));
         }

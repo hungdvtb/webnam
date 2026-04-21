@@ -40,7 +40,7 @@ class ViettelPostTrackingImportService
                 $isHeader = false;
                 foreach ($row as $cell) {
                     $cellLower = mb_strtolower(trim((string)$cell));
-                    if (str_contains($cellLower, 'mã đơn hàng') || str_contains($cellLower, 'mã vận đơn')) {
+                    if (str_contains($cellLower, 'mã đơn hàng') || str_contains($cellLower, 'mã vận đơn') || str_contains($cellLower, 'số phiếu gửi')) {
                         $isHeader = true;
                         break;
                     }
@@ -60,13 +60,14 @@ class ViettelPostTrackingImportService
             // Extract data rows (everything after headerIndex)
             $dataRows = array_slice($allRows, $headerIndex + 1);
             
-            // Map header names to indices
+            // Map header names to indices (strip ALL non-letter/non-digit chars)
             $headerMap = [];
             foreach ($headerRow as $i => $h) {
-                // Keep only unicode letters and numbers
                 $cleanHeader = preg_replace('/[^\p{L}\p{N}]/u', '', trim((string)$h));
-                $cleanHeader = mb_strtolower($cleanHeader, 'UTF-8');
-                $headerMap[$cleanHeader] = $i;
+                $cleanHeader = mb_strtolower($cleanHeader ?? '', 'UTF-8');
+                if ($cleanHeader !== '') {
+                    $headerMap[$cleanHeader] = $i;
+                }
             }
 
             if (empty($dataRows)) {
@@ -83,11 +84,27 @@ class ViettelPostTrackingImportService
 
             foreach ($dataRows as $index => $row) {
                 // Identify values using indices
-                $orderNumber = $this->findInRow($row, $headerMap, ['madonhang', 'ordercode', 'madonhangkhach', 'reference', 'mãđơnhàng', 'mãđơnhàngkhách']);
-                $trackingNumber = $this->findInRow($row, $headerMap, ['mabưuphẩm', 'mavandon', 'mavandonvtp', 'trackingnumber', 'mabuguithanhcong', 'mãvậnđơn', 'mãbưuphẩm']);
-                
-                // For "Tổng phí (9)= (3)+(5)+(6)+(7)-(8)", our regex produces "tổngphí935678"
-                $shippingFee = (float)$this->findInRow($row, $headerMap, ['tổngphí935678', 'tổngphí', 'tongcuoc', 'moneytotal', 'cuocphi', 'cuoc_tong', 'tổngcước', 'tổngtiềncước'], 0);
+                // Keys below are post-normalizeKey() form (all non-letter/digit stripped, lowercased)
+                // Real file keys confirmed: 'mãvậnđơn'(Col B), 'mãđơnhàng'(Col C),
+                // 'tiềnthuhộ4'(Col AA), 'tổngphí935678'(Col AF), 'trạngthái'(Col AG)
+                $orderNumber = $this->findInRow($row, $headerMap, [
+                    'mãđơnhàng', 'madonhang', 'mãđơnhàngkhách', 'madonhangkhach',
+                    'reference', 'madon', 'mãđơn', 'ordercode',
+                ]);
+
+                $trackingNumber = $this->findInRow($row, $headerMap, [
+                    'mãvậnđơn',   // Col B – confirmed from real file
+                    'mavandon', 'mavandonvtp', 'trackingnumber',
+                    'mãbưuphẩm', 'mabưuphẩm', 'sophieugui', 'sốphiếugửi',
+                ]);
+
+                // Shipping fee: "Tổng phí (9)= (3)+(5)+(6)+(7)-(8)" → 'tổngphí935678'
+                $shippingFee = (float)$this->findInRow($row, $headerMap, [
+                    'tổngphí935678',    // Col AF – confirmed from real file
+                    'tổngphí', 'tongphi',
+                    'tổngcước1',        // "Tổng cước (1)" Col W – fallback
+                    'tongcuoc', 'moneytotal', 'cuocphi',
+                ], 0);
 
                 if (!$orderNumber) {
                     // Skip empty rows
@@ -129,9 +146,17 @@ class ViettelPostTrackingImportService
     private function findInRow(array $row, array $headerMap, array $keys, $default = null)
     {
         foreach ($keys as $key) {
-            if (isset($headerMap[$key])) {
-                $idx = $headerMap[$key];
-                return isset($row[$idx]) ? trim((string)$row[$idx]) : $default;
+            // Normalize search key the same way headers are normalized
+            $normalizedKey = mb_strtolower(
+                preg_replace('/[^\p{L}\p{N}]/u', '', $key) ?? '',
+                'UTF-8'
+            );
+            if (isset($headerMap[$normalizedKey])) {
+                $idx = $headerMap[$normalizedKey];
+                $val = isset($row[$idx]) ? trim((string)$row[$idx]) : null;
+                if ($val !== null && $val !== '') {
+                    return $val;
+                }
             }
         }
         return $default;

@@ -123,6 +123,35 @@ const summarizeVariantSelectionValues = (values = [], emptyLabel = 'Chưa chọn
     return `${normalizedValues.slice(0, 3).join(', ')} +${normalizedValues.length - 3}`;
 };
 
+const normalizeVariantStatus = (value, fallback = true) => {
+    if (value === undefined || value === null || value === '') {
+        return fallback;
+    }
+
+    if (typeof value === 'string') {
+        const normalizedValue = value.trim().toLowerCase();
+        if (normalizedValue === '') {
+            return fallback;
+        }
+
+        if (['0', 'false', 'off', 'no'].includes(normalizedValue)) {
+            return false;
+        }
+
+        if (['1', 'true', 'on', 'yes'].includes(normalizedValue)) {
+            return true;
+        }
+    }
+
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+
+    return Boolean(value);
+};
+
+const isActiveVariantDraft = (variant) => normalizeVariantStatus(variant?.status, true);
+
 const isTemporaryProductImageId = (imageId) => {
     const normalizedId = String(imageId || '');
     return normalizedId.startsWith('temp_') || normalizedId.startsWith('opt_');
@@ -1934,6 +1963,8 @@ const ProductForm = () => {
     const [variantQuickUpdateScope, setVariantQuickUpdateScope] = useState('all');
     const [variantQuickUpdateForm, setVariantQuickUpdateForm] = useState(createEmptyVariantQuickUpdateForm);
     const [lastDeletedVariantBatch, setLastDeletedVariantBatch] = useState(null);
+    const [showHiddenVariantsModal, setShowHiddenVariantsModal] = useState(false);
+    const [selectedHiddenVariantIds, setSelectedHiddenVariantIds] = useState([]);
     const [refreshingAttributes, setRefreshingAttributes] = useState(false);
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, post_id, post_title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
@@ -2785,7 +2816,10 @@ const ProductForm = () => {
 
         try {
             const response = await productApi.getOne(normalizedProductId);
-            const variants = (response.data.linked_products || []).filter((product) => product.pivot?.link_type === 'super_link');
+            const variants = (response.data.linked_products || []).filter((product) => (
+                product.pivot?.link_type === 'super_link'
+                && normalizeVariantStatus(product.status, true)
+            ));
             setBundleItemVariants((prev) => ({ ...prev, [normalizedProductId]: variants }));
             hydrateBundleItemsWithVariants(normalizedProductId, variants);
             return variants;
@@ -2851,19 +2885,46 @@ const ProductForm = () => {
     ), []);
 
     const selectedVariantIdSet = useMemo(() => new Set(selectedVariantIds), [selectedVariantIds]);
+    const selectedHiddenVariantIdSet = useMemo(() => new Set(selectedHiddenVariantIds), [selectedHiddenVariantIds]);
+    const visibleVariantEntries = useMemo(
+        () => variants.map((variant, index) => ({
+            variant,
+            index,
+            selectionKey: getVariantSelectionKey(variant, index),
+        })).filter((entry) => isActiveVariantDraft(entry.variant)),
+        [getVariantSelectionKey, variants]
+    );
+    const hiddenVariantEntries = useMemo(
+        () => variants.map((variant, index) => ({
+            variant,
+            index,
+            selectionKey: getVariantSelectionKey(variant, index),
+        })).filter((entry) => !isActiveVariantDraft(entry.variant)),
+        [getVariantSelectionKey, variants]
+    );
+    const visibleVariantCount = visibleVariantEntries.length;
+    const hiddenVariantCount = hiddenVariantEntries.length;
     const selectedVariantCount = useMemo(
-        () => variants.reduce((count, variant, index) => (
-            selectedVariantIdSet.has(getVariantSelectionKey(variant, index)) ? count + 1 : count
+        () => visibleVariantEntries.reduce((count, entry) => (
+            selectedVariantIdSet.has(entry.selectionKey) ? count + 1 : count
         ), 0),
-        [getVariantSelectionKey, selectedVariantIdSet, variants]
+        [selectedVariantIdSet, visibleVariantEntries]
+    );
+    const selectedHiddenVariantCount = useMemo(
+        () => hiddenVariantEntries.reduce((count, entry) => (
+            selectedHiddenVariantIdSet.has(entry.selectionKey) ? count + 1 : count
+        ), 0),
+        [hiddenVariantEntries, selectedHiddenVariantIdSet]
     );
     const hasLocalDraftVariants = useMemo(
         () => variants.some((variant) => isLocalDraftVariantId(variant?.id)),
         [variants]
     );
-    const isAllVariantsSelected = variants.length > 0 && selectedVariantCount === variants.length;
+    const isAllVariantsSelected = visibleVariantCount > 0 && selectedVariantCount === visibleVariantCount;
     const hasPartialVariantSelection = selectedVariantCount > 0 && !isAllVariantsSelected;
-    const variantQuickUpdateTargetCount = variantQuickUpdateScope === 'selected' ? selectedVariantCount : variants.length;
+    const isAllHiddenVariantsSelected = hiddenVariantCount > 0 && selectedHiddenVariantCount === hiddenVariantCount;
+    const hasPartialHiddenVariantSelection = selectedHiddenVariantCount > 0 && !isAllHiddenVariantsSelected;
+    const variantQuickUpdateTargetCount = variantQuickUpdateScope === 'selected' ? selectedVariantCount : visibleVariantCount;
     const lastDeletedVariantCount = lastDeletedVariantBatch?.items?.length || 0;
     const hasRestorableDeletedVariantBatch = lastDeletedVariantCount > 0;
     const canApplyVariantQuickUpdate = useMemo(
@@ -3833,6 +3894,7 @@ const ProductForm = () => {
             weight: formData.weight,
             inventory_unit_id: formData.inventory_unit_id || '',
             attributes: {},
+            status: true,
             isExistingSourceVariant: false,
             isConvertedSourceVariant: false,
             library_image_id: null,
@@ -4055,6 +4117,7 @@ const ProductForm = () => {
                         current_cost: resolveDuplicateSafeCost(v.cost_price),
                         weight: v.weight ?? '',
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
+                        status: normalizeVariantStatus(v.status, true),
                         sku: v.sku ?? '',
                         sku_auto: false,
                         attributes: attrs,
@@ -4868,6 +4931,7 @@ const ProductForm = () => {
                 weight: formData.weight,
                 inventory_unit_id: formData.inventory_unit_id || '',
                 attributes: combo,
+                status: true,
                 isExistingSourceVariant: false,
                 isConvertedSourceVariant: false,
                 library_image_id: null,
@@ -5100,9 +5164,9 @@ const ProductForm = () => {
             return;
         }
 
-        const selectedIndices = variants.reduce((results, variant, index) => {
-            if (selectedVariantIdSet.has(getVariantSelectionKey(variant, index))) {
-                results.push(index);
+        const selectedIndices = visibleVariantEntries.reduce((results, entry) => {
+            if (selectedVariantIdSet.has(entry.selectionKey)) {
+                results.push(entry.index);
             }
             return results;
         }, []);
@@ -5121,7 +5185,7 @@ const ProductForm = () => {
                 : `Bạn có chắc muốn xóa ${selectedVariantCount} biến thể đã chọn khỏi danh sách này không?`,
             successMessage: `Đã xóa ${selectedVariantCount} biến thể đã chọn. Có thể bấm "Khôi phục vừa xóa" để hoàn tác ngay.`,
         });
-    }, [deleteVariantBatch, getVariantSelectionKey, selectedVariantCount, selectedVariantIdSet, showToast, variants]);
+    }, [deleteVariantBatch, selectedVariantCount, selectedVariantIdSet, showToast, variants, visibleVariantEntries]);
 
     const handleRestoreLastDeletedVariants = useCallback(() => {
         const deletedItems = Array.isArray(lastDeletedVariantBatch?.items)
@@ -5153,6 +5217,161 @@ const ProductForm = () => {
         });
     }, [clearServerValidationErrors, closeVariantImagePicker, lastDeletedVariantBatch, showToast]);
 
+    const closeHiddenVariantsModal = useCallback(() => {
+        setShowHiddenVariantsModal(false);
+        setSelectedHiddenVariantIds([]);
+    }, []);
+
+    const openHiddenVariantsModal = useCallback(() => {
+        setSelectedHiddenVariantIds([]);
+        setShowHiddenVariantsModal(true);
+    }, []);
+
+    const hideVariantBatch = useCallback((indices = [], options = {}) => {
+        const normalizedIndices = Array.from(new Set(
+            (Array.isArray(indices) ? indices : [])
+                .map((value) => Number(value))
+                .filter((value) => Number.isInteger(value) && value >= 0 && value < variants.length)
+        )).sort((left, right) => left - right);
+
+        if (normalizedIndices.length === 0) {
+            return false;
+        }
+
+        if (options.confirmMessage && !window.confirm(options.confirmMessage)) {
+            return false;
+        }
+
+        const hiddenSelectionKeySet = new Set(
+            normalizedIndices
+                .map((index) => {
+                    const variant = variants[index];
+                    return variant ? getVariantSelectionKey(variant, index) : null;
+                })
+                .filter(Boolean)
+        );
+
+        setVariants((prev) => prev.map((variant, index) => (
+            hiddenSelectionKeySet.has(getVariantSelectionKey(variant, index))
+                ? { ...variant, status: false }
+                : variant
+        )));
+        setSelectedVariantIds((prev) => prev.filter((selectionKey) => !hiddenSelectionKeySet.has(selectionKey)));
+        closeVariantImagePicker();
+        clearServerValidationErrors(['variants.']);
+
+        if (options.successMessage) {
+            showToast({
+                type: 'success',
+                message: options.successMessage,
+            });
+        }
+
+        return true;
+    }, [clearServerValidationErrors, closeVariantImagePicker, getVariantSelectionKey, showToast, variants]);
+
+    const handleHideSelectedVariants = useCallback(() => {
+        if (selectedVariantCount === 0) {
+            showToast({
+                type: 'warning',
+                message: 'Hãy chọn ít nhất một biến thể trước khi ẩn hàng loạt.',
+            });
+            return;
+        }
+
+        const selectedIndices = visibleVariantEntries.reduce((results, entry) => {
+            if (selectedVariantIdSet.has(entry.selectionKey)) {
+                results.push(entry.index);
+            }
+
+            return results;
+        }, []);
+
+        hideVariantBatch(selectedIndices, {
+            confirmMessage: `Ẩn ${selectedVariantCount} biến thể đã chọn? Các mẫu này sẽ biến khỏi giao diện bán hàng và có thể khôi phục từ danh sách "Mẫu đã ẩn".`,
+            successMessage: `Đã ẩn ${selectedVariantCount} biến thể đã chọn. Có thể khôi phục trong "Mẫu đã ẩn".`,
+        });
+    }, [hideVariantBatch, selectedVariantCount, selectedVariantIdSet, showToast, visibleVariantEntries]);
+
+    const toggleHiddenVariantSelection = useCallback((selectionKey) => {
+        setSelectedHiddenVariantIds((prev) => (
+            prev.includes(selectionKey)
+                ? prev.filter((id) => id !== selectionKey)
+                : [...prev, selectionKey]
+        ));
+    }, []);
+
+    const toggleSelectAllHiddenVariants = useCallback(() => {
+        const allIds = hiddenVariantEntries.map((entry) => entry.selectionKey);
+        setSelectedHiddenVariantIds((prev) => (
+            prev.length === allIds.length && allIds.every((id) => prev.includes(id))
+                ? []
+                : allIds
+        ));
+    }, [hiddenVariantEntries]);
+
+    const restoreHiddenVariantBatch = useCallback((selectionKeys = []) => {
+        const normalizedSelectionKeys = Array.from(new Set(
+            (Array.isArray(selectionKeys) ? selectionKeys : []).filter(Boolean)
+        ));
+
+        if (normalizedSelectionKeys.length === 0) {
+            return false;
+        }
+
+        const selectionKeySet = new Set(normalizedSelectionKeys);
+
+        setVariants((prev) => prev.map((variant, index) => (
+            selectionKeySet.has(getVariantSelectionKey(variant, index))
+                ? { ...variant, status: true }
+                : variant
+        )));
+        setSelectedHiddenVariantIds((prev) => prev.filter((selectionKey) => !selectionKeySet.has(selectionKey)));
+        clearServerValidationErrors(['variants.']);
+
+        return true;
+    }, [clearServerValidationErrors, getVariantSelectionKey]);
+
+    const handleRestoreSelectedHiddenVariants = useCallback(() => {
+        if (selectedHiddenVariantCount === 0) {
+            showToast({
+                type: 'warning',
+                message: 'Hãy chọn ít nhất một mẫu đã ẩn trước khi khôi phục.',
+            });
+            return;
+        }
+
+        const shouldCloseModal = selectedHiddenVariantCount === hiddenVariantCount;
+        if (!restoreHiddenVariantBatch(selectedHiddenVariantIds)) {
+            return;
+        }
+
+        if (shouldCloseModal) {
+            closeHiddenVariantsModal();
+        }
+
+        showToast({
+            type: 'success',
+            message: `Đã khôi phục ${selectedHiddenVariantCount} mẫu đã ẩn.`,
+        });
+    }, [closeHiddenVariantsModal, hiddenVariantCount, restoreHiddenVariantBatch, selectedHiddenVariantCount, selectedHiddenVariantIds, showToast]);
+
+    const handleRestoreSingleHiddenVariant = useCallback((selectionKey) => {
+        const shouldCloseModal = hiddenVariantCount === 1;
+        if (!restoreHiddenVariantBatch([selectionKey])) {
+            return;
+        }
+
+        if (shouldCloseModal) {
+            closeHiddenVariantsModal();
+        }
+
+        showToast({
+            type: 'success',
+            message: 'Đã khôi phục biến thể đã ẩn.',
+        });
+    }, [closeHiddenVariantsModal, hiddenVariantCount, restoreHiddenVariantBatch, showToast]);
+
     const toggleVariantSelection = useCallback((selectionKey) => {
         setSelectedVariantIds((prev) => (
             prev.includes(selectionKey)
@@ -5162,13 +5381,13 @@ const ProductForm = () => {
     }, []);
 
     const toggleSelectAllVariants = useCallback(() => {
-        const allIds = variants.map((variant, index) => getVariantSelectionKey(variant, index));
+        const allIds = visibleVariantEntries.map((entry) => entry.selectionKey);
         setSelectedVariantIds((prev) => (
             prev.length === allIds.length && allIds.every((id) => prev.includes(id))
                 ? []
                 : allIds
         ));
-    }, [getVariantSelectionKey, variants]);
+    }, [visibleVariantEntries]);
 
     const openVariantQuickUpdateModal = useCallback(() => {
         setVariantQuickUpdateForm(createEmptyVariantQuickUpdateForm());
@@ -5229,6 +5448,10 @@ const ProductForm = () => {
                 return variant;
             }
 
+            if (!targetIds && !isActiveVariantDraft(variant)) {
+                return variant;
+            }
+
             return {
                 ...variant,
                 ...updates,
@@ -5241,7 +5464,7 @@ const ProductForm = () => {
             type: 'success',
             message: variantQuickUpdateScope === 'selected'
                 ? `Đã cập nhật nhanh ${selectedVariantCount} biến thể đã chọn.`
-                : `Đã cập nhật nhanh toàn bộ ${variants.length} biến thể.`,
+                : `Đã cập nhật nhanh toàn bộ ${visibleVariantCount} biến thể đang bán.`,
         });
     }, [
         canApplyVariantQuickUpdate,
@@ -5251,7 +5474,7 @@ const ProductForm = () => {
         showToast,
         variantQuickUpdateForm,
         variantQuickUpdateScope,
-        variants.length,
+        visibleVariantCount,
     ]);
 
     const handleWeightInputChange = (e) => {
@@ -5969,6 +6192,7 @@ const ProductForm = () => {
                     submitData.append(`variants[${idx}][expected_cost]`, normalizedVariantExpectedCost ?? '');
                     submitData.append(`variants[${idx}][weight]`, v.weight || '');
                     submitData.append(`variants[${idx}][inventory_unit_id]`, v.inventory_unit_id || formData.inventory_unit_id || '');
+                    submitData.append(`variants[${idx}][status]`, isActiveVariantDraft(v) ? '1' : '0');
 
                     if (v.image_file) {
                         submitData.append(`variants[${idx}][image]`, v.image_file);
@@ -7192,7 +7416,7 @@ const ProductForm = () => {
                                                 <span className="material-symbols-outlined text-[16px]">add_circle</span>
                                                 Tạo biến thể trống
                                             </button>
-                                            {variants.length > 0 && (
+                                            {visibleVariantCount > 0 && (
                                                 <button
                                                     type="button"
                                                     onClick={openVariantQuickUpdateModal}
@@ -7213,21 +7437,36 @@ const ProductForm = () => {
                                     </div>
                                 )}
 
-                                {variants.length > 0 ? (
+                                {visibleVariantCount > 0 || hiddenVariantCount > 0 ? (
                                     <div className="space-y-3">
                                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-purple-100 bg-purple-50/40 px-4 py-3">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700 shadow-sm">
-                                                    {variants.length} biến thể
+                                                    {visibleVariantCount} biến thể đang bán
                                                 </span>
+                                                {hiddenVariantCount > 0 && (
+                                                    <span className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700 shadow-sm">
+                                                        {hiddenVariantCount} mẫu đã ẩn
+                                                    </span>
+                                                )}
                                                 <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${selectedVariantCount > 0 ? 'bg-purple-600 text-white' : 'bg-white text-purple-400'}`}>
                                                     {selectedVariantCount > 0 ? `Đã chọn ${selectedVariantCount}` : 'Chưa chọn biến thể'}
                                                 </span>
                                                 <span className="text-[11px] text-purple-900/55">
-                                                    Tồn kho không chỉnh tại đây, chỉ cập nhật giá và thông tin biến thể.
+                                                    Ẩn biến thể sẽ giữ nguyên lịch sử đơn hàng và doanh số cũ.
                                                 </span>
                                             </div>
                                             <div className="flex flex-wrap items-center justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleHideSelectedVariants}
+                                                    disabled={selectedVariantCount === 0}
+                                                    className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] transition-all ${selectedVariantCount > 0 ? 'border-amber-200 bg-white text-amber-700 hover:border-amber-500 hover:bg-amber-500 hover:text-white shadow-sm' : 'cursor-not-allowed border-stone/15 bg-white text-stone/30'}`}
+                                                    title={selectedVariantCount > 0 ? `Ẩn nhanh ${selectedVariantCount} biến thể đã chọn` : 'Chọn biến thể trước khi ẩn hàng loạt'}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">visibility_off</span>
+                                                    Ẩn biến thể đã chọn
+                                                </button>
                                                 <button
                                                     type="button"
                                                     onClick={handleDeleteSelectedVariants}
@@ -7248,17 +7487,29 @@ const ProductForm = () => {
                                                     <span className="material-symbols-outlined text-[16px]">undo</span>
                                                     Khôi phục vừa xóa
                                                 </button>
-                                            <button
-                                                type="button"
-                                                onClick={toggleSelectAllVariants}
-                                                className="inline-flex items-center gap-1.5 text-[11px] font-bold text-purple-700 transition-colors hover:text-purple-900"
-                                            >
-                                                <span className="material-symbols-outlined text-[18px]">
-                                                    {isAllVariantsSelected ? 'check_box' : hasPartialVariantSelection ? 'indeterminate_check_box' : 'check_box_outline_blank'}
-                                                </span>
-                                                {isAllVariantsSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
-                                            </button>
-                                        </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={openHiddenVariantsModal}
+                                                    className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] transition-all ${hiddenVariantCount > 0 ? 'border-amber-200 bg-white text-amber-700 hover:border-amber-500 hover:bg-amber-50 shadow-sm' : 'border-stone/15 bg-white text-stone/40 hover:border-stone/25 hover:text-stone/60'}`}
+                                                    title={hiddenVariantCount > 0 ? `Mở danh sách ${hiddenVariantCount} biến thể đã ẩn` : 'Chưa có biến thể nào bị ẩn'}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+                                                    Mẫu đã ẩn
+                                                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
+                                                        {hiddenVariantCount}
+                                                    </span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={toggleSelectAllVariants}
+                                                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-purple-700 transition-colors hover:text-purple-900"
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">
+                                                        {isAllVariantsSelected ? 'check_box' : hasPartialVariantSelection ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                                                    </span>
+                                                    {isAllVariantsSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                                                </button>
+                                            </div>
                                         </div>
                                         <div className="overflow-x-auto border border-stone/10 rounded-sm custom-scrollbar bg-white">
                                         <table className="w-full text-left border-collapse" style={{ tableLayout: 'fixed' }}>
@@ -7312,10 +7563,31 @@ const ProductForm = () => {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-stone/20">
-                                                {variants.map((v, index) => {
+                                                {visibleVariantCount === 0 ? (
+                                                    <tr>
+                                                        <td colSpan={10} className="px-6 py-12">
+                                                            <div className="flex flex-col items-center justify-center gap-3 text-center">
+                                                                <span className="material-symbols-outlined text-4xl text-amber-300">inventory_2</span>
+                                                                <div>
+                                                                    <p className="text-[13px] font-bold text-primary">Tất cả biến thể đang được ẩn</p>
+                                                                    <p className="mt-1 text-[11px] text-stone/50">
+                                                                        Mở danh sách "Mẫu đã ẩn" để khôi phục biến thể cần bán lại.
+                                                                    </p>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={openHiddenVariantsModal}
+                                                                    className="inline-flex items-center gap-2 rounded-sm border border-amber-200 bg-white px-4 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-amber-700 transition-all hover:border-amber-500 hover:bg-amber-50"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+                                                                    Mở mẫu đã ẩn
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ) : visibleVariantEntries.map(({ variant: v, index, selectionKey: variantSelectionKey }) => {
                                                     const parentPrimaryImage = images.find(img => img.is_primary) || images[0];
                                                     const displayImageUrl = v.image_url || parentPrimaryImage?.image_url;
-                                                    const variantSelectionKey = getVariantSelectionKey(v, index);
                                                     const isVariantSelected = selectedVariantIdSet.has(variantSelectionKey);
                                                     const isConvertedSourceVariant = Boolean(v.isConvertedSourceVariant);
                                                     const shouldHighlightExistingVariant = Boolean(
@@ -7334,7 +7606,7 @@ const ProductForm = () => {
                                                             : 'hover:bg-purple-50/30');
 
                                                     return (
-                                                        <tr key={v.id} className={`transition-colors ${variantRowClassName}`}>
+                                                        <tr key={`${v.id ?? 'variant'}-${index}`} className={`transition-colors ${variantRowClassName}`}>
                                                             <td className="px-3 py-3 border-r border-stone/20 text-center align-top">
                                                                 <button
                                                                     type="button"
@@ -9492,15 +9764,15 @@ const ProductForm = () => {
                                             className={`rounded-sm border px-4 py-4 text-left transition-all ${variantQuickUpdateScope === 'all' ? 'border-purple-500 bg-white shadow-sm' : 'border-purple-100 bg-white/70 hover:border-purple-300'}`}
                                         >
                                             <div className="flex items-center justify-between gap-3">
-                                                <div>
-                                                    <div className="text-[13px] font-bold text-purple-950">Tất cả biến thể</div>
-                                                    <div className="mt-1 text-[11px] text-purple-900/55">Áp dụng cho toàn bộ danh sách biến thể hiện tại.</div>
+                                                    <div>
+                                                        <div className="text-[13px] font-bold text-purple-950">Tất cả biến thể đang bán</div>
+                                                        <div className="mt-1 text-[11px] text-purple-900/55">Áp dụng cho toàn bộ danh sách biến thể hiện đang hiển thị trong bảng.</div>
+                                                    </div>
+                                                    <span className="rounded-full bg-purple-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700">
+                                                        {visibleVariantCount} biến thể
+                                                    </span>
                                                 </div>
-                                                <span className="rounded-full bg-purple-100 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-purple-700">
-                                                    {variants.length} biến thể
-                                                </span>
-                                            </div>
-                                        </button>
+                                            </button>
                                         <button
                                             type="button"
                                             onClick={() => selectedVariantCount > 0 && setVariantQuickUpdateScope('selected')}
@@ -9607,6 +9879,203 @@ const ProductForm = () => {
                                 >
                                     <span className="material-symbols-outlined text-[16px]">bolt</span>
                                     Cập nhật
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {showHiddenVariantsModal && (
+                    <div className="fixed inset-0 z-[106] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={closeHiddenVariantsModal}
+                            className="absolute inset-0 bg-primary/45 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.96, y: 24 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.96, y: 24 }}
+                            className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-sm bg-white shadow-premium-lg"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-amber-100 bg-[#fffaf3] px-6 py-5">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-3">
+                                        <span className="material-symbols-outlined rounded-full bg-amber-100 p-2 text-amber-700">inventory_2</span>
+                                        <div>
+                                            <h3 className="text-[16px] font-bold uppercase tracking-tight text-primary">Mẫu đã ẩn</h3>
+                                            <p className="mt-1 text-[12px] text-stone/55">
+                                                Các biến thể trong danh sách này đang được giữ lại để bảo toàn lịch sử đơn hàng, nhưng không còn hiện ngoài frontend và ô tìm kiếm bán hàng.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeHiddenVariantsModal}
+                                    className="text-stone/35 transition-colors hover:text-brick"
+                                    title="Đóng popup"
+                                >
+                                    <span className="material-symbols-outlined">close</span>
+                                </button>
+                            </div>
+
+                            <div className="space-y-4 overflow-auto px-6 py-5 custom-scrollbar">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-amber-100 bg-amber-50/50 px-4 py-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700 shadow-sm">
+                                            {hiddenVariantCount} mẫu đã ẩn
+                                        </span>
+                                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${selectedHiddenVariantCount > 0 ? 'bg-amber-600 text-white' : 'bg-white text-amber-700/60'}`}>
+                                            {selectedHiddenVariantCount > 0 ? `Đã chọn ${selectedHiddenVariantCount}` : 'Chưa chọn mẫu'}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={toggleSelectAllHiddenVariants}
+                                            disabled={hiddenVariantCount === 0}
+                                            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-700 transition-colors hover:text-amber-900 disabled:cursor-not-allowed disabled:text-stone/30"
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">
+                                                {isAllHiddenVariantsSelected ? 'check_box' : hasPartialHiddenVariantSelection ? 'indeterminate_check_box' : 'check_box_outline_blank'}
+                                            </span>
+                                            {isAllHiddenVariantsSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleRestoreSelectedHiddenVariants}
+                                            disabled={selectedHiddenVariantCount === 0}
+                                            className={`inline-flex items-center gap-2 rounded-sm border px-4 py-2 text-[11px] font-black uppercase tracking-[0.14em] transition-all ${selectedHiddenVariantCount > 0 ? 'border-emerald-200 bg-white text-emerald-700 hover:border-emerald-600 hover:bg-emerald-600 hover:text-white shadow-sm' : 'cursor-not-allowed border-stone/15 bg-white text-stone/30'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">settings_backup_restore</span>
+                                            Khôi phục đã chọn
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {hiddenVariantCount === 0 ? (
+                                    <div className="flex flex-col items-center justify-center gap-3 rounded-sm border border-dashed border-amber-200 bg-stone/5 px-6 py-16 text-center">
+                                        <span className="material-symbols-outlined text-[42px] text-amber-200">inventory_2</span>
+                                        <div>
+                                            <p className="text-[13px] font-bold text-stone/45">Chưa có biến thể nào bị ẩn</p>
+                                            <p className="mt-1 text-[12px] text-stone/40">
+                                                Tick biến thể ở bảng chính rồi bấm "Ẩn biến thể đã chọn" để chuyển chúng vào đây.
+                                            </p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="overflow-hidden rounded-sm border border-stone/10">
+                                        <div className="grid grid-cols-[64px_88px_minmax(0,1.6fr)_1fr_124px_136px] border-b border-stone/10 bg-[#faf7ef] text-[10px] font-black uppercase tracking-[0.18em] text-stone/55">
+                                            <div className="border-r border-stone/10 px-4 py-3 text-center">Chọn</div>
+                                            <div className="border-r border-stone/10 px-4 py-3 text-center">Ảnh</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">Biến thể</div>
+                                            <div className="border-r border-stone/10 px-4 py-3">SKU</div>
+                                            <div className="border-r border-stone/10 px-4 py-3 text-center">Giá bán</div>
+                                            <div className="px-4 py-3 text-center">Khôi phục</div>
+                                        </div>
+
+                                        <div className="max-h-[58vh] overflow-auto custom-scrollbar">
+                                            {hiddenVariantEntries.map(({ variant, index, selectionKey }) => {
+                                                const parentPrimaryImage = images.find((img) => img.is_primary) || images[0];
+                                                const displayImageUrl = variant.image_url || parentPrimaryImage?.image_url;
+                                                const isHiddenVariantSelected = selectedHiddenVariantIdSet.has(selectionKey);
+                                                const variantAttributeSummary = Object.entries(variant.attributes || {})
+                                                    .map(([attrId, attrValue]) => {
+                                                        const attribute = selectedSuperAttributes.find((item) => String(item.id) === String(attrId));
+                                                        if (!attrValue) {
+                                                            return '';
+                                                        }
+
+                                                        return attribute?.name ? `${attribute.name}: ${attrValue}` : String(attrValue);
+                                                    })
+                                                    .filter(Boolean)
+                                                    .join(' • ');
+
+                                                return (
+                                                    <div
+                                                        key={`hidden-${variant.id ?? 'variant'}-${index}`}
+                                                        className={`grid grid-cols-[64px_88px_minmax(0,1.6fr)_1fr_124px_136px] border-b border-stone/10 last:border-b-0 ${isHiddenVariantSelected ? 'bg-amber-50/60' : 'bg-white'}`}
+                                                    >
+                                                        <div className="flex items-center justify-center border-r border-stone/10 px-4 py-3">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleHiddenVariantSelection(selectionKey)}
+                                                                className={`inline-flex items-center justify-center transition-colors ${isHiddenVariantSelected ? 'text-amber-700' : 'text-stone/35 hover:text-amber-700'}`}
+                                                                title={isHiddenVariantSelected ? 'Bỏ chọn mẫu này' : 'Chọn mẫu này'}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[20px]">
+                                                                    {isHiddenVariantSelected ? 'check_box' : 'check_box_outline_blank'}
+                                                                </span>
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="flex items-center justify-center border-r border-stone/10 px-4 py-3">
+                                                            <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-sm border border-stone/10 bg-stone/5">
+                                                                {displayImageUrl ? (
+                                                                    <img src={displayImageUrl} alt="" className="h-full w-full object-cover" />
+                                                                ) : (
+                                                                    <span className="material-symbols-outlined text-stone/25">image</span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="min-w-0 border-r border-stone/10 px-4 py-3">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <p className="truncate text-[13px] font-bold text-primary">
+                                                                    {variant.label || variant.name || 'Biến thể chưa có tên'}
+                                                                </p>
+                                                                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                                                    Đang ẩn
+                                                                </span>
+                                                            </div>
+                                                            {variantAttributeSummary ? (
+                                                                <p className="mt-1 line-clamp-2 text-[11px] text-stone/55">{variantAttributeSummary}</p>
+                                                            ) : (
+                                                                <p className="mt-1 text-[11px] text-stone/35">Không có phân loại bổ sung.</p>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="flex items-center border-r border-stone/10 px-4 py-3">
+                                                            <p className="truncate font-mono text-[12px] font-bold text-stone-600">{variant.sku || 'Chưa có SKU'}</p>
+                                                        </div>
+
+                                                        <div className="flex items-center justify-center border-r border-stone/10 px-4 py-3">
+                                                            <p className="text-[12px] font-black text-brick">{formatNumberOutput(variant.price)}₫</p>
+                                                        </div>
+
+                                                        <div className="flex items-center justify-center px-4 py-3">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRestoreSingleHiddenVariant(selectionKey)}
+                                                                className="inline-flex items-center gap-1.5 rounded-sm border border-emerald-200 bg-white px-3 py-2 text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700 transition-all hover:border-emerald-600 hover:bg-emerald-600 hover:text-white shadow-sm"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[16px]">settings_backup_restore</span>
+                                                                Khôi phục
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stone/10 bg-stone/5 px-6 py-4">
+                                <p className="text-[11px] text-stone/55">
+                                    Khôi phục xong là biến thể sẽ xuất hiện lại trong bảng chính và có thể bán lại như bình thường.
+                                </p>
+                                <button
+                                    type="button"
+                                    onClick={closeHiddenVariantsModal}
+                                    className="px-5 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                                >
+                                    Đóng
                                 </button>
                             </div>
                         </motion.div>

@@ -5,6 +5,7 @@ import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionC
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
 import { closePrintSession, printOrders } from '../../utils/orderPrint';
+import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
@@ -77,14 +78,7 @@ const OrderDetail = () => {
 
     const getStatusColorStyle = (status) => {
         const found = orderStatuses.find(s => s.code === status);
-        if (found) {
-            return {
-                backgroundColor: `${found.color}15`,
-                color: found.color,
-                borderColor: `${found.color}30`
-            };
-        }
-        return {};
+        return getStatusBadgeStyle(found?.color);
     };
 
     const handlePrintOrder = async () => {
@@ -181,17 +175,22 @@ const OrderDetail = () => {
                         <span className="material-symbols-outlined text-sm">print</span>
                         {printing ? 'Đang chuẩn bị...' : 'In Hóa Đơn'}
                     </button>
-                    <select
-                        value={order.status}
-                        onChange={(e) => handleUpdateStatus(e.target.value)}
-                        disabled={updating}
-                        style={getStatusColorStyle(order.status)}
-                        className="px-4 py-2 border font-ui text-xs font-bold uppercase tracking-widest focus:outline-none"
-                    >
-                        {orderStatuses.filter(s => s.is_active || s.code === order.status).map(s => (
-                            <option key={s.id} value={s.code}>{s.name}</option>
-                        ))}
-                    </select>
+                    <div className="relative">
+                        <select
+                            value={order.status}
+                            onChange={(e) => handleUpdateStatus(e.target.value)}
+                            disabled={updating}
+                            style={getStatusColorStyle(order.status)}
+                            className="admin-order-status-badge admin-order-status-badge--select min-w-[180px] text-left font-ui text-[11px] font-black tracking-[0.12em] focus:outline-none disabled:opacity-70"
+                        >
+                            {orderStatuses.filter(s => s.is_active || s.code === order.status).map(s => (
+                                <option key={s.id} value={s.code}>{s.name}</option>
+                            ))}
+                        </select>
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-white/80">
+                            <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                        </span>
+                    </div>
                     </div>
                     {printError && (
                         <div className="max-w-sm text-right text-[12px] font-semibold leading-relaxed" style={{color:'#b91c1c'}}>

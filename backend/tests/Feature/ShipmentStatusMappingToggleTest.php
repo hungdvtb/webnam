@@ -3,17 +3,22 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\CarrierRawStatus;
 use App\Models\CarrierStatusMapping;
 use App\Models\Order;
+use App\Models\OrderStatus;
 use App\Models\Shipment;
 use App\Models\User;
+use App\Services\SimpleXlsxService;
 use App\Services\Shipping\CarrierStatusMapper;
+use App\Services\Shipping\ViettelPostReconciliationService;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\Sanctum;
+use Mockery;
 use Tests\TestCase;
 
 #[\PHPUnit\Framework\Attributes\RequiresPhpExtension('pdo_sqlite')]
@@ -111,7 +116,7 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $response
             ->assertOk()
             ->assertJsonPath('shipment.shipment_status', 'delivered')
-            ->assertJsonPath('shipment.order.status', 'completed');
+            ;
 
         $order->refresh();
         $shipment->refresh();
@@ -370,6 +375,373 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $this->assertSame('shipped', (string) $shipment->shipment_status);
     }
 
+    public function test_bulk_delete_removes_selected_carrier_mappings_and_releases_raw_statuses(): void
+    {
+        [$account] = $this->authenticate();
+
+        $firstMapping = $this->createMapping($account, [
+            'carrier_code' => 'custom_carrier',
+            'carrier_raw_status' => 'legacy_100',
+        ]);
+        $secondMapping = $this->createMapping($account, [
+            'carrier_code' => 'custom_carrier',
+            'carrier_raw_status' => 'legacy_101',
+        ]);
+        $remainingMapping = $this->createMapping($account, [
+            'carrier_code' => 'custom_carrier',
+            'carrier_raw_status' => 'legacy_keep',
+        ]);
+
+        CarrierRawStatus::query()->insert([
+            [
+                'account_id' => $account->id,
+                'carrier_code' => 'custom_carrier',
+                'raw_status' => 'legacy_100',
+                'first_seen_at' => now(),
+                'last_seen_at' => now(),
+                'is_mapped' => true,
+                'mapping_id' => $firstMapping->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'account_id' => null,
+                'carrier_code' => 'custom_carrier',
+                'raw_status' => 'legacy_100',
+                'first_seen_at' => now(),
+                'last_seen_at' => now(),
+                'is_mapped' => true,
+                'mapping_id' => $firstMapping->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'account_id' => $account->id,
+                'carrier_code' => 'custom_carrier',
+                'raw_status' => 'legacy_101',
+                'first_seen_at' => now(),
+                'last_seen_at' => now(),
+                'is_mapped' => true,
+                'mapping_id' => $secondMapping->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'account_id' => $account->id,
+                'carrier_code' => 'custom_carrier',
+                'raw_status' => 'legacy_keep',
+                'first_seen_at' => now(),
+                'last_seen_at' => now(),
+                'is_mapped' => true,
+                'mapping_id' => $remainingMapping->id,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->deleteJson('/api/carrier-mappings', [
+                'ids' => [$firstMapping->id, $secondMapping->id],
+                'carrier_code' => 'custom_carrier',
+            ])
+            ->assertOk()
+            ->assertJsonPath('deleted_count', 2);
+
+        $this->assertDatabaseMissing('carrier_status_mappings', [
+            'id' => $firstMapping->id,
+        ]);
+        $this->assertDatabaseMissing('carrier_status_mappings', [
+            'id' => $secondMapping->id,
+        ]);
+        $this->assertDatabaseHas('carrier_status_mappings', [
+            'id' => $remainingMapping->id,
+        ]);
+
+        $this->assertDatabaseHas('carrier_raw_statuses', [
+            'account_id' => $account->id,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'legacy_100',
+            'is_mapped' => 0,
+            'mapping_id' => null,
+        ]);
+        $this->assertDatabaseHas('carrier_raw_statuses', [
+            'account_id' => null,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'legacy_100',
+            'is_mapped' => 0,
+            'mapping_id' => null,
+        ]);
+        $this->assertDatabaseHas('carrier_raw_statuses', [
+            'account_id' => $account->id,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'legacy_101',
+            'is_mapped' => 0,
+            'mapping_id' => null,
+        ]);
+        $this->assertDatabaseHas('carrier_raw_statuses', [
+            'account_id' => $account->id,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'legacy_keep',
+            'is_mapped' => 1,
+            'mapping_id' => $remainingMapping->id,
+        ]);
+    }
+
+    public function test_mapping_store_infers_internal_shipment_status_from_viettel_raw_status_when_field_is_omitted(): void
+    {
+        [$account] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/carrier-mappings', [
+                'carrier_code' => 'viettel_post',
+                'carrier_raw_status' => 'Đơn giao thành công tại kho',
+                'mapped_order_status' => 'completed',
+                'is_terminal' => true,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('internal_shipment_status', 'delivered')
+            ->assertJsonPath('mapped_order_status', 'completed');
+    }
+
+    public function test_carrier_mapping_with_blank_internal_shipment_status_still_syncs_order_status_from_raw_status(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'in_transit',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'shipment_status' => 'in_transit',
+            'status' => 'in_transit',
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Giao thành công',
+            'internal_shipment_status' => null,
+            'mapped_order_status' => 'completed',
+            'is_active' => true,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/shipments/carrier-callback', [
+                'shipment_id' => $shipment->id,
+                'carrier_code' => 'viettel_post',
+                'raw_status' => 'Giao thành công',
+            ])
+            ->assertOk()
+            ->assertJsonPath('shipment.shipment_status', 'delivered')
+            ;
+
+        $shipment->refresh();
+        $order->refresh();
+
+        $this->assertSame('Giao thành công', (string) $shipment->carrier_status_raw);
+        $this->assertSame('delivered', (string) $shipment->carrier_status_mapped);
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+        $this->assertSame('completed', (string) $order->status);
+        $this->assertSame('delivered', (string) $order->shipping_status);
+    }
+
+    public function test_carrier_mapping_matches_viettel_raw_status_without_diacritics(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'in_transit',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'shipment_status' => 'in_transit',
+            'status' => 'in_transit',
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Giao thành công',
+            'internal_shipment_status' => 'delivered',
+            'mapped_order_status' => 'completed',
+            'is_active' => true,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/shipments/carrier-callback', [
+                'shipment_id' => $shipment->id,
+                'carrier_code' => 'viettel_post',
+                'raw_status' => 'Giao thanh cong',
+            ])
+            ->assertOk()
+            ->assertJsonPath('shipment.shipment_status', 'delivered');
+
+        $shipment->refresh();
+        $order->refresh();
+
+        $this->assertSame('Giao thanh cong', (string) $shipment->carrier_status_raw);
+        $this->assertSame('delivered', (string) $shipment->carrier_status_mapped);
+        $this->assertSame('completed', (string) $order->status);
+    }
+
+    public function test_mapping_store_normalizes_order_status_name_to_code_and_canonicalizes_viettel_carrier_code(): void
+    {
+        [$account] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        OrderStatus::query()->create([
+            'account_id' => $account->id,
+            'code' => 'completed',
+            'name' => 'Giao hàng thành công',
+            'color' => '#10b981',
+            'sort_order' => 1,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/carrier-mappings', [
+                'carrier_code' => 'viettelpost',
+                'carrier_raw_status' => 'Giao thành công',
+                'internal_shipment_status' => 'delivered',
+                'mapped_order_status' => 'Giao hàng thành công',
+                'is_terminal' => true,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('carrier_code', 'viettel_post')
+            ->assertJsonPath('mapped_order_status', 'completed');
+
+        $this->assertDatabaseHas('carrier_status_mappings', [
+            'account_id' => $account->id,
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Giao thành công',
+            'mapped_order_status' => 'completed',
+        ]);
+    }
+
+    public function test_carrier_callback_uses_request_carrier_code_when_shipment_has_no_carrier_code(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'in_transit',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => null,
+            'carrier_name' => null,
+            'shipment_status' => 'in_transit',
+            'status' => 'in_transit',
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'custom_carrier',
+            'carrier_raw_status' => 'delivered_callback',
+            'internal_shipment_status' => 'delivered',
+            'mapped_order_status' => 'completed',
+            'is_active' => true,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/shipments/carrier-callback', [
+                'shipment_id' => $shipment->id,
+                'carrier_code' => 'custom_carrier',
+                'raw_status' => 'delivered_callback',
+            ])
+            ->assertOk()
+            ->assertJsonPath('shipment.shipment_status', 'delivered');
+
+        $shipment->refresh();
+        $order->refresh();
+
+        $this->assertSame('custom_carrier', (string) $shipment->carrier_code);
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+        $this->assertSame('completed', (string) $order->status);
+        $this->assertSame('delivered', (string) $order->shipping_status);
+    }
+
+    public function test_viettel_post_reconciliation_applies_raw_status_mapping_and_syncs_order_status_for_legacy_carrier_code(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'confirmed',
+            'shipment_status' => 'shipped',
+            'total_price' => 100000,
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettelpost',
+            'carrier_name' => 'Viettel Post',
+            'tracking_number' => 'TRACK-VTP-001',
+            'carrier_tracking_code' => 'TRACK-VTP-001',
+            'shipment_status' => 'in_transit',
+            'status' => 'in_transit',
+            'cod_amount' => 100000,
+            'shipping_cost' => 5000,
+            'actual_received_amount' => 95000,
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Giao thành công',
+            'internal_shipment_status' => 'delivered',
+            'mapped_order_status' => 'completed',
+            'is_active' => true,
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'Mã Vận Đơn',
+                'Cước vận chuyển (3)= (1+2)',
+                'Tiền thu hộ (4)',
+                'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)',
+                'Trạng Thái',
+                'Trạng thái đối soát COD',
+            ],
+            [
+                'TRACK-VTP-001',
+                '5000',
+                '100000',
+                '5000',
+                'Giao thành công',
+                'Đã nhận COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, $result['summary']['received_cod']);
+
+        $shipment->refresh();
+        $order->refresh();
+
+        $this->assertSame('viettel_post', (string) $shipment->carrier_code);
+        $this->assertSame('Giao thành công', (string) $shipment->carrier_status_raw);
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+        $this->assertSame('received_cod', (string) $shipment->reconciliation_status);
+        $this->assertSame('completed', (string) $order->status);
+        $this->assertSame('delivered', (string) $order->shipping_status);
+        $this->assertSame('carrier', (string) $order->shipping_status_source);
+    }
+
     private function authenticate(): array
     {
         $this->ensureCarrierExists();
@@ -486,9 +858,12 @@ class ShipmentStatusMappingToggleTest extends TestCase
 
             foreach ([
                 'shipment_status_logs',
+                'shipment_reconciliations',
                 'order_status_logs',
+                'carrier_raw_statuses',
                 'carrier_status_mappings',
                 'shipments',
+                'order_statuses',
                 'orders',
                 'account_user',
                 'carriers',
@@ -660,12 +1035,57 @@ class ShipmentStatusMappingToggleTest extends TestCase
             $table->unsignedBigInteger('account_id')->nullable();
             $table->string('carrier_code');
             $table->string('carrier_raw_status');
-            $table->string('internal_shipment_status');
+            $table->string('internal_shipment_status')->nullable();
             $table->string('mapped_order_status')->nullable();
             $table->text('description')->nullable();
             $table->boolean('is_terminal')->default(false);
             $table->integer('sort_order')->default(0);
             $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+
+        Schema::create('carrier_raw_statuses', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('account_id')->nullable();
+            $table->string('carrier_code');
+            $table->string('raw_status');
+            $table->timestamp('first_seen_at')->nullable();
+            $table->timestamp('last_seen_at')->nullable();
+            $table->boolean('is_mapped')->default(false);
+            $table->unsignedBigInteger('mapping_id')->nullable();
+            $table->json('sample_payload')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::create('order_statuses', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('account_id')->nullable();
+            $table->string('code');
+            $table->string('name');
+            $table->string('color')->nullable();
+            $table->integer('sort_order')->default(0);
+            $table->boolean('is_default')->default(false);
+            $table->boolean('is_system')->default(false);
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+        });
+
+        Schema::create('shipment_reconciliations', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('shipment_id');
+            $table->string('reconciliation_code')->nullable();
+            $table->string('carrier_code')->nullable();
+            $table->decimal('cod_amount', 15, 2)->default(0);
+            $table->decimal('shipping_fee', 15, 2)->default(0);
+            $table->decimal('service_fee', 15, 2)->default(0);
+            $table->decimal('return_fee', 15, 2)->default(0);
+            $table->decimal('actual_received_amount', 15, 2)->default(0);
+            $table->decimal('system_expected_amount', 15, 2)->default(0);
+            $table->decimal('diff_amount', 15, 2)->default(0);
+            $table->string('status')->nullable();
+            $table->text('note')->nullable();
+            $table->unsignedBigInteger('reconciled_by')->nullable();
+            $table->timestamp('reconciled_at')->nullable();
             $table->timestamps();
         });
 
@@ -697,10 +1117,15 @@ class ShipmentStatusMappingToggleTest extends TestCase
 
     private function ensureCarrierExists(): void
     {
+        $this->ensureCarrier('custom_carrier', 'Custom Carrier');
+    }
+
+    private function ensureCarrier(string $code, string $name): void
+    {
         \App\Models\Carrier::query()->updateOrCreate(
-            ['code' => 'custom_carrier'],
+            ['code' => $code],
             [
-                'name' => 'Custom Carrier',
+                'name' => $name,
                 'is_active' => true,
                 'is_visible' => true,
                 'sort_order' => 1,

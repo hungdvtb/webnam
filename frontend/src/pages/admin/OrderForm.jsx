@@ -103,10 +103,17 @@ const SEARCH_ENTRY_BUNDLE_OPTION = 'bundle_option';
 const orderFormColumnOrderStorageKey = 'order_form_column_order';
 const orderFormVisibleColumnsStorageKey = 'order_form_visible_columns';
 const orderFormColumnWidthsStorageKey = 'order_column_widths';
+const orderFormColumnWidthModeStorageKey = 'order_form_column_width_mode';
+const orderFormColumnOrderDefaultStorageKey = 'order_form_column_order_default';
+const orderFormVisibleColumnsDefaultStorageKey = 'order_form_visible_columns_default';
+const orderFormColumnWidthsDefaultStorageKey = 'order_column_widths_default';
+const orderFormColumnWidthModeDefaultStorageKey = 'order_form_column_width_mode_default';
 const orderFormCostPriceMigrationStorageKey = 'added_cost_price_migrated_form';
 const orderFormUnitVisibleMigrationStorageKey = 'added_unit_visible_migrated_form';
 const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_sell_migrated_form';
 const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
+const ORDER_FORM_COLUMN_WIDTH_MODE_AUTO = 'auto';
+const ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL = 'manual';
 const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
 const ORDER_FORM_REQUIRED_VISIBLE_COLUMN_IDS = ['available_to_sell'];
 const ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH = 44;
@@ -451,6 +458,11 @@ const normalizeStoredOrderFormColumnWidths = (value) => {
         })
     );
 };
+const normalizeOrderFormColumnWidthMode = (value) => (
+    value === ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL
+        ? ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL
+        : ORDER_FORM_COLUMN_WIDTH_MODE_AUTO
+);
 const getStoredOrderFormColumnOrder = () => normalizeStoredOrderFormColumnOrder(
     readOrderFormStorageJson(orderFormColumnOrderStorageKey, ORDER_FORM_DEFAULT_COLUMN_IDS)
 );
@@ -486,6 +498,15 @@ const getStoredOrderFormVisibleColumns = () => {
 const getStoredOrderFormColumnWidths = () => normalizeStoredOrderFormColumnWidths(
     readOrderFormStorageJson(orderFormColumnWidthsStorageKey, ORDER_FORM_DEFAULT_COLUMN_WIDTHS)
 );
+const getStoredOrderFormColumnWidthMode = () => normalizeOrderFormColumnWidthMode(
+    readOrderFormStorageValue(orderFormColumnWidthModeStorageKey, ORDER_FORM_COLUMN_WIDTH_MODE_AUTO)
+);
+const getOrderFormSystemColumnConfig = () => ({
+    order: [...ORDER_FORM_DEFAULT_COLUMN_IDS],
+    visible: [...ORDER_FORM_DEFAULT_COLUMN_IDS],
+    widths: { ...ORDER_FORM_DEFAULT_COLUMN_WIDTHS },
+    widthMode: ORDER_FORM_COLUMN_WIDTH_MODE_AUTO,
+});
 const getOrderFormPreferredColumnWidth = (
     columnId,
     widthMap = ORDER_FORM_DEFAULT_COLUMN_WIDTHS,
@@ -2963,6 +2984,7 @@ const OrderForm = () => {
     const [columnOrder, setColumnOrder] = useState(() => getStoredOrderFormColumnOrder());
     const [visibleColumns, setVisibleColumns] = useState(() => getStoredOrderFormVisibleColumns());
     const [columnWidths, setColumnWidths] = useState(() => getStoredOrderFormColumnWidths());
+    const [columnWidthMode, setColumnWidthMode] = useState(() => getStoredOrderFormColumnWidthMode());
     useEffect(() => {
         const normalizedColumnOrder = normalizeStoredOrderFormColumnOrder(columnOrder);
         const hasChanged = normalizedColumnOrder.length !== columnOrder.length
@@ -3007,14 +3029,53 @@ const OrderForm = () => {
         [desktopTableDensityKey]
     );
     const desktopAutoColumnWidths = useMemo(
-        () => fitOrderFormColumnsToViewport({
-            containerWidth: orderFormTableViewportWidth,
-            visibleColumnIds: desktopVisibleColumnIds,
-            preferredWidths: columnWidths,
-            columnMetrics: desktopTableMetrics,
-        }),
-        [columnWidths, desktopTableMetrics, desktopVisibleColumnIds, orderFormTableViewportWidth]
+        () => (
+            columnWidthMode === ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL
+                ? Object.fromEntries(
+                    desktopVisibleColumnIds.map((columnId) => [
+                        columnId,
+                        getOrderFormPreferredColumnWidth(columnId, columnWidths, desktopTableMetrics),
+                    ])
+                )
+                : fitOrderFormColumnsToViewport({
+                    containerWidth: orderFormTableViewportWidth,
+                    visibleColumnIds: desktopVisibleColumnIds,
+                    preferredWidths: columnWidths,
+                    columnMetrics: desktopTableMetrics,
+                })
+        ),
+        [columnWidthMode, columnWidths, desktopTableMetrics, desktopVisibleColumnIds, orderFormTableViewportWidth]
     );
+    const isUsingManualColumnWidths = columnWidthMode === ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL;
+    const desktopTableWidth = useMemo(
+        () => desktopVisibleColumnIds.reduce(
+            (total, columnId) => total + (
+                desktopAutoColumnWidths[columnId] || getOrderFormPreferredColumnWidth(columnId, columnWidths, desktopTableMetrics)
+            ),
+            ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH
+        ),
+        [columnWidths, desktopAutoColumnWidths, desktopTableMetrics, desktopVisibleColumnIds]
+    );
+    const desktopTablePixelWidth = useMemo(
+        () => (
+            isUsingManualColumnWidths
+                ? desktopTableWidth
+                : Math.max(orderFormTableViewportWidth || 0, desktopTableWidth)
+        ),
+        [desktopTableWidth, isUsingManualColumnWidths, orderFormTableViewportWidth]
+    );
+    const captureDisplayedOrderFormColumnWidths = useCallback(() => {
+        const nextWidths = { ...normalizeStoredOrderFormColumnWidths(columnWidths) };
+
+        ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
+            const renderedWidth = desktopAutoColumnWidths[columnId];
+            if (Number.isFinite(renderedWidth) && renderedWidth > 0) {
+                nextWidths[columnId] = Math.round(renderedWidth);
+            }
+        });
+
+        return normalizeStoredOrderFormColumnWidths(nextWidths);
+    }, [columnWidths, desktopAutoColumnWidths]);
     const desktopTableStyleVars = useMemo(() => ({
         '--order-form-header-font-size': `${desktopTableDensity.headerFontSize}px`,
         '--order-form-header-letter-spacing': desktopTableDensity.headerLetterSpacing,
@@ -4395,6 +4456,136 @@ const OrderForm = () => {
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
     };
+
+    const persistOrderFormColumnLayout = useCallback(({
+        order = columnOrder,
+        visible = visibleColumns,
+        widths = columnWidths,
+        widthMode = columnWidthMode,
+    } = {}) => {
+        writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(order));
+        writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizeStoredOrderFormVisibleColumns(visible));
+        writeOrderFormStorageJson(orderFormColumnWidthsStorageKey, normalizeStoredOrderFormColumnWidths(widths));
+        writeOrderFormStorageValue(orderFormColumnWidthModeStorageKey, normalizeOrderFormColumnWidthMode(widthMode));
+    }, [columnOrder, columnWidthMode, columnWidths, visibleColumns]);
+
+    const applyOrderFormColumnLayout = useCallback(({
+        order = columnOrder,
+        visible = visibleColumns,
+        widths = columnWidths,
+        widthMode = columnWidthMode,
+    } = {}) => {
+        const nextOrder = normalizeStoredOrderFormColumnOrder(order);
+        const nextVisibleColumns = normalizeStoredOrderFormVisibleColumns(visible);
+        const nextColumnWidths = normalizeStoredOrderFormColumnWidths(widths);
+        const nextWidthMode = normalizeOrderFormColumnWidthMode(widthMode);
+
+        setColumnOrder(nextOrder);
+        setVisibleColumns(nextVisibleColumns);
+        setColumnWidths(nextColumnWidths);
+        setColumnWidthMode(nextWidthMode);
+        persistOrderFormColumnLayout({
+            order: nextOrder,
+            visible: nextVisibleColumns,
+            widths: nextColumnWidths,
+            widthMode: nextWidthMode,
+        });
+    }, [columnOrder, columnWidthMode, columnWidths, persistOrderFormColumnLayout, visibleColumns]);
+
+    const saveColumnSettingsDefault = useCallback(() => {
+        const nextOrder = normalizeStoredOrderFormColumnOrder(columnOrder);
+        const nextVisibleColumns = normalizeStoredOrderFormVisibleColumns(visibleColumns);
+        const nextColumnWidths = captureDisplayedOrderFormColumnWidths();
+        const nextWidthMode = normalizeOrderFormColumnWidthMode(columnWidthMode);
+
+        writeOrderFormStorageJson(orderFormColumnOrderDefaultStorageKey, nextOrder);
+        writeOrderFormStorageJson(orderFormVisibleColumnsDefaultStorageKey, nextVisibleColumns);
+        writeOrderFormStorageJson(orderFormColumnWidthsDefaultStorageKey, nextColumnWidths);
+        writeOrderFormStorageValue(orderFormColumnWidthModeDefaultStorageKey, nextWidthMode);
+        applyOrderFormColumnLayout({
+            order: nextOrder,
+            visible: nextVisibleColumns,
+            widths: nextColumnWidths,
+            widthMode: nextWidthMode,
+        });
+        setShowColumnConfig(false);
+        alert('Đã lưu cấu hình cột mặc định.');
+    }, [applyOrderFormColumnLayout, captureDisplayedOrderFormColumnWidths, columnOrder, columnWidthMode, visibleColumns]);
+
+    const resetColumnSettingsDefault = useCallback(() => {
+        const savedDefaultOrder = readOrderFormStorageJson(orderFormColumnOrderDefaultStorageKey, null);
+        const savedDefaultVisibleColumns = readOrderFormStorageJson(orderFormVisibleColumnsDefaultStorageKey, null);
+        const savedDefaultWidths = readOrderFormStorageJson(orderFormColumnWidthsDefaultStorageKey, null);
+        const savedDefaultWidthMode = normalizeOrderFormColumnWidthMode(
+            readOrderFormStorageValue(orderFormColumnWidthModeDefaultStorageKey, ORDER_FORM_COLUMN_WIDTH_MODE_AUTO)
+        );
+        const hasSavedDefault = Array.isArray(savedDefaultOrder)
+            || Array.isArray(savedDefaultVisibleColumns)
+            || Boolean(savedDefaultWidths && typeof savedDefaultWidths === 'object' && !Array.isArray(savedDefaultWidths));
+
+        if (hasSavedDefault) {
+            applyOrderFormColumnLayout({
+                order: savedDefaultOrder || ORDER_FORM_DEFAULT_COLUMN_IDS,
+                visible: savedDefaultVisibleColumns || ORDER_FORM_DEFAULT_COLUMN_IDS,
+                widths: savedDefaultWidths || ORDER_FORM_DEFAULT_COLUMN_WIDTHS,
+                widthMode: savedDefaultWidthMode,
+            });
+            setShowColumnConfig(false);
+            alert('Đã khôi phục cấu hình cột mặc định đã lưu.');
+            return;
+        }
+
+        const systemColumnConfig = getOrderFormSystemColumnConfig();
+        applyOrderFormColumnLayout(systemColumnConfig);
+        setShowColumnConfig(false);
+        alert('Đã khôi phục cấu hình cột về mặc định hệ thống.');
+    }, [applyOrderFormColumnLayout]);
+
+    const handlePersistedColumnResize = useCallback((id, e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const baseWidths = captureDisplayedOrderFormColumnWidths();
+        const startX = e.clientX;
+        const startWidth = baseWidths[id] || e.currentTarget.parentElement.offsetWidth;
+        const minWidth = desktopTableMetrics.minWidths?.[id] ?? 50;
+        let currentWidth = startWidth;
+
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMouseMove = (moveEvent) => {
+            currentWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
+            setColumnWidthMode(ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL);
+            setColumnWidths({
+                ...baseWidths,
+                [id]: Math.round(currentWidth),
+            });
+        };
+
+        const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+
+            const nextColumnWidths = normalizeStoredOrderFormColumnWidths({
+                ...baseWidths,
+                [id]: Math.round(currentWidth),
+            });
+
+            setColumnWidthMode(ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL);
+            setColumnWidths(nextColumnWidths);
+            persistOrderFormColumnLayout({
+                widths: nextColumnWidths,
+                widthMode: ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL,
+            });
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }, [captureDisplayedOrderFormColumnWidths, desktopTableMetrics, persistOrderFormColumnLayout]);
 
     // handleCancel now handles navigation directly without confirm for a faster experience
 
@@ -7785,8 +7976,8 @@ const OrderForm = () => {
 
                         {/* Captured Area for Screenshot */}
                         <div ref={captureRef} className="mt-[10px] hidden overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl lg:block">
-                            <div ref={orderFormTableViewportRef} className="relative min-h-[400px] overflow-y-auto overflow-x-hidden order-form-table" style={desktopTableStyleVars}>
-                                <table className="w-full min-w-0 text-left border-collapse table-fixed">
+                            <div ref={orderFormTableViewportRef} className="relative min-h-[400px] overflow-y-auto overflow-x-auto order-form-table" style={desktopTableStyleVars}>
+                                <table className="text-left border-collapse table-fixed" style={{ width: `${desktopTablePixelWidth}px`, minWidth: `${desktopTablePixelWidth}px` }}>
                                     <colgroup>
                                         <col style={{ width: `${ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH}px` }} />
                                         {desktopVisibleColumnIds.map((colId) => (
@@ -7824,7 +8015,7 @@ const OrderForm = () => {
                                                                     initial={{ opacity: 0, x: -10 }}
                                                                     animate={{ opacity: 1, x: 0 }}
                                                                     exit={{ opacity: 0, x: -10 }}
-                                                                    className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-64 normal-case text-left"
+                                                                    className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-72 normal-case text-left"
                                                                 >
                                                                     <h4 className="font-sans text-sm font-bold text-primary/50 mb-4">Cấu hình cột hiển thị</h4>
                                                                     <div className="space-y-1">
@@ -7866,16 +8057,21 @@ const OrderForm = () => {
                                                                                 </Reorder.Item>
                                                                             ))}
                                                                         </Reorder.Group>
+                                                                        <div className="border-t border-primary/10 pt-3">
+                                                                            <div className="mb-2 text-[11px] font-semibold leading-[1.45] text-primary/45">
+                                                                                Resize cột sẽ tự lưu ngay khi thả chuột. Có thể lưu cấu hình hiện tại làm mặc định riêng.
+                                                                            </div>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={saveColumnSettingsDefault}
+                                                                                className="mb-2 inline-flex w-full items-center justify-center gap-1 rounded-sm border border-primary/15 bg-white px-3 py-2 text-[11px] font-bold text-primary transition hover:border-primary hover:bg-primary/5"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[15px]">save</span>
+                                                                                Lưu mặc định
+                                                                            </button>
                                                                         <button
                                                                             type="button"
-                                                                            onClick={() => {
-                                                                                const defOrder = [...ORDER_FORM_DEFAULT_COLUMN_IDS];
-                                                                                const defVisible = [...ORDER_FORM_DEFAULT_COLUMN_IDS];
-                                                                                const defWidths = { ...ORDER_FORM_DEFAULT_COLUMN_WIDTHS };
-                                                                                setColumnOrder(defOrder);
-                                                                                setVisibleColumns(defVisible);
-                                                                                setColumnWidths(defWidths);
-                                                                            }}
+                                                                            onClick={resetColumnSettingsDefault}
                                                                             className="py-2 text-[12px] font-bold text-primary/40 hover:bg-primary/5 rounded-sm transition-all"
                                                                         >
                                                                             Mặc định

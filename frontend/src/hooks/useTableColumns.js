@@ -27,9 +27,10 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     useEffect(() => {
         const savedOrder = localStorage.getItem(`${storageKey}_column_order`);
         let sortedColumns = [...defaultColumns];
+        let orderIds = [];
 
         if (savedOrder) {
-            const orderIds = JSON.parse(savedOrder);
+            orderIds = JSON.parse(savedOrder);
             sortedColumns = [...defaultColumns].sort((first, second) => {
                 const firstIndex = orderIds.indexOf(first.id);
                 const secondIndex = orderIds.indexOf(second.id);
@@ -44,17 +45,25 @@ export const useTableColumns = (storageKey, defaultColumns) => {
 
         const savedVisible = localStorage.getItem(`${storageKey}_columns`);
         const allIds = sortedColumns.map((column) => column.id);
+        const defaultVisibleIds = sortedColumns
+            .filter((column) => !column.hidden)
+            .map((column) => column.id);
+        const fallbackVisibleIds = defaultVisibleIds.length > 0 ? defaultVisibleIds : allIds;
 
         if (savedVisible) {
             const savedIds = JSON.parse(savedVisible);
-            const nextVisible = allIds.filter((id) => savedIds.includes(id));
-            const missingIds = allIds.filter((id) => !nextVisible.includes(id));
-            const merged = [...nextVisible, ...missingIds];
-            setVisibleColumns(merged);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(merged));
+            const nextVisible = savedIds.filter((id) => allIds.includes(id));
+            const knownIds = (orderIds.length > 0 ? orderIds : savedIds).filter((id) => allIds.includes(id));
+            const addedVisibleIds = sortedColumns
+                .filter((column) => !column.hidden && !knownIds.includes(column.id) && !nextVisible.includes(column.id))
+                .map((column) => column.id);
+            const mergedVisible = [...nextVisible, ...addedVisibleIds];
+            const sanitizedVisible = mergedVisible.length > 0 ? mergedVisible : fallbackVisibleIds;
+            setVisibleColumns(sanitizedVisible);
+            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(sanitizedVisible));
         } else {
-            setVisibleColumns(allIds);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(allIds));
+            setVisibleColumns(fallbackVisibleIds);
+            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(fallbackVisibleIds));
         }
     }, [storageKey, defaultColumns]);
 

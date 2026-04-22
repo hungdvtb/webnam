@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\Log;
 
 class ViettelPostTrackingImportService
 {
+    private const CARRIER_CODE = 'viettel_post';
+
     private SimpleXlsxService $xlsxService;
     private ShipmentStatusSyncService $syncService;
 
@@ -179,7 +181,7 @@ class ViettelPostTrackingImportService
                     'order_code' => $order->order_number,
                     'shipment_number' => $shipmentNumber,
                     'tracking_number' => $trackingNumber,
-                    'carrier_code' => 'viettelpost',
+                    'carrier_code' => self::CARRIER_CODE,
                     'carrier_name' => 'Viettel Post',
                     'carrier_tracking_code' => $trackingNumber,
                     'channel' => 'vtp_excel_import',
@@ -206,6 +208,8 @@ class ViettelPostTrackingImportService
             } else {
                 // If shipment exists, update it
                 $shipmentData = [
+                    'carrier_code' => self::CARRIER_CODE,
+                    'carrier_name' => $shipment->carrier_name ?: 'Viettel Post',
                     'shipping_cost' => $shippingFee,
                     'actual_received_amount' => $shipment->cod_amount - $shippingFee,
                 ];

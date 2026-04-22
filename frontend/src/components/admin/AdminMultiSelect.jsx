@@ -38,6 +38,7 @@ function AdminMultiSelect({
     portal = false,
     getOptionValue = defaultGetOptionValue,
     getOptionLabel = defaultGetOptionLabel,
+    getSummaryText,
 }) {
     const containerRef = useRef(null);
     const controlRef = useRef(null);
@@ -198,16 +199,40 @@ function AdminMultiSelect({
         updateValues([...normalizedValues, targetValue]);
     };
 
+    const summaryText = useMemo(() => {
+        if (selectedLabels.length === 0) {
+            return placeholder;
+        }
+
+        if (typeof getSummaryText === 'function') {
+            const customSummary = getSummaryText({
+                placeholder,
+                selectedCount: selectedLabels.length,
+                selectedLabels,
+                selectedValues: normalizedValues,
+            });
+
+            if (customSummary !== undefined && customSummary !== null) {
+                const normalizedSummary = String(customSummary).trim();
+                if (normalizedSummary) {
+                    return normalizedSummary;
+                }
+            }
+        }
+
+        return selectedLabels.join(', ');
+    }, [getSummaryText, normalizedValues, placeholder, selectedLabels]);
+
     const controlClassName = compact
         ? 'h-[40px] rounded-sm border border-primary/15 bg-white px-3 py-2 text-[12px] font-semibold text-primary'
         : 'h-[40px] rounded-sm border border-primary/15 bg-primary/[0.03] px-3 py-2 text-[13px] font-semibold text-primary';
     const dropdownClassName = compact
         ? 'absolute left-0 right-0 top-full z-[160] mt-1 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl'
         : 'absolute left-0 right-0 top-full z-[160] mt-2 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl';
-    const summaryText = selectedLabels.length > 0 ? selectedLabels.join(', ') : placeholder;
     const dropdownContent = (
         <div
             ref={dropdownRef}
+            data-admin-multiselect-dropdown
             style={portal ? {
                 position: 'fixed',
                 top: dropdownPosition?.top || 0,
@@ -284,7 +309,7 @@ function AdminMultiSelect({
     );
 
     return (
-        <div ref={containerRef} className={`relative ${className}`}>
+        <div ref={containerRef} data-admin-multiselect-root className={`relative ${className}`}>
             <button
                 ref={controlRef}
                 type="button"

@@ -148,11 +148,11 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                                 <p className="text-2xl font-black text-slate-800">{s.total_rows}</p>
                             </div>
 
-                            {/* Row 1: Matched + In-progress */}
+                            {/* Row 1: Received COD + In-progress */}
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-4 text-center">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-emerald-500 mb-1">✓ Khớp chuẩn</p>
-                                    <p className="text-3xl font-black text-emerald-700">{s.reconciled}</p>
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-emerald-500 mb-1">✓ Đã nhận COD</p>
+                                    <p className="text-3xl font-black text-emerald-700">{s.received_cod ?? 0}</p>
                                 </div>
                                 <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 text-center">
                                     <p className="text-[10px] uppercase tracking-widest font-black text-blue-400 mb-1">⏳ Đang xử lý</p>
@@ -160,34 +160,16 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
                                 </div>
                             </div>
 
-                            {/* Mismatch block — expanded with +/- details */}
-                            <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
-                                <div className="flex items-center justify-between mb-3">
-                                    <p className="text-[10px] uppercase tracking-widest font-black text-amber-500">⚠ Lệch tiền</p>
-                                    <span className="text-2xl font-black text-amber-700">{s.mismatch}</span>
+                            {/* Unreconciled / No COD blocks */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-center">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-amber-500 mb-1">⚠ Chưa đối soát</p>
+                                    <p className="text-3xl font-black text-amber-700">{s.unreconciled_cod ?? 0}</p>
                                 </div>
-                                {s.mismatch > 0 && (
-                                    <div className="space-y-2 pt-2 border-t border-amber-100">
-                                        {(s.mismatch_positive ?? 0) > 0 && (
-                                            <div className="flex items-center justify-between text-sm">
-                                                <span className="font-semibold text-emerald-600 flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[14px]">arrow_upward</span>
-                                                    Lệch dương ({s.mismatch_positive} đơn)
-                                                </span>
-                                                <span className="font-black text-emerald-600">+{fmt(s.mismatch_pos_amount)}đ</span>
-                                            </div>
-                                        )}
-                                        {(s.mismatch_negative ?? 0) > 0 && (
-                                            <div className="flex items-center justify-between text-sm">
-                                                <span className="font-semibold text-rose-600 flex items-center gap-1">
-                                                    <span className="material-symbols-outlined text-[14px]">arrow_downward</span>
-                                                    Lệch âm ({s.mismatch_negative} đơn)
-                                                </span>
-                                                <span className="font-black text-rose-600">-{fmt(s.mismatch_neg_amount)}đ</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
+                                <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 text-center">
+                                    <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Không có COD</p>
+                                    <p className="text-3xl font-black text-slate-600">{s.no_cod ?? 0}</p>
+                                </div>
                             </div>
 
                             {/* Not found */}

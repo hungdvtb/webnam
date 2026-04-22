@@ -591,15 +591,41 @@ const parseOrderListRouteScope = (search = '') => {
         batchReturnDocumentNumber: String(params.get('batch_return_document_number') || '').trim(),
     };
 };
+const resolveOrderTypeFilterCandidate = (value) => {
+    if (Array.isArray(value)) {
+        return '';
+    }
+
+    if (value && typeof value === 'object') {
+        if (value.value !== undefined && value.value !== null) {
+            return value.value;
+        }
+
+        if (value.id !== undefined && value.id !== null) {
+            return value.id;
+        }
+    }
+
+    return value;
+};
 const normalizeOrderTypeFilterValues = (value) => {
     const rawValues = Array.isArray(value)
         ? value
-        : String(value || '').split(',');
+        : (
+            value && typeof value === 'object'
+                ? [value]
+                : String(value || '').split(',')
+        );
     const seen = new Set();
 
     return rawValues.reduce((result, item) => {
-        const normalized = normalizeOrderType(item);
-        if (normalized === ORDER_TYPE_STANDARD && String(item || '').trim() !== ORDER_TYPE_STANDARD) {
+        const candidate = String(resolveOrderTypeFilterCandidate(item) ?? '').trim();
+        if (!candidate) {
+            return result;
+        }
+
+        const normalized = normalizeOrderType(candidate);
+        if (normalized === ORDER_TYPE_STANDARD && candidate !== ORDER_TYPE_STANDARD) {
             return result;
         }
         if (seen.has(normalized)) {

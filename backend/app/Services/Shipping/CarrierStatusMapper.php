@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 /**
  * CarrierStatusMapper
@@ -67,6 +68,8 @@ class CarrierStatusMapper
         $mapping = $this->getMapping($carrierCode, $rawStatus, $accountId);
 
         if ($mapping) {
+            $resolvedShipmentStatus = $this->resolveMappedShipmentStatus($carrierCode, $rawStatus, $mapping, $accountId);
+
             if (!(bool) $mapping->is_active) {
                 return [
                     'shipment_status' => null,
@@ -78,7 +81,7 @@ class CarrierStatusMapper
             }
 
             return [
-                'shipment_status' => $mapping->internal_shipment_status ?: $mapping->carrier_raw_status,
+                'shipment_status' => $resolvedShipmentStatus,
                 'order_status'    => $this->normalizeOptionalStatus($mapping->mapped_order_status, $accountId),
                 'is_terminal'     => (bool) $mapping->is_terminal,
                 'blocked_by_disabled_mapping' => false,
@@ -174,6 +177,45 @@ class CarrierStatusMapper
         return self::DEFAULT_SHIPMENT_TO_ORDER_MAP[$shipmentStatus] ?? null;
     }
 
+    public function inferInternalShipmentStatus(
+        ?string $carrierCode,
+        ?string $rawStatus,
+        ?string $explicitShipmentStatus = null,
+        ?int $accountId = null
+    ): ?string {
+        $explicit = $this->trimOptionalValue($explicitShipmentStatus);
+        if ($explicit !== null) {
+            return $explicit;
+        }
+
+        $normalizedCarrierCode = $this->canonicalizeCarrierCode($carrierCode);
+        $normalizedRawStatus = $this->trimOptionalValue($rawStatus);
+        if ($normalizedCarrierCode === null || $normalizedRawStatus === null) {
+            return null;
+        }
+
+        $matchedMapping = $this->getCarrierMappingSet($normalizedCarrierCode, $accountId)
+            ->first(function (CarrierStatusMapping $mapping) use ($normalizedRawStatus) {
+                return $this->normalizeLookupKey((string) $mapping->carrier_raw_status) === $this->normalizeLookupKey($normalizedRawStatus)
+                    && $this->trimOptionalValue($mapping->internal_shipment_status) !== null;
+            });
+
+        if ($matchedMapping) {
+            return $this->trimOptionalValue($matchedMapping->internal_shipment_status);
+        }
+
+        $fallbackShipmentStatus = $this->resolveFallbackShipmentStatus($normalizedCarrierCode, $normalizedRawStatus);
+        if ($fallbackShipmentStatus !== null) {
+            return $fallbackShipmentStatus;
+        }
+
+        $normalizedStatusKey = $this->normalizeStatusKey($normalizedRawStatus);
+
+        return array_key_exists($normalizedStatusKey, self::DEFAULT_SHIPMENT_TO_ORDER_MAP)
+            ? $normalizedStatusKey
+            : null;
+    }
+
     /**
      * Resolve whether the current shipment status should update order status.
      *
@@ -262,6 +304,20 @@ class CarrierStatusMapper
 
         return $matches->first(fn (CarrierStatusMapping $mapping) => (bool) $mapping->is_active)
             ?: $matches->first();
+    }
+
+    private function resolveMappedShipmentStatus(
+        string $carrierCode,
+        string $rawStatus,
+        CarrierStatusMapping $mapping,
+        ?int $accountId = null
+    ): ?string {
+        return $this->inferInternalShipmentStatus(
+            $carrierCode,
+            $rawStatus,
+            $mapping->internal_shipment_status,
+            $accountId
+        );
     }
 
     /**
@@ -380,7 +436,7 @@ class CarrierStatusMapper
     {
         $normalized = preg_replace('/\s+/u', ' ', str_replace("\u{00A0}", ' ', trim($value))) ?? '';
 
-        return mb_strtolower($normalized, 'UTF-8');
+        return Str::lower(Str::ascii($normalized));
     }
 
     private function normalizeOptionalStatus(mixed $value, ?int $accountId = null): ?string

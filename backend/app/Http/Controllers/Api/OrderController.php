@@ -912,9 +912,18 @@ class OrderController extends Controller
     {
         $rawValues = is_array($orderTypes)
             ? $orderTypes
-            : explode(',', (string) $orderTypes);
+            : [$orderTypes];
 
         return collect($rawValues)
+            ->flatMap(function ($value) {
+                if (is_array($value)) {
+                    $value = $value['value'] ?? $value['id'] ?? null;
+                } elseif (is_object($value)) {
+                    $value = $value->value ?? $value->id ?? null;
+                }
+
+                return explode(',', (string) $value);
+            })
             ->map(fn ($value) => Str::lower(trim((string) $value)))
             ->filter(fn (string $value) => in_array($value, Order::TYPES, true))
             ->unique()

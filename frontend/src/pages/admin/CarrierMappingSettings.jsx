@@ -33,6 +33,8 @@ const CarrierMappingSettings = ({ embedded = false }) => {
     const [showAddForm, setShowAddForm] = useState(false);
     const [showManagementModal, setShowManagementModal] = useState(false);
     const [isSavingSort, setIsSavingSort] = useState(false);
+    const [selectedMappingIds, setSelectedMappingIds] = useState([]);
+    const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     
     /* ── State cho form thêm mới ── */
     const [newMapping, setNewMapping] = useState({
@@ -77,6 +79,30 @@ const CarrierMappingSettings = ({ embedded = false }) => {
             .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
     }, [allMappings, activeTab]);
 
+    const selectedMappings = useMemo(
+        () => filteredMappings.filter(m => selectedMappingIds.includes(m.id)),
+        [filteredMappings, selectedMappingIds]
+    );
+
+    const selectedCount = selectedMappings.length;
+    const allVisibleMappingsSelected = filteredMappings.length > 0 && selectedCount === filteredMappings.length;
+
+    useEffect(() => {
+        setSelectedMappingIds(previous => previous.filter(id => filteredMappings.some(mapping => mapping.id === id)));
+    }, [filteredMappings]);
+
+    const toggleSelectMapping = useCallback((id) => {
+        setSelectedMappingIds(previous => (
+            previous.includes(id)
+                ? previous.filter(item => item !== id)
+                : [...previous, id]
+        ));
+    }, []);
+
+    const toggleSelectAllMappings = useCallback(() => {
+        setSelectedMappingIds(allVisibleMappingsSelected ? [] : filteredMappings.map(mapping => mapping.id));
+    }, [allVisibleMappingsSelected, filteredMappings]);
+
     /* ── Xử lý sự kiện ── */
     const handleCarrierReorder = async (newOrder) => {
         setCarriers(newOrder);
@@ -119,16 +145,41 @@ const CarrierMappingSettings = ({ embedded = false }) => {
         if (!window.confirm('Xóa quy tắc mapping này?')) return;
         try {
             await api.delete(`/carrier-mappings/${id}`);
+            setSelectedMappingIds(previous => previous.filter(item => item !== id));
             fetchData();
         } catch {
             alert('Lỗi khi xóa');
         }
     };
 
+    const handleBulkDeleteMappings = async () => {
+        const ids = selectedMappings.map(mapping => mapping.id);
+        if (!ids.length) return;
+        if (!window.confirm(`Xóa ${ids.length} trạng thái đã chọn?`)) return;
+
+        setIsBulkDeleting(true);
+        try {
+            await api.delete('/carrier-mappings', {
+                data: {
+                    ids,
+                    carrier_code: activeTab,
+                },
+            });
+            setSelectedMappingIds([]);
+            setEditingId(null);
+            setEditData({});
+            await fetchData();
+        } catch (error) {
+            alert(error.response?.data?.message || 'Lỗi khi xóa hàng loạt');
+        } finally {
+            setIsBulkDeleting(false);
+        }
+    };
+
     const handleAddMappingFromDiscovery = async (carrierCode, rawStatus) => {
         setActiveTab(carrierCode);
         setShowAddForm(true);
-        setNewMapping(v => ({ ...v, carrier_raw_status: rawStatus }));
+        setNewMapping(v => ({ ...v, carrier_raw_status: rawStatus, internal_shipment_status: '', mapped_order_status: '' }));
         setShowManagementModal(false);
         document.getElementById('add-mapping-form')?.scrollIntoView({ behavior: 'smooth' });
     };
@@ -233,7 +284,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
             {/* ═══ Bảng Danh Sách Mapping ═══ */}
             <div className="flex-1 min-h-0 bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
                 {/* Header hãng đang chọn */}
-                <div className="px-6 py-3 border-b border-stone-100 bg-[#f9f9f8] flex items-center justify-between shrink-0">
+                <div className="px-6 py-3 border-b border-stone-100 bg-[#f9f9f8] flex items-center justify-between gap-3 shrink-0">
                     <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-lg bg-white border border-stone-200 shadow-sm flex items-center justify-center text-lg">
                             {CARRIER_ICONS[activeTab] || '📦'}
@@ -253,6 +304,38 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                 </div>
 
                 {/* Nội dung bảng */}
+                {selectedCount > 0 && (
+                    <div className="px-6 py-3 border-b border-red-100 bg-red-50/70 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                        <span className="text-[10px] font-black text-red-700 uppercase tracking-widest">
+                            Đã chọn {selectedCount} trạng thái
+                        </span>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setSelectedMappingIds([])}
+                                className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-stone-600 transition-colors hover:text-stone-900"
+                            >
+                                Bỏ chọn
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleBulkDeleteMappings}
+                                disabled={isBulkDeleting}
+                                className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-[10px] font-black uppercase tracking-widest transition-all ${
+                                    isBulkDeleting
+                                        ? 'cursor-wait bg-red-200 text-red-700'
+                                        : 'bg-red-600 text-white hover:bg-red-700'
+                                }`}
+                            >
+                                <span className={`material-symbols-outlined text-[14px] ${isBulkDeleting ? 'animate-spin' : ''}`}>
+                                    {isBulkDeleting ? 'progress_activity' : 'delete'}
+                                </span>
+                                {isBulkDeleting ? 'Đang xóa' : 'Xóa đã chọn'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 <div className="flex-1 overflow-auto custom-scrollbar">
                     {/* Form thêm nhanh */}
                     <AnimatePresence>
@@ -265,7 +348,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                 className="overflow-hidden border-b border-stone-200 bg-primary/[0.02]"
                             >
                                 <div className="p-5 grid grid-cols-12 gap-4 items-end">
-                                    <div className="col-span-3">
+                                    <div className="col-span-6">
                                         <label className="text-[9px] font-bold text-stone-800 uppercase tracking-widest block mb-1.5 px-0.5">TRẠNG THÁI TỪ HÃNG (RAW)</label>
                                         <input 
                                             type="text" 
@@ -276,7 +359,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                         />
                                     </div>
 
-                                    <div className="col-span-3">
+                                    <div className="col-span-6">
                                         <label className="text-[9px] font-bold text-stone-800 uppercase tracking-widest block mb-1.5 px-0.5">ĐỒNG BỘ ĐƠN HÀNG</label>
                                         <select 
                                             value={newMapping.mapped_order_status}
@@ -287,7 +370,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                             {orderStatuses.map(s => <option key={s.code} value={s.code}>{s.name}</option>)}
                                         </select>
                                     </div>
-                                    <div className="col-span-6 flex justify-end gap-2 pb-0.5">
+                                    <div className="col-span-12 flex justify-end gap-2 pb-0.5">
                                         <button onClick={() => setShowAddForm(false)} className="px-3 py-2 text-stone-600 hover:text-stone-900 text-[10px] font-bold uppercase tracking-widest transition-colors">HỦY</button>
                                         <button onClick={handleAddMapping} className="px-4 py-2 bg-primary text-white rounded-lg text-[10px] font-black uppercase tracking-widest shadow-md">LƯU QUY TẮC</button>
                                     </div>
@@ -305,8 +388,17 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                         <table className="w-full border-collapse">
                             <thead>
                                 <tr className="text-[10px] font-bold text-stone-800 uppercase tracking-wider border-b border-stone-200 sticky top-0 bg-white/95 backdrop-blur-md z-10">
+                                    <th className="pl-6 py-3 text-center w-12">
+                                        <input
+                                            type="checkbox"
+                                            checked={allVisibleMappingsSelected}
+                                            onChange={toggleSelectAllMappings}
+                                            className="size-4 cursor-pointer accent-primary"
+                                            aria-label="Chọn tất cả trạng thái mapping"
+                                        />
+                                    </th>
                                     <th className="pl-6 py-3 text-left w-12 text-stone-500">STT</th>
-                                    <th className="px-4 py-3 text-left">TRẠNG THÁI TỪ HÃNG</th>
+                                                                        <th className="px-4 py-3 text-left">TRẠNG THÁI TỪ HÃNG</th>
                                     <th className="px-4 py-3 text-left">ĐỒNG BỘ ĐƠN HÀNG</th>
                                     <th className="px-4 py-3 text-center w-24">HOẠT ĐỘNG</th>
                                     <th className="px-4 py-3 text-center w-24">KẾT THÚC</th>
@@ -316,13 +408,21 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                             <tbody>
                                 {filteredMappings.map((m, idx) => {
                                     const isEditing = editingId === m.id;
-                                    const currentShipmentStatus = SHIPMENT_STATUSES.find(s => s.code === (isEditing ? editData.internal_shipment_status ?? m.internal_shipment_status : m.internal_shipment_status));
-                                    const currentOrderStatus = orderStatuses.find(s => s.code === (isEditing ? editData.mapped_order_status ?? m.mapped_order_status : m.mapped_order_status));
+                                    const isSelected = selectedMappingIds.includes(m.id);
+                                                                        const currentOrderStatus = orderStatuses.find(s => s.code === (isEditing ? editData.mapped_order_status ?? m.mapped_order_status : m.mapped_order_status));
 
                                     return (
-                                        <tr key={m.id} className={`group border-b border-stone-100 transition-all ${!m.is_active ? 'bg-stone-50 opacity-60' : 'hover:bg-primary/[0.02]'}`}>
+                                        <tr key={m.id} className={`group border-b border-stone-100 transition-all ${!m.is_active ? 'opacity-60' : ''} ${isSelected ? 'bg-red-50/60' : 'bg-white'} ${!isSelected && m.is_active ? 'hover:bg-primary/[0.02]' : ''}`}>
+                                            <td className="pl-6 py-4 text-center">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isSelected}
+                                                    onChange={() => toggleSelectMapping(m.id)}
+                                                    className="size-4 cursor-pointer accent-primary"
+                                                    aria-label={`Chọn trạng thái ${m.carrier_raw_status}`}
+                                                />
+                                            </td>
                                             <td className="pl-6 py-4 font-mono text-[11px] text-stone-400">{idx + 1}</td>
-
                                             <td className="px-4 py-4">
                                                 {isEditing ? (
                                                     <input 

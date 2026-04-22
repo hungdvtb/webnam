@@ -53,7 +53,8 @@ const DEFAULT_COLUMNS = [
     { id: 'customer_info', label: 'Thông tin khách hàng', minWidth: '142px' },
     { id: 'staff_notes', label: 'Ghi chú nhân viên', minWidth: '168px' },
     { id: 'order_status', label: 'Trạng thái đơn hàng', minWidth: '164px' },
-    { id: 'shipment_status', label: 'Trạng thái vận đơn', minWidth: '164px' },
+    { id: 'carrier_status', label: 'Trạng thái vận đơn', minWidth: '168px' },
+    { id: 'shipment_status', label: 'Trạng thái vận đơn hệ thống', minWidth: '176px', hidden: true },
     { id: 'cod_amount', label: 'COD', minWidth: '124px' },
     { id: 'shipping_cost', label: 'Phí ship', minWidth: '124px' },
     { id: 'actual_received_amount', label: 'Thực nhận', minWidth: '128px' },
@@ -62,6 +63,7 @@ const DEFAULT_COLUMNS = [
     { id: 'created_at', label: 'Ngày tạo', minWidth: '112px' },
 ];
 
+const SHIPMENT_TABLE_STORAGE_KEY = 'shipment_list_v2';
 const SHIPMENT_FILTER_STORAGE_KEY = 'shipment_list_filters_v2';
 const LEGACY_SEARCH_STORAGE_KEY = 'shipment_list_search_current';
 
@@ -1041,7 +1043,7 @@ const ShipmentList = () => {
         resetDefault,
         saveAsDefault,
         setAvailableColumns,
-    } = useTableColumns('shipment_list', DEFAULT_COLUMNS);
+    } = useTableColumns(SHIPMENT_TABLE_STORAGE_KEY, DEFAULT_COLUMNS);
 
     const statusMap = useMemo(() => new Map(orderStatuses.map((status) => [String(status.code), status])), [orderStatuses]);
     const carrierMap = useMemo(() => new Map(carriers.map((carrier) => [String(carrier.code), carrier])), [carriers]);
@@ -1797,7 +1799,7 @@ const ShipmentList = () => {
                             </span>
                             {filters.search?.trim() && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Tìm kiếm:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={filters.search.trim()}>{filters.search.trim()}</span><button type="button" onClick={() => removeFilter('search')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                             {filters.order_status?.length > 0 && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Đơn hàng:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={appliedOrderStatusLabels.join(', ')}>{appliedOrderStatusSummary}</span><button type="button" onClick={() => removeFilter('order_status')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
-                            {filters.shipment_status?.length > 0 && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Vận đơn:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={appliedShipmentStatusLabels.join(', ')}>{appliedShipmentStatusSummary}</span><button type="button" onClick={() => removeFilter('shipment_status')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
+                            {filters.shipment_status?.length > 0 && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Hệ thống:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={appliedShipmentStatusLabels.join(', ')}>{appliedShipmentStatusSummary}</span><button type="button" onClick={() => removeFilter('shipment_status')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                             {filters.customer_name && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Khách:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={filters.customer_name}>{filters.customer_name}</span><button type="button" onClick={() => removeFilter('customer_name')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                             {filters.shipment_number && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Mã vận đơn:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={filters.shipment_number}>{filters.shipment_number}</span><button type="button" onClick={() => removeFilter('shipment_number')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
                             {filters.order_code && <div className="flex max-w-full items-center gap-2 rounded-full border border-primary/20 bg-white px-3 py-1.5 shadow-sm animate-in fade-in duration-300"><span className="text-[11px] text-primary/40">Mã đơn:</span><span className="truncate text-[12px] font-bold text-[#0F172A]" title={filters.order_code}>{filters.order_code}</span><button type="button" onClick={() => removeFilter('order_code')} className="shrink-0 text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button></div>}
@@ -1857,7 +1859,7 @@ const ShipmentList = () => {
                                 </p>
                             </div>
                             <div className="space-y-2 border-b border-r border-primary/10 p-4">
-                                <label className="text-[13px] font-medium text-stone-600">Trạng thái vận đơn</label>
+                                <label className="text-[13px] font-medium text-stone-600">Trạng thái vận đơn hệ thống</label>
                                 <AdminMultiSelect
                                     className="w-full"
                                     compact
@@ -1866,8 +1868,8 @@ const ShipmentList = () => {
                                     value={tempFilters.shipment_status}
                                     onChange={(shipmentStatusValues) => setTempFilters((previous) => normalizeShipmentFilters({ ...previous, shipment_status: shipmentStatusValues }))}
                                     placeholder="Tất cả"
-                                    searchPlaceholder="Tìm trạng thái vận đơn..."
-                                    emptyLabel="Không có trạng thái vận đơn"
+                                    searchPlaceholder="Tìm trạng thái hệ thống..."
+                                    emptyLabel="Không có trạng thái hệ thống"
                                     getOptionValue={(status) => status.code}
                                     getOptionLabel={(status) => status.label}
                                     getSummaryText={({ placeholder: emptyText, selectedLabels }) => selectedLabels.length > 0 ? formatCompactSelectionSummary(selectedLabels) : emptyText}
@@ -1888,7 +1890,7 @@ const ShipmentList = () => {
 
                 {showColumnSettings && (
                     <div ref={columnSettingsRef}>
-                        <TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey="shipment_list" />
+                        <TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey={SHIPMENT_TABLE_STORAGE_KEY} />
                     </div>
                 )}
             </div>
@@ -1919,11 +1921,11 @@ const ShipmentList = () => {
                             <tr><td colSpan={renderedColumns.length + 1} className="p-12 text-center"><div className="flex flex-col items-center gap-2 text-primary/40"><span className="material-symbols-outlined text-[48px]">inventory_2</span><p className="text-[15px] font-bold">Không tìm thấy vận đơn nào</p><p className="text-[13px]">Kiểm tra lại từ khóa tìm kiếm hoặc bộ lọc đang áp dụng.</p></div></td></tr>
                         ) : (
                             shipments.map((shipment) => {
-                                const rawShipmentStatus = getStatus(shipment.shipment_status, SHIPMENT_STATUSES);
-                                const shipmentStatus = {
-                                    ...rawShipmentStatus,
-                                    label: shipment.carrier_status_text || rawShipmentStatus.label
-                                };
+                                const shipmentStatus = getStatus(shipment.shipment_status, SHIPMENT_STATUSES);
+                                const carrierStatusLabel = shipment.carrier_status_text || shipment.carrier_status_raw || '-';
+                                const carrierStatusColor = carrierStatusLabel !== '-'
+                                    ? shipmentStatus.color || DEFAULT_STATUS_BADGE_COLOR
+                                    : DEFAULT_STATUS_BADGE_COLOR;
                                 const orderStatusName = statusMap.get(String(shipment.order?.status))?.name || shipment.order?.status || '-';
                                 const createdAtParts = formatDateTimeParts(shipment.created_at);
                                 const shippedAtParts = formatDateTimeParts(shipment.shipped_at || shipment.order?.shipping_dispatched_at);
@@ -1984,13 +1986,34 @@ const ShipmentList = () => {
                                                     </td>
                                                 );
                                             }
+                                            if (column.id === 'carrier_status') {
+                                                return (
+                                                    <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2">
+                                                        <ShipmentCopyableCell
+                                                            copyValue={carrierStatusLabel}
+                                                            copyId={`${shipment.id}-carrier_status`}
+                                                            copyLabel="trạng thái từ hãng"
+                                                            copiedCellId={copiedCellId}
+                                                            onCopy={handleCopy}
+                                                            iconTopClassName="top-1/2 -translate-y-1/2"
+                                                            className="max-w-full"
+                                                        >
+                                                            <AdminStatusBadge
+                                                                label={carrierStatusLabel}
+                                                                color={carrierStatusColor}
+                                                                className="max-w-full text-[11px] font-black shadow-sm"
+                                                            />
+                                                        </ShipmentCopyableCell>
+                                                    </td>
+                                                );
+                                            }
                                             if (column.id === 'shipment_status') {
                                                 return (
                                                     <td key={column.id} style={cellStyle} className="relative border border-primary/20 px-3 py-2">
                                                         <ShipmentCopyableCell
                                                             copyValue={shipmentStatus.label}
                                                             copyId={`${shipment.id}-shipment_status`}
-                                                            copyLabel="trạng thái vận đơn"
+                                                            copyLabel="trạng thái vận đơn hệ thống"
                                                             copiedCellId={copiedCellId}
                                                             onCopy={handleCopy}
                                                             iconTopClassName="top-1/2 -translate-y-1/2"
@@ -2010,11 +2033,6 @@ const ShipmentList = () => {
                                                                 className="max-w-full text-[11px] font-black shadow-sm transition-all hover:scale-[1.03] active:scale-95"
                                                                 iconClassName="text-[16px] leading-none"
                                                             />
-                                                            {shipment.carrier_status_text && shipment.carrier_status_text !== shipmentStatus.label && (
-                                                                <p className="mt-1 truncate text-[9px] font-black uppercase tracking-wider text-stone/25">
-                                                                    {shipment.carrier_status_text}
-                                                                </p>
-                                                            )}
                                                         </ShipmentCopyableCell>
                                                     </td>
                                                 );
@@ -2336,7 +2354,7 @@ const ShipmentList = () => {
                 onDraftChange={(value) => setNotePanel((previous) => previous ? { ...previous, draft: value } : previous)}
                 onSubmit={handleSubmitNotePanel}
             />
-            <StatusDropdownPortal title={statusMenu?.type === 'order' ? 'Cập nhật trạng thái đơn hàng' : 'Cập nhật trạng thái vận đơn'} options={statusMenu?.type === 'order' ? orderStatusOptions : shipmentStatusOptions} currentValue={statusMenu?.type === 'order' ? activeStatusMenuShipment?.order?.status : activeStatusMenuShipment?.shipment_status} onSelect={(value) => { if (!activeStatusMenuShipment) return; if (statusMenu?.type === 'order') { handleOrderStatusUpdate(activeStatusMenuShipment, value); return; } handleShipmentStatusUpdate(activeStatusMenuShipment.id, value); }} anchorRef={statusMenuAnchorRef} visible={Boolean(statusMenu && activeStatusMenuShipment)} onClose={() => setStatusMenu(null)} statusMenuRef={statusMenuRef} />
+            <StatusDropdownPortal title={statusMenu?.type === 'order' ? 'Cập nhật trạng thái đơn hàng' : 'Cập nhật trạng thái vận đơn hệ thống'} options={statusMenu?.type === 'order' ? orderStatusOptions : shipmentStatusOptions} currentValue={statusMenu?.type === 'order' ? activeStatusMenuShipment?.order?.status : activeStatusMenuShipment?.shipment_status} onSelect={(value) => { if (!activeStatusMenuShipment) return; if (statusMenu?.type === 'order') { handleOrderStatusUpdate(activeStatusMenuShipment, value); return; } handleShipmentStatusUpdate(activeStatusMenuShipment.id, value); }} anchorRef={statusMenuAnchorRef} visible={Boolean(statusMenu && activeStatusMenuShipment)} onClose={() => setStatusMenu(null)} statusMenuRef={statusMenuRef} />
             <ViettelPostReconcileModal 
                 isOpen={vtpReconcileOpen} 
                 onClose={() => setVtpReconcileOpen(false)}

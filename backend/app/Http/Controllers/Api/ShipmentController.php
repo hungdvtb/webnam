@@ -211,7 +211,12 @@ class ShipmentController extends Controller
         }
 
         if ($request->filled('shipment_number')) {
-            $query->where('shipment_number', 'like', '%' . trim((string) $request->input('shipment_number')) . '%');
+            $searchTerm = trim((string) $request->input('shipment_number'));
+            $query->where(function ($q) use ($searchTerm) {
+                $q->where('shipment_number', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('tracking_number', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('carrier_tracking_code', 'like', '%' . $searchTerm . '%');
+            });
         }
         if ($request->filled('order_code')) {
             $query->where('order_code', 'like', '%' . trim((string) $request->input('order_code')) . '%');
@@ -629,6 +634,10 @@ class ShipmentController extends Controller
             return response()->json(['message' => 'Không tìm thấy vận đơn'], 404);
         }
 
+        $shipment->forceFill([
+            'carrier_code' => $request->carrier_code,
+        ]);
+
         $result = $this->syncService->processCarrierStatus(
             $shipment,
             $request->raw_status,
@@ -809,6 +818,8 @@ class ShipmentController extends Controller
         $shipment->forceFill([
             'tracking_number' => $shipment->tracking_number ?: $trackingNumber,
             'carrier_tracking_code' => $shipment->carrier_tracking_code ?: $trackingNumber,
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => $shipment->carrier_name ?: 'Viettel Post',
             'carrier_status_code' => $rawStatus,
             'carrier_status_text' => 'Webhook ViettelPost',
             'raw_tracking_payload' => $payload,

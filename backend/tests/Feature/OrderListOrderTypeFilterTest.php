@@ -73,6 +73,49 @@ class OrderListOrderTypeFilterTest extends TestCase
         );
     }
 
+    public function test_order_list_can_filter_multiple_order_types_from_array_query_values(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $standardOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-TYPE-STD-ARR-0001',
+            'order_type' => Order::TYPE_STANDARD,
+        ]);
+        $exchangeOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-TYPE-EX-ARR-0001',
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+        ]);
+        $partialOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-TYPE-PD-ARR-0001',
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->call('GET', '/api/orders', [
+                'per_page' => 100,
+                'order_type' => [Order::TYPE_EXCHANGE_RETURN, Order::TYPE_PARTIAL_DELIVERY],
+            ]);
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+        $returnedTypes = collect($response->json('data'))
+            ->pluck('order_type')
+            ->all();
+
+        $this->assertNotContains($standardOrder->id, $returnedIds);
+        $this->assertContains($exchangeOrder->id, $returnedIds);
+        $this->assertContains($partialOrder->id, $returnedIds);
+        $this->assertEqualsCanonicalizing(
+            [Order::TYPE_EXCHANGE_RETURN, Order::TYPE_PARTIAL_DELIVERY],
+            array_values(array_unique($returnedTypes))
+        );
+    }
+
     public function test_standard_order_type_filter_includes_legacy_blank_values(): void
     {
         [$account, $user] = $this->authenticate();

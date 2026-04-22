@@ -205,6 +205,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Carrier Status Mappings
     Route::get('/carrier-mappings', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'index']);
     Route::post('/carrier-mappings', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'store']);
+    Route::delete('/carrier-mappings', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'bulkDestroy']);
     Route::put('/carrier-mappings/{id}', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'update']);
     Route::delete('/carrier-mappings/{id}', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'destroy']);
     Route::post('/carrier-mappings/carriers/reorder', [\App\Http\Controllers\Api\CarrierStatusMappingController::class , 'updateCarriersSort']);

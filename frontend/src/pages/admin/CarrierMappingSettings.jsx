@@ -135,8 +135,8 @@ const CarrierMappingSettings = ({ embedded = false }) => {
 
     const handleAddMapping = async () => {
         const data = { ...newMapping, carrier_code: activeTab };
-        if (!data.carrier_raw_status || !data.internal_shipment_status) {
-            alert('Vui lòng điền đầy đủ: Trạng thái từ hãng và Trạng thái vận chuyển');
+        if (!data.carrier_raw_status) {
+            alert('Vui lòng điền: Trạng thái từ hãng');
             return;
         }
         try {
@@ -275,17 +275,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                             className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-[13px] font-medium focus:border-primary outline-none shadow-sm"
                                         />
                                     </div>
-                                    <div className="col-span-3">
-                                        <label className="text-[9px] font-bold text-stone-800 uppercase tracking-widest block mb-1.5 px-0.5">TRẠNG THÁI VẬN ĐƠN</label>
-                                        <select 
-                                            value={newMapping.internal_shipment_status}
-                                            onChange={e => setNewMapping(v => ({ ...v, internal_shipment_status: e.target.value }))}
-                                            className="w-full bg-white border border-stone-300 rounded-lg px-3 py-2 text-[13px] font-medium focus:border-primary outline-none shadow-sm"
-                                        >
-                                            <option value="">— Chọn trạng thái —</option>
-                                            {SHIPMENT_STATUSES.map(s => <option key={s.code} value={s.code}>{s.label}</option>)}
-                                        </select>
-                                    </div>
+
                                     <div className="col-span-3">
                                         <label className="text-[9px] font-bold text-stone-800 uppercase tracking-widest block mb-1.5 px-0.5">ĐỒNG BỘ ĐƠN HÀNG</label>
                                         <select 
@@ -297,7 +287,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                             {orderStatuses.map(s => <option key={s.code} value={s.code}>{s.name}</option>)}
                                         </select>
                                     </div>
-                                    <div className="col-span-3 flex justify-end gap-2 pb-0.5">
+                                    <div className="col-span-6 flex justify-end gap-2 pb-0.5">
                                         <button onClick={() => setShowAddForm(false)} className="px-3 py-2 text-stone-600 hover:text-stone-900 text-[10px] font-bold uppercase tracking-widest transition-colors">HỦY</button>
                                         <button onClick={handleAddMapping} className="px-4 py-2 bg-primary text-white rounded-lg text-[10px] font-black uppercase tracking-widest shadow-md">LƯU QUY TẮC</button>
                                     </div>
@@ -317,7 +307,6 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                 <tr className="text-[10px] font-bold text-stone-800 uppercase tracking-wider border-b border-stone-200 sticky top-0 bg-white/95 backdrop-blur-md z-10">
                                     <th className="pl-6 py-3 text-left w-12 text-stone-500">STT</th>
                                     <th className="px-4 py-3 text-left">TRẠNG THÁI TỪ HÃNG</th>
-                                    <th className="px-4 py-3 text-left">TRẠNG THÁI VẬN ĐƠN</th>
                                     <th className="px-4 py-3 text-left">ĐỒNG BỘ ĐƠN HÀNG</th>
                                     <th className="px-4 py-3 text-center w-24">HOẠT ĐỘNG</th>
                                     <th className="px-4 py-3 text-center w-24">KẾT THÚC</th>
@@ -349,24 +338,7 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                                                 )}
                                             </td>
 
-                                            <td className="px-4 py-4 font-bold">
-                                                {isEditing ? (
-                                                    <select 
-                                                        value={editData.internal_shipment_status ?? m.internal_shipment_status}
-                                                        onChange={e => setEditData(d => ({ ...d, internal_shipment_status: e.target.value }))}
-                                                        className="w-full bg-white border border-stone-400 rounded-lg px-2 py-1.5 text-[13px] font-bold outline-none"
-                                                    >
-                                                        {SHIPMENT_STATUSES.map(s => <option key={s.code} value={s.code}>{s.label}</option>)}
-                                                    </select>
-                                                ) : (
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: currentShipmentStatus?.color }}></span>
-                                                        <span className="text-[13px] font-bold uppercase tracking-tighter" style={{ color: currentShipmentStatus?.color }}>
-                                                            {currentShipmentStatus?.label}
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </td>
+
 
                                             <td className="px-4 py-4">
                                                 {isEditing ? (

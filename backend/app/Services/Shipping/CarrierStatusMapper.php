@@ -2,11 +2,13 @@
 
 namespace App\Services\Shipping;
 
+use App\Models\Account;
 use App\Models\CarrierStatusMapping;
+use App\Models\OrderStatus;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * CarrierStatusMapper
@@ -16,6 +18,27 @@ use Illuminate\Support\Str;
  */
 class CarrierStatusMapper
 {
+    private const CARRIER_CODE_ALIASES = [
+        'viettel_post' => ['viettel_post', 'viettelpost'],
+        'viettelpost' => ['viettel_post', 'viettelpost'],
+    ];
+
+    private const RAW_STATUS_FALLBACK_MAP = [
+        'viettel_post' => [
+            'giao thành công' => 'delivered',
+            'đang vận chuyển' => 'in_transit',
+            'đang giao hàng' => 'out_for_delivery',
+            'chờ phát lại' => 'out_for_delivery',
+            'đã lấy hàng' => 'picked_up',
+            'chờ xử lý' => 'waiting_pickup',
+            'chuyển hoàn' => 'returning',
+            'đã hoàn thành' => 'returned',
+            'đã hoàn' => 'returned',
+            'hoàn thành công' => 'returned',
+            'đã trả' => 'returned',
+        ],
+    ];
+
     /**
      * Default mapping when carrier has no specific mapping defined
      * shipment_status => order_status
@@ -55,8 +78,8 @@ class CarrierStatusMapper
             }
 
             return [
-                'shipment_status' => $mapping->internal_shipment_status,
-                'order_status'    => $this->normalizeOptionalStatus($mapping->mapped_order_status),
+                'shipment_status' => $mapping->internal_shipment_status ?: $mapping->carrier_raw_status,
+                'order_status'    => $this->normalizeOptionalStatus($mapping->mapped_order_status, $accountId),
                 'is_terminal'     => (bool) $mapping->is_terminal,
                 'blocked_by_disabled_mapping' => false,
                 'mapping_id' => (int) $mapping->id,
@@ -64,6 +87,17 @@ class CarrierStatusMapper
         }
 
         // Fallback: try to match raw status to internal status directly
+        $fallbackShipmentStatus = $this->resolveFallbackShipmentStatus($carrierCode, $rawStatus);
+        if ($fallbackShipmentStatus !== null) {
+            return [
+                'shipment_status' => $fallbackShipmentStatus,
+                'order_status' => $this->shipmentToOrderStatus($fallbackShipmentStatus),
+                'is_terminal' => in_array($fallbackShipmentStatus, ['delivered', 'returned', 'canceled'], true),
+                'blocked_by_disabled_mapping' => false,
+                'mapping_id' => null,
+            ];
+        }
+
         $normalizedRaw = $this->normalizeStatusKey($rawStatus);
         if (array_key_exists($normalizedRaw, self::DEFAULT_SHIPMENT_TO_ORDER_MAP)) {
             return [
@@ -83,6 +117,53 @@ class CarrierStatusMapper
             'blocked_by_disabled_mapping' => false,
             'mapping_id' => null,
         ];
+    }
+
+    public function canonicalizeCarrierCode(?string $carrierCode): ?string
+    {
+        $normalized = $this->trimOptionalValue($carrierCode);
+
+        if ($normalized === null) {
+            return null;
+        }
+
+        $lookupKey = $this->normalizeLookupKey($normalized);
+
+        return self::CARRIER_CODE_ALIASES[$lookupKey][0] ?? $lookupKey;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function equivalentCarrierCodes(?string $carrierCode): array
+    {
+        $canonical = $this->canonicalizeCarrierCode($carrierCode);
+
+        if ($canonical === null) {
+            return [];
+        }
+
+        return self::CARRIER_CODE_ALIASES[$canonical] ?? [$canonical];
+    }
+
+    public function resolveOrderStatusIdentifier(mixed $value, ?int $accountId = null): ?string
+    {
+        $normalized = $this->trimOptionalValue($value);
+
+        if ($normalized === null || !Schema::hasTable('order_statuses')) {
+            return $normalized;
+        }
+
+        $lookupKey = $this->normalizeLookupKey($normalized);
+        $match = OrderStatus::query()
+            ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
+            ->get(['code', 'name'])
+            ->first(function (OrderStatus $status) use ($lookupKey) {
+                return $this->normalizeLookupKey((string) $status->code) === $lookupKey
+                    || $this->normalizeLookupKey((string) $status->name) === $lookupKey;
+            });
+
+        return $match?->code ?? $normalized;
     }
 
     /**
@@ -135,7 +216,7 @@ class CarrierStatusMapper
         $mapping = $mapping ?: $this->getMappingForShipmentStatus($carrierCode, $shipmentStatus, $accountId);
 
         if ($mapping) {
-            $mappedOrderStatus = $this->normalizeOptionalStatus($mapping->mapped_order_status);
+            $mappedOrderStatus = $this->normalizeOptionalStatus($mapping->mapped_order_status, $accountId);
 
             return [
                 'should_sync_order_status' => (bool) $mapping->is_active && $mappedOrderStatus !== null,
@@ -204,7 +285,7 @@ class CarrierStatusMapper
         $carrierCodes = collect();
 
         if ($carrierCode) {
-            $carrierCodes->push($carrierCode);
+            $carrierCodes = collect($this->equivalentCarrierCodes($carrierCode));
         } else {
             $carrierCodes = CarrierStatusMapping::query()
                 ->distinct()
@@ -217,11 +298,19 @@ class CarrierStatusMapper
             ->each(function (string $code): void {
                 Cache::forget($this->carrierCacheKey($code, null));
 
-                CarrierStatusMapping::query()
-                    ->where('carrier_code', $code)
+                $accountIds = CarrierStatusMapping::query()
+                    ->whereIn('carrier_code', $this->equivalentCarrierCodes($code))
                     ->whereNotNull('account_id')
                     ->distinct()
-                    ->pluck('account_id')
+                    ->pluck('account_id');
+
+                if (Schema::hasTable('accounts')) {
+                    $accountIds = $accountIds->merge(Account::query()->pluck('id'));
+                }
+
+                $accountIds
+                    ->filter()
+                    ->unique()
                     ->each(fn ($accountId) => Cache::forget($this->carrierCacheKey($code, (int) $accountId)));
             });
     }
@@ -231,12 +320,14 @@ class CarrierStatusMapper
      */
     private function getCarrierMappingSet(string $carrierCode, ?int $accountId = null): EloquentCollection
     {
+        $carrierCodes = $this->equivalentCarrierCodes($carrierCode);
+
         return Cache::remember(
             $this->carrierCacheKey($carrierCode, $accountId),
             3600,
-            function () use ($carrierCode, $accountId) {
+            function () use ($carrierCodes, $accountId) {
                 return CarrierStatusMapping::query()
-                    ->where('carrier_code', $carrierCode)
+                    ->whereIn('carrier_code', $carrierCodes)
                     ->when(
                         $accountId !== null,
                         function ($query) use ($accountId) {
@@ -275,6 +366,7 @@ class CarrierStatusMapper
     private function carrierCacheKey(string $carrierCode, ?int $accountId = null): string
     {
         $scope = $accountId === null ? 'global' : (string) $accountId;
+        $carrierCode = $this->canonicalizeCarrierCode($carrierCode) ?? $carrierCode;
 
         return "carrier_mappings:{$scope}:{$carrierCode}";
     }
@@ -286,13 +378,44 @@ class CarrierStatusMapper
 
     private function normalizeLookupKey(string $value): string
     {
-        return (string) Str::of($value)->trim()->lower();
+        $normalized = preg_replace('/\s+/u', ' ', str_replace("\u{00A0}", ' ', trim($value))) ?? '';
+
+        return mb_strtolower($normalized, 'UTF-8');
     }
 
-    private function normalizeOptionalStatus(mixed $value): ?string
+    private function normalizeOptionalStatus(mixed $value, ?int $accountId = null): ?string
+    {
+        $normalized = $this->trimOptionalValue($value);
+
+        return $normalized === null
+            ? null
+            : $this->resolveOrderStatusIdentifier($normalized, $accountId);
+    }
+
+    private function trimOptionalValue(mixed $value): ?string
     {
         $normalized = trim((string) ($value ?? ''));
 
         return $normalized === '' ? null : $normalized;
+    }
+
+    private function resolveFallbackShipmentStatus(string $carrierCode, string $rawStatus): ?string
+    {
+        $canonicalCarrierCode = $this->canonicalizeCarrierCode($carrierCode);
+        $fallbacks = self::RAW_STATUS_FALLBACK_MAP[$canonicalCarrierCode] ?? null;
+
+        if (!$fallbacks) {
+            return null;
+        }
+
+        $normalizedRawStatus = $this->normalizeLookupKey($rawStatus);
+
+        foreach ($fallbacks as $rawPattern => $shipmentStatus) {
+            if (str_contains($normalizedRawStatus, $this->normalizeLookupKey($rawPattern))) {
+                return $shipmentStatus;
+            }
+        }
+
+        return null;
     }
 }

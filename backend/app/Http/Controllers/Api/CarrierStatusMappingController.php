@@ -17,6 +17,7 @@ class CarrierStatusMappingController extends Controller
     public function index(Request $request)
     {
         $accountId = $request->header('X-Account-Id');
+        $requestedCarrierCode = $this->carrierStatusMapper->canonicalizeCarrierCode((string) $request->input('carrier_code'));
         $query = CarrierStatusMapping::query()
             ->where(function ($scoped) use ($accountId) {
                 $scoped->where('account_id', $accountId)
@@ -26,11 +27,15 @@ class CarrierStatusMappingController extends Controller
             ->orderByRaw('CASE WHEN account_id IS NULL THEN 1 ELSE 0 END')
             ->orderBy('sort_order');
 
-        if ($request->carrier_code) {
-            $query->where('carrier_code', $request->carrier_code);
+        if ($requestedCarrierCode) {
+            $query->whereIn('carrier_code', $this->carrierStatusMapper->equivalentCarrierCodes($requestedCarrierCode));
         }
 
-        $mappings = $query->get();
+        $mappings = $query->get()->map(function (CarrierStatusMapping $mapping) {
+            $mapping->carrier_code = $this->carrierStatusMapper->canonicalizeCarrierCode($mapping->carrier_code) ?? $mapping->carrier_code;
+
+            return $mapping;
+        });
 
         $orderStatuses = \App\Models\OrderStatus::query()
             ->when($accountId, fn ($q) => $q->where('account_id', $accountId))
@@ -45,7 +50,12 @@ class CarrierStatusMappingController extends Controller
             })
             ->where('is_mapped', false)
             ->orderBy('last_seen_at', 'desc')
-            ->get();
+            ->get()
+            ->map(function (\App\Models\CarrierRawStatus $status) {
+                $status->carrier_code = $this->carrierStatusMapper->canonicalizeCarrierCode($status->carrier_code) ?? $status->carrier_code;
+
+                return $status;
+            });
 
         $mappingCounts = $mappings->groupBy('carrier_code')->map->count();
         $unmappedCounts = $discoveredStatuses->groupBy('carrier_code')->map->count();
@@ -85,14 +95,21 @@ class CarrierStatusMappingController extends Controller
         $request->validate([
             'carrier_code' => 'required|string|max:50',
             'carrier_raw_status' => 'required|string',
-            'internal_shipment_status' => 'required|string|max:50',
+            'internal_shipment_status' => 'nullable|string|max:50',
             'mapped_order_status' => 'nullable|string|max:50',
             'is_terminal' => 'boolean',
             'sort_order' => 'integer',
             'description' => 'nullable|string',
         ]);
 
-        $exists = CarrierStatusMapping::where('carrier_code', $request->carrier_code)
+        $accountId = $request->header('X-Account-Id');
+        $carrierCode = $this->carrierStatusMapper->canonicalizeCarrierCode((string) $request->input('carrier_code'));
+        $mappedOrderStatus = $this->carrierStatusMapper->resolveOrderStatusIdentifier(
+            $request->input('mapped_order_status'),
+            $accountId ? (int) $accountId : null
+        );
+
+        $exists = CarrierStatusMapping::whereIn('carrier_code', $this->carrierStatusMapper->equivalentCarrierCodes($carrierCode))
             ->where('carrier_raw_status', $request->carrier_raw_status)
             ->where(function ($scoped) use ($request) {
                 $scoped->where('account_id', $request->header('X-Account-Id'))
@@ -105,19 +122,19 @@ class CarrierStatusMappingController extends Controller
         }
 
         $mapping = CarrierStatusMapping::create(array_merge($request->only([
-            'carrier_code',
             'carrier_raw_status',
             'internal_shipment_status',
-            'mapped_order_status',
             'is_terminal',
             'sort_order',
             'is_active',
             'description',
         ]), [
-            'account_id' => $request->header('X-Account-Id'),
+            'account_id' => $accountId,
+            'carrier_code' => $carrierCode,
+            'mapped_order_status' => $mappedOrderStatus,
         ]));
 
-        \App\Models\CarrierRawStatus::where('carrier_code', $request->carrier_code)
+        \App\Models\CarrierRawStatus::whereIn('carrier_code', $this->carrierStatusMapper->equivalentCarrierCodes($carrierCode))
             ->where('raw_status', $request->carrier_raw_status)
             ->where(function ($scoped) use ($request) {
                 $scoped->where('account_id', $request->header('X-Account-Id'))
@@ -133,10 +150,11 @@ class CarrierStatusMappingController extends Controller
     public function update(Request $request, $id)
     {
         $mapping = CarrierStatusMapping::findOrFail($id);
+        $accountId = $request->header('X-Account-Id');
 
         $request->validate([
             'carrier_raw_status' => 'sometimes|string',
-            'internal_shipment_status' => 'sometimes|string|max:50',
+            'internal_shipment_status' => 'nullable|string|max:50',
             'mapped_order_status' => 'nullable|string|max:50',
             'is_terminal' => 'boolean',
             'sort_order' => 'integer',
@@ -144,15 +162,23 @@ class CarrierStatusMappingController extends Controller
             'description' => 'nullable|string',
         ]);
 
-        $mapping->update($request->only([
+        $updateData = $request->only([
             'carrier_raw_status',
             'internal_shipment_status',
-            'mapped_order_status',
             'is_terminal',
             'sort_order',
             'is_active',
             'description',
-        ]));
+        ]);
+
+        if ($request->exists('mapped_order_status')) {
+            $updateData['mapped_order_status'] = $this->carrierStatusMapper->resolveOrderStatusIdentifier(
+                $request->input('mapped_order_status'),
+                $accountId ? (int) $accountId : null
+            );
+        }
+
+        $mapping->update($updateData);
 
         $this->carrierStatusMapper->clearCache($mapping->carrier_code);
 

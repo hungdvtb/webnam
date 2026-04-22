@@ -50,6 +50,7 @@ import FixedCostTracker from './pages/admin/FixedCostTracker';
 import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
 import DailyProfitReport from './pages/admin/DailyProfitReport';
+import MonthlyProfitReport from './pages/admin/MonthlyProfitReport';
 import FloatingContactButtons from './components/FloatingContactButtons';
 
 import { AuthProvider } from './context/AuthContext';
@@ -168,6 +169,7 @@ function App() {
                 <Route path="finance/funds" element={<FundManagement />} />
                 <Route path="finance/debts" element={<DebtManagement />} />
                 <Route path="finance/daily-profit" element={<DailyProfitReport />} />
+                <Route path="finance/monthly-profit" element={<MonthlyProfitReport />} />
                 <Route path="finance/*" element={<Navigate to="/admin" replace />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
                 <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />

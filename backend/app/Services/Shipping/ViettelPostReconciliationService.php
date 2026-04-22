@@ -76,7 +76,7 @@ class ViettelPostReconciliationService
             'carrier_status_raw' => $vtpStatus,
             'carrier_status_mapped' => $fallbackStatus,
             'carrier_status_code' => $vtpStatus,
-            'carrier_status_text' => sprintf('Raw %s -> %s', $vtpStatus, $fallbackStatus),
+            'carrier_status_text' => $vtpStatus,
             'last_synced_at' => now(),
         ])->save();
 
@@ -468,7 +468,7 @@ class ViettelPostReconciliationService
                 'carrier_status_raw' => $vtpStatus,
                 'carrier_status_mapped' => 'returned',
                 'carrier_status_code' => $vtpStatus,
-                'carrier_status_text' => sprintf('Raw %s -> returned', $vtpStatus),
+                'carrier_status_text' => $vtpStatus,
                 'status' => 'returned',
                 'shipment_status' => 'returned',
                 'return_status' => $newReturnStatus,

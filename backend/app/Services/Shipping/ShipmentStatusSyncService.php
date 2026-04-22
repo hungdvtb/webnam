@@ -86,8 +86,25 @@ class ShipmentStatusSyncService
 
     public function processCarrierStatus(Shipment $shipment, string $carrierRawStatus, ?array $rawPayload = null): array
     {
-        $carrierCode = $shipment->carrier_code;
+        $carrierCode = $this->mapper->canonicalizeCarrierCode($shipment->carrier_code) ?? trim((string) $shipment->carrier_code);
         $accountId = $shipment->account_id;
+
+        if ($carrierCode === '') {
+            return [
+                'success' => false,
+                'message' => 'Vận đơn chưa có mã hãng vận chuyển để áp mapping.',
+                'shipment' => $shipment,
+                'order_synced' => false,
+            ];
+        }
+
+        if ($carrierCode && $shipment->carrier_code !== $carrierCode) {
+            $shipment->carrier_code = $carrierCode;
+            if ($carrierCode === 'viettel_post' && !$shipment->carrier_name) {
+                $shipment->carrier_name = 'Viettel Post';
+            }
+        }
+
         $mapped = $this->mapper->mapCarrierStatus($carrierCode, $carrierRawStatus, $accountId);
 
         if (!$mapped['shipment_status']) {
@@ -173,8 +190,9 @@ class ShipmentStatusSyncService
         }
 
         $shouldUseRawStatus = $source === 'carrier_sync';
+        $carrierCode = $this->mapper->canonicalizeCarrierCode($shipment->carrier_code) ?? $shipment->carrier_code;
         $orderSync = $this->mapper->resolveOrderStatusSync(
-            $shipment->carrier_code,
+            $carrierCode,
             $shipment->shipment_status,
             $shipment->account_id,
             $shouldUseRawStatus ? $shipment->carrier_status_raw : null
@@ -241,7 +259,7 @@ class ShipmentStatusSyncService
             'shipping_status' => $newShippingStatus,
             'shipping_synced_at' => now(),
             'shipping_status_source' => $source === 'carrier_sync' ? 'carrier' : 'system',
-            'shipping_carrier_code' => $shipment->carrier_code,
+            'shipping_carrier_code' => $carrierCode,
             'shipping_carrier_name' => $shipment->carrier_name,
             'shipping_tracking_code' => $shipment->carrier_tracking_code ?: $shipment->tracking_number,
             'shipping_dispatched_at' => $shipment->shipped_at ?: $order->shipping_dispatched_at ?: now(),
@@ -385,7 +403,7 @@ class ShipmentStatusSyncService
 
     private function describeCarrierStatus(string $rawStatus, string $mappedStatus): string
     {
-        return sprintf('Raw %s -> %s', $rawStatus, $mappedStatus);
+        return $rawStatus;
     }
 
     private function recordTrackingHistory(Shipment $shipment, string $carrierRawStatus, array $rawPayload): void

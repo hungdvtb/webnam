@@ -5,6 +5,7 @@ namespace App\Services\Shipping;
 use App\Models\Account;
 use App\Models\CarrierStatusMapping;
 use App\Models\OrderStatus;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -169,6 +170,37 @@ class CarrierStatusMapper
         return $match?->code ?? $normalized;
     }
 
+    public function inferShipmentStatusFromOrderStatus(mixed $orderStatus, ?int $accountId = null): ?string
+    {
+        $resolvedOrderStatus = $this->resolveOrderStatusIdentifier($orderStatus, $accountId);
+        $normalizedOrderStatus = $this->normalizeStatusKey((string) ($resolvedOrderStatus ?? ''));
+
+        return match ($normalizedOrderStatus) {
+            'completed', OrderStatusCatalog::EXCHANGE_COMPLETED_CODE => 'delivered',
+            'pending_return' => 'returning',
+            'returned', OrderStatusCatalog::PARTIAL_DELIVERY_CODE => 'returned',
+            'cancelled' => 'canceled',
+            default => null,
+        };
+    }
+
+    public function rawStatusesMatch(?string $left, ?string $right): bool
+    {
+        $normalizedLeft = $this->trimOptionalValue($left);
+        $normalizedRight = $this->trimOptionalValue($right);
+
+        if ($normalizedLeft === null || $normalizedRight === null) {
+            return false;
+        }
+
+        return $this->normalizeLookupKey($normalizedLeft) === $this->normalizeLookupKey($normalizedRight);
+    }
+
+    public function findExistingMappingForRawStatus(string $carrierCode, string $rawStatus, ?int $accountId = null): ?CarrierStatusMapping
+    {
+        return $this->getMapping($carrierCode, $rawStatus, $accountId);
+    }
+
     /**
      * Map internal shipment_status to order_status
      */
@@ -249,7 +281,7 @@ class CarrierStatusMapper
             $exactMapping = $this->getMapping($carrierCode, $rawStatus, $accountId);
             if (
                 $exactMapping
-                && $this->normalizeStatusKey((string) $exactMapping->internal_shipment_status) === $this->normalizeStatusKey($shipmentStatus)
+                && $this->normalizeStatusKey((string) ($this->resolvedMappingShipmentStatus($exactMapping, $accountId) ?? '')) === $this->normalizeStatusKey($shipmentStatus)
             ) {
                 $mapping = $exactMapping;
             }
@@ -294,7 +326,7 @@ class CarrierStatusMapper
     {
         $matches = $this->preferScopedMatches(
             $this->getCarrierMappingSet($carrierCode, $accountId)
-                ->filter(fn (CarrierStatusMapping $mapping) => $this->normalizeStatusKey((string) $mapping->internal_shipment_status) === $this->normalizeStatusKey($shipmentStatus))
+                ->filter(fn (CarrierStatusMapping $mapping) => $this->normalizeStatusKey((string) ($this->resolvedMappingShipmentStatus($mapping, $accountId) ?? '')) === $this->normalizeStatusKey($shipmentStatus))
                 ->values()
         );
 
@@ -312,12 +344,41 @@ class CarrierStatusMapper
         CarrierStatusMapping $mapping,
         ?int $accountId = null
     ): ?string {
-        return $this->inferInternalShipmentStatus(
+        $resolvedShipmentStatus = $this->resolvedMappingShipmentStatus($mapping, $accountId);
+
+        if ($resolvedShipmentStatus !== null) {
+            return $resolvedShipmentStatus;
+        }
+
+        $resolvedShipmentStatus = $this->inferInternalShipmentStatus(
             $carrierCode,
             $rawStatus,
             $mapping->internal_shipment_status,
             $accountId
         );
+
+        return $resolvedShipmentStatus
+            ?? $this->inferShipmentStatusFromOrderStatus($mapping->mapped_order_status, $accountId);
+    }
+
+    private function resolvedMappingShipmentStatus(
+        CarrierStatusMapping $mapping,
+        ?int $accountId = null
+    ): ?string {
+        $explicitShipmentStatus = $this->trimOptionalValue($mapping->internal_shipment_status);
+        $normalizedExplicitShipmentStatus = $explicitShipmentStatus !== null
+            ? $this->normalizeStatusKey($explicitShipmentStatus)
+            : null;
+        $derivedShipmentStatus = $this->inferShipmentStatusFromOrderStatus($mapping->mapped_order_status, $accountId);
+
+        // Legacy mappings can contain contradictory data such as:
+        // internal_shipment_status=returned but mapped_order_status=pending_return.
+        // In that case, prefer the workflow stage inferred from the order status.
+        if ($normalizedExplicitShipmentStatus === 'returned' && $derivedShipmentStatus === 'returning') {
+            return 'returning';
+        }
+
+        return $normalizedExplicitShipmentStatus ?? $derivedShipmentStatus;
     }
 
     /**

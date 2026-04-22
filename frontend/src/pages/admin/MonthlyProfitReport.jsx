@@ -1,268 +1,429 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { financeApi } from '../../services/api';
 
-const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
+const formatNumber = (value) =>
+    new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
+
+const padNumber = (value) => String(value).padStart(2, '0');
+
+const formatInputDate = (date) =>
+    `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`;
+
+const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const getReportRange = (year) => {
+    const today = new Date();
+    const currentYear = today.getFullYear();
+
+    return {
+        start_date: `${year}-01-01`,
+        end_date: year >= currentYear ? formatInputDate(today) : `${year}-12-31`,
+    };
+};
 
 const IconBase = ({ size = 20, className = '', children }) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+        aria-hidden="true"
+    >
         {children}
     </svg>
 );
 
-const Filter = ({ size, className }) => <IconBase size={size} className={className}><path d="M4 5h16" /><path d="M7 12h10" /><path d="M10 19h4" /></IconBase>;
-const RefreshCw = ({ size, className }) => <IconBase size={size} className={className}><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></IconBase>;
+const Filter = ({ size, className }) => (
+    <IconBase size={size} className={className}>
+        <path d="M4 5h16" />
+        <path d="M7 12h10" />
+        <path d="M10 19h4" />
+    </IconBase>
+);
+
+const RefreshCw = ({ size, className }) => (
+    <IconBase size={size} className={className}>
+        <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+        <path d="M21 3v6h-6" />
+    </IconBase>
+);
 
 const MonthlyProfitReport = () => {
+    const currentYear = new Date().getFullYear();
+    const [selectedYear, setSelectedYear] = useState(currentYear);
     const [loading, setLoading] = useState(false);
-    
-    // Dummy Data
-    const [reportData] = useState([
-        {
-            month: 'Tháng 1/2026',
-            revenue: 62185008,
-            cost_actual: 33141000,
-            shipping_fee: 4815000,
-            return_fee: 0,
-            damaged_goods: 380000,
-            exchange_cost: 0,
-            salary: 0,
-            packaging_fee: 1360000,
-            ads_spend: 7248585,
-            ads_tax: 7973444, 
-            tax: 860550,
-            fixed_cost: 0,
-            total_profit: 13655014,
-            profit_per_house: 6827507,
-            notes: 'Đã chia 2/2/2026',
-            pct_cost: 53.29,
-            pct_shipping: 7.74,
-            pct_ads: 11.66
-        },
-        {
-            month: 'Tháng 2/2026',
-            revenue: 120500000,
-            cost_actual: 60250000,
-            shipping_fee: 10500000,
-            return_fee: 1200000,
-            damaged_goods: 500000,
-            exchange_cost: 300000,
-            salary: 15000000,
-            packaging_fee: 2500000,
-            ads_spend: 15000000,
-            ads_tax: 16500000,
-            tax: 1800000,
-            fixed_cost: 5000000,
-            total_profit: 6950000,
-            profit_per_house: 3475000,
-            notes: '',
-            pct_cost: 50.00,
-            pct_shipping: 8.71,
-            pct_ads: 12.45
-        }
-    ]);
+    const [error, setError] = useState('');
+    const [reportData, setReportData] = useState([]);
+    const [reloadKey, setReloadKey] = useState(0);
+
+    const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
 
     const defaultCols = [
-        'month', 'revenue', 'cost_actual', 'shipping_fee', 'return_fee', 'damaged_goods', 
-        'exchange_cost', 'salary', 'packaging_fee', 'ads_spend', 'ads_tax', 'tax', 
-        'fixed_cost', 'total_profit', 'profit_per_house', 'notes', 'pct_cost', 'pct_shipping', 'pct_ads'
+        'month',
+        'order_count',
+        'revenue',
+        'cost_actual',
+        'shipping_fee',
+        'damaged_goods',
+        'salary',
+        'packaging_fee',
+        'ads_spend',
+        'tax',
+        'fixed_cost',
+        'exchange_profit_loss',
+        'partial_delivery_profit_loss',
+        'total_profit',
+        'profit_per_house',
     ];
 
     const columnFormulas = {
-        'month': 'Tháng báo cáo',
-        'revenue': 'Tổng doanh thu trong tháng của các đơn hàng đã giao thành công',
-        'cost_actual': 'Tiền hàng thực tế',
-        'shipping_fee': 'Tổng tiền cước vận chuyển',
-        'return_fee': 'Phí hoàn hàng',
-        'damaged_goods': 'Chi phí hàng hỏng',
-        'exchange_cost': 'Chi phí đổi trả',
-        'salary': 'Chi phí lương nhân viên',
-        'packaging_fee': 'Chi phí thùng xốp và xốp nổ',
-        'ads_spend': 'Chi phí quảng cáo (QC)',
-        'ads_tax': 'Chi phí quảng cáo + Thuế',
-        'tax': 'Thuế đóng cho nhà nước',
-        'fixed_cost': 'Các chi phí cố định khác (Mặt bằng, điện, nước...)',
-        'total_profit': 'Lợi nhuận tổng',
-        'profit_per_house': 'Lợi nhuận chia mỗi nhà (chia đôi)',
-        'notes': 'Ghi chú thêm',
-        'pct_cost': '% Tiền hàng / Doanh thu',
-        'pct_shipping': '% Tiền ship / Doanh thu',
-        'pct_ads': '% Tiền quảng cáo / Doanh thu'
+        month: 'Tháng báo cáo, tổng hợp từ dữ liệu báo cáo ngày thực tế.',
+        order_count: 'Tổng số đơn gửi đi trong tháng, đếm theo ngày gửi đi thực tế (shipping_dispatched_at).',
+        revenue: 'Tổng doanh thu gốc trong tháng, chỉ tính đơn thường có trạng thái Giao hàng thành công; loại bỏ đơn đổi trả và giao hàng 1 phần.',
+        cost_actual: 'Tổng tiền hàng thực tế trong tháng, là tổng giá vốn của các đơn thường có trạng thái Giao hàng thành công; loại bỏ đơn đổi trả và giao hàng 1 phần.',
+        shipping_fee: 'Tổng phí ship của tất cả đơn trong tháng, ưu tiên phí ship thực tế của đơn; nếu chưa có thì lấy 5% x tổng tiền đơn.',
+        damaged_goods: 'Chi phí hàng hỏng. Hiện chỉ cộng được khi backend trả riêng trường này.',
+        exchange_profit_loss: 'Tổng lãi/lỗ đổi trả trong tháng.',
+        partial_delivery_profit_loss: 'Tổng lãi/lỗ giao hàng 1 phần trong tháng.',
+        salary: 'Chi phí lương. Hiện chỉ cộng được khi backend trả riêng trường này.',
+        packaging_fee: 'Tổng số đơn của tháng x Phí đóng gói/đơn lấy từ phần cấu hình của báo cáo lãi lỗ ngày.',
+        ads_spend: 'Tổng chi phí quảng cáo trong tháng.',
+        tax: 'Tổng thuế tạm tính trong tháng.',
+        fixed_cost: 'Tổng chi phí cố định trong tháng.',
+        total_profit: 'Tổng lợi nhuận tháng.',
+        profit_per_house: 'Lợi nhuận tổng chia 2.',
     };
+
+    useEffect(() => {
+        let ignore = false;
+
+        const loadData = async () => {
+            setLoading(true);
+            setError('');
+
+            try {
+                const range = getReportRange(selectedYear);
+
+                await financeApi.syncFbAdSpend(range).catch(() => null);
+
+                const response = await financeApi.getMonthlyPnlReport(range);
+                if (ignore) return;
+
+                setReportData(response?.data?.data || []);
+            } catch (requestError) {
+                if (!ignore) {
+                    setReportData([]);
+                    setError(requestError.response?.data?.message || 'Không thể tải báo cáo lãi lỗ tháng.');
+                }
+            } finally {
+                if (!ignore) {
+                    setLoading(false);
+                }
+            }
+        };
+
+        loadData();
+
+        return () => {
+            ignore = true;
+        };
+    }, [reloadKey, selectedYear]);
+
+    const totals = reportData.reduce((acc, row) => ({
+        order_count: acc.order_count + Number(row.order_count || 0),
+        revenue: acc.revenue + Number(row.revenue || 0),
+        cost_actual: acc.cost_actual + Number(row.cost_actual || 0),
+        shipping_fee: acc.shipping_fee + Number(row.shipping_fee || 0),
+        damaged_goods: acc.damaged_goods + Number(row.damaged_goods || 0),
+        exchange_profit_loss: acc.exchange_profit_loss + Number(row.exchange_profit_loss || 0),
+        partial_delivery_profit_loss: acc.partial_delivery_profit_loss + Number(row.partial_delivery_profit_loss || 0),
+        salary: acc.salary + Number(row.salary || 0),
+        packaging_fee: acc.packaging_fee + Number(row.packaging_fee || 0),
+        ads_spend: acc.ads_spend + Number(row.ads_spend || 0),
+        tax: acc.tax + Number(row.tax || 0),
+        fixed_cost: acc.fixed_cost + Number(row.fixed_cost || 0),
+        total_profit: acc.total_profit + Number(row.total_profit || 0),
+    }), {
+        order_count: 0,
+        revenue: 0,
+        cost_actual: 0,
+        shipping_fee: 0,
+        damaged_goods: 0,
+        exchange_profit_loss: 0,
+        partial_delivery_profit_loss: 0,
+        salary: 0,
+        packaging_fee: 0,
+        ads_spend: 0,
+        tax: 0,
+        fixed_cost: 0,
+        total_profit: 0,
+    });
+
+    const totalRow = {
+        ...totals,
+        profit_per_house: roundMoney(totals.total_profit / 2),
+    };
+
+    const sortedReportData = [...reportData].sort((left, right) => {
+        const leftKey = String(left.key || '');
+        const rightKey = String(right.key || '');
+
+        return rightKey.localeCompare(leftKey);
+    });
 
     const renderHeader = (id) => {
         const tooltip = columnFormulas[id];
         const renderTH = (className, content) => (
             <th key={id} className={`group/header relative ${className}`}>
-                <div className="flex flex-col items-center justify-center cursor-help">
+                <div className="flex cursor-help flex-col items-center justify-center">
                     {content}
                 </div>
-                {tooltip && (
-                    <div className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 z-[100] mt-1 w-48 p-3 bg-white border border-gray-200 rounded-lg shadow-xl opacity-0 group-hover/header:opacity-100 transition-opacity duration-200">
-                        <p className="text-[12px] font-medium text-gray-700 leading-relaxed text-left normal-case">
+                {tooltip ? (
+                    <div className="pointer-events-none absolute left-1/2 top-full z-[100] mt-1 w-56 -translate-x-1/2 rounded-lg border border-gray-200 bg-white p-3 opacity-0 shadow-xl transition-opacity duration-200 group-hover/header:opacity-100">
+                        <p className="text-left text-[12px] font-medium leading-relaxed text-gray-700 normal-case">
                             {tooltip}
                         </p>
-                        <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-t border-l border-gray-200 rotate-45"></div>
+                        <div className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t border-gray-200 bg-white" />
                     </div>
-                )}
+                ) : null}
             </th>
         );
 
-        switch(id) {
-            case 'month': return renderTH("px-3 py-4 text-[13px] font-bold text-gray-700 leading-tight align-middle text-center bg-gray-100", <>Tháng</>);
-            case 'revenue': return renderTH("px-3 py-4 text-[13px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center bg-yellow-50", <>Doanh thu</>);
-            case 'cost_actual': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Tiền hàng<br/>thực tế</>);
-            case 'shipping_fee': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Tiền ship<br/>hàng</>);
-            case 'return_fee': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Phí hoàn<br/>hàng</>);
-            case 'damaged_goods': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Hàng hỏng</>);
-            case 'exchange_cost': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Chi phí<br/>đổi trả</>);
-            case 'salary': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Chi phí<br/>Lương</>);
-            case 'packaging_fee': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Chi phí<br/>xốp + nổ</>);
-            case 'ads_spend': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>QC</>);
-            case 'ads_tax': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>QC cộng<br/>thuế</>);
-            case 'tax': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Thuế</>);
-            case 'fixed_cost': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Chi phí<br/>cố định</>);
-            case 'total_profit': return renderTH("px-3 py-4 text-[13px] font-bold text-red-600 border-b border-gray-200 leading-tight align-middle text-center bg-gray-50", <>Lợi nhuận<br/>tổng</>);
-            case 'profit_per_house': return renderTH("px-3 py-4 text-[13px] font-bold text-red-600 border-b border-gray-200 leading-tight align-middle text-center bg-gray-50", <>Lợi nhuận<br/>mỗi nhà</>);
-            case 'notes': return renderTH("px-3 py-4 text-[13px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>Ghi chú</>);
-            case 'pct_cost': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>% Tiền<br/>hàng</>);
-            case 'pct_shipping': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>% Tiền<br/>ship</>);
-            case 'pct_ads': return renderTH("px-3 py-4 text-[12px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center", <>% Quảng<br/>cáo</>);
-            default: return null;
+        switch (id) {
+            case 'month':
+                return renderTH('bg-gray-100 px-3 py-4 text-center align-middle text-[13px] font-bold text-gray-700', <>Tháng</>);
+            case 'order_count':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Đơn hàng</>);
+            case 'revenue':
+                return renderTH('bg-yellow-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-gray-700', <>Doanh thu</>);
+            case 'cost_actual':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Tiền hàng<br />thực tế</>);
+            case 'shipping_fee':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Tiền ship<br />hàng</>);
+            case 'damaged_goods':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Hàng hỏng</>);
+            case 'exchange_profit_loss':
+                return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[12px] font-bold text-red-600', <>Lãi lỗ<br />đổi trả</>);
+            case 'partial_delivery_profit_loss':
+                return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[12px] font-bold text-red-600', <>Lãi lỗ<br />giao 1 phần</>);
+            case 'salary':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />lương</>);
+            case 'packaging_fee':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />gói hàng</>);
+            case 'ads_spend':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>QC</>);
+            case 'tax':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Thuế</>);
+            case 'fixed_cost':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />cố định</>);
+            case 'total_profit':
+                return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-red-600', <>Lợi nhuận<br />tổng</>);
+            case 'profit_per_house':
+                return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-red-600', <>Lợi nhuận<br />mỗi nhà</>);
+            default:
+                return null;
         }
     };
 
     const renderTotal = (id) => {
-        const aggr = reportData.reduce((acc, row) => {
-            Object.keys(row).forEach(k => {
-                if (typeof row[k] === 'number') {
-                    acc[k] = (acc[k] || 0) + row[k];
-                }
-            });
-            return acc;
-        }, {});
-
-        switch(id) {
-            case 'month': return <td key='month' className="px-3 py-3 text-[13px] font-bold text-center uppercase tracking-wider">TỔNG CỘNG</td>;
-            case 'revenue': return <td key='revenue' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.revenue)}</td>;
-            case 'cost_actual': return <td key='cost_actual' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.cost_actual)}</td>;
-            case 'shipping_fee': return <td key='shipping_fee' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.shipping_fee)}</td>;
-            case 'return_fee': return <td key='return_fee' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.return_fee)}</td>;
-            case 'damaged_goods': return <td key='damaged_goods' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.damaged_goods)}</td>;
-            case 'exchange_cost': return <td key='exchange_cost' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.exchange_cost)}</td>;
-            case 'salary': return <td key='salary' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.salary)}</td>;
-            case 'packaging_fee': return <td key='packaging_fee' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.packaging_fee)}</td>;
-            case 'ads_spend': return <td key='ads_spend' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.ads_spend)}</td>;
-            case 'ads_tax': return <td key='ads_tax' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.ads_tax)}</td>;
-            case 'tax': return <td key='tax' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.tax)}</td>;
-            case 'fixed_cost': return <td key='fixed_cost' className="px-3 py-3 text-[13px] font-bold text-center">{formatNumber(aggr.fixed_cost)}</td>;
-            case 'total_profit': return <td key='total_profit' className="px-3 py-3 text-[13px] font-bold text-center bg-white/10">{formatNumber(aggr.total_profit)}</td>;
-            case 'profit_per_house': return <td key='profit_per_house' className="px-3 py-3 text-[13px] font-bold text-center bg-white/10">{formatNumber(aggr.profit_per_house)}</td>;
-            case 'notes': return <td key='notes' className="px-3 py-3"></td>;
-            case 'pct_cost': return <td key='pct_cost' className="px-3 py-3 text-[13px] font-bold text-center">{(aggr.revenue > 0 ? (aggr.cost_actual / aggr.revenue * 100) : 0).toFixed(2)}%</td>;
-            case 'pct_shipping': return <td key='pct_shipping' className="px-3 py-3 text-[13px] font-bold text-center">{(aggr.revenue > 0 ? (aggr.shipping_fee / aggr.revenue * 100) : 0).toFixed(2)}%</td>;
-            case 'pct_ads': return <td key='pct_ads' className="px-3 py-3 text-[13px] font-bold text-center">{(aggr.revenue > 0 ? (aggr.ads_spend / aggr.revenue * 100) : 0).toFixed(2)}%</td>;
-            default: return null;
+        switch (id) {
+            case 'month':
+                return <td key="month" className="px-3 py-3 text-center text-[13px] font-bold uppercase tracking-wider">TỔNG CỘNG</td>;
+            case 'order_count':
+                return <td key="order_count" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.order_count)}</td>;
+            case 'revenue':
+                return <td key="revenue" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.revenue)}</td>;
+            case 'cost_actual':
+                return <td key="cost_actual" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.cost_actual)}</td>;
+            case 'shipping_fee':
+                return <td key="shipping_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.shipping_fee)}</td>;
+            case 'damaged_goods':
+                return <td key="damaged_goods" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.damaged_goods)}</td>;
+            case 'exchange_profit_loss':
+                return <td key="exchange_profit_loss" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.exchange_profit_loss)}</td>;
+            case 'partial_delivery_profit_loss':
+                return <td key="partial_delivery_profit_loss" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.partial_delivery_profit_loss)}</td>;
+            case 'salary':
+                return <td key="salary" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.salary)}</td>;
+            case 'packaging_fee':
+                return <td key="packaging_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.packaging_fee)}</td>;
+            case 'ads_spend':
+                return <td key="ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.ads_spend)}</td>;
+            case 'tax':
+                return <td key="tax" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.tax)}</td>;
+            case 'fixed_cost':
+                return <td key="fixed_cost" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.fixed_cost)}</td>;
+            case 'total_profit':
+                return <td key="total_profit" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.total_profit)}</td>;
+            case 'profit_per_house':
+                return <td key="profit_per_house" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.profit_per_house)}</td>;
+            default:
+                return null;
         }
     };
 
     const renderRow = (id, row) => {
-        switch(id) {
-            case 'month': return <td key='month' className="px-3 py-3 text-[13px] font-bold text-gray-700 text-center border-r border-gray-50">{row.month}</td>;
-            case 'revenue': return <td key='revenue' className="px-3 py-3 text-[13px] font-bold text-gray-800 text-center bg-yellow-50/30">{row.revenue > 0 ? formatNumber(row.revenue) : '-'}</td>;
-            case 'cost_actual': return <td key='cost_actual' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.cost_actual > 0 ? formatNumber(row.cost_actual) : '-'}</td>;
-            case 'shipping_fee': return <td key='shipping_fee' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.shipping_fee > 0 ? formatNumber(row.shipping_fee) : '-'}</td>;
-            case 'return_fee': return <td key='return_fee' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.return_fee > 0 ? formatNumber(row.return_fee) : '-'}</td>;
-            case 'damaged_goods': return <td key='damaged_goods' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.damaged_goods > 0 ? formatNumber(row.damaged_goods) : '-'}</td>;
-            case 'exchange_cost': return <td key='exchange_cost' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.exchange_cost > 0 ? formatNumber(row.exchange_cost) : '-'}</td>;
-            case 'salary': return <td key='salary' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.salary > 0 ? formatNumber(row.salary) : '-'}</td>;
-            case 'packaging_fee': return <td key='packaging_fee' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.packaging_fee > 0 ? formatNumber(row.packaging_fee) : '-'}</td>;
-            case 'ads_spend': return <td key='ads_spend' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.ads_spend > 0 ? formatNumber(row.ads_spend) : '-'}</td>;
-            case 'ads_tax': return <td key='ads_tax' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.ads_tax > 0 ? formatNumber(row.ads_tax) : '-'}</td>;
-            case 'tax': return <td key='tax' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.tax > 0 ? formatNumber(row.tax) : '-'}</td>;
-            case 'fixed_cost': return <td key='fixed_cost' className="px-3 py-3 text-[13px] text-gray-600 text-center bg-pink-50/10">{row.fixed_cost > 0 ? formatNumber(row.fixed_cost) : '-'}</td>;
-            case 'total_profit': return <td key='total_profit' className={`px-3 py-3 text-[13px] font-bold text-center bg-gray-50 ${row.total_profit < 0 ? 'text-red-500' : 'text-red-600'}`}>{row.total_profit > 0 || row.total_profit < 0 ? formatNumber(row.total_profit) : '-'}</td>;
-            case 'profit_per_house': return <td key='profit_per_house' className={`px-3 py-3 text-[13px] font-bold text-center bg-gray-50 ${row.profit_per_house < 0 ? 'text-red-500' : 'text-red-600'}`}>{row.profit_per_house > 0 || row.profit_per_house < 0 ? formatNumber(row.profit_per_house) : '-'}</td>;
-            case 'notes': return <td key='notes' className="px-3 py-3 text-[12px] text-orange-600 font-medium text-center">{row.notes}</td>;
-            case 'pct_cost': return <td key='pct_cost' className="px-3 py-3 text-[13px] text-gray-600 text-center">{row.revenue > 0 ? row.pct_cost.toFixed(2) + '%' : '#DIV/0!'}</td>;
-            case 'pct_shipping': return <td key='pct_shipping' className="px-3 py-3 text-[13px] text-gray-600 text-center">{row.revenue > 0 ? row.pct_shipping.toFixed(2) + '%' : '#DIV/0!'}</td>;
-            case 'pct_ads': return <td key='pct_ads' className="px-3 py-3 text-[13px] text-gray-600 text-center">{row.revenue > 0 ? row.pct_ads.toFixed(2) + '%' : '#DIV/0!'}</td>;
-            default: return null;
+        switch (id) {
+            case 'month':
+                return <td key="month" className="border-r border-gray-50 px-3 py-3 text-center text-[13px] font-bold text-gray-700">{row.month}</td>;
+            case 'order_count':
+                return <td key="order_count" className="px-3 py-3 text-center text-[13px] font-bold text-gray-700">{formatNumber(row.order_count)}</td>;
+            case 'revenue':
+                return <td key="revenue" className="bg-yellow-50/30 px-3 py-3 text-center text-[13px] font-bold text-gray-800">{row.revenue !== 0 ? formatNumber(row.revenue) : '-'}</td>;
+            case 'cost_actual':
+                return <td key="cost_actual" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.cost_actual !== 0 ? formatNumber(row.cost_actual) : '-'}</td>;
+            case 'shipping_fee':
+                return <td key="shipping_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.shipping_fee !== 0 ? formatNumber(row.shipping_fee) : '-'}</td>;
+            case 'damaged_goods':
+                return <td key="damaged_goods" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.damaged_goods !== 0 ? formatNumber(row.damaged_goods) : '-'}</td>;
+            case 'exchange_profit_loss':
+                return (
+                    <td
+                        key="exchange_profit_loss"
+                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.exchange_profit_loss < 0 ? 'text-red-600' : 'text-emerald-600'}`}
+                    >
+                        {row.exchange_profit_loss !== 0 ? formatNumber(row.exchange_profit_loss) : '-'}
+                    </td>
+                );
+            case 'partial_delivery_profit_loss':
+                return (
+                    <td
+                        key="partial_delivery_profit_loss"
+                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.partial_delivery_profit_loss < 0 ? 'text-red-600' : 'text-emerald-600'}`}
+                    >
+                        {row.partial_delivery_profit_loss !== 0 ? formatNumber(row.partial_delivery_profit_loss) : '-'}
+                    </td>
+                );
+            case 'salary':
+                return <td key="salary" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.salary !== 0 ? formatNumber(row.salary) : '-'}</td>;
+            case 'packaging_fee':
+                return <td key="packaging_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.packaging_fee !== 0 ? formatNumber(row.packaging_fee) : '-'}</td>;
+            case 'ads_spend':
+                return <td key="ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.ads_spend !== 0 ? formatNumber(row.ads_spend) : '-'}</td>;
+            case 'tax':
+                return <td key="tax" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.tax !== 0 ? formatNumber(row.tax) : '-'}</td>;
+            case 'fixed_cost':
+                return <td key="fixed_cost" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.fixed_cost !== 0 ? formatNumber(row.fixed_cost) : '-'}</td>;
+            case 'total_profit':
+                return (
+                    <td
+                        key="total_profit"
+                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.total_profit < 0 ? 'text-red-500' : 'text-red-600'}`}
+                    >
+                        {row.total_profit !== 0 ? formatNumber(row.total_profit) : '-'}
+                    </td>
+                );
+            case 'profit_per_house':
+                return (
+                    <td
+                        key="profit_per_house"
+                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.profit_per_house < 0 ? 'text-red-500' : 'text-red-600'}`}
+                    >
+                        {row.profit_per_house !== 0 ? formatNumber(row.profit_per_house) : '-'}
+                    </td>
+                );
+            default:
+                return null;
         }
     };
 
-    const loadData = async () => {
-        setLoading(true);
-        setTimeout(() => setLoading(false), 500);
-    };
-
     return (
-        <div className="p-4 md:p-6 bg-gray-50 min-h-screen">
-            <div className="bg-white p-3 rounded-xl shadow-sm mb-4 border border-gray-100 flex flex-wrap items-center justify-between gap-4">
+        <div className="min-h-screen bg-gray-50 p-4 md:p-6">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
                 <div className="flex items-center gap-4">
-                    <h1 className="text-xl font-bold text-gray-800 whitespace-nowrap">Báo cáo lãi lỗ tháng</h1>
-                    <div className="h-6 w-px bg-gray-200 hidden md:block"></div>
+                    <h1 className="whitespace-nowrap text-xl font-bold text-gray-800">Báo cáo lãi lỗ tháng</h1>
+                    <div className="hidden h-6 w-px bg-gray-200 md:block" />
 
-                    <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
-                        <button className="px-3 py-1 text-[13px] font-bold rounded-md transition-all bg-white text-emerald-700 shadow-sm">
+                    <div className="flex items-center gap-1 rounded-lg bg-gray-100 p-1">
+                        <button
+                            type="button"
+                            onClick={() => setSelectedYear(currentYear)}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${selectedYear === currentYear ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
                             Năm nay
                         </button>
-                        <button className="px-3 py-1 text-[13px] font-bold text-gray-500 hover:text-gray-700 rounded-md transition-all">
+                        <button
+                            type="button"
+                            onClick={() => setSelectedYear(currentYear - 1)}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${selectedYear === currentYear - 1 ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
                             Năm trước
                         </button>
                     </div>
 
                     <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
                         <Filter size={14} className="text-gray-400" />
-                        <select className="text-[13px] border border-gray-200 rounded-md p-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500">
-                            <option value="2026">2026</option>
-                            <option value="2025">2025</option>
+                        <select
+                            value={selectedYear}
+                            onChange={(event) => setSelectedYear(Number(event.target.value))}
+                            className="rounded-md border border-gray-200 p-1.5 text-[13px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        >
+                            {yearOptions.map((year) => (
+                                <option key={year} value={year}>
+                                    {year}
+                                </option>
+                            ))}
                         </select>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={loadData}
+                        type="button"
+                        onClick={() => setReloadKey((value) => value + 1)}
                         disabled={loading}
-                        className="bg-gray-800 text-white px-3 py-1.5 rounded-lg text-[13px] font-medium hover:bg-gray-900 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-70"
+                        className="flex items-center gap-2 rounded-lg bg-gray-800 px-3 py-1.5 text-[13px] font-medium text-white transition-all hover:bg-gray-900 active:scale-95 disabled:opacity-70"
                     >
-                        <RefreshCw className={`${loading ? 'animate-spin' : ''}`} size={14} />
+                        <RefreshCw className={loading ? 'animate-spin' : ''} size={14} />
                         {loading ? 'Đang tải...' : 'Làm mới'}
                     </button>
                 </div>
             </div>
 
-            <div className="bg-white p-4 rounded-xl shadow-sm mb-4 border border-blue-100">
-                <p className="text-[13px] text-blue-800 font-medium flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[18px]">info</span>
-                    Báo cáo lãi lỗ theo tháng chỉ được tính toán và chốt sổ khi <strong>tất cả đơn hàng phát sinh trong tháng đã giao thành công</strong> (không còn đơn đang vận chuyển).
-                </p>
-            </div>
+            {error ? (
+                <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] font-medium text-red-700">
+                    {error}
+                </div>
+            ) : null}
 
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto max-h-[75vh]">
-                    <table className="w-full text-left border-collapse min-w-[1500px] [&_th]:border [&_th]:border-gray-200 [&_td]:border [&_td]:border-gray-200">
+            <div className="min-h-[460px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:min-h-[560px]">
+                <div className="min-h-[460px] max-h-[75vh] overflow-auto md:min-h-[560px]">
+                    <table className="min-w-[1240px] w-full border-collapse text-left [&_td]:border [&_td]:border-gray-200 [&_th]:border [&_th]:border-gray-200">
                         <thead className="sticky top-0 z-20 bg-gray-100 shadow-sm">
                             <tr>
-                                {defaultCols.map(id => renderHeader(id))}
+                                {defaultCols.map((id) => renderHeader(id))}
                             </tr>
-                            <tr className="bg-emerald-600 text-white border-b border-emerald-700 sticky top-[53px] z-20">
-                                {defaultCols.map(id => renderTotal(id))}
+                            <tr className="sticky top-[53px] z-20 border-b border-emerald-700 bg-emerald-600 text-white">
+                                {defaultCols.map((id) => renderTotal(id))}
                             </tr>
                         </thead>
                         <tbody className="bg-white">
-                            {reportData.map((row, index) => (
-                                <tr key={index} className="hover:bg-gray-50 transition-colors group">
-                                    {defaultCols.map(id => renderRow(id, row))}
+                            {!loading && reportData.length === 0 ? (
+                                <tr>
+                                    <td colSpan={defaultCols.length} className="px-4 py-12 text-center text-[13px] text-gray-400">
+                                        Không có dữ liệu phát sinh cho năm {selectedYear}.
+                                    </td>
                                 </tr>
-                            ))}
+                            ) : (
+                                sortedReportData.map((row) => (
+                                    <tr key={row.key || row.month} className="group transition-colors hover:bg-gray-50">
+                                        {defaultCols.map((id) => renderRow(id, row))}
+                                    </tr>
+                                ))
+                            )}
                         </tbody>
                     </table>
                 </div>
             </div>
-            
-            {/* Ghi chú chân trang */}
-            <div className="mt-4 flex flex-col md:flex-row justify-between items-start md:items-center text-[12px] text-gray-400 italic">
-                <p>* Dữ liệu dựa trên báo cáo chi tiết theo ngày nhưng được nhóm lại thành từng tháng.</p>
+
+            <div className="mt-4 flex flex-col items-start justify-between gap-2 text-[12px] italic text-gray-400 md:flex-row md:items-center">
+                <p>* Dữ liệu tháng đã lấy từ backend thật, không còn dùng dữ liệu mẫu.</p>
+                <p>* Cột Đơn hàng hiện đếm theo ngày gửi đi thực tế của đơn.</p>
             </div>
         </div>
     );

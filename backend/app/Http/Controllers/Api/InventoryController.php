@@ -1753,6 +1753,10 @@ class InventoryController extends Controller
             $rules['items.*.allow_oversold'] = 'nullable|boolean';
         }
 
+        if ($type === 'damaged') {
+            $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
+        }
+
         $validated = $request->validate($rules);
 
         if ($type === 'adjustment') {
@@ -1820,6 +1824,10 @@ class InventoryController extends Controller
             $rules['items.*.direction'] = ['sometimes', Rule::in(['in', 'out'])];
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
             $rules['items.*.allow_oversold'] = 'nullable|boolean';
+        }
+
+        if ($type === 'damaged') {
+            $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
         }
 
         $validated = $request->validate($rules);

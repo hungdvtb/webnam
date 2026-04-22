@@ -1354,6 +1354,37 @@ class InventoryService
                 ]);
             }
         }
+        $productIds = $document->items
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($productIds)) {
+            return;
+        }
+
+        $products = Product::query()
+            ->whereIn('id', $productIds)
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+
+        foreach ($document->items as $item) {
+            $product = $products->get((int) $item->product_id);
+            if (!$product) {
+                continue;
+            }
+
+            $reverseDamagedDelta = -$this->storedItemDamagedQuantityDelta($document, $item);
+            if ($reverseDamagedDelta < 0 && (int) ($product->damaged_quantity ?? 0) < abs($reverseDamagedDelta)) {
+                throw ValidationException::withMessages([
+                    'document' => ["Khong the xoa phieu kho vi {$product->sku} - {$product->name} da duoc xu ly tiep trong ton hong."],
+                ]);
+            }
+        }
     }
 
     private function revertDocument(InventoryDocument $document, bool $preserveItems = false): void
@@ -1416,11 +1447,29 @@ class InventoryService
 
                 InventoryDocumentAllocation::query()->where('inventory_document_item_id', $item->id)->delete();
             } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'in') {
-                $product->damaged_quantity = max(0, (int) ($product->damaged_quantity ?? 0) - (int) $item->quantity);
-                $product->save();
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    -((int) $item->quantity),
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de hoan tac phieu kho."
+                );
             } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'out') {
-                $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + (int) $item->quantity;
-                $product->save();
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    (int) $item->quantity,
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de hoan tac phieu kho."
+                );
+            }
+
+            $transferDamagedDelta = $this->storedItemTransferToDamagedDelta($document, $item);
+            if ($transferDamagedDelta !== 0) {
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    -$transferDamagedDelta,
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de hoan tac phieu kho."
+                );
             }
         }
 
@@ -1528,18 +1577,29 @@ class InventoryService
                     'total_cost' => round((float) $allocation['total_cost'], 2),
                 ])->save();
             } elseif ($stockBucket === 'damaged' && $inventoryDirection === 'in') {
-                $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
-                $product->save();
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    $quantity,
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de khoi phuc phieu."
+                );
             } elseif ($stockBucket === 'damaged' && $inventoryDirection === 'out') {
-                $currentDamaged = (int) ($product->damaged_quantity ?? 0);
-                if ($currentDamaged < $quantity) {
-                    throw ValidationException::withMessages([
-                        'document' => "San pham {$product->sku} - {$product->name} khong du ton hong de khoi phuc phieu.",
-                    ]);
-                }
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    -$quantity,
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de khoi phuc phieu."
+                );
+            }
 
-                $product->damaged_quantity = $currentDamaged - $quantity;
-                $product->save();
+            $transferDamagedDelta = $this->storedItemTransferToDamagedDelta($document, $item);
+            if ($transferDamagedDelta !== 0) {
+                $this->applyDamagedQuantityDelta(
+                    $product,
+                    $transferDamagedDelta,
+                    'document',
+                    "San pham {$product->sku} - {$product->name} khong du ton hong de khoi phuc phieu."
+                );
             }
 
             $touchedProductIds[] = (int) $product->id;
@@ -1758,38 +1818,86 @@ class InventoryService
             foreach ($items as $item) {
                 $product = $products->get((int) $item['product_id']);
                 $quantity = (int) $item['quantity'];
-                $allocation = $this->allocateSellableBatches($accountId, $product, $quantity);
-                $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
+                $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+                $stockBucket = $this->resolveDamagedDocumentStockBucket($accountId, $product, $item, $quantity);
 
-                $documentItem = InventoryDocumentItem::create([
-                    'account_id' => $accountId,
-                    'inventory_document_id' => $document->id,
-                    'product_id' => $product->id,
-                    'product_name_snapshot' => $product->name,
-                    'product_sku_snapshot' => $product->sku,
-                    'quantity' => $quantity,
-                    'stock_bucket' => 'sellable',
-                    'direction' => 'out',
-                    'unit_cost' => $avgUnitCost,
-                    'total_cost' => $allocation['total_cost'],
-                    'notes' => $item['notes'] ?? null,
-                ]);
+                if ($stockBucket === 'damaged') {
+                    $unitCost = $this->resolveDamagedDocumentUnitCost($product, $item);
 
-                foreach ($allocation['allocations'] as $row) {
-                    InventoryDocumentAllocation::create([
+                    InventoryDocumentItem::create([
                         'account_id' => $accountId,
-                        'inventory_document_item_id' => $documentItem->id,
-                        'inventory_batch_id' => $row['inventory_batch_id'],
+                        'inventory_document_id' => $document->id,
                         'product_id' => $product->id,
-                        'quantity' => $row['quantity'],
-                        'unit_cost' => $row['unit_cost'],
-                        'total_cost' => $row['total_cost'],
-                        'allocated_at' => now(),
+                        'product_name_snapshot' => $product->name,
+                        'product_sku_snapshot' => $product->sku,
+                        'quantity' => $quantity,
+                        'stock_bucket' => 'damaged',
+                        'direction' => 'out',
+                        'unit_cost' => $unitCost,
+                        'total_cost' => round($quantity * $unitCost, 2),
+                        'notes' => $item['notes'] ?? null,
+                        'meta' => [
+                            'quantity_scope' => 'damaged_stock',
+                            'old_quantity' => $currentDamaged,
+                            'new_quantity' => $currentDamaged - $quantity,
+                            'difference_quantity' => -$quantity,
+                        ],
                     ]);
+
+                    $this->applyDamagedQuantityDelta(
+                        $product,
+                        -$quantity,
+                        'items',
+                        "San pham {$product->sku} - {$product->name} khong du ton hong de tao phieu hong."
+                    );
+                } else {
+                    $allocation = $this->allocateSellableBatches($accountId, $product, $quantity);
+                    $avgUnitCost = $quantity > 0 ? round($allocation['total_cost'] / $quantity, 2) : 0;
+
+                    $documentItem = InventoryDocumentItem::create([
+                        'account_id' => $accountId,
+                        'inventory_document_id' => $document->id,
+                        'product_id' => $product->id,
+                        'product_name_snapshot' => $product->name,
+                        'product_sku_snapshot' => $product->sku,
+                        'quantity' => $quantity,
+                        'stock_bucket' => 'sellable',
+                        'direction' => 'out',
+                        'unit_cost' => $avgUnitCost,
+                        'total_cost' => $allocation['total_cost'],
+                        'notes' => $item['notes'] ?? null,
+                        'meta' => [
+                            'quantity_scope' => 'damaged_stock',
+                            'old_quantity' => $currentDamaged,
+                            'new_quantity' => $currentDamaged + $quantity,
+                            'difference_quantity' => $quantity,
+                            'damaged_stock_delta' => $quantity,
+                            'source_bucket' => 'sellable',
+                            'target_bucket' => 'damaged',
+                        ],
+                    ]);
+
+                    foreach ($allocation['allocations'] as $row) {
+                        InventoryDocumentAllocation::create([
+                            'account_id' => $accountId,
+                            'inventory_document_item_id' => $documentItem->id,
+                            'inventory_batch_id' => $row['inventory_batch_id'],
+                            'product_id' => $product->id,
+                            'quantity' => $row['quantity'],
+                            'unit_cost' => $row['unit_cost'],
+                            'total_cost' => $row['total_cost'],
+                            'allocated_at' => now(),
+                        ]);
+                    }
+
+                    $this->applyDamagedQuantityDelta(
+                        $product,
+                        $quantity,
+                        'items',
+                        "San pham {$product->sku} - {$product->name} khong du ton hong de tao phieu hong."
+                    );
                 }
 
-                $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
-                $product->save();
                 $touchedProductIds[] = $product->id;
             }
 
@@ -1798,6 +1906,111 @@ class InventoryService
 
             return $document->load(['items.product:id,sku,name', 'creator:id,name']);
         });
+    }
+
+    private function resolveDamagedDocumentStockBucket(int $accountId, Product $product, array $item, int $quantity): string
+    {
+        $explicitBucket = (string) ($item['stock_bucket'] ?? '');
+        if (in_array($explicitBucket, ['sellable', 'damaged'], true)) {
+            return $explicitBucket;
+        }
+
+        $sellableAvailable = $this->availableSellableQuantity($accountId, $product);
+        if ($sellableAvailable >= $quantity) {
+            return 'sellable';
+        }
+
+        $damagedAvailable = (int) ($product->damaged_quantity ?? 0);
+        if ($damagedAvailable >= $quantity) {
+            return 'damaged';
+        }
+
+        throw ValidationException::withMessages([
+            'items' => "San pham {$product->sku} - {$product->name} khong du ton phu hop. Ton ban duoc {$sellableAvailable}, ton hong {$damagedAvailable}, can {$quantity}.",
+        ]);
+    }
+
+    private function availableSellableQuantity(int $accountId, Product $product): int
+    {
+        return (int) InventoryBatch::query()
+            ->where('account_id', $accountId)
+            ->where('product_id', $product->id)
+            ->where('remaining_quantity', '>', 0)
+            ->where(function ($query) {
+                $query
+                    ->whereNull('source_type')
+                    ->orWhere('source_type', '!=', self::OVERSOLD_RESERVE_SOURCE);
+            })
+            ->lockForUpdate()
+            ->get()
+            ->sum('remaining_quantity');
+    }
+
+    private function resolveDamagedDocumentUnitCost(Product $product, array $item): float
+    {
+        return round((float) ($item['unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
+    }
+
+    private function applyDamagedQuantityDelta(Product $product, int $delta, string $errorKey, string $errorMessage): void
+    {
+        if ($delta === 0) {
+            return;
+        }
+
+        $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+        $nextDamaged = $currentDamaged + $delta;
+
+        if ($nextDamaged < 0) {
+            throw ValidationException::withMessages([
+                $errorKey => $errorMessage,
+            ]);
+        }
+
+        $product->damaged_quantity = $nextDamaged;
+        $product->save();
+    }
+
+    private function storedItemDamagedQuantityDelta(InventoryDocument $document, InventoryDocumentItem $item): int
+    {
+        $delta = $this->storedItemTransferToDamagedDelta($document, $item);
+        $stockBucket = (string) ($item->stock_bucket ?? 'sellable');
+
+        if ($stockBucket !== 'damaged') {
+            return $delta;
+        }
+
+        $quantity = (int) ($item->quantity ?? 0);
+        $direction = $this->storedItemInventoryDirection($document, $item);
+
+        return $delta + ($direction === 'in' ? $quantity : -$quantity);
+    }
+
+    private function storedItemTransferToDamagedDelta(InventoryDocument $document, InventoryDocumentItem $item): int
+    {
+        $metaDelta = data_get($item->meta, 'damaged_stock_delta');
+        if (is_numeric($metaDelta)) {
+            return (int) $metaDelta;
+        }
+
+        return (string) $document->type === 'damaged'
+            && (string) ($item->stock_bucket ?? 'sellable') === 'sellable'
+            && (string) ($item->direction ?? 'in') === 'out'
+            ? (int) ($item->quantity ?? 0)
+            : 0;
+    }
+
+    private function storedItemInventoryDirection(InventoryDocument $document, InventoryDocumentItem $item): string
+    {
+        $direction = (string) ($item->direction ?? 'in');
+
+        if ((string) $document->type !== 'adjustment') {
+            return $direction;
+        }
+
+        return $this->effectiveAdjustmentStockDirection(
+            $this->normalizeAdjustmentKind($document->adjustment_kind ?? null),
+            $direction
+        );
     }
 
     private function createAdjustmentDocument(array $payload, int $accountId, ?int $userId): InventoryDocument
@@ -1945,9 +2158,22 @@ class InventoryService
                         ]);
                     }
                 } elseif ($stockBucket === 'damaged' && $effectiveStockDirection === 'in') {
-                    $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
-                    $product->save();
+                    $this->applyDamagedQuantityDelta(
+                        $product,
+                        $quantity,
+                        'items',
+                        "San pham {$product->sku} - {$product->name} khong du ton hong de dieu chinh."
+                    );
                 } elseif ($stockBucket === 'damaged' && $effectiveStockDirection === 'out') {
+                    $this->applyDamagedQuantityDelta(
+                        $product,
+                        -$quantity,
+                        'items',
+                        "San pham {$product->sku} - {$product->name} khong du ton hong de dieu chinh giam."
+                    );
+                    $touchedProductIds[] = $product->id;
+                    continue;
+
                     $currentDamaged = (int) ($product->damaged_quantity ?? 0);
                     if ($currentDamaged < $quantity) {
                         throw ValidationException::withMessages([

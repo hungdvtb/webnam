@@ -764,17 +764,44 @@ class ShipmentController extends Controller
             return response()->json(['message' => 'Chưa có vận đơn cần đồng bộ.'], 422);
         }
 
-        $shipments = $query->get();
+        $shipments = $query->with('order')->get();
+
+        $reappliedCount = 0;
+        $skippedCount = 0;
+
+        $shipments->each(function (Shipment $shipment) use (&$reappliedCount, &$skippedCount) {
+            if (!filled($shipment->carrier_status_raw) || !filled($shipment->carrier_code)) {
+                $skippedCount++;
+
+                return;
+            }
+
+            $result = $this->syncService->reapplyStoredCarrierStatus($shipment, 'carrier_mapping_reapply');
+
+            if ($result['success'] ?? false) {
+                $reappliedCount++;
+
+                return;
+            }
+
+            $skippedCount++;
+        });
 
         return response()->json([
             'message' => 'Danh sách vận đơn đã được refresh từ dữ liệu webhook/API mới nhất.',
             'count' => $shipments->count(),
-            'shipments' => $shipments->map(fn ($shipment) => [
-                'id' => $shipment->id,
-                'shipment_number' => $shipment->shipment_number,
-                'shipment_status' => $shipment->shipment_status,
-                'last_synced_at' => optional($shipment->last_synced_at)->format('Y-m-d H:i:s'),
-            ])->values(),
+            'reapplied_count' => $reappliedCount,
+            'skipped_count' => $skippedCount,
+            'shipments' => $shipments->map(function (Shipment $shipment) {
+                $freshShipment = $shipment->fresh();
+
+                return [
+                    'id' => $shipment->id,
+                    'shipment_number' => $shipment->shipment_number,
+                    'shipment_status' => $freshShipment?->shipment_status,
+                    'last_synced_at' => optional($freshShipment?->last_synced_at)->format('Y-m-d H:i:s'),
+                ];
+            })->values(),
         ]);
     }
 
@@ -846,8 +873,13 @@ class ShipmentController extends Controller
 
         $file = $request->file('file');
         $filePath = $file->getRealPath();
-        
-        $result = $this->reconcileService->processFile($filePath, auth()->id());
+        $accountId = $request->header('X-Account-Id');
+
+        $result = $this->reconcileService->processFile(
+            $filePath,
+            auth()->id(),
+            filled($accountId) ? (int) $accountId : null
+        );
         
         if (!$result['success']) {
             return response()->json([

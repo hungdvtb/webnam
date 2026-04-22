@@ -7,13 +7,18 @@ use App\Models\Carrier;
 use App\Models\CarrierRawStatus;
 use App\Models\CarrierStatusMapping;
 use App\Services\Shipping\CarrierStatusMapper;
+use App\Services\Shipping\ShipmentStatusSyncService;
+use App\Models\Shipment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class CarrierStatusMappingController extends Controller
 {
-    public function __construct(private CarrierStatusMapper $carrierStatusMapper)
+    public function __construct(
+        private CarrierStatusMapper $carrierStatusMapper,
+        private ShipmentStatusSyncService $shipmentStatusSyncService
+    )
     {
     }
 
@@ -117,6 +122,11 @@ class CarrierStatusMappingController extends Controller
             $request->input('mapped_order_status'),
             $accountId ? (int) $accountId : null
         );
+        $internalShipmentStatus = $internalShipmentStatus
+            ?? $this->carrierStatusMapper->inferShipmentStatusFromOrderStatus(
+                $mappedOrderStatus,
+                $accountId ? (int) $accountId : null
+            );
 
         $exists = CarrierStatusMapping::whereIn('carrier_code', $this->carrierStatusMapper->equivalentCarrierCodes($carrierCode))
             ->where('carrier_raw_status', $request->carrier_raw_status)
@@ -153,6 +163,11 @@ class CarrierStatusMappingController extends Controller
             ->update(['is_mapped' => true, 'mapping_id' => $mapping->id]);
 
         $this->carrierStatusMapper->clearCache($mapping->carrier_code);
+        $this->reapplyMappedShipments(
+            $accountId ? (int) $accountId : null,
+            $mapping->carrier_code,
+            $mapping->carrier_raw_status
+        );
 
         return response()->json($mapping, 201);
     }
@@ -196,9 +211,27 @@ class CarrierStatusMappingController extends Controller
             );
         }
 
+        $shouldBackfillInternalShipmentStatus = (
+            $request->exists('internal_shipment_status')
+            || $request->exists('carrier_raw_status')
+            || $request->exists('mapped_order_status')
+        ) && !filled($updateData['internal_shipment_status'] ?? $mapping->internal_shipment_status);
+
+        if ($shouldBackfillInternalShipmentStatus) {
+            $updateData['internal_shipment_status'] = $this->carrierStatusMapper->inferShipmentStatusFromOrderStatus(
+                $updateData['mapped_order_status'] ?? $mapping->mapped_order_status,
+                $accountId ? (int) $accountId : null
+            );
+        }
+
         $mapping->update($updateData);
 
         $this->carrierStatusMapper->clearCache($mapping->carrier_code);
+        $this->reapplyMappedShipments(
+            $accountId ? (int) $accountId : null,
+            $mapping->carrier_code,
+            $mapping->carrier_raw_status
+        );
 
         return response()->json($mapping);
     }
@@ -365,5 +398,34 @@ class CarrierStatusMappingController extends Controller
                 'is_mapped' => false,
                 'mapping_id' => null,
             ]);
+    }
+
+    private function reapplyMappedShipments(?int $accountId, ?string $carrierCode, ?string $rawStatus): void
+    {
+        $equivalentCarrierCodes = $this->carrierStatusMapper->equivalentCarrierCodes($carrierCode);
+
+        if (empty($equivalentCarrierCodes) || !filled($rawStatus)) {
+            return;
+        }
+
+        Shipment::withoutGlobalScopes()
+            ->whereIn('carrier_code', $equivalentCarrierCodes)
+            ->whereNotNull('carrier_status_raw')
+            ->whereNull('deleted_at')
+            ->when(
+                $accountId !== null,
+                fn ($query) => $query->where('account_id', $accountId),
+                fn ($query) => $query->whereNull('account_id')
+            )
+            ->with('order')
+            ->get()
+            ->filter(fn (Shipment $shipment) => $this->carrierStatusMapper->rawStatusesMatch($shipment->carrier_status_raw, $rawStatus))
+            ->each(function (Shipment $shipment): void {
+                $this->shipmentStatusSyncService->reapplyStoredCarrierStatus(
+                    $shipment,
+                    'carrier_mapping_reapply',
+                    auth()->id()
+                );
+            });
     }
 }

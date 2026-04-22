@@ -284,6 +284,102 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $this->assertSame('returned', (string) $order->shipping_status);
     }
 
+    public function test_order_status_override_to_returned_updates_active_shipment_and_survives_reconciliation_reimport(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        OrderStatus::query()->create([
+            'account_id' => $account->id,
+            'code' => 'pending_return',
+            'name' => 'Chờ hoàn',
+            'color' => '#f97316',
+            'sort_order' => 91,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
+        OrderStatus::query()->create([
+            'account_id' => $account->id,
+            'code' => 'returned',
+            'name' => 'Đã hoàn',
+            'color' => '#b91c1c',
+            'sort_order' => 92,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'pending_return',
+            'shipping_status' => 'returning',
+            'shipment_status' => 'returned',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'shipment_status' => 'returning',
+            'status' => 'returning',
+            'carrier_status_raw' => 'Đã trả chưa về',
+            'carrier_status_mapped' => 'returning',
+            'carrier_status_code' => 'Đã trả chưa về',
+            'carrier_status_text' => 'Đã trả chưa về',
+            'returning_at' => now(),
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Đã trả chưa về',
+            'internal_shipment_status' => 'returned',
+            'mapped_order_status' => 'pending_return',
+            'is_active' => true,
+        ]);
+
+        $mapper = $this->app->make(CarrierStatusMapper::class);
+        $this->assertSame(
+            'returning',
+            $mapper->mapCarrierStatus('viettel_post', 'ÄÃ£ tráº£ chÆ°a vá»', $account->id)['shipment_status']
+        );
+        $this->assertSame(
+            'returned',
+            $mapper->resolveOrderStatusSync('viettel_post', 'returned', $account->id, 'ÄÃ£ tráº£ chÆ°a vá»')['order_status']
+        );
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}/status", [
+                'status' => 'returned',
+                'allow_shipping_override' => true,
+                'reason' => 'Đã nhận hàng hoàn tại kho',
+            ])
+            ->assertOk()
+            ->assertJsonPath('status', 'returned')
+            ->assertJsonPath('shipping_status', 'returned');
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('returned', (string) $order->status);
+        $this->assertSame('returned', (string) $order->shipping_status);
+        $this->assertSame('returned', (string) $shipment->shipment_status);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            ['Mã Vận Đơn', 'Cước vận chuyển (3)= (1+2)', 'Tiền thu hộ (4)', 'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)', 'Trạng Thái', 'Trạng thái đối soát COD'],
+            [$shipment->tracking_number, '28750', '700000', '28750', 'Đã trả chưa về', 'Chưa đối soát COD'],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('returned', (string) $order->status);
+        $this->assertSame('returned', (string) $order->shipping_status);
+        $this->assertSame('returned', (string) $shipment->shipment_status);
+    }
+
     public function test_admin_can_correct_returned_shipment_back_to_returning(): void
     {
         [$account, $user] = $this->authenticate();
@@ -740,6 +836,289 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $this->assertSame('completed', (string) $order->status);
         $this->assertSame('delivered', (string) $order->shipping_status);
         $this->assertSame('carrier', (string) $order->shipping_status_source);
+    }
+
+    public function test_viettel_post_reconciliation_discovers_unmapped_raw_statuses_for_account_without_duplicates(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        CarrierRawStatus::query()->create([
+            'account_id' => $account->id,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'Đang vận chuyển',
+            'first_seen_at' => now()->subDay(),
+            'last_seen_at' => now()->subDay(),
+            'is_mapped' => false,
+            'mapping_id' => null,
+            'sample_payload' => ['source' => 'existing_custom_carrier'],
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'Mã Vận Đơn',
+                'Cước vận chuyển (3)= (1+2)',
+                'Tiền thu hộ (4)',
+                'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)',
+                'Trạng Thái',
+                'Trạng thái đối soát COD',
+            ],
+            [
+                'TRACK-MISSING-001',
+                '15000',
+                '200000',
+                '15000',
+                'Đang vận chuyển',
+                'Chưa đối soát COD',
+            ],
+            [
+                'TRACK-MISSING-002',
+                '15000',
+                '200000',
+                '15000',
+                'Đang vận chuyển',
+                'Chưa đối soát COD',
+            ],
+            [
+                'TRACK-MISSING-003',
+                '15000',
+                '200000',
+                '15000',
+                'Chờ phát lại',
+                'Chưa đối soát COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+
+        $discoveredStatuses = CarrierRawStatus::query()
+            ->where('account_id', $account->id)
+            ->where('carrier_code', 'viettel_post')
+            ->get();
+
+        $this->assertCount(2, $discoveredStatuses);
+        $this->assertEqualsCanonicalizing(
+            ['Đang vận chuyển', 'Chờ phát lại'],
+            $discoveredStatuses->pluck('raw_status')->all()
+        );
+
+        $discoveredStatuses->each(function (CarrierRawStatus $status): void {
+            $this->assertFalse((bool) $status->is_mapped);
+            $this->assertNull($status->mapping_id);
+            $this->assertSame('viettel_post_reconciliation_import', data_get($status->sample_payload, 'source'));
+        });
+
+        $this->assertDatabaseHas('carrier_raw_statuses', [
+            'account_id' => $account->id,
+            'carrier_code' => 'custom_carrier',
+            'raw_status' => 'Đang vận chuyển',
+        ]);
+    }
+
+    public function test_viettel_post_reconciliation_updates_existing_raw_status_once_and_marks_it_mapped_when_mapping_exists(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $mapping = $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Đang giao hàng',
+            'internal_shipment_status' => 'out_for_delivery',
+            'mapped_order_status' => 'shipping',
+            'is_active' => true,
+        ]);
+
+        CarrierRawStatus::query()->create([
+            'account_id' => $account->id,
+            'carrier_code' => 'viettel_post',
+            'raw_status' => 'Đang giao hàng',
+            'first_seen_at' => now()->subDay(),
+            'last_seen_at' => now()->subDay(),
+            'is_mapped' => false,
+            'mapping_id' => null,
+            'sample_payload' => ['source' => 'legacy_import'],
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'Mã Vận Đơn',
+                'Cước vận chuyển (3)= (1+2)',
+                'Tiền thu hộ (4)',
+                'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)',
+                'Trạng Thái',
+                'Trạng thái đối soát COD',
+            ],
+            [
+                'TRACK-MISSING-004',
+                '12000',
+                '120000',
+                '12000',
+                'Đang giao hàng',
+                'Chưa đối soát COD',
+            ],
+            [
+                'TRACK-MISSING-005',
+                '12000',
+                '120000',
+                '12000',
+                'Đang giao hàng',
+                'Chưa đối soát COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, CarrierRawStatus::query()
+            ->where('account_id', $account->id)
+            ->where('carrier_code', 'viettel_post')
+            ->where('raw_status', 'Đang giao hàng')
+            ->count());
+
+        $rawStatus = CarrierRawStatus::query()
+            ->where('account_id', $account->id)
+            ->where('carrier_code', 'viettel_post')
+            ->where('raw_status', 'Đang giao hàng')
+            ->firstOrFail();
+
+        $this->assertTrue((bool) $rawStatus->is_mapped);
+        $this->assertSame($mapping->id, (int) $rawStatus->mapping_id);
+        $this->assertSame('viettel_post_reconciliation_import', data_get($rawStatus->sample_payload, 'source'));
+    }
+
+    public function test_mapping_store_reapplies_existing_giao_thanh_cong_shipment_and_shipment_list_returns_exchange_completed(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        OrderStatus::query()->create([
+            'account_id' => $account->id,
+            'code' => 'exchange_completed',
+            'name' => 'Đổi hàng thành công',
+            'color' => '#15803d',
+            'sort_order' => 90,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'completed',
+            'shipping_status' => 'delivered',
+            'shipment_status' => 'delivered',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'shipment_status' => 'delivered',
+            'status' => 'delivered',
+            'carrier_status_raw' => 'Giao thành công',
+            'carrier_status_mapped' => 'delivered',
+            'carrier_status_code' => 'Giao thành công',
+            'carrier_status_text' => 'Giao thành công',
+            'delivered_at' => now(),
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/carrier-mappings', [
+                'carrier_code' => 'viettel_post',
+                'carrier_raw_status' => 'Giao thành công',
+                'mapped_order_status' => 'Đổi hàng thành công',
+                'is_active' => true,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('internal_shipment_status', 'delivered')
+            ->assertJsonPath('mapped_order_status', 'exchange_completed');
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('exchange_completed', (string) $order->status);
+        $this->assertSame('delivered', (string) $order->shipping_status);
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/shipments?' . http_build_query([
+                'shipment_number' => $shipment->shipment_number,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('data.0.order.status', 'exchange_completed')
+            ->assertJsonPath('data.0.carrier_status_raw', 'Giao thành công');
+    }
+
+    public function test_sync_endpoint_reapplies_legacy_da_tra_chua_ve_mapping_without_internal_status_and_updates_shipment_list(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        OrderStatus::query()->create([
+            'account_id' => $account->id,
+            'code' => 'pending_return',
+            'name' => 'Chờ hoàn',
+            'color' => '#f97316',
+            'sort_order' => 91,
+            'is_system' => true,
+            'is_active' => true,
+        ]);
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'shipped',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+            'carrier_status_raw' => 'Đã trả chưa về',
+            'carrier_status_mapped' => null,
+            'carrier_status_code' => 'Đã trả chưa về',
+            'carrier_status_text' => 'Đã trả chưa về',
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Đã trả chưa về',
+            'internal_shipment_status' => null,
+            'mapped_order_status' => 'pending_return',
+            'is_active' => true,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/shipments/sync', [
+                'shipment_ids' => [$shipment->id],
+                'mode' => 'selected',
+            ])
+            ->assertOk()
+            ->assertJsonPath('reapplied_count', 1)
+            ->assertJsonPath('shipments.0.shipment_status', 'returning');
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('pending_return', (string) $order->status);
+        $this->assertSame('returning', (string) $order->shipping_status);
+        $this->assertSame('returning', (string) $shipment->shipment_status);
+        $this->assertSame('returning', (string) $shipment->carrier_status_mapped);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/shipments?' . http_build_query([
+                'shipment_number' => $shipment->shipment_number,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('data.0.order.status', 'pending_return')
+            ->assertJsonPath('data.0.carrier_status_raw', 'Đã trả chưa về');
     }
 
     private function authenticate(): array

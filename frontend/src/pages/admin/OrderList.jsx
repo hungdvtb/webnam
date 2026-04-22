@@ -3593,7 +3593,11 @@ const OrderList = () => {
 
     const handleQuickStatusUpdate = async (id, s) => {
         try {
-            await orderApi.updateStatus(id, s);
+            await orderApi.updateStatus(id, {
+                status: s,
+                allow_shipping_override: true,
+                reason: 'Cập nhật từ bảng quản lý đơn hàng',
+            });
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setStatusMenuOrderId(null);
             setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng.' });

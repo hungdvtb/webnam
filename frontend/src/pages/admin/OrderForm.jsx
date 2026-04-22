@@ -4429,34 +4429,6 @@ const OrderForm = () => {
         };
     }, [actualProductPickerLineId, actualProductPickerSearchTerm]);
 
-    const saveColumnSettings = () => {
-        writeOrderFormStorageJson(orderFormColumnOrderStorageKey, normalizeStoredOrderFormColumnOrder(columnOrder));
-        writeOrderFormStorageJson(orderFormVisibleColumnsStorageKey, normalizeStoredOrderFormVisibleColumns(visibleColumns));
-        writeOrderFormStorageJson(orderFormColumnWidthsStorageKey, normalizeStoredOrderFormColumnWidths(columnWidths));
-        setShowColumnConfig(false);
-        alert('Đã lưu cấu hình bảng làm mặc định!');
-    };
-
-    const handleColumnResize = (id, e) => {
-        e.preventDefault();
-        const startX = e.clientX;
-        const startWidth = columnWidths[id] || (e.currentTarget.parentElement.offsetWidth);
-        const minWidth = desktopTableMetrics.minWidths?.[id] ?? 50;
-
-        const onMouseMove = (moveEvent) => {
-            const newWidth = Math.max(minWidth, startWidth + (moveEvent.clientX - startX));
-            setColumnWidths(prev => ({ ...prev, [id]: newWidth }));
-        };
-
-        const onMouseUp = () => {
-            document.removeEventListener('mousemove', onMouseMove);
-            document.removeEventListener('mouseup', onMouseUp);
-        };
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-    };
-
     const persistOrderFormColumnLayout = useCallback(({
         order = columnOrder,
         visible = visibleColumns,
@@ -8015,9 +7987,27 @@ const OrderForm = () => {
                                                                     initial={{ opacity: 0, x: -10 }}
                                                                     animate={{ opacity: 1, x: 0 }}
                                                                     exit={{ opacity: 0, x: -10 }}
-                                                                    className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-72 normal-case text-left"
+                                                                    className="absolute top-10 left-0 bg-white border border-primary/10 shadow-2xl rounded-sm p-4 z-[200] w-72 normal-case text-left [&>h4]:hidden"
                                                                 >
                                                                     <h4 className="font-sans text-sm font-bold text-primary/50 mb-4">Cấu hình cột hiển thị</h4>
+                                                                    <div className="mb-3 flex items-center justify-end gap-2">
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={saveColumnSettingsDefault}
+                                                                            className="inline-flex size-8 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary transition hover:border-primary hover:bg-primary/5"
+                                                                            title="Lưu mặc định"
+                                                                        >
+                                                                            <span className="material-symbols-outlined text-[16px]">save</span>
+                                                                        </button>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={resetColumnSettingsDefault}
+                                                                            className="inline-flex size-8 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary transition hover:border-primary hover:bg-primary/5"
+                                                                            title="Reset mặc định"
+                                                                        >
+                                                                            <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                                                                        </button>
+                                                                    </div>
                                                                     <div className="space-y-1">
                                                                         <Reorder.Group axis="y" values={columnOrder} onReorder={setColumnOrder} className="space-y-1">
                                                                             {columnOrder.map(colId => (
@@ -8057,7 +8047,7 @@ const OrderForm = () => {
                                                                                 </Reorder.Item>
                                                                             ))}
                                                                         </Reorder.Group>
-                                                                        <div className="border-t border-primary/10 pt-3">
+                                                                        <div className="hidden">
                                                                             <div className="mb-2 text-[11px] font-semibold leading-[1.45] text-primary/45">
                                                                                 Resize cột sẽ tự lưu ngay khi thả chuột. Có thể lưu cấu hình hiện tại làm mặc định riêng.
                                                                             </div>
@@ -8072,10 +8062,12 @@ const OrderForm = () => {
                                                                         <button
                                                                             type="button"
                                                                             onClick={resetColumnSettingsDefault}
-                                                                            className="py-2 text-[12px] font-bold text-primary/40 hover:bg-primary/5 rounded-sm transition-all"
+                                                                            className="inline-flex w-full items-center justify-center gap-1 rounded-sm border border-primary/15 bg-white px-3 py-2 text-[11px] font-bold text-primary transition hover:border-primary hover:bg-primary/5"
                                                                         >
-                                                                            Mặc định
+                                                                            <span className="material-symbols-outlined text-[15px]">restart_alt</span>
+                                                                            Reset mặc định
                                                                         </button>
+                                                                    </div>
                                                                     </div>
                                                                 </motion.div>
                                                             </>
@@ -8116,7 +8108,7 @@ const OrderForm = () => {
                                                         {/* Resize Handle */}
                                                         <div
                                                             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/30 z-20 transition-colors opacity-0 group-hover/header:opacity-100"
-                                                            onMouseDown={(e) => handleColumnResize(colId, e)}
+                                                            onMouseDown={(e) => handlePersistedColumnResize(colId, e)}
                                                         />
                                                     </th>
                                                 );

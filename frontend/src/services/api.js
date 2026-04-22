@@ -720,6 +720,7 @@ export const financeApi = {
 
     // Daily Profit/Loss Report (P&L)
     getDailyPnlReport: (params) => api.get('/finance/daily-pnl/report', { params }),
+    getMonthlyPnlReport: (params) => api.get('/finance/daily-pnl/monthly-report', { params }),
     getDailyPnlConfig: () => api.get('/finance/daily-pnl/config'),
     updateDailyPnlConfig: (data) => api.post('/finance/daily-pnl/config', data),
     getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),

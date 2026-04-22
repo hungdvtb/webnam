@@ -25,6 +25,7 @@ use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
 use App\Services\RepeatCustomerPhoneService;
+use App\Services\Shipping\CarrierStatusMapper;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShipmentRollbackService;
 use App\Services\Shipping\ShippingAlertService;
@@ -4527,16 +4528,54 @@ class OrderController extends Controller
                     OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
                 ];
                 $allowShippingOverride = $request->boolean('allow_shipping_override');
-                if (!$allowShippingOverride && in_array($newStatus, $shippingLockedStatuses) && $order->hasActiveShipment()) {
-                    $syncService = app(\App\Services\Shipping\ShipmentStatusSyncService::class);
+                if (in_array($newStatus, $shippingLockedStatuses, true) && $order->hasActiveShipment()) {
+                    $syncService = app(ShipmentStatusSyncService::class);
                     $canEdit = $syncService->canManuallyEditOrderShipping($order);
 
-                    if (!$canEdit['allowed']) {
+                    if (!$allowShippingOverride && !$canEdit['allowed']) {
                         return response()->json([
                             'message' => $canEdit['reason'],
                             'shipping_locked' => true,
                             'shipment_number' => $canEdit['shipment_number'] ?? null,
                         ], 422);
+                    }
+
+                    if ($allowShippingOverride) {
+                        $activeShipment = $order->activeShipment()->first();
+                        $targetShipmentStatus = app(CarrierStatusMapper::class)->inferShipmentStatusFromOrderStatus(
+                            $newStatus,
+                            $order->account_id
+                        );
+
+                        if ($activeShipment && $targetShipmentStatus !== null) {
+                            $shipmentResult = $syncService->updateShipmentStatus(
+                                $activeShipment,
+                                $targetShipmentStatus,
+                                'manual',
+                                auth()->id(),
+                                $request->reason ?? 'Cập nhật từ trạng thái đơn hàng',
+                                null,
+                                (bool) (auth()->user()?->is_admin ?? false)
+                            );
+
+                            if (!($shipmentResult['success'] ?? false)) {
+                                return response()->json([
+                                    'message' => $shipmentResult['message'] ?? 'Không thể đồng bộ trạng thái vận đơn.',
+                                    'requires_override' => (bool) ($shipmentResult['requires_override'] ?? false),
+                                    'shipping_locked' => true,
+                                    'shipment_number' => $activeShipment->shipment_number,
+                                ], 422);
+                            }
+
+                            $order->refresh();
+
+                            if ((string) $order->status === (string) $newStatus) {
+                                return response()->json($order->load(array_merge(
+                                    $this->orderDetailRelations(),
+                                    ['customer', 'shipments']
+                                )));
+                            }
+                        }
                     }
                 }
 

@@ -373,6 +373,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // New Daily Profit/Loss Report (P&L) routes
     Route::prefix('finance/daily-pnl')->group(function () {
         Route::get('report', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getReport']);
+        Route::get('monthly-report', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getMonthlyReport']);
         Route::get('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getConfig']);
         Route::post('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'updateConfig']);
         Route::get('fb-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFacebookAdAccounts']);

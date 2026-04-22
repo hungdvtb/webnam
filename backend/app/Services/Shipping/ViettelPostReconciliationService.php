@@ -115,7 +115,7 @@ class ViettelPostReconciliationService
         return null;
     }
 
-    public function processFile(string $filePath, int $userId): array
+    public function processFile(string $filePath, int $userId, ?int $accountId = null): array
     {
         try {
             $allRows = $this->xlsxService->readRaw($filePath);
@@ -178,7 +178,7 @@ class ViettelPostReconciliationService
                 }
 
                 $summary['total_rows']++;
-                $result = $this->processRow($row, $headerMap, $userId, $i + 1);
+                $result = $this->processRow($row, $headerMap, $userId, $i + 1, $accountId);
 
                 switch ($result['status']) {
                     case 'received_cod':
@@ -220,7 +220,7 @@ class ViettelPostReconciliationService
         }
     }
 
-    private function processRow(array $row, array $headerMap, int $userId, int $lineNum): array
+    private function processRow(array $row, array $headerMap, int $userId, int $lineNum, ?int $accountId = null): array
     {
         $get = function (array $aliases, $default = '') use ($row, $headerMap) {
             foreach ($aliases as $alias) {
@@ -259,18 +259,27 @@ class ViettelPostReconciliationService
             'tongphi',
         ], '0'));
         $vtpStatus = $get(['Trạng Thái', 'Trạng thái', 'trangthai']);
-
-        $codStatusRaw = mb_strtolower($get([
+        $codStatus = $get([
             'Trạng thái đối soát COD',
             'TrạngtháiđốisoátCOD',
             'trangthaidoisoatcod',
-        ]), 'UTF-8');
+        ]);
+        $codStatusRaw = mb_strtolower($codStatus, 'UTF-8');
 
         $reconciliationStatus = 'unreconciled_cod';
         if (str_contains($codStatusRaw, 'đã nhận cod')) {
             $reconciliationStatus = 'received_cod';
         } elseif (str_contains($codStatusRaw, 'không có cod')) {
             $reconciliationStatus = 'no_cod';
+        }
+
+        if ($vtpStatus !== '') {
+            $this->syncService->rememberCarrierRawStatus($accountId, self::CARRIER_CODE, $vtpStatus, [
+                'source' => 'viettel_post_reconciliation_import',
+                'line' => $lineNum,
+                'tracking_code' => $trackingCode,
+                'cod_status' => $codStatus,
+            ]);
         }
 
         if ($trackingCode === '') {

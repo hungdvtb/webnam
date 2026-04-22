@@ -21,6 +21,16 @@ const CARRIER_ICONS = {
     ghn: '🟠', ghtk: '🟢', viettel_post: '🔴', jt: '🟡', shopee_express: '🟤',
 };
 
+const SHIPPING_MAPPING_REFRESH_EVENT = 'shipping:mapping-refresh';
+const SHIPPING_MAPPING_REFRESH_KEY = 'shippingMappingRefreshToken';
+
+const normalizeRawStatusKey = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
 const CarrierMappingSettings = ({ embedded = false }) => {
     const [allMappings, setAllMappings] = useState([]);
     const [carriers, setCarriers] = useState([]);
@@ -71,6 +81,36 @@ const CarrierMappingSettings = ({ embedded = false }) => {
         fetchData();
     }, [fetchData]);
 
+    useEffect(() => {
+        const handleRefresh = () => {
+            fetchData();
+        };
+
+        const handleStorage = (event) => {
+            if (!event.key || event.key === SHIPPING_MAPPING_REFRESH_KEY) {
+                fetchData();
+            }
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                fetchData();
+            }
+        };
+
+        window.addEventListener('focus', handleRefresh);
+        window.addEventListener(SHIPPING_MAPPING_REFRESH_EVENT, handleRefresh);
+        window.addEventListener('storage', handleStorage);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener('focus', handleRefresh);
+            window.removeEventListener(SHIPPING_MAPPING_REFRESH_EVENT, handleRefresh);
+            window.removeEventListener('storage', handleStorage);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, [fetchData]);
+
     const visibleCarriers = useMemo(() => carriers.filter(c => c.is_visible), [carriers]);
     
     const filteredMappings = useMemo(() => {
@@ -78,6 +118,40 @@ const CarrierMappingSettings = ({ embedded = false }) => {
         return allMappings.filter(m => m.carrier_code === activeTab)
             .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
     }, [allMappings, activeTab]);
+
+    const filteredDiscoveredStatuses = useMemo(() => {
+        if (!activeTab) return [];
+
+        const mappedStatusKeys = new Set(
+            allMappings
+                .filter(mapping => mapping.carrier_code === activeTab)
+                .map(mapping => normalizeRawStatusKey(mapping.carrier_raw_status))
+        );
+
+        return discoveredStatuses
+            .filter(status => status.carrier_code === activeTab)
+            .filter(status => !mappedStatusKeys.has(normalizeRawStatusKey(status.raw_status)))
+            .sort((a, b) => {
+                const left = new Date(b.last_seen_at || 0).getTime();
+                const right = new Date(a.last_seen_at || 0).getTime();
+                return left - right;
+            });
+    }, [activeTab, allMappings, discoveredStatuses]);
+
+    const mappingTableRows = useMemo(() => (
+        [
+            ...filteredMappings.map(mapping => ({
+                kind: 'mapping',
+                key: `mapping-${mapping.id}`,
+                payload: mapping,
+            })),
+            ...filteredDiscoveredStatuses.map(status => ({
+                kind: 'discovered',
+                key: `discovered-${status.id ?? normalizeRawStatusKey(status.raw_status)}`,
+                payload: status,
+            })),
+        ]
+    ), [filteredDiscoveredStatuses, filteredMappings]);
 
     const selectedMappings = useMemo(
         () => filteredMappings.filter(m => selectedMappingIds.includes(m.id)),
@@ -378,6 +452,48 @@ const CarrierMappingSettings = ({ embedded = false }) => {
                             </motion.div>
                         )}
                     </AnimatePresence>
+
+                    {filteredDiscoveredStatuses.length > 0 && (
+                        <div className="border-b border-amber-100 bg-amber-50/30">
+                            <div className="px-6 py-3 flex items-center justify-between gap-3 border-b border-amber-100">
+                                <div>
+                                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Trạng thái mới từ đối soát</p>
+                                    <p className="text-[11px] font-medium text-stone-600">Các trạng thái này đã được phát hiện từ file đối soát và đang chờ bạn map.</p>
+                                </div>
+                                <span className="px-2 py-1 rounded-md bg-amber-100 border border-amber-200 text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                    {filteredDiscoveredStatuses.length} mới
+                                </span>
+                            </div>
+                            <div className="divide-y divide-amber-100">
+                                {filteredDiscoveredStatuses.map((status) => {
+                                    const discoveredAt = status.last_seen_at
+                                        ? new Date(status.last_seen_at).toLocaleString('vi-VN')
+                                        : null;
+
+                                    return (
+                                        <div key={`discovered-inline-${status.id ?? normalizeRawStatusKey(status.raw_status)}`} className="px-6 py-4 flex items-center justify-between gap-4">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="font-mono text-[12px] font-bold text-stone-800 bg-white px-2 py-1 rounded border border-amber-200">{status.raw_status}</span>
+                                                    <span className="px-2 py-1 rounded-md bg-amber-100 border border-amber-200 text-[10px] font-black uppercase tracking-tight text-amber-700">Mới từ đối soát</span>
+                                                </div>
+                                                {discoveredAt && (
+                                                    <p className="mt-1 text-[10px] font-medium text-stone-500">Phát hiện lần cuối: {discoveredAt}</p>
+                                                )}
+                                            </div>
+                                            <button
+                                                onClick={() => handleAddMappingFromDiscovery(activeTab, status.raw_status)}
+                                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-white shadow-md transition-all hover:bg-amber-700"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">add_task</span>
+                                                THIẾT LẬP
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     {filteredMappings.length === 0 ? (
                         <div className="py-20 flex flex-col items-center justify-center opacity-40 select-none">

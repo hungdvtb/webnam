@@ -6494,6 +6494,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         if (item.unit_cost != null) base.unit_cost = item.unit_cost;
                         if (item.stock_bucket && item.stock_bucket !== 'sellable') base.stock_bucket = item.stock_bucket;
                     }
+                    if (type === 'damaged' && form.id && item.stock_bucket) {
+                        base.stock_bucket = item.stock_bucket;
+                    }
                     return base;
                 }),
             };

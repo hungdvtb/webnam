@@ -2,6 +2,8 @@ import React, { useState, useRef } from 'react';
 import { shipmentApi } from '../../services/api';
 
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
+const SHIPPING_MAPPING_REFRESH_EVENT = 'shipping:mapping-refresh';
+const SHIPPING_MAPPING_REFRESH_KEY = 'shippingMappingRefreshToken';
 
 const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
     const [file, setFile] = useState(null);
@@ -33,12 +35,29 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
         try {
             const response = await shipmentApi.reconcileViettelPost(formData);
             setResult(response.data);
+            notifyMappingRefresh();
             if (onRefresh) onRefresh();
         } catch (err) {
             setError(err.response?.data?.message || 'Có lỗi xảy ra khi xử lý file.');
         } finally {
             setUploading(false);
         }
+    };
+
+    const notifyMappingRefresh = () => {
+        const payload = {
+            source: 'viettel_post_reconcile',
+            carrier_code: 'viettel_post',
+            refreshed_at: Date.now(),
+        };
+
+        try {
+            window.localStorage.setItem(SHIPPING_MAPPING_REFRESH_KEY, JSON.stringify(payload));
+        } catch (storageError) {
+            console.warn('Unable to persist mapping refresh token', storageError);
+        }
+
+        window.dispatchEvent(new CustomEvent(SHIPPING_MAPPING_REFRESH_EVENT, { detail: payload }));
     };
 
     const resetModal = () => {

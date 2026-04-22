@@ -105,6 +105,8 @@ class ShipmentStatusSyncService
             }
         }
 
+        $this->rememberCarrierRawStatus($accountId, $carrierCode, $carrierRawStatus, $rawPayload);
+
         $mapped = $this->mapper->mapCarrierStatus($carrierCode, $carrierRawStatus, $accountId);
 
         if (!$mapped['shipment_status']) {
@@ -122,20 +124,6 @@ class ShipmentStatusSyncService
                     'mapping_disabled' => true,
                 ];
             }
-
-            CarrierRawStatus::updateOrCreate(
-                [
-                    'account_id' => $accountId,
-                    'carrier_code' => $carrierCode,
-                    'raw_status' => $carrierRawStatus,
-                ],
-                [
-                    'first_seen_at' => now(),
-                    'last_seen_at' => now(),
-                    'is_mapped' => false,
-                    'sample_payload' => $rawPayload,
-                ]
-            );
 
             Log::warning("Unknown carrier status: {$carrierCode}:{$carrierRawStatus}", [
                 'shipment_id' => $shipment->id,
@@ -177,6 +165,73 @@ class ShipmentStatusSyncService
         return $result;
     }
 
+    public function reapplyStoredCarrierStatus(
+        Shipment $shipment,
+        string $source = 'carrier_mapping_reapply',
+        ?int $changedBy = null
+    ): array {
+        $carrierRawStatus = trim((string) ($shipment->carrier_status_raw ?? ''));
+        $carrierCode = $this->mapper->canonicalizeCarrierCode($shipment->carrier_code) ?? trim((string) $shipment->carrier_code);
+        $accountId = $shipment->account_id;
+
+        if ($carrierCode === '' || $carrierRawStatus === '') {
+            return [
+                'success' => false,
+                'message' => 'Van don chua co raw status de doi chieu mapping.',
+                'shipment' => $shipment,
+                'order_synced' => false,
+            ];
+        }
+
+        $samplePayload = is_array($shipment->raw_tracking_payload) ? $shipment->raw_tracking_payload : null;
+        $this->rememberCarrierRawStatus($accountId, $carrierCode, $carrierRawStatus, $samplePayload);
+
+        $mapped = $this->mapper->mapCarrierStatus($carrierCode, $carrierRawStatus, $accountId);
+
+        if (!$mapped['shipment_status']) {
+            return [
+                'success' => false,
+                'message' => !empty($mapped['blocked_by_disabled_mapping'])
+                    ? 'Mapping hien tai dang bi tat nen khong tu dong dong bo lai.'
+                    : 'Khong tim thay mapping hop le cho raw status hien tai.',
+                'shipment' => $shipment,
+                'order_synced' => false,
+                'mapping_disabled' => (bool) ($mapped['blocked_by_disabled_mapping'] ?? false),
+            ];
+        }
+
+        if ($shipment->carrier_code !== $carrierCode) {
+            $shipment->carrier_code = $carrierCode;
+        }
+
+        $shipment->carrier_status_mapped = $mapped['shipment_status'];
+        $shipment->carrier_status_code = $carrierRawStatus;
+        $shipment->carrier_status_text = $this->describeCarrierStatus($carrierRawStatus, $mapped['shipment_status']);
+
+        if ($shipment->isDirty(['carrier_code', 'carrier_status_mapped', 'carrier_status_code', 'carrier_status_text'])) {
+            $shipment->save();
+        }
+
+        if ((string) $shipment->shipment_status !== (string) $mapped['shipment_status']) {
+            return $this->updateShipmentStatus(
+                $shipment,
+                $mapped['shipment_status'],
+                $source,
+                $changedBy,
+                "Re-apply mapping tu carrier: {$carrierCode} raw='{$carrierRawStatus}'"
+            );
+        }
+
+        $orderSynced = $this->syncOrderFromShipment($shipment, $source, $changedBy);
+
+        return [
+            'success' => true,
+            'message' => 'Da dong bo lai mapping cho van don hien co.',
+            'shipment' => $shipment->fresh(),
+            'order_synced' => $orderSynced,
+        ];
+    }
+
     public function syncOrderFromShipment(
         Shipment $shipment,
         string $source = 'shipment_sync',
@@ -189,7 +244,7 @@ class ShipmentStatusSyncService
             return false;
         }
 
-        $shouldUseRawStatus = $source === 'carrier_sync';
+        $shouldUseRawStatus = $this->isCarrierDrivenSource($source);
         $carrierCode = $this->mapper->canonicalizeCarrierCode($shipment->carrier_code) ?? $shipment->carrier_code;
         $orderSync = $this->mapper->resolveOrderStatusSync(
             $carrierCode,
@@ -258,7 +313,7 @@ class ShipmentStatusSyncService
         $updateData = [
             'shipping_status' => $newShippingStatus,
             'shipping_synced_at' => now(),
-            'shipping_status_source' => $source === 'carrier_sync' ? 'carrier' : 'system',
+            'shipping_status_source' => $this->isCarrierDrivenSource($source) ? 'carrier' : 'system',
             'shipping_carrier_code' => $carrierCode,
             'shipping_carrier_name' => $shipment->carrier_name,
             'shipping_tracking_code' => $shipment->carrier_tracking_code ?: $shipment->tracking_number,
@@ -349,6 +404,47 @@ class ShipmentStatusSyncService
         }
 
         return ['allowed' => true, 'reason' => 'Tất cả vận đơn đã hủy, có thể sửa tay.'];
+    }
+
+    public function rememberCarrierRawStatus(
+        ?int $accountId,
+        ?string $carrierCode,
+        ?string $carrierRawStatus,
+        ?array $samplePayload = null
+    ): void
+    {
+        $normalizedCarrierCode = $this->mapper->canonicalizeCarrierCode($carrierCode) ?? trim((string) $carrierCode);
+        $normalizedRawStatus = trim((string) ($carrierRawStatus ?? ''));
+
+        if ($normalizedCarrierCode === '' || $normalizedRawStatus === '') {
+            return;
+        }
+
+        $mapping = $this->mapper->findExistingMappingForRawStatus($normalizedCarrierCode, $normalizedRawStatus, $accountId);
+        $rawStatusRecord = CarrierRawStatus::query()->firstOrNew([
+            'account_id' => $accountId,
+            'carrier_code' => $normalizedCarrierCode,
+            'raw_status' => $normalizedRawStatus,
+        ]);
+
+        if (!$rawStatusRecord->exists || $rawStatusRecord->first_seen_at === null) {
+            $rawStatusRecord->first_seen_at = now();
+        }
+
+        $rawStatusRecord->last_seen_at = now();
+        $rawStatusRecord->is_mapped = $mapping !== null;
+        $rawStatusRecord->mapping_id = $mapping?->id;
+
+        if ($samplePayload !== null) {
+            $rawStatusRecord->sample_payload = $samplePayload;
+        }
+
+        $rawStatusRecord->save();
+    }
+
+    private function isCarrierDrivenSource(string $source): bool
+    {
+        return in_array($source, ['carrier_sync', 'carrier_mapping_reapply'], true);
     }
 
     private function setShipmentTimestamp(Shipment $shipment, string $status): void

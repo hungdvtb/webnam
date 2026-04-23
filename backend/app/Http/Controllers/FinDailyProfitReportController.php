@@ -12,6 +12,34 @@ use Illuminate\Support\Facades\DB;
 class FinDailyProfitReportController extends Controller
 {
     private const MONTHLY_REPORT_INCLUDED_STATUS = 'completed';
+    private const MONTHLY_REPORT_TAX_RATE = 1.5;
+    private const EXCLUDED_ORDER_STATUSES = ['cancelled', 'canceled'];
+    private const MONTHLY_REPORT_COST_FIELDS = [
+        'cost_actual',
+        'shipping_fee',
+        'damaged_goods',
+        'salary',
+        'packaging_fee',
+        'ads_spend',
+        'tax',
+        'fixed_cost',
+    ];
+    private const MONTHLY_REPORT_ROUNDED_FIELDS = [
+        'revenue',
+        'cost_actual',
+        'shipping_fee',
+        'damaged_goods',
+        'exchange_profit_loss',
+        'partial_delivery_profit_loss',
+        'salary',
+        'packaging_fee',
+        'ads_spend_raw',
+        'ads_spend',
+        'tax',
+        'fixed_cost',
+        'total_profit',
+        'profit_per_house',
+    ];
 
     public function getConfig()
     {
@@ -58,6 +86,17 @@ class FinDailyProfitReportController extends Controller
         ]);
     }
 
+    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate): array
+    {
+        return DailyAdsSpend::query()
+            ->whereBetween('date', [$startDate, $endDate])
+            ->select('date', DB::raw('ROUND(SUM(COALESCE(amount, 0)), 2) as total_amount'))
+            ->groupBy('date')
+            ->pluck('total_amount', 'date')
+            ->map(fn ($amount) => (float) $amount)
+            ->toArray();
+    }
+
     private function buildDailyReportPayload(string $startDate, string $endDate): array
     {
         $config = FinDailyReportConfig::first();
@@ -73,7 +112,7 @@ class FinDailyProfitReportController extends Controller
                 $query->where('order_kind', 'official')
                     ->orWhereNull('order_kind');
             })
-            ->whereNotIn('status', ['cancelled'])
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
             ->select(
                 DB::raw('DATE(officialized_at) as date'),
                 DB::raw('COUNT(*) as order_count'),
@@ -92,10 +131,7 @@ class FinDailyProfitReportController extends Controller
             ->pluck('amount', 'date')
             ->toArray();
 
-        $adsSpends = DailyAdsSpend::query()
-            ->whereBetween('date', [$startDate, $endDate])
-            ->pluck('amount', 'date')
-            ->toArray();
+        $adsSpends = $this->dailyAdsSpendTotalsByDate($startDate, $endDate);
 
         $report = [];
         $period = \Carbon\CarbonPeriod::create($startDate, $endDate);
@@ -121,7 +157,7 @@ class FinDailyProfitReportController extends Controller
             if ($dayData) {
                 $ordersOfDay = Order::query()
                     ->whereDate('officialized_at', $dateStr)
-                    ->whereNotIn('status', ['cancelled'])
+                    ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
                     ->where(function ($query) {
                         $query->where('order_kind', 'official')
                             ->orWhereNull('order_kind');
@@ -158,8 +194,8 @@ class FinDailyProfitReportController extends Controller
             $fixedCostDaily = isset($fixedCosts[$dateStr]) ? (float) $fixedCosts[$dateStr] : 0;
 
             $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
-            $adsSpendRawDaily = isset($adsSpends[$dateStr]) ? (float) $adsSpends[$dateStr] : 0;
-            $adsSpendDaily = $adsSpendRawDaily * (1 + $fbTaxRate / 100);
+            $adsSpendRawDaily = round((float) ($adsSpends[$dateStr] ?? 0), 2);
+            $adsSpendDaily = round($adsSpendRawDaily * (1 + $fbTaxRate / 100), 2);
 
             $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $adsSpendDaily;
             $exchangeProfitLoss = $dayData ? (float) $dayData->exchange_profit_loss : 0;
@@ -225,12 +261,152 @@ class FinDailyProfitReportController extends Controller
             'partial_delivery_profit_loss' => 0,
             'salary' => 0,
             'packaging_fee' => 0,
+            'ads_spend_raw' => 0,
             'ads_spend' => 0,
             'tax' => 0,
             'fixed_cost' => 0,
             'total_profit' => 0,
             'profit_per_house' => 0,
         ];
+    }
+
+    private function monthlyReportOrderTimestamp(Order $order): ?\Carbon\Carbon
+    {
+        $officializedAt = $order->officialized_at;
+
+        if ($officializedAt instanceof \Carbon\Carbon) {
+            return $officializedAt;
+        }
+
+        if ($officializedAt instanceof \DateTimeInterface) {
+            return \Carbon\Carbon::instance($officializedAt);
+        }
+
+        if ($officializedAt) {
+            return \Carbon\Carbon::parse($officializedAt);
+        }
+
+        $createdAt = $order->created_at;
+
+        if ($createdAt instanceof \Carbon\Carbon) {
+            return $createdAt;
+        }
+
+        if ($createdAt instanceof \DateTimeInterface) {
+            return \Carbon\Carbon::instance($createdAt);
+        }
+
+        return $createdAt ? \Carbon\Carbon::parse($createdAt) : null;
+    }
+
+    private function monthlySpecialOrderProfitLoss(string $startDate, string $endDate)
+    {
+        $startAt = $startDate . ' 00:00:00';
+        $endAt = $endDate . ' 23:59:59';
+
+        return Order::query()
+            ->where(function ($query) {
+                $query->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
+            ->where(function ($query) use ($startAt, $endAt) {
+                $query->whereBetween('officialized_at', [$startAt, $endAt])
+                    ->orWhere(function ($fallbackQuery) use ($startAt, $endAt) {
+                        $fallbackQuery->whereNull('officialized_at')
+                            ->whereBetween('created_at', [$startAt, $endAt]);
+                    });
+            })
+            ->whereIn('order_type', [
+                Order::TYPE_EXCHANGE_RETURN,
+                Order::TYPE_PARTIAL_DELIVERY,
+            ])
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
+            ->get([
+                'order_type',
+                'report_profit_total',
+                'officialized_at',
+                'created_at',
+            ])
+            ->groupBy(function (Order $order) {
+                return $this->monthlyReportOrderTimestamp($order)?->format('Y-m');
+            })
+            ->filter(fn ($orders, $monthKey) => !empty($monthKey))
+            ->map(function ($orders) {
+                return [
+                    'exchange_profit_loss' => round((float) $orders
+                        ->where('order_type', Order::TYPE_EXCHANGE_RETURN)
+                        ->sum(fn (Order $order) => (float) ($order->report_profit_total ?? 0)), 2),
+                    'partial_delivery_profit_loss' => round((float) $orders
+                        ->where('order_type', Order::TYPE_PARTIAL_DELIVERY)
+                        ->sum(fn (Order $order) => (float) ($order->report_profit_total ?? 0)), 2),
+                ];
+            });
+    }
+
+    private function calculateMonthlyTotalCosts(array $row): float
+    {
+        return round((float) collect(self::MONTHLY_REPORT_COST_FIELDS)
+            ->sum(fn (string $field) => (float) ($row[$field] ?? 0)), 2);
+    }
+
+    private function calculateMonthlyTotalProfit(array $row): float
+    {
+        $specialProfit = round(
+            (float) ($row['exchange_profit_loss'] ?? 0)
+            + (float) ($row['partial_delivery_profit_loss'] ?? 0),
+            2
+        );
+
+        return round(
+            (float) ($row['revenue'] ?? 0)
+            - $this->calculateMonthlyTotalCosts($row)
+            + $specialProfit,
+            2
+        );
+    }
+
+    private function finalizeMonthlyReportRow(array $row): array
+    {
+        foreach (self::MONTHLY_REPORT_ROUNDED_FIELDS as $field) {
+            if ($field === 'total_profit' || $field === 'profit_per_house') {
+                continue;
+            }
+
+            $row[$field] = round((float) ($row[$field] ?? 0), 2);
+        }
+
+        $row['total_profit'] = $this->calculateMonthlyTotalProfit($row);
+        $row['profit_per_house'] = round((float) $row['total_profit'] / 2, 2);
+
+        return $row;
+    }
+
+    private function buildMonthlySummary($rows): array
+    {
+        $totalRevenue = round((float) $rows->sum('revenue'), 2);
+        $totalOrders = (int) $rows->sum('order_count');
+
+        $summary = [
+            'order_count' => $totalOrders,
+            'revenue' => $totalRevenue,
+            'cost_actual' => round((float) $rows->sum('cost_actual'), 2),
+            'shipping_fee' => round((float) $rows->sum('shipping_fee'), 2),
+            'damaged_goods' => round((float) $rows->sum('damaged_goods'), 2),
+            'exchange_profit_loss' => round((float) $rows->sum('exchange_profit_loss'), 2),
+            'partial_delivery_profit_loss' => round((float) $rows->sum('partial_delivery_profit_loss'), 2),
+            'salary' => round((float) $rows->sum('salary'), 2),
+            'packaging_fee' => round((float) $rows->sum('packaging_fee'), 2),
+            'ads_spend_raw' => round((float) $rows->sum('ads_spend_raw'), 2),
+            'ads_spend' => round((float) $rows->sum('ads_spend'), 2),
+            'tax' => round((float) $rows->sum('tax'), 2),
+            'fixed_cost' => round((float) $rows->sum('fixed_cost'), 2),
+            'total_revenue' => $totalRevenue,
+            'total_tax' => round((float) $rows->sum('tax'), 2),
+            'total_orders' => $totalOrders,
+        ];
+
+        return $this->finalizeMonthlyReportRow($summary);
     }
 
     private function hasMonthlyActivity(array $row): bool
@@ -244,13 +420,14 @@ class FinDailyProfitReportController extends Controller
             || (float) ($row['partial_delivery_profit_loss'] ?? 0) !== 0.0
             || (float) ($row['salary'] ?? 0) !== 0.0
             || (float) ($row['packaging_fee'] ?? 0) !== 0.0
+            || (float) ($row['ads_spend_raw'] ?? 0) !== 0.0
             || (float) ($row['ads_spend'] ?? 0) !== 0.0
             || (float) ($row['tax'] ?? 0) !== 0.0
             || (float) ($row['fixed_cost'] ?? 0) !== 0.0
             || (float) ($row['total_profit'] ?? 0) !== 0.0;
     }
 
-    private function successfulStandardOrdersForMonthlyReport(string $startDate, string $endDate)
+    private function successfulOrdersForMonthlyReport(string $startDate, string $endDate)
     {
         return Order::query()
             ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
@@ -259,7 +436,24 @@ class FinDailyProfitReportController extends Controller
                 $query->where('order_kind', Order::KIND_OFFICIAL)
                     ->orWhereNull('order_kind')
                     ->orWhere('order_kind', '');
-            })
+            });
+    }
+
+    private function shippingOrdersForMonthlyReport(string $startDate, string $endDate)
+    {
+        return Order::query()
+            ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
+            ->where(function ($query) {
+                $query->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            });
+    }
+
+    private function successfulStandardOrdersForMonthlyReport(string $startDate, string $endDate)
+    {
+        return $this->successfulOrdersForMonthlyReport($startDate, $endDate)
             ->where(function ($query) {
                 $query->where('order_type', Order::TYPE_STANDARD)
                     ->orWhereNull('order_type')
@@ -294,16 +488,24 @@ class FinDailyProfitReportController extends Controller
             });
     }
 
-    private function monthlyShippingFeeForAllOrders(string $startDate, string $endDate)
+    private function resolveMonthlyReportShippingFee(Order $order): float
     {
-        return Order::query()
-            ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->whereNotIn('status', ['cancelled', 'canceled'])
-            ->where(function ($query) {
-                $query->where('order_kind', Order::KIND_OFFICIAL)
-                    ->orWhereNull('order_kind')
-                    ->orWhere('order_kind', '');
-            })
+        $storedShippingFee = max(0, round((float) ($order->internal_shipping_fee ?? 0), 2));
+        $activeShipmentFee = max(0, round((float) ($order->activeShipment?->shipping_cost ?? 0), 2));
+        $outsideDeliveryFee = max(0, round((float) data_get($order->external_delivery_meta, 'shipping_cost', 0), 2));
+
+        $resolvedShippingFee = max($storedShippingFee, $activeShipmentFee, $outsideDeliveryFee);
+
+        if ($resolvedShippingFee > 0) {
+            return $resolvedShippingFee;
+        }
+
+        return round((float) ($order->total_price ?? 0) * 0.05, 2);
+    }
+
+    private function monthlyOrderShippingFee(string $startDate, string $endDate)
+    {
+        return $this->shippingOrdersForMonthlyReport($startDate, $endDate)
             ->with(['activeShipment:id,order_id,shipping_cost'])
             ->get([
                 'officialized_at',
@@ -313,22 +515,39 @@ class FinDailyProfitReportController extends Controller
             ])
             ->groupBy(fn (Order $order) => optional($order->officialized_at)?->format('Y-m'))
             ->map(function ($orders) {
-                $shippingFee = round((float) $orders->sum(function (Order $order) {
-                    $storedShippingFee = max(0, round((float) ($order->internal_shipping_fee ?? 0), 2));
-                    $activeShipmentFee = max(0, round((float) ($order->activeShipment?->shipping_cost ?? 0), 2));
-                    $outsideDeliveryFee = max(0, round((float) data_get($order->external_delivery_meta, 'shipping_cost', 0), 2));
+                return [
+                    'shipping_fee' => round((float) $orders->sum(
+                        fn (Order $order) => $this->resolveMonthlyReportShippingFee($order)
+                    ), 2),
+                ];
+            });
+    }
 
-                    $resolvedShippingFee = max($storedShippingFee, $activeShipmentFee, $outsideDeliveryFee);
+    private function monthlySuccessfulOrderRevenueShippingAndTax(string $startDate, string $endDate, float $taxRate)
+    {
+        return $this->successfulOrdersForMonthlyReport($startDate, $endDate)
+            ->with(['activeShipment:id,order_id,shipping_cost'])
+            ->get([
+                'officialized_at',
+                'report_revenue_total',
+                'internal_shipping_fee',
+                'external_delivery_meta',
+                'total_price',
+            ])
+            ->groupBy(fn (Order $order) => optional($order->officialized_at)?->format('Y-m'))
+            ->map(function ($orders) use ($taxRate) {
+                $revenue = round((float) $orders->sum(
+                    fn (Order $order) => (float) ($order->report_revenue_total ?? $order->total_price ?? 0)
+                ), 2);
 
-                    if ($resolvedShippingFee > 0) {
-                        return $resolvedShippingFee;
-                    }
-
-                    return (float) ($order->total_price ?? 0) * 0.05;
-                }), 2);
+                $shippingFee = round((float) $orders->sum(
+                    fn (Order $order) => $this->resolveMonthlyReportShippingFee($order)
+                ), 2);
 
                 return [
+                    'revenue_for_tax' => $revenue,
                     'shipping_fee' => $shippingFee,
+                    'tax' => round(($revenue - $shippingFee) * ($taxRate / 100), 2),
                 ];
             });
     }
@@ -337,6 +556,7 @@ class FinDailyProfitReportController extends Controller
     {
         return InventoryDocument::query()
             ->where('type', 'damaged')
+            ->where('status', 'completed')
             ->whereBetween('document_date', [$startDate, $endDate])
             ->get([
                 'document_date',
@@ -374,6 +594,7 @@ class FinDailyProfitReportController extends Controller
         $payload = $this->buildDailyReportPayload($startDate, $endDate);
         $config = FinDailyReportConfig::query()->first();
         $packagingFeePerOrder = $config ? (float) $config->packaging_fee : 2000.0;
+        $taxRate = self::MONTHLY_REPORT_TAX_RATE;
 
         $monthlyRows = collect($payload['data'])
             ->filter(fn (array $row) => !empty($row['date']))
@@ -382,42 +603,20 @@ class FinDailyProfitReportController extends Controller
                 $monthly = $this->makeMonthlyReportRow($monthKey);
 
                 foreach ($rows as $row) {
-                    $monthly['shipping_fee'] += (float) ($row['shipping_fee'] ?? 0);
-                    $monthly['damaged_goods'] += (float) ($row['damaged_goods'] ?? 0);
-                    $monthly['exchange_profit_loss'] += (float) ($row['exchange_profit_loss'] ?? 0);
-                    $monthly['partial_delivery_profit_loss'] += (float) ($row['partial_delivery_profit_loss'] ?? 0);
                     $monthly['salary'] += (float) ($row['salary'] ?? 0);
+                    $monthly['ads_spend_raw'] += (float) ($row['ads_spend_raw'] ?? 0);
                     $monthly['ads_spend'] += (float) ($row['ads_spend'] ?? 0);
-                    $monthly['tax'] += (float) ($row['tax'] ?? 0);
                     $monthly['fixed_cost'] += (float) ($row['fixed_cost'] ?? 0);
-                    $monthly['total_profit'] += (float) ($row['profit'] ?? 0);
                 }
-
-                foreach ([
-                    'revenue',
-                    'cost_actual',
-                    'shipping_fee',
-                    'damaged_goods',
-                    'exchange_profit_loss',
-                    'partial_delivery_profit_loss',
-                    'salary',
-                    'packaging_fee',
-                    'ads_spend',
-                    'tax',
-                    'fixed_cost',
-                    'total_profit',
-                ] as $field) {
-                    $monthly[$field] = round((float) $monthly[$field], 2);
-                }
-
-                $monthly['profit_per_house'] = round((float) $monthly['total_profit'] / 2, 2);
 
                 return $monthly;
             });
 
         $monthlyRevenueAndCost = $this->monthlyRevenueAndCostActual($startDate, $endDate);
-        $monthlyShippingFee = $this->monthlyShippingFeeForAllOrders($startDate, $endDate);
+        $monthlyShippingFee = $this->monthlyOrderShippingFee($startDate, $endDate);
+        $monthlySuccessfulOrderTotals = $this->monthlySuccessfulOrderRevenueShippingAndTax($startDate, $endDate, $taxRate);
         $monthlyDamagedGoods = $this->monthlyDamagedGoodsFromDamagedSlips($startDate, $endDate);
+        $monthlySpecialOrderProfitLoss = $this->monthlySpecialOrderProfitLoss($startDate, $endDate);
 
         foreach ($monthlyRevenueAndCost as $monthKey => $totals) {
             if (!$monthKey) {
@@ -430,13 +629,32 @@ class FinDailyProfitReportController extends Controller
             $monthlyRows->put($monthKey, $monthly);
         }
 
-        foreach ($monthlyShippingFee as $monthKey => $totals) {
+        $shippingMonthKeys = $monthlyRows->keys()
+            ->merge($monthlyShippingFee->keys())
+            ->unique();
+
+        foreach ($shippingMonthKeys as $monthKey) {
             if (!$monthKey) {
                 continue;
             }
 
             $monthly = $monthlyRows->get($monthKey, $this->makeMonthlyReportRow($monthKey));
-            $monthly['shipping_fee'] = round((float) ($totals['shipping_fee'] ?? 0), 2);
+            $monthly['shipping_fee'] = round((float) ($monthlyShippingFee->get($monthKey)['shipping_fee'] ?? 0), 2);
+            $monthlyRows->put($monthKey, $monthly);
+        }
+
+        $taxMonthKeys = $monthlyRows->keys()
+            ->merge($monthlySuccessfulOrderTotals->keys())
+            ->unique();
+
+        foreach ($taxMonthKeys as $monthKey) {
+            if (!$monthKey) {
+                continue;
+            }
+
+            $monthly = $monthlyRows->get($monthKey, $this->makeMonthlyReportRow($monthKey));
+            $totals = $monthlySuccessfulOrderTotals->get($monthKey, []);
+            $monthly['tax'] = round((float) ($totals['tax'] ?? 0), 2);
             $monthlyRows->put($monthKey, $monthly);
         }
 
@@ -455,9 +673,10 @@ class FinDailyProfitReportController extends Controller
             ->whereBetween('shipping_dispatched_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where(function ($query) {
                 $query->where('order_kind', 'official')
-                    ->orWhereNull('order_kind');
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
             })
-            ->whereNotIn('status', ['cancelled', 'canceled'])
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
             ->get(['id', 'shipping_dispatched_at'])
             ->groupBy(fn (Order $order) => optional($order->shipping_dispatched_at)?->format('Y-m'))
             ->map(fn ($orders) => $orders->count());
@@ -473,21 +692,34 @@ class FinDailyProfitReportController extends Controller
             $monthlyRows->put($monthKey, $monthly);
         }
 
+        $monthlyRows = $monthlyRows->map(function (array $monthly, string $monthKey) use ($monthlySpecialOrderProfitLoss) {
+            $resolvedSpecialProfit = $monthlySpecialOrderProfitLoss->get($monthKey, [
+                'exchange_profit_loss' => 0,
+                'partial_delivery_profit_loss' => 0,
+            ]);
+
+            $monthly['exchange_profit_loss'] = round((float) ($resolvedSpecialProfit['exchange_profit_loss'] ?? 0), 2);
+            $monthly['partial_delivery_profit_loss'] = round((float) ($resolvedSpecialProfit['partial_delivery_profit_loss'] ?? 0), 2);
+
+            return $this->finalizeMonthlyReportRow($monthly);
+        });
+
         $rows = $monthlyRows
             ->filter(fn (array $row) => $this->hasMonthlyActivity($row))
             ->sortKeysDesc()
             ->values();
 
+        $summary = $this->buildMonthlySummary($rows);
+
         return response()->json([
             'status' => 'success',
             'data' => $rows,
-            'summary' => [
-                'total_profit' => round((float) $rows->sum('total_profit'), 2),
-                'total_revenue' => round((float) $rows->sum('revenue'), 2),
-                'total_orders' => (int) $rows->sum('order_count'),
-            ],
+            'summary' => $summary,
             'meta' => [
                 'order_count_basis' => 'shipping_dispatched_at',
+                'special_profit_source' => 'orders.report_profit_total',
+                'special_profit_month_basis' => 'officialized_at_or_created_at_fallback',
+                'total_profit_formula' => 'revenue - cost_actual - shipping_fee - damaged_goods - salary - packaging_fee - ads_spend - tax - fixed_cost + exchange_profit_loss + partial_delivery_profit_loss',
             ],
         ]);
     }

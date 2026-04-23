@@ -64,8 +64,19 @@ function App() {
 
   useEffect(() => {
     const resolveSite = async () => {
+      const configuredSiteCode = String(siteConfig.SITE_CODE || '').trim();
+
+      if (!configuredSiteCode) {
+        siteConfig.accountId = null;
+        siteConfig.accountName = null;
+        localStorage.removeItem('activeAccountId');
+        localStorage.removeItem('activeSiteCode');
+        setSiteReady(true);
+        return;
+      }
+
       try {
-        const res = await accountApi.resolve(siteConfig.SITE_CODE);
+        const res = await accountApi.resolve(configuredSiteCode);
         siteConfig.accountId = res.data.id;
         siteConfig.accountName = res.data.name;
 
@@ -76,7 +87,7 @@ function App() {
             localStorage.setItem('activeAccountId', res.data.id);
         }
 
-        localStorage.setItem('activeSiteCode', siteConfig.SITE_CODE);
+        localStorage.setItem('activeSiteCode', configuredSiteCode);
       } catch (err) {
         console.warn('Could not resolve site_code, using defaults:', err.message);
       } finally {

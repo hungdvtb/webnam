@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { shipmentApi } from '../../services/api';
+import { orderApi, shipmentApi } from '../../services/api';
 
 const fmt = (n) => new Intl.NumberFormat('vi-VN').format(Math.round(n || 0));
 const SHIPPING_MAPPING_REFRESH_EVENT = 'shipping:mapping-refresh';
@@ -35,6 +35,7 @@ const ViettelPostReconcileModal = ({ isOpen, onClose, onRefresh }) => {
         try {
             const response = await shipmentApi.reconcileViettelPost(formData);
             setResult(response.data);
+            orderApi.invalidateAllDetails();
             notifyMappingRefresh();
             if (onRefresh) onRefresh();
         } catch (err) {

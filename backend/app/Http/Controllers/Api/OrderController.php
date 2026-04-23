@@ -121,6 +121,7 @@ class OrderController extends Controller
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
         protected OrderInventorySlipService $orderInventorySlipService,
+        protected ShipmentStatusSyncService $shipmentStatusSyncService,
     ) {
     }
 
@@ -782,7 +783,7 @@ class OrderController extends Controller
         });
 
         $finalTotal = round(
-            $itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0),
+            $itemRevenue - (float) ($order->discount ?? 0),
             2
         );
 
@@ -807,6 +808,7 @@ class OrderController extends Controller
             'status' => $order->status,
             'customer_name' => $order->customer_name,
             'customer_phone' => $order->customer_phone,
+            'notes' => $order->notes,
             'total_price' => (float) $order->total_price,
             'cost_total' => (float) ($order->cost_total ?? 0),
             'shipping_fee' => (float) ($order->shipping_fee ?? 0),
@@ -927,6 +929,28 @@ class OrderController extends Controller
             })
             ->map(fn ($value) => Str::lower(trim((string) $value)))
             ->filter(fn (string $value) => in_array($value, Order::TYPES, true))
+            ->unique()
+            ->values();
+    }
+
+    private function extractRequestedStatusCodes(mixed $statuses): Collection
+    {
+        $rawValues = is_array($statuses)
+            ? $statuses
+            : [$statuses];
+
+        return collect($rawValues)
+            ->flatMap(function ($value) {
+                if (is_array($value)) {
+                    $value = $value['value'] ?? $value['id'] ?? null;
+                } elseif (is_object($value)) {
+                    $value = $value->value ?? $value->id ?? null;
+                }
+
+                return explode(',', (string) $value);
+            })
+            ->map(fn ($value) => Str::lower(trim((string) $value)))
+            ->filter()
             ->unique()
             ->values();
     }
@@ -2034,7 +2058,7 @@ class OrderController extends Controller
     {
         $normalizedOrderType = $this->normalizeOrderType($orderType ?? (string) $order->order_type);
         $finalTotal = round(
-            $itemRevenue + (float) ($order->shipping_fee ?? 0) - (float) ($order->discount ?? 0),
+            $itemRevenue - (float) ($order->discount ?? 0),
             2
         );
 
@@ -2069,6 +2093,11 @@ class OrderController extends Controller
             'report_cost_total' => $reportCostTotal,
             'report_profit_total' => $reportProfitTotal,
         ]))->save();
+    }
+
+    private function syncActiveShipmentFinancials(Order $order): void
+    {
+        $this->shipmentStatusSyncService->syncShipmentFinancialsFromOrder($order);
     }
 
     private function syncOfficialCustomerAndInvoice(Order $order, bool $syncCustomerStats = true): void
@@ -2930,11 +2959,14 @@ class OrderController extends Controller
                 $this->applyInsensitiveLike($q, 'return_tracking_code', $this->containsLike((string) $request->input('return_tracking_code')));
             })
             ->when($request->filled('status'), function ($q) use ($request) {
-                $statuses = is_array($request->input('status'))
-                    ? $request->input('status')
-                    : explode(',', (string) $request->input('status'));
+                $statuses = $this->extractRequestedStatusCodes($request->input('status'));
 
-                $q->whereIn('status', $statuses);
+                if ($statuses->isEmpty()) {
+                    $q->whereRaw('1 = 0');
+                    return;
+                }
+
+                $q->whereIn('status', $statuses->all());
             })
             ->when($request->filled('created_at_from'), function ($q) use ($request) {
                 $this->applyOrderDisplayDateFilter($q, '>=', (string) $request->input('created_at_from'));
@@ -2980,6 +3012,59 @@ class OrderController extends Controller
                     ]);
             });
         }
+    }
+
+    private function emptyOrderListSummary(): array
+    {
+        return [
+            'order_count' => 0,
+            'total_price' => 0.0,
+            'shipping_fee' => 0.0,
+            'goods_total' => 0.0,
+        ];
+    }
+
+    private function resolveOrderListGoodsTotal(Order $order): float
+    {
+        $discount = $this->orderTableHasColumn('discount')
+            ? (float) ($order->discount ?? 0)
+            : 0.0;
+
+        return round((float) ($order->total_price ?? 0) + $discount, 2);
+    }
+
+    private function calculateOrderListSummary($query): array
+    {
+        $summary = $this->emptyOrderListSummary();
+
+        $summaryQuery = clone $query;
+        $summaryQuery->setEagerLoads([]);
+        $summaryQuery->with([
+            'activeShipment:id,order_id,shipping_cost',
+        ]);
+        $summaryQuery->select($this->selectExistingOrderColumns([
+            'id',
+            'total_price',
+            'discount',
+            'internal_shipping_fee',
+            'external_delivery_meta',
+        ]));
+
+        $summaryQuery->chunkById(200, function (Collection $orders) use (&$summary) {
+            foreach ($orders as $order) {
+                $summary['order_count']++;
+                $summary['total_price'] += round((float) ($order->total_price ?? 0), 2);
+                $summary['shipping_fee'] += $this->resolveOrderInternalShippingFee($order);
+                $summary['goods_total'] += $this->resolveOrderListGoodsTotal($order);
+            }
+        }, 'orders.id', 'id');
+
+        return [
+            'order_count' => (int) $summary['order_count'],
+            'total_price' => round((float) $summary['total_price'], 2),
+            'shipping_fee' => round((float) $summary['shipping_fee'], 2),
+            'goods_total' => round((float) $summary['goods_total'], 2),
+        ];
     }
 
     private function repeatPhoneMetaForOrder(array $repeatMetaMap, int $orderId): array
@@ -3445,6 +3530,7 @@ class OrderController extends Controller
         ]);
 
         $this->applyOrderListFilters($query, $request);
+        $summary = $this->calculateOrderListSummary($query);
 
         $sortBy = $request->input('sort_by', 'created_at');
         $sortOrder = $request->input('sort_order', 'desc');
@@ -3481,6 +3567,7 @@ class OrderController extends Controller
 
         $response = $paginator->toArray();
         $response['order_kind_counts'] = $this->loadOrderKindCounts($accountId);
+        $response['summary'] = $summary;
 
         return response()->json($response);
     }
@@ -4250,6 +4337,8 @@ class OrderController extends Controller
         } elseif ($this->shouldManageInventory($requestedKind)) {
             $this->syncOfficialCustomerAndInvoice($order, false);
         }
+
+        $this->syncActiveShipmentFinancials($order);
 
         return $order;
     }

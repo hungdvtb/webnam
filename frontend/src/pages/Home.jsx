@@ -13,10 +13,14 @@ const Home = () => {
 
     useEffect(() => {
         const fetchData = async () => {
+            const siteScopedParams = siteConfig.SITE_CODE
+                ? { site_code: siteConfig.SITE_CODE }
+                : {};
+
             try {
                 const [prodRes, settingsRes] = await Promise.all([
-                    productApi.getAll({ featured: 1, per_page: 8, site_code: siteConfig.SITE_CODE }),
-                    cmsApi.settings.get({ site_code: siteConfig.SITE_CODE })
+                    productApi.getAll({ featured: 1, per_page: 8, ...siteScopedParams }),
+                    cmsApi.settings.get(siteScopedParams)
                 ]);
                 setFeaturedProducts(prodRes.data.data);
                 setSettings(settingsRes.data);

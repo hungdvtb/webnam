@@ -9,6 +9,25 @@ use Illuminate\Support\Facades\Log;
 
 class FacebookAdsSyncService
 {
+    private function normalizeDateKey(mixed $value): ?string
+    {
+        if ($value instanceof \DateTimeInterface) {
+            return $value->format('Y-m-d');
+        }
+
+        $dateString = trim((string) $value);
+
+        if ($dateString === '') {
+            return null;
+        }
+
+        try {
+            return \Carbon\Carbon::parse($dateString)->format('Y-m-d');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public function syncRange(string $startDate, string $endDate)
     {
         $config = FinDailyReportConfig::first();
@@ -44,13 +63,20 @@ class FacebookAdsSyncService
             $allDates[] = $date->format('Y-m-d');
         }
 
-        // Get existing dates from DB
-        $existingDates = DailyAdsSpend::whereIn('date', $allDates)->pluck('date')->toArray();
+        $existingSpendByDate = DailyAdsSpend::query()
+            ->whereIn('date', $allDates)
+            ->pluck('amount', 'date')
+            ->mapWithKeys(function ($amount, $date) {
+                $normalizedDate = $this->normalizeDateKey($date);
+
+                return $normalizedDate ? [$normalizedDate => (float) $amount] : [];
+            })
+            ->toArray();
 
         $datesToFetch = [];
         foreach ($allDates as $d) {
             // Fetch if not exists in DB OR if it's today
-            if (!in_array($d, $existingDates) || $d === $today) {
+            if (!array_key_exists($d, $existingSpendByDate) || $d === $today) {
                 $datesToFetch[] = $d;
             }
         }
@@ -68,6 +94,9 @@ class FacebookAdsSyncService
         foreach ($datesToFetch as $d) {
             $dailyTotals[$d] = 0;
         }
+
+        $successfulRequestCount = 0;
+        $returnedDates = [];
 
         foreach ($tokenConfigs as $tokenGroup) {
             $token = trim($tokenGroup['token'] ?? '');
@@ -93,11 +122,13 @@ class FacebookAdsSyncService
                     ]);
 
                     if ($response->successful()) {
+                        $successfulRequestCount++;
                         $data = $response->json('data');
                         if (!empty($data)) {
                             foreach ($data as $dayData) {
                                 $dateStr = $dayData['date_start'] ?? null;
                                 if ($dateStr && isset($dailyTotals[$dateStr])) {
+                                    $returnedDates[$dateStr] = true;
                                     $dailyTotals[$dateStr] += floatval($dayData['spend'] ?? 0);
                                 }
                             }
@@ -111,8 +142,21 @@ class FacebookAdsSyncService
             }
         }
 
+        if ($successfulRequestCount === 0) {
+            Log::warning('Facebook Ads Sync: No successful responses received; existing spend data was left unchanged.');
+
+            return false;
+        }
+
         // Save fetched data to DB
         foreach ($dailyTotals as $date => $totalSpend) {
+            $hasExistingRow = array_key_exists($date, $existingSpendByDate);
+            $dateWasReturned = array_key_exists($date, $returnedDates);
+
+            if (!$dateWasReturned && $hasExistingRow) {
+                continue;
+            }
+
             DailyAdsSpend::updateOrCreate(
                 ['date' => $date],
                 ['amount' => $totalSpend]

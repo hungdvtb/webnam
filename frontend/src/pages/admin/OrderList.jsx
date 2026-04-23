@@ -730,6 +730,82 @@ const normalizeStoredOrderPagination = (value) => ({
     per_page: Math.max(1, Number.parseInt(value?.per_page, 10) || 20),
 });
 
+const createEmptyOrderListSummary = () => ({
+    order_count: 0,
+    total_price: 0,
+    shipping_fee: 0,
+    goods_total: 0,
+});
+
+const normalizeOrderListSummary = (value, fallbackCount = 0) => {
+    const parsedCount = Number.parseInt(value?.order_count, 10);
+    const parsedFallbackCount = Number.parseInt(fallbackCount, 10);
+    const parsedTotalPrice = Number(value?.total_price);
+    const parsedShippingFee = Number(value?.shipping_fee);
+    const parsedGoodsTotal = Number(value?.goods_total);
+
+    return {
+        order_count: Math.max(0, Number.isFinite(parsedCount) ? parsedCount : (Number.isFinite(parsedFallbackCount) ? parsedFallbackCount : 0)),
+        total_price: Number.isFinite(parsedTotalPrice) ? parsedTotalPrice : 0,
+        shipping_fee: Number.isFinite(parsedShippingFee) ? parsedShippingFee : 0,
+        goods_total: Number.isFinite(parsedGoodsTotal) ? parsedGoodsTotal : 0,
+    };
+};
+
+const buildOrderStatusFilterSelections = (value, statusMap) => (
+    normalizeOrderListFilterValues(value).map((statusCode) => ({
+        code: statusCode,
+        name: statusMap.get(String(statusCode))?.name || statusCode,
+    }))
+);
+
+const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
+    const nextFilters = {
+        ...sourceFilters,
+        status: normalizeOrderListFilterValues(sourceFilters?.status),
+        order_type: normalizeOrderTypeFilterValues(sourceFilters?.order_type),
+        order_ids: parseOrderIdList(sourceFilters?.order_ids),
+        attributes: { ...(sourceFilters?.attributes || {}) },
+    };
+
+    if (key === 'attributes') {
+        delete nextFilters.attributes[value?.attrId];
+        return nextFilters;
+    }
+
+    if (key === 'status') {
+        nextFilters.status = value == null
+            ? []
+            : nextFilters.status.filter((statusCode) => String(statusCode) !== String(value));
+        return nextFilters;
+    }
+
+    if (key === 'order_type') {
+        nextFilters.order_type = [];
+        return nextFilters;
+    }
+
+    if (key === 'date') {
+        nextFilters.created_at_from = '';
+        nextFilters.created_at_to = '';
+        return nextFilters;
+    }
+
+    if (key === 'shipping_date') {
+        nextFilters.shipping_dispatched_from = '';
+        nextFilters.shipping_dispatched_to = '';
+        return nextFilters;
+    }
+
+    if (key === 'order_ids') {
+        nextFilters.order_ids = [];
+        return nextFilters;
+    }
+
+    nextFilters[key] = '';
+    return nextFilters;
+};
+
 const readPersistedOrderListState = ({ expectedView = 'main', fallbackSearch = '', orderIds = [] } = {}) => {
     const fallbackState = {
         filters: createDefaultOrderFilters(fallbackSearch, orderIds),
@@ -1018,7 +1094,7 @@ const buildOrderListRequestParams = ({
         params.search_terms = searchTerms;
     }
     if (effectiveScopedIds.length) params.order_ids = effectiveScopedIds.join(',');
-    if (filters.status?.length) params.status = filters.status.join(',');
+    if (filters.status?.length) params.status = normalizeOrderListFilterValues(filters.status).join(',');
     if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
     if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
     if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
@@ -2196,6 +2272,7 @@ const OrderList = () => {
     const columnSettingsRef = useRef(null);
     const [orderStatuses, setOrderStatuses] = useState([]);
     const [orders, setOrders] = useState([]);
+    const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
     const [allAttributes, setAllAttributes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIdsState] = useState([]);
@@ -2374,6 +2451,14 @@ const OrderList = () => {
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
     );
+    const activeStatusFilters = useMemo(
+        () => buildOrderStatusFilterSelections(filters.status, statusMap),
+        [filters.status, statusMap]
+    );
+    const tempStatusFilters = useMemo(
+        () => buildOrderStatusFilterSelections(tempFilters?.status, statusMap),
+        [tempFilters?.status, statusMap]
+    );
     const activeSearchTerms = useMemo(
         () => buildOrderSearchTerms(filters),
         [filters.search_input, filters.search_terms]
@@ -2391,6 +2476,32 @@ const OrderList = () => {
             values.some((value) => String(value || '').toLowerCase().includes(term))
         ))
     ), [normalizedActiveSearchTerms]);
+    const orderSummaryItems = useMemo(() => ([
+        {
+            key: 'order_count',
+            label: 'Tổng số đơn',
+            value: formatNumber(orderSummary.order_count),
+            className: 'text-primary',
+        },
+        {
+            key: 'total_price',
+            label: 'Tổng tiền đơn hàng',
+            value: formatMoney(orderSummary.total_price),
+            className: 'text-brick',
+        },
+        {
+            key: 'shipping_fee',
+            label: 'Tổng tiền ship',
+            value: formatMoney(orderSummary.shipping_fee),
+            className: 'text-stone-600',
+        },
+        {
+            key: 'goods_total',
+            label: 'Tổng tiền hàng',
+            value: formatMoney(orderSummary.goods_total),
+            className: 'text-sky-700',
+        },
+    ]), [orderSummary.goods_total, orderSummary.order_count, orderSummary.shipping_fee, orderSummary.total_price]);
     const carrierMap = useMemo(
         () => new Map(connectedCarriers.map((carrier) => [String(carrier.carrier_code), carrier])),
         [connectedCarriers]
@@ -2656,6 +2767,7 @@ const OrderList = () => {
 
             if (isReturnWorkbenchView && scopedOrderIds.length === 0) {
                 setOrders([]);
+                setOrderSummary(createEmptyOrderListSummary());
                 setPagination((current) => ({
                     ...current,
                     current_page: 1,
@@ -2680,6 +2792,7 @@ const OrderList = () => {
             const response = await orderApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
             setOrders(response.data.data);
+            setOrderSummary(normalizeOrderListSummary(response.data.summary, response.data.total));
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
             setHasLoadedOrdersOnce(true);
         } catch (error) {
@@ -3148,6 +3261,34 @@ const OrderList = () => {
         setTempFilters(prev => ({ ...prev, [name]: value }));
     };
 
+    const handleTempStatusFilterChange = useCallback((nextStatuses) => {
+        setTempFilters((prev) => (
+            prev
+                ? {
+                    ...prev,
+                    status: normalizeOrderListFilterValues(nextStatuses),
+                }
+                : prev
+        ));
+    }, []);
+
+    const handleTempStatusFilterRemove = useCallback((statusCode) => {
+        setTempFilters((prev) => (
+            prev
+                ? {
+                    ...prev,
+                    status: normalizeOrderListFilterValues(prev.status).filter(
+                        (value) => String(value) !== String(statusCode)
+                    ),
+                }
+                : prev
+        ));
+    }, []);
+
+    const clearTempStatusFilters = useCallback(() => {
+        handleTempStatusFilterChange([]);
+    }, [handleTempStatusFilterChange]);
+
     const handleTempAttributeFilterChange = (attrId, value) => {
         setTempFilters(prev => {
             const current = (prev.attributes?.[attrId] || []);
@@ -3160,6 +3301,7 @@ const OrderList = () => {
     const applyFilters = () => {
         const nextFilters = {
             ...tempFilters,
+            status: normalizeOrderListFilterValues(tempFilters?.status),
             order_type: normalizeOrderTypeFilterValues(tempFilters?.order_type),
             search_terms: filters.search_terms,
             search_input: filters.search_input,
@@ -3171,24 +3313,19 @@ const OrderList = () => {
 
     const removeFilter = (key, value = null) => {
         if (key === 'order_ids') {
-            const nextFilters = { ...filters, order_ids: [] };
+            const nextFilters = removeOrderListFilterValue(filters, key);
             setFilters(nextFilters);
-            setTempFilters((prev) => (prev ? { ...prev, order_ids: [] } : prev));
+            setTempFilters((prev) => (prev ? removeOrderListFilterValue(prev, key) : prev));
             fetchOrders(1, nextFilters);
             clearRouteOrderScopeFromUrl();
             return;
         }
 
         setFilters(prev => {
-            let nf = { ...prev };
-            if (key === 'attributes') { nf.attributes = { ...prev.attributes }; delete nf.attributes[value.attrId]; }
-            else if (key === 'status') { nf.status = []; }
-            else if (key === 'order_type') { nf.order_type = []; }
-            else if (key === 'date') { nf.created_at_from = ''; nf.created_at_to = ''; }
-            else if (key === 'shipping_date') { nf.shipping_dispatched_from = ''; nf.shipping_dispatched_to = ''; }
-            else { nf[key] = ''; }
-            fetchOrders(1, nf);
-            return nf;
+            const nextFilters = removeOrderListFilterValue(prev, key, value);
+            setTempFilters((current) => (current ? removeOrderListFilterValue(current, key, value) : current));
+            fetchOrders(1, nextFilters);
+            return nextFilters;
         });
     };
 
@@ -4074,6 +4211,8 @@ const OrderList = () => {
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
                 .admin-page-container { font-family: 'Roboto', sans-serif; display: flex; flex-direction: column; height: 100%; background-color: #F8FAFC; }
                 .admin-header-title { font-size: 15px !important; font-weight: 800 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
+                .order-status-temp-chip-list > button:last-of-type { display: none; }
+                .order-status-active-filter > button:last-of-type { display: none; }
                 .admin-text-13 { font-size: 13px !important; color: #0F172A !important; }
                 .admin-table-header { font-size: 11px !important; font-weight: 900 !important; color: #1B365D !important; text-transform: uppercase !important; letter-spacing: 0.15em !important; background-color: #F0F4F8 !important; }
                 .sticky-col-0 { position: sticky; left: 0; z-index: 10; background: #FCFEFF; border-right: 2px solid #E2E8F0 !important; }
@@ -4683,11 +4822,69 @@ const OrderList = () => {
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Trạng thái</label>
                             <div className="relative">
+                                <div className="hidden">
                                 <select name="status" className="w-full h-10 bg-white border border-primary/20 rounded-sm px-3 pr-8 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer appearance-none" value={tempFilters.status[0] || ''} onChange={(e) => setTempFilters({ ...tempFilters, status: e.target.value ? [e.target.value] : [] })}>
                                     <option value="">Tất cả</option>
                                     {orderStatuses.map(s => <option key={s.id} value={s.code}>{s.name}</option>)}
                                 </select>
+                                </div>
+                                <AdminMultiSelect
+                                    className="w-full"
+                                    compact
+                                    portal
+                                    options={orderStatuses}
+                                    value={normalizeOrderListFilterValues(tempFilters.status)}
+                                    onChange={handleTempStatusFilterChange}
+                                    placeholder="Tat ca"
+                                    searchPlaceholder="Tim trang thai..."
+                                    emptyLabel="Khong co trang thai"
+                                    getOptionValue={(option) => option.code}
+                                    getOptionLabel={(option) => option.name}
+                                    getSummaryText={({ placeholder, selectedCount, selectedLabels }) => {
+                                        if (selectedCount === 0) {
+                                            return placeholder;
+                                        }
+
+                                        if (selectedCount === 1) {
+                                            return selectedLabels[0];
+                                        }
+
+                                        return `${selectedCount} trang thai da chon`;
+                                    }}
+                                />
                             </div>
+                            {tempStatusFilters.length > 0 && (
+                                <div className="order-status-temp-chip-list flex flex-wrap items-center gap-1.5">
+                                    {tempStatusFilters.map(({ code, name }) => (
+                                        <button
+                                            key={code}
+                                            type="button"
+                                            onClick={() => handleTempStatusFilterRemove(code)}
+                                            className="inline-flex max-w-full items-center gap-1 rounded-sm border border-primary/15 bg-primary/[0.04] px-2 py-1 text-[11px] font-bold text-primary transition hover:border-primary/35 hover:bg-primary/[0.08]"
+                                            title={`Bá» tráº¡ng thÃ¡i ${name}`}
+                                        >
+                                            <span className="max-w-[140px] truncate">{name}</span>
+                                            <span className="material-symbols-outlined text-[13px]">close</span>
+                                        </button>
+                                    ))}
+                                    <button
+                                        type="button"
+                                        onClick={clearTempStatusFilters}
+                                        className="inline-flex items-center gap-1 rounded-sm border border-brick/20 bg-brick/5 px-2 py-1 text-[11px] font-black text-brick transition hover:bg-brick/10"
+                                    >
+                                        <span className="material-symbols-outlined text-[13px]">backspace</span>
+                                        <span>Xoa het</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={clearTempStatusFilters}
+                                        className="inline-flex items-center gap-1 rounded-sm border border-brick/20 bg-brick/5 px-2 py-1 text-[11px] font-black text-brick transition hover:bg-brick/10"
+                                    >
+                                        <span className="material-symbols-outlined text-[13px]">backspace</span>
+                                        XÃ³a háº¿t
+                                    </button>
+                                </div>
+                            )}
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Loại đơn</label>
@@ -4893,11 +5090,21 @@ const OrderList = () => {
                                     </button>
                                 </div>
                             )}
-                            {filters.status?.length > 0 && (
-                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            {activeStatusFilters.length > 0 && (
+                                <div className="order-status-active-filter bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                                     <span className="text-[11px] text-primary/40">Trạng thái:</span>
-                                    <span className="text-[13px] font-bold text-[#0F172A]">{filters.status.map((s) => statusMap.get(String(s))?.name || s).join(', ')}</span>
-                                    <button onClick={() => removeFilter('status')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        {activeStatusFilters.map(({ code, name }) => (
+                                            <span key={code} className="inline-flex items-center gap-1 rounded-sm border border-primary/15 bg-primary/[0.04] px-2 py-1">
+                                                <span className="text-[12px] font-bold text-[#0F172A]">{name}</span>
+                                                <button type="button" onClick={() => removeFilter('status', code)} className="text-primary/40 hover:text-brick">
+                                                    <span className="material-symbols-outlined text-[14px]">close</span>
+                                                </button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                    <button type="button" onClick={() => removeFilter('status')} className="text-[11px] font-bold text-brick hover:text-brick/80">Xoa het</button>
+                                    <button type="button" onClick={() => removeFilter('status')} className="text-[11px] font-bold text-brick hover:text-brick/80">XÃ³a háº¿t</button>
                                 </div>
                             )}
                             {filters.customer_name && (
@@ -5616,9 +5823,38 @@ const OrderList = () => {
                 {loading && <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-50"><div className="w-8 h-8 border-4 border-gold/10 border-t-gold rounded-full animate-refresh-spin"></div></div>}
             </div>
 
-            <div className="mt-4 flex-none border-t border-primary/10 pt-4 text-[13px] font-bold text-primary/40 lg:flex lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-4"><span>Hiển thị {orders.length} / {pagination.total}</span><div className="flex items-center gap-2"><span>Số dòng:</span><select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">{[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}</select></div></div>
-                <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
+            <div className="mt-4 flex-none border-t border-primary/10 pt-4">
+                <div className="rounded-[18px] border border-primary/10 bg-white/70 px-3 py-3 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/40">Tổng hợp theo bộ lọc hiện tại</div>
+                            <div className="mt-1 text-[12px] font-bold text-primary/55">Luôn bám đúng danh sách đang lọc trên bảng</div>
+                        </div>
+                        <div className="rounded-full border border-primary/10 bg-primary/[0.03] px-3 py-1 text-[11px] font-black text-primary/55">
+                            {formatNumber(orderSummary.order_count)} đơn
+                        </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
+                        {orderSummaryItems.map((item) => (
+                            <div key={item.key} className="rounded-[14px] border border-primary/10 bg-white px-3 py-2.5">
+                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">{item.label}</div>
+                                <div className={`mt-1 text-[15px] font-black leading-tight ${item.className}`}>{item.value}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="mt-4 flex flex-col gap-3 text-[13px] font-bold text-primary/40 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex flex-wrap items-center gap-4">
+                        <span>Hiển thị {orders.length} / {pagination.total}</span>
+                        <div className="flex items-center gap-2">
+                            <span>Số dòng:</span>
+                            <select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">
+                                {[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                    <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
+                </div>
             </div>
 
             {selectedIds.length > 0 && (

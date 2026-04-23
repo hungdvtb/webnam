@@ -4,8 +4,9 @@ import { authApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { normalizeAdminPermissions } from '../utils/adminPermissions';
 
+const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
+
 const Login = () => {
-    const [credentials, setCredentials] = useState({ email: '', password: '' });
     const [error, setError] = useState(() => (
         typeof window !== 'undefined' && window.sessionStorage.getItem('auth_notice') === 'session-expired'
             ? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'
@@ -14,6 +15,13 @@ const Login = () => {
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const { setUser } = useAuth();
+    const isLoopbackHost = typeof window !== 'undefined' && LOOPBACK_HOST_PATTERN.test(window.location.hostname);
+    const initialEmail = import.meta.env.DEV && isLoopbackHost
+        ? String(import.meta.env.VITE_DEV_DEFAULT_EMAIL || '').trim()
+        : '';
+    const initialPassword = import.meta.env.DEV && isLoopbackHost
+        ? String(import.meta.env.VITE_DEV_DEFAULT_PASSWORD || '')
+        : '';
 
     const resolveLoginError = (err) => {
         if (!err?.response) {
@@ -27,16 +35,18 @@ const Login = () => {
         return err.response?.data?.message || 'Đăng nhập thất bại. Vui lòng thử lại.';
     };
 
-    const handleChange = (e) => {
-        setCredentials({ ...credentials, [e.target.name]: e.target.value });
-    };
-
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
         setError('');
+        const formData = new FormData(e.currentTarget);
+        const submittedCredentials = {
+            email: String(formData.get('email') || '').trim(),
+            password: String(formData.get('password') || ''),
+        };
+
         try {
-            const response = await authApi.login(credentials);
+            const response = await authApi.login(submittedCredentials);
             localStorage.setItem('token', response.data.token);
             localStorage.setItem('user', JSON.stringify(response.data.user));
             setUser(response.data.user);
@@ -91,8 +101,8 @@ const Login = () => {
                         <input
                             type="email"
                             name="email"
-                            value={credentials.email}
-                            onChange={handleChange}
+                            defaultValue={initialEmail}
+                            autoComplete="email"
                             required
                             className="w-full bg-background-light border-gold/30 border-b p-3 focus:outline-none focus:border-primary transition-all font-body text-lg"
                             placeholder="username@example.com"
@@ -103,8 +113,8 @@ const Login = () => {
                         <input
                             type="password"
                             name="password"
-                            value={credentials.password}
-                            onChange={handleChange}
+                            defaultValue={initialPassword}
+                            autoComplete="current-password"
                             required
                             className="w-full bg-background-light border-gold/30 border-b p-3 focus:outline-none focus:border-primary transition-all font-body text-lg"
                             placeholder="********"

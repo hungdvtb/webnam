@@ -3,6 +3,8 @@ import axios from 'axios';
 const DEFAULT_API_BASE_URL = '/api';
 const ADMIN_HOST_PATTERN = /(^|\.)admin\.gomdaithanh\.com$/i;
 const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
+const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
+const ABSOLUTE_HTTP_URL_PATTERN = /^https?:\/\//i;
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
@@ -24,8 +26,34 @@ const RETRYABLE_NETWORK_MESSAGE_FRAGMENTS = [
 ];
 const IDEMPOTENT_HTTP_METHODS = new Set(['get', 'head', 'options']);
 
+const normalizeHostname = (value) => String(value || '').trim().replace(/^\[|\]$/g, '').toLowerCase();
+const isLoopbackHostname = (value) => LOOPBACK_HOST_PATTERN.test(normalizeHostname(value));
+
+const shouldUseSameOriginFallback = (value) => {
+    if (typeof window === 'undefined' || !ABSOLUTE_HTTP_URL_PATTERN.test(value)) {
+        return false;
+    }
+
+    try {
+        const configuredUrl = new URL(value, window.location.origin);
+        const currentHostname = normalizeHostname(window.location.hostname);
+        const isKnownHostedEnv = ADMIN_HOST_PATTERN.test(currentHostname) || API_HOST_PATTERN.test(currentHostname);
+
+        return isLoopbackHostname(configuredUrl.hostname)
+            && (isKnownHostedEnv || !isLoopbackHostname(currentHostname));
+    } catch {
+        return false;
+    }
+};
+
 const resolveApiBaseUrl = (value) => {
-    return trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
+    const resolvedValue = trimTrailingSlash(value || DEFAULT_API_BASE_URL) || DEFAULT_API_BASE_URL;
+
+    if (shouldUseSameOriginFallback(resolvedValue)) {
+        return DEFAULT_API_BASE_URL;
+    }
+
+    return resolvedValue;
 };
 
 const configuredApiBaseUrl = trimTrailingSlash(import.meta.env.VITE_API_BASE_URL);
@@ -35,7 +63,7 @@ export const API_BASE_URL = resolveApiBaseUrl(configuredApiBaseUrl || DEFAULT_AP
 
 const configuredStorageBaseUrl = trimTrailingSlash(import.meta.env.VITE_STORAGE_BASE_URL);
 const resolvedStorageBaseUrl = configuredStorageBaseUrl
-    ? configuredStorageBaseUrl
+    ? resolveApiBaseUrl(configuredStorageBaseUrl)
     : API_BASE_URL.replace(/\/api$/, '');
 
 export const STORAGE_BASE_URL = resolvedStorageBaseUrl.replace(/\/$/, '');
@@ -452,6 +480,9 @@ export const orderApi = {
     invalidateOne: (id) => {
         if (!id) return;
         invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+    },
+    invalidateAllDetails: () => {
+        requestCache.orderDetail.clear();
     },
     getInventorySlips: (id) => api.get(`/orders/${id}/inventory-slips`),
     createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data),

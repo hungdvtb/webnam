@@ -17,7 +17,7 @@ echo.
 echo Dang dung cua so nay neu ban con muon su dung frontend.
 echo.
 
-"%PHP_EXE%" -S 127.0.0.1:8003 -t public vendor\laravel\framework\src\Illuminate\Foundation\resources\server.php
+"%PHP_EXE%" -S 127.0.0.1:8003 -t public public\index.php
 
 echo.
 echo Backend da dung. Nhan phim bat ky de dong cua so.

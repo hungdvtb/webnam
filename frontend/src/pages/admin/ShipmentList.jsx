@@ -334,6 +334,29 @@ const getInitialFilters = () => {
 
 const getStatus = (code, list) => list.find((status) => status.code === code) || { label: code || '-', color: '#9ca3af' };
 const fmtMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(Number(value || 0));
+const formatEditableMoneyInput = (value) => {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    if (!digits) return '';
+    return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(digits));
+};
+const getAnchoredPortalPosition = ({ anchorRect, preferredWidth, estimatedHeight, gap = 8, viewportMargin = 10 }) => {
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(preferredWidth, Math.max(220, viewportWidth - (viewportMargin * 2)));
+
+    let top = anchorRect.bottom + gap;
+    let left = anchorRect.left + (anchorRect.width / 2) - (width / 2);
+    let placement = 'bottom';
+
+    if (viewportHeight - anchorRect.bottom < estimatedHeight + viewportMargin && anchorRect.top > viewportHeight - anchorRect.bottom) {
+        top = anchorRect.top - gap;
+        placement = 'top';
+    }
+
+    left = Math.max(viewportMargin, Math.min(left, viewportWidth - width - viewportMargin));
+
+    return { top, left, width, placement };
+};
 const fmtDateTime = (value) => {
     if (!value) return '-';
     const parsed = new Date(value);
@@ -743,18 +766,8 @@ const StatusDropdownPortal = ({ title, options, currentValue, onSelect, anchorRe
         if (!visible || !anchorRef.current) return undefined;
         const updatePosition = () => {
             const rect = anchorRef.current.getBoundingClientRect();
-            const viewportHeight = window.innerHeight;
-            const dropdownWidth = 280;
-            const estimatedHeight = Math.min(options.length * 48 + 64, viewportHeight * 0.7);
-            let top = rect.bottom + 6;
-            let left = rect.left + (rect.width / 2) - (dropdownWidth / 2);
-            let placement = 'bottom';
-            if (viewportHeight - rect.bottom < estimatedHeight + 10 && rect.top > viewportHeight - rect.bottom) {
-                top = rect.top - 6;
-                placement = 'top';
-            }
-            left = Math.max(10, Math.min(left, window.innerWidth - dropdownWidth - 10));
-            setPosition({ top, left, placement });
+            const estimatedHeight = Math.min(options.length * 48 + 64, window.innerHeight * 0.7);
+            setPosition(getAnchoredPortalPosition({ anchorRect: rect, preferredWidth: 280, estimatedHeight, gap: 6 }));
         };
         updatePosition();
         window.addEventListener('scroll', updatePosition, true);
@@ -766,7 +779,7 @@ const StatusDropdownPortal = ({ title, options, currentValue, onSelect, anchorRe
     }, [visible, anchorRef, options]);
     if (!visible) return null;
     return createPortal(
-        <div ref={statusMenuRef} style={{ position: 'fixed', top: position?.top || 0, left: position?.left || 0, transform: position?.placement === 'top' ? 'translateY(-100%)' : 'none', zIndex: 999999, width: 280, opacity: position ? 1 : 0 }} className={`overflow-hidden rounded-sm border border-primary/10 bg-white py-2 shadow-2xl ${position?.placement === 'top' ? 'origin-bottom' : 'origin-top'}`} onClick={(event) => event.stopPropagation()}>
+        <div ref={statusMenuRef} style={{ position: 'fixed', top: position?.top || 0, left: position?.left || 0, transform: position?.placement === 'top' ? 'translateY(-100%)' : 'none', zIndex: 999999, width: position?.width || 280, opacity: position ? 1 : 0 }} className={`overflow-hidden rounded-sm border border-primary/10 bg-white py-2 shadow-2xl ${position?.placement === 'top' ? 'origin-bottom' : 'origin-top'}`} onClick={(event) => event.stopPropagation()}>
             <div className="mb-1 flex items-center gap-2.5 border-b border-primary/5 px-5 py-2.5 opacity-40">
                 <span className="material-symbols-outlined text-[16px]">swap_vert</span>
                 <p className="text-[10px] font-black uppercase tracking-[0.2em]">{title}</p>
@@ -784,6 +797,141 @@ const StatusDropdownPortal = ({ title, options, currentValue, onSelect, anchorRe
                         {currentValue === option.value && <div className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10"><span className="material-symbols-outlined text-[18px] font-bold text-primary">check</span></div>}
                     </button>
                 ))}
+            </div>
+        </div>,
+        document.body,
+    );
+};
+
+const MoneyEditorPortal = ({
+    title,
+    fieldLabel,
+    value,
+    saving,
+    currentAmount,
+    anchorRef,
+    visible,
+    onChange,
+    onSave,
+    onCancel,
+    editorRef,
+}) => {
+    const [position, setPosition] = useState(null);
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+        if (!visible || !anchorRef.current) return undefined;
+
+        let closedForMissingAnchor = false;
+        let frameId = null;
+
+        const updatePosition = () => {
+            const anchor = anchorRef.current;
+            if (!anchor || !anchor.isConnected) {
+                if (!closedForMissingAnchor) {
+                    closedForMissingAnchor = true;
+                    onCancel();
+                }
+                return;
+            }
+
+            const rect = anchor.getBoundingClientRect();
+            setPosition(getAnchoredPortalPosition({
+                anchorRect: rect,
+                preferredWidth: 320,
+                estimatedHeight: 208,
+                gap: 10,
+                viewportMargin: 12,
+            }));
+        };
+
+        const watchPosition = () => {
+            updatePosition();
+            frameId = window.requestAnimationFrame(watchPosition);
+        };
+
+        updatePosition();
+        window.addEventListener('scroll', updatePosition, true);
+        window.addEventListener('resize', updatePosition);
+        frameId = window.requestAnimationFrame(watchPosition);
+
+        return () => {
+            if (frameId) window.cancelAnimationFrame(frameId);
+            window.removeEventListener('scroll', updatePosition, true);
+            window.removeEventListener('resize', updatePosition);
+        };
+    }, [visible, anchorRef, onCancel]);
+
+    useEffect(() => {
+        if (!visible) return undefined;
+        const focusTimer = window.setTimeout(() => {
+            inputRef.current?.focus();
+            inputRef.current?.select();
+        }, 0);
+        return () => window.clearTimeout(focusTimer);
+    }, [visible]);
+
+    if (!visible) return null;
+
+    return createPortal(
+        <div
+            ref={editorRef}
+            style={{
+                position: 'fixed',
+                top: position?.top || 0,
+                left: position?.left || 0,
+                width: position?.width || 320,
+                transform: position?.placement === 'top' ? 'translateY(-100%)' : 'none',
+                zIndex: 1000000,
+                opacity: position ? 1 : 0,
+            }}
+            className={`overflow-hidden rounded-xl border border-primary/10 bg-white shadow-[0_24px_80px_rgba(15,23,42,0.22)] ${position?.placement === 'top' ? 'origin-bottom' : 'origin-top'}`}
+            onClick={(event) => event.stopPropagation()}
+        >
+            <div className="flex items-center gap-3 border-b border-primary/10 bg-[#fcfcfa] px-4 py-3">
+                <div className="flex size-9 items-center justify-center rounded-full border border-primary/10 bg-primary/[0.05] text-primary">
+                    <span className="material-symbols-outlined text-[18px]">payments</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-black text-primary">{title}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-stone/35">{fieldLabel}</p>
+                </div>
+                <button type="button" onClick={onCancel} className="inline-flex size-8 items-center justify-center rounded-full text-primary/35 transition-all hover:bg-brick/5 hover:text-brick" title="Đóng">
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+            </div>
+            <div className="space-y-3 p-4">
+                <div className="rounded-lg border border-primary/10 bg-primary/[0.03] px-3 py-2.5">
+                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/35">Giá trị hiện tại</p>
+                    <p className="mt-1 text-[15px] font-black tracking-tight text-primary">{currentAmount}</p>
+                </div>
+                <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-bold text-stone/55">Nhập số tiền mới</span>
+                    <input
+                        ref={inputRef}
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        value={formatEditableMoneyInput(value)}
+                        onChange={(event) => onChange(event.target.value.replace(/\D/g, ''))}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') onSave();
+                            if (event.key === 'Escape') onCancel();
+                        }}
+                        className="h-11 w-full rounded-lg border border-primary/15 bg-white px-3 text-[14px] font-black text-primary focus:border-primary focus:outline-none"
+                        placeholder="0"
+                    />
+                </label>
+                <div className="flex items-center gap-2">
+                    <button type="button" onClick={onSave} disabled={saving} className="inline-flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-[13px] font-black text-white transition-all hover:bg-umber disabled:cursor-wait disabled:opacity-60">
+                        <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'check'}</span>
+                        <span>{saving ? 'Đang lưu...' : 'Xác nhận'}</span>
+                    </button>
+                    <button type="button" onClick={onCancel} disabled={saving} className="inline-flex h-11 items-center justify-center rounded-lg border border-primary/15 px-4 text-[13px] font-black text-primary transition-all hover:border-brick/20 hover:bg-brick/5 hover:text-brick disabled:opacity-50">
+                        Hủy
+                    </button>
+                </div>
+                <p className="text-[10px] font-bold text-stone/35">Enter để lưu, Esc để hủy.</p>
             </div>
         </div>,
         document.body,
@@ -988,6 +1136,8 @@ const ShipmentList = () => {
     const searchContainerRef = useRef(null);
     const statusMenuRef = useRef(null);
     const statusMenuAnchorRef = useRef(null);
+    const moneyEditorRef = useRef(null);
+    const moneyEditorAnchorRef = useRef(null);
     const abortRef = useRef(null);
     const copyFeedbackTimeoutRef = useRef(null);
 
@@ -1050,6 +1200,7 @@ const ShipmentList = () => {
     const orderStatusOptions = useMemo(() => orderStatuses.map((status) => ({ value: status.code, label: status.name, color: status.color || '#9ca3af' })), [orderStatuses]);
     const shipmentStatusOptions = useMemo(() => SHIPMENT_STATUSES.map((status) => ({ value: status.code, label: status.label, color: status.color })), []);
     const activeStatusMenuShipment = useMemo(() => statusMenu ? shipments.find((shipment) => String(shipment.id) === String(statusMenu.shipmentId)) || null : null, [shipments, statusMenu]);
+    const activeMoneyEditorShipment = useMemo(() => moneyEditor ? shipments.find((shipment) => String(shipment.id) === String(moneyEditor.shipmentId)) || null : null, [moneyEditor, shipments]);
     const getOrderStatusLabels = useCallback((statusCodes = []) => (
         (Array.isArray(statusCodes) ? statusCodes : [])
             .map((statusCode) => statusMap.get(String(statusCode))?.name || statusCode)
@@ -1079,6 +1230,10 @@ const ShipmentList = () => {
     }, []);
     const closeNotePanel = useCallback(() => {
         setNotePanel(null);
+    }, []);
+    const closeMoneyEditor = useCallback(() => {
+        moneyEditorAnchorRef.current = null;
+        setMoneyEditor(null);
     }, []);
 
     const showToast = useCallback((type, message) => setNotification({ type, message }), []);
@@ -1202,6 +1357,9 @@ const ShipmentList = () => {
     }, [fetchShipments, fetchStats, filters]);
     useEffect(() => { setSelectedIds((previous) => previous.filter((id) => shipments.some((shipment) => shipment.id === id))); }, [shipments]);
     useEffect(() => {
+        if (moneyEditor && !activeMoneyEditorShipment) closeMoneyEditor();
+    }, [activeMoneyEditorShipment, closeMoneyEditor, moneyEditor]);
+    useEffect(() => {
         const queryString = buildShipmentFilterQueryString(filters);
 
         if (hasAnyShipmentFilter(filters)) {
@@ -1231,28 +1389,30 @@ const ShipmentList = () => {
             const clickedFilterToggle = target?.closest?.('[data-filter-btn]');
             const clickedColumnSettingsToggle = target?.closest?.('[data-column-settings-btn]');
             const clickedStatusEditToggle = target?.closest?.('[data-status-edit-btn]');
+            const clickedMoneyEditToggle = target?.closest?.('[data-money-edit-btn]');
             const clickedMultiSelectDropdown = target?.closest?.('[data-admin-multiselect-dropdown]');
 
             if (filterRef.current && !filterRef.current.contains(target) && !clickedFilterToggle && !clickedMultiSelectDropdown) setShowFilters(false);
             if (columnSettingsRef.current && !columnSettingsRef.current.contains(target) && !clickedColumnSettingsToggle) setShowColumnSettings(false);
             if (statusMenuRef.current && !statusMenuRef.current.contains(target) && !clickedStatusEditToggle) setStatusMenu(null);
+            if (moneyEditorRef.current && !moneyEditorRef.current.contains(target) && !clickedMoneyEditToggle) closeMoneyEditor();
             if (searchContainerRef.current && !searchContainerRef.current.contains(target)) setShowSearchHistory(false);
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+    }, [closeMoneyEditor]);
     useEffect(() => {
         const handleEscape = (event) => {
             if (event.key !== 'Escape') return;
             setStatusMenu(null);
-            setMoneyEditor(null);
+            closeMoneyEditor();
             closeDetail();
             closeCustomerInfo();
             closeNotePanel();
         };
         window.addEventListener('keydown', handleEscape);
         return () => window.removeEventListener('keydown', handleEscape);
-    }, [closeCustomerInfo, closeDetail, closeNotePanel]);
+    }, [closeCustomerInfo, closeDetail, closeMoneyEditor, closeNotePanel]);
     useEffect(() => {
         const intervalId = window.setInterval(async () => {
             try {
@@ -1516,6 +1676,7 @@ const ShipmentList = () => {
         setReconcileLoading(true);
         try {
             await shipmentApi.markReconciled(detailShipment.id, { reconciled_amount: parseFloat(reconcileForm.amount), note: reconcileForm.note });
+            orderApi.invalidateOne(detailShipment?.order?.id || detailShipment?.order_id);
             setReconcileForm({ amount: '', note: '' });
             await openDetail(detailShipment.id);
             fetchStats(filters);
@@ -1592,7 +1753,12 @@ const ShipmentList = () => {
         if (!selectedIds.length) return;
         setBulkReconciling(true);
         try {
+            const impactedOrderIds = shipments
+                .filter((shipment) => selectedIds.includes(shipment.id))
+                .map((shipment) => shipment.order?.id || shipment.order_id)
+                .filter(Boolean);
             const response = await shipmentApi.bulkReconcile({ shipment_ids: selectedIds });
+            impactedOrderIds.forEach((orderId) => orderApi.invalidateOne(orderId));
             showToast('success', response.data?.message || `Đã đối soát ${response.data?.success_count || selectedIds.length} vận đơn.`);
             setSelectedIds([]);
             fetchShipments(pagination.current_page || 1, filters);
@@ -1612,6 +1778,15 @@ const ShipmentList = () => {
         setBulkSyncing(true);
         try {
             const response = await shipmentApi.sync(mode === 'selected' ? { shipment_ids: shipmentIds, mode } : { mode });
+            if (mode === 'selected') {
+                const impactedOrderIds = shipments
+                    .filter((shipment) => shipmentIds.includes(shipment.id))
+                    .map((shipment) => shipment.order?.id || shipment.order_id)
+                    .filter(Boolean);
+                impactedOrderIds.forEach((orderId) => orderApi.invalidateOne(orderId));
+            } else {
+                orderApi.invalidateAllDetails();
+            }
             showToast('success', response.data?.message || 'Đã đồng bộ trạng thái vận đơn.');
             fetchShipments(mode === 'selected' ? pagination.current_page || 1 : 1, filters);
             fetchStats(filters);
@@ -1622,7 +1797,13 @@ const ShipmentList = () => {
             setBulkSyncing(false);
         }
     };
-    const openMoneyEditor = (shipment, field) => setMoneyEditor({ shipmentId: shipment.id, field, value: String(Number(shipment[field] || 0)), saving: false });
+    const openMoneyEditor = (shipment, field, anchor) => {
+        moneyEditorAnchorRef.current = anchor;
+        setStatusMenu(null);
+        setMoneyEditor((previous) => previous && String(previous.shipmentId) === String(shipment.id) && previous.field === field
+            ? null
+            : { shipmentId: shipment.id, field, value: String(Number(shipment[field] || 0)), saving: false });
+    };
     const saveMoneyEditor = async () => {
         if (!moneyEditor || moneyEditor.saving) return;
         const parsedValue = parseEditableMoney(moneyEditor.value);
@@ -1633,8 +1814,10 @@ const ShipmentList = () => {
         setMoneyEditor((previous) => ({ ...previous, saving: true }));
         try {
             const response = await shipmentApi.update(moneyEditor.shipmentId, { [moneyEditor.field]: parsedValue });
-            syncShipmentIntoState(response.data || response);
-            setMoneyEditor(null);
+            const updatedShipment = response.data || response;
+            syncShipmentIntoState(updatedShipment);
+            orderApi.invalidateOne(updatedShipment?.order?.id || updatedShipment?.order_id);
+            closeMoneyEditor();
             fetchStats(filters);
             showToast('success', moneyEditor.field === 'cod_amount' ? 'Đã cập nhật COD.' : 'Đã cập nhật phí ship.');
         } catch (error) {
@@ -1648,15 +1831,6 @@ const ShipmentList = () => {
         const formattedValue = fmtMoney(value);
         const copyId = `${shipment.id}-${field}`;
         const copyLabel = field === 'cod_amount' ? 'giá trị COD' : 'phí ship';
-        if (isEditing) {
-            return (
-                <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
-                    <input type="number" min="0" step="1000" autoFocus value={moneyEditor.value} onChange={(event) => setMoneyEditor((previous) => ({ ...previous, value: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') saveMoneyEditor(); if (event.key === 'Escape') setMoneyEditor(null); }} className="h-9 w-28 rounded-sm border border-primary/20 px-2 text-[13px] font-bold text-primary focus:border-primary focus:outline-none" />
-                    <button type="button" onClick={saveMoneyEditor} disabled={moneyEditor.saving} className="flex h-9 w-9 items-center justify-center rounded-sm border border-primary/20 text-primary transition-all hover:bg-primary/5 disabled:opacity-40" title="Lưu"><span className="material-symbols-outlined text-[16px]">{moneyEditor.saving ? 'progress_activity' : 'check'}</span></button>
-                    <button type="button" onClick={() => setMoneyEditor(null)} className="flex h-9 w-9 items-center justify-center rounded-sm border border-primary/10 text-primary/40 transition-all hover:border-brick/20 hover:bg-brick/5 hover:text-brick" title="Hủy"><span className="material-symbols-outlined text-[16px]">close</span></button>
-                </div>
-            );
-        }
         return (
             <div className="group/money flex flex-col items-start">
                 <div className="flex items-center gap-1">
@@ -1664,11 +1838,11 @@ const ShipmentList = () => {
                     <button type="button" onClick={(event) => handleCopy(formattedValue, event, copyId, copyLabel)} className={`inline-flex size-5 items-center justify-center rounded-sm transition-all ${copiedCellId === copyId ? 'text-green-600 opacity-100' : 'text-primary/20 opacity-0 group-hover/money:opacity-100 hover:text-primary'}`} title={`Sao chép ${copyLabel}`}>
                         <span className="material-symbols-outlined text-[13px]">{copiedCellId === copyId ? 'check' : 'content_copy'}</span>
                     </button>
-                    <button type="button" onClick={(event) => { event.stopPropagation(); openMoneyEditor(shipment, field); }} className="inline-flex size-5 items-center justify-center rounded-sm text-primary/30 opacity-0 transition-all hover:bg-primary/5 hover:text-primary group-hover/money:opacity-100" title="Sửa tay">
+                    <button type="button" data-money-edit-btn onClick={(event) => { event.stopPropagation(); openMoneyEditor(shipment, field, event.currentTarget); }} className={`inline-flex size-5 items-center justify-center rounded-sm transition-all ${isEditing ? 'bg-primary/10 text-primary opacity-100' : 'text-primary/30 opacity-0 hover:bg-primary/5 hover:text-primary group-hover/money:opacity-100'}`} title="Sửa tay">
                         <span className="material-symbols-outlined text-[13px] font-normal">edit</span>
                     </button>
                 </div>
-                <span className="text-[9px] font-black uppercase tracking-wider text-stone/25">Sync VTPost</span>
+                <span className={`text-[9px] font-black uppercase tracking-wider ${isEditing ? 'text-primary/45' : 'text-stone/25'}`}>{isEditing ? 'Đang sửa...' : 'Sync VTPost'}</span>
             </div>
         );
     };
@@ -2353,6 +2527,19 @@ const ShipmentList = () => {
                 onClose={closeNotePanel}
                 onDraftChange={(value) => setNotePanel((previous) => previous ? { ...previous, draft: value } : previous)}
                 onSubmit={handleSubmitNotePanel}
+            />
+            <MoneyEditorPortal
+                title={moneyEditor?.field === 'cod_amount' ? 'Cập nhật COD' : 'Cập nhật phí ship'}
+                fieldLabel={moneyEditor?.field === 'cod_amount' ? 'COD' : 'Phí ship'}
+                value={moneyEditor?.value || ''}
+                saving={Boolean(moneyEditor?.saving)}
+                currentAmount={fmtMoney(activeMoneyEditorShipment?.[moneyEditor?.field] || 0)}
+                anchorRef={moneyEditorAnchorRef}
+                visible={Boolean(moneyEditor && activeMoneyEditorShipment)}
+                onChange={(value) => setMoneyEditor((previous) => previous ? { ...previous, value } : previous)}
+                onSave={saveMoneyEditor}
+                onCancel={closeMoneyEditor}
+                editorRef={moneyEditorRef}
             />
             <StatusDropdownPortal title={statusMenu?.type === 'order' ? 'Cập nhật trạng thái đơn hàng' : 'Cập nhật trạng thái vận đơn hệ thống'} options={statusMenu?.type === 'order' ? orderStatusOptions : shipmentStatusOptions} currentValue={statusMenu?.type === 'order' ? activeStatusMenuShipment?.order?.status : activeStatusMenuShipment?.shipment_status} onSelect={(value) => { if (!activeStatusMenuShipment) return; if (statusMenu?.type === 'order') { handleOrderStatusUpdate(activeStatusMenuShipment, value); return; } handleShipmentStatusUpdate(activeStatusMenuShipment.id, value); }} anchorRef={statusMenuAnchorRef} visible={Boolean(statusMenu && activeStatusMenuShipment)} onClose={() => setStatusMenu(null)} statusMenuRef={statusMenuRef} />
             <ViettelPostReconcileModal 

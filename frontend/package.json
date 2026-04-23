@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node ./scripts/dev-with-backend.mjs --host 127.0.0.1 --port 3003",
+    "dev:vite": "vite",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview"

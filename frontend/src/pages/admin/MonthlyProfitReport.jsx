@@ -10,6 +10,45 @@ const formatInputDate = (date) =>
     `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())}`;
 
 const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const MONTHLY_PROFIT_COST_FIELDS = [
+    'cost_actual',
+    'shipping_fee',
+    'damaged_goods',
+    'salary',
+    'packaging_fee',
+    'ads_spend',
+    'tax',
+    'fixed_cost',
+];
+const getNumericValue = (row, field) => Number(row?.[field] || 0);
+const calculateMonthlyTotalProfit = (row) =>
+    roundMoney(
+        getNumericValue(row, 'revenue')
+        - MONTHLY_PROFIT_COST_FIELDS.reduce((sum, field) => sum + getNumericValue(row, field), 0)
+        + getNumericValue(row, 'exchange_profit_loss')
+        + getNumericValue(row, 'partial_delivery_profit_loss')
+    );
+const normalizeMonthlyProfitRow = (row = {}) => {
+    const totalProfit = calculateMonthlyTotalProfit(row);
+
+    return {
+        ...row,
+        total_profit: totalProfit,
+        profit_per_house: roundMoney(totalProfit / 2),
+    };
+};
+const hasAdsSpendBreakdown = (taxedValue, rawValue) =>
+    Math.abs(Number(taxedValue || 0) - Number(rawValue || 0)) > 1;
+const renderAdsSpendBreakdown = (taxedValue, rawValue, rawClassName) => (
+    <div className="flex flex-col items-center">
+        <span>{formatNumber(taxedValue)}</span>
+        {hasAdsSpendBreakdown(taxedValue, rawValue) ? (
+            <span className={`mt-0.5 text-[12px] font-normal ${rawClassName}`}>
+                ({formatNumber(rawValue)})
+            </span>
+        ) : null}
+    </div>
+);
 
 const getReportRange = (year) => {
     const today = new Date();
@@ -59,6 +98,7 @@ const MonthlyProfitReport = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [reportData, setReportData] = useState([]);
+    const [reportSummary, setReportSummary] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
 
     const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
@@ -92,12 +132,15 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: 'Tổng lãi/lỗ giao hàng 1 phần trong tháng.',
         salary: 'Chi phí lương. Hiện chỉ cộng được khi backend trả riêng trường này.',
         packaging_fee: 'Tổng số đơn của tháng x Phí đóng gói/đơn lấy từ phần cấu hình của báo cáo lãi lỗ ngày.',
-        ads_spend: 'Tổng chi phí quảng cáo trong tháng.',
+        ads_spend: 'Tổng QC thực tế trong tháng, cộng trực tiếp từ cột QC FB của từng ngày. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
         tax: 'Tổng thuế tạm tính trong tháng.',
         fixed_cost: 'Tổng chi phí cố định trong tháng.',
-        total_profit: 'Tổng lợi nhuận tháng.',
+        total_profit: 'Lợi nhuận tổng = Doanh thu - Tiền hàng thực tế - Tiền ship hàng - Hàng hỏng - Chi phí lương - Chi phí gói hàng - QC - Thuế - Chi phí cố định + Lãi lỗ đổi trả + Lãi lỗ giao 1 phần.',
         profit_per_house: 'Lợi nhuận tổng chia 2.',
     };
+
+    columnFormulas.shipping_fee = 'Tổng phí ship của tất cả đơn hợp lệ trong tháng, gồm đơn thường, đơn đổi trả và giao hàng 1 phần; ưu tiên phí ship thực tế, nếu chưa có thì lấy 5% x doanh số đơn.';
+    columnFormulas.tax = 'Thuế tháng hiện vẫn tính riêng trên các đơn thành công trong tháng: (Doanh thu các đơn thành công - tiền ship của chính tập đơn thành công đó) x 1.5%.';
 
     useEffect(() => {
         let ignore = false;
@@ -115,9 +158,11 @@ const MonthlyProfitReport = () => {
                 if (ignore) return;
 
                 setReportData(response?.data?.data || []);
+                setReportSummary(response?.data?.summary || null);
             } catch (requestError) {
                 if (!ignore) {
                     setReportData([]);
+                    setReportSummary(null);
                     setError(requestError.response?.data?.message || 'Không thể tải báo cáo lãi lỗ tháng.');
                 }
             } finally {
@@ -134,7 +179,10 @@ const MonthlyProfitReport = () => {
         };
     }, [reloadKey, selectedYear]);
 
-    const totals = reportData.reduce((acc, row) => ({
+    const normalizedReportData = reportData.map((row) => normalizeMonthlyProfitRow(row));
+    const normalizedReportSummary = reportSummary ? normalizeMonthlyProfitRow(reportSummary) : null;
+
+    const totals = normalizedReportData.reduce((acc, row) => ({
         order_count: acc.order_count + Number(row.order_count || 0),
         revenue: acc.revenue + Number(row.revenue || 0),
         cost_actual: acc.cost_actual + Number(row.cost_actual || 0),
@@ -144,6 +192,7 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: acc.partial_delivery_profit_loss + Number(row.partial_delivery_profit_loss || 0),
         salary: acc.salary + Number(row.salary || 0),
         packaging_fee: acc.packaging_fee + Number(row.packaging_fee || 0),
+        ads_spend_raw: acc.ads_spend_raw + Number(row.ads_spend_raw || 0),
         ads_spend: acc.ads_spend + Number(row.ads_spend || 0),
         tax: acc.tax + Number(row.tax || 0),
         fixed_cost: acc.fixed_cost + Number(row.fixed_cost || 0),
@@ -158,18 +207,42 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: 0,
         salary: 0,
         packaging_fee: 0,
+        ads_spend_raw: 0,
         ads_spend: 0,
         tax: 0,
         fixed_cost: 0,
         total_profit: 0,
     });
 
-    const totalRow = {
-        ...totals,
-        profit_per_house: roundMoney(totals.total_profit / 2),
+    const totalValue = (field, fallbackField = field) => {
+        if (normalizedReportSummary && normalizedReportSummary[field] !== undefined && normalizedReportSummary[field] !== null) {
+            return Number(normalizedReportSummary[field] || 0);
+        }
+
+        if (normalizedReportSummary && fallbackField !== field && normalizedReportSummary[fallbackField] !== undefined && normalizedReportSummary[fallbackField] !== null) {
+            return Number(normalizedReportSummary[fallbackField] || 0);
+        }
+
+        return Number(totals[field] || 0);
     };
 
-    const sortedReportData = [...reportData].sort((left, right) => {
+    const totalRow = normalizeMonthlyProfitRow({
+        order_count: totalValue('order_count', 'total_orders'),
+        revenue: roundMoney(totalValue('revenue', 'total_revenue')),
+        cost_actual: roundMoney(totalValue('cost_actual')),
+        shipping_fee: roundMoney(totalValue('shipping_fee')),
+        damaged_goods: roundMoney(totalValue('damaged_goods')),
+        exchange_profit_loss: roundMoney(totalValue('exchange_profit_loss')),
+        partial_delivery_profit_loss: roundMoney(totalValue('partial_delivery_profit_loss')),
+        salary: roundMoney(totalValue('salary')),
+        packaging_fee: roundMoney(totalValue('packaging_fee')),
+        ads_spend_raw: roundMoney(totalValue('ads_spend_raw')),
+        ads_spend: roundMoney(totalValue('ads_spend')),
+        tax: roundMoney(totalValue('tax', 'total_tax')),
+        fixed_cost: roundMoney(totalValue('fixed_cost')),
+    });
+
+    const sortedReportData = [...normalizedReportData].sort((left, right) => {
         const leftKey = String(left.key || '');
         const rightKey = String(right.key || '');
 
@@ -253,7 +326,11 @@ const MonthlyProfitReport = () => {
             case 'packaging_fee':
                 return <td key="packaging_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.packaging_fee)}</td>;
             case 'ads_spend':
-                return <td key="ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.ads_spend)}</td>;
+                return (
+                    <td key="ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderAdsSpendBreakdown(totalRow.ads_spend, totalRow.ads_spend_raw, 'text-white/70')}
+                    </td>
+                );
             case 'tax':
                 return <td key="tax" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.tax)}</td>;
             case 'fixed_cost':
@@ -304,7 +381,13 @@ const MonthlyProfitReport = () => {
             case 'packaging_fee':
                 return <td key="packaging_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.packaging_fee !== 0 ? formatNumber(row.packaging_fee) : '-'}</td>;
             case 'ads_spend':
-                return <td key="ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.ads_spend !== 0 ? formatNumber(row.ads_spend) : '-'}</td>;
+                return (
+                    <td key="ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {Number(row.ads_spend || 0) !== 0
+                            ? renderAdsSpendBreakdown(row.ads_spend, row.ads_spend_raw, 'text-gray-400')
+                            : '-'}
+                    </td>
+                );
             case 'tax':
                 return <td key="tax" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.tax !== 0 ? formatNumber(row.tax) : '-'}</td>;
             case 'fixed_cost':
@@ -403,7 +486,7 @@ const MonthlyProfitReport = () => {
                             </tr>
                         </thead>
                         <tbody className="bg-white">
-                            {!loading && reportData.length === 0 ? (
+                            {!loading && normalizedReportData.length === 0 ? (
                                 <tr>
                                     <td colSpan={defaultCols.length} className="px-4 py-12 text-center text-[13px] text-gray-400">
                                         Không có dữ liệu phát sinh cho năm {selectedYear}.

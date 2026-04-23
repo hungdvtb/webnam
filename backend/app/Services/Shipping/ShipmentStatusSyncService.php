@@ -3,10 +3,12 @@
 namespace App\Services\Shipping;
 
 use App\Models\CarrierRawStatus;
+use App\Models\Invoice;
 use App\Models\Order;
 use App\Models\OrderStatusLog;
 use App\Models\Shipment;
 use App\Models\ShipmentStatusLog;
+use App\Support\OrderCodAdjustmentSystemNote;
 use App\Support\OrderStatusCatalog;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -281,6 +283,8 @@ class ShipmentStatusSyncService
                 && $order->shipping_dispatched_at
                 && $order->shipping_dispatched_at->equalTo($expectedDispatchedAt)
             );
+        $financialUpdateData = $this->buildOrderFinancialSyncPayload($order, $shipment);
+        $financialChanged = $this->hasModelDifferences($order, $financialUpdateData);
 
         if (
             !$statusChanged
@@ -295,6 +299,7 @@ class ShipmentStatusSyncService
                 !Schema::hasColumn('orders', 'internal_shipping_fee')
                 || abs((float) ($order->internal_shipping_fee ?? 0) - $expectedInternalShippingFee) < 0.01
             )
+            && !$financialChanged
         ) {
             return false;
         }
@@ -345,10 +350,41 @@ class ShipmentStatusSyncService
             'canceled' => 'ready',
         ];
         $updateData['shipment_status'] = $legacyShipmentStatusMap[$newShippingStatus] ?? $order->shipment_status;
+        $updateData = array_merge($updateData, $financialUpdateData);
 
         $order->update($updateData);
+        $this->syncInvoiceAmountFromOrder($order, $updateData);
 
         return true;
+    }
+
+    public function syncShipmentFinancialsFromOrder(Order $order): bool
+    {
+        $shipment = $order->relationLoaded('activeShipment')
+            ? $order->activeShipment
+            : $order->activeShipment()->first();
+
+        if (!$shipment) {
+            return $this->syncOrderCodAdjustmentNote($order, null, 0.0, false);
+        }
+
+        $updateData = $this->buildShipmentFinancialSyncPayload($order, $shipment);
+        $shipmentChanged = $this->hasModelDifferences($shipment, $updateData);
+
+        if ($shipmentChanged) {
+            $shipment->update($updateData);
+        }
+
+        $currentSystemAdjustment = $this->resolveCurrentSystemAdjustmentAmount($order);
+        $baseManualDiscount = $this->resolveManualDiscountBase($order, $currentSystemAdjustment);
+        $noteChanged = $this->syncOrderCodAdjustmentNote(
+            $order,
+            $shipment,
+            $currentSystemAdjustment,
+            abs($baseManualDiscount) >= 0.01
+        );
+
+        return $shipmentChanged || $noteChanged;
     }
 
     private function resolveOrderStatusForSpecialOrderType(
@@ -382,6 +418,211 @@ class ShipmentStatusSyncService
         }
 
         return $mappedOrderStatus;
+    }
+
+    private function buildOrderFinancialSyncPayload(Order $order, Shipment $shipment): array
+    {
+        if ((string) $shipment->shipment_status === 'canceled') {
+            return $this->filterPersistableOrderData([
+                'notes' => $this->resolveOrderCodAdjustmentNotes($order, null, 0.0, false),
+            ]);
+        }
+
+        $itemRevenue = $this->resolveOrderItemRevenue($order);
+        $targetTotalPrice = round((float) ($shipment->cod_amount ?? 0), 2);
+        $targetDiscount = round($itemRevenue - $targetTotalPrice, 2);
+        $currentSystemAdjustment = $this->resolveCurrentSystemAdjustmentAmount($order);
+        $baseManualDiscount = $this->resolveManualDiscountBase($order, $currentSystemAdjustment);
+        $systemAdjustment = round($targetDiscount - $baseManualDiscount, 2);
+        $baseCostTotal = round((float) ($order->cost_total ?? 0), 2);
+        $baseProfitTotal = round($targetTotalPrice - $baseCostTotal, 2);
+        $normalizedOrderType = $order->getNormalizedOrderType();
+        $settlementDelta = $normalizedOrderType === Order::TYPE_STANDARD
+            ? 0.0
+            : round((float) ($order->settlement_delta ?? 0), 2);
+        $supplementTotalPrice = $normalizedOrderType === Order::TYPE_STANDARD
+            ? 0.0
+            : round((float) ($order->supplement_items_total_price ?? 0), 2);
+        $supplementCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
+            ? 0.0
+            : round((float) ($order->supplement_items_cost_total ?? 0), 2);
+        $reportRevenueTotal = $normalizedOrderType === Order::TYPE_STANDARD
+            ? $targetTotalPrice
+            : round($targetTotalPrice - $supplementTotalPrice + $settlementDelta, 2);
+        $reportCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
+            ? $baseCostTotal
+            : round($baseCostTotal - $supplementCostTotal, 2);
+        $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
+
+        return $this->filterPersistableOrderData([
+            'total_price' => $targetTotalPrice,
+            'discount' => $targetDiscount,
+            'profit_total' => $baseProfitTotal,
+            'report_revenue_total' => $reportRevenueTotal,
+            'report_cost_total' => $reportCostTotal,
+            'report_profit_total' => $reportProfitTotal,
+            'notes' => $this->resolveOrderCodAdjustmentNotes(
+                $order,
+                $shipment,
+                $systemAdjustment,
+                abs($baseManualDiscount) >= 0.01
+            ),
+        ]);
+    }
+
+    private function buildShipmentFinancialSyncPayload(Order $order, Shipment $shipment): array
+    {
+        if ((string) $shipment->shipment_status === 'canceled') {
+            return [];
+        }
+
+        $targetCodAmount = round((float) ($order->total_price ?? 0), 2);
+        $targetActualReceivedAmount = round(
+            $targetCodAmount
+            - (float) ($shipment->shipping_cost ?? 0)
+            - (float) ($shipment->service_fee ?? 0)
+            - (float) ($shipment->return_fee ?? 0)
+            - (float) ($shipment->other_fee ?? 0),
+            2
+        );
+
+        return $this->filterPersistableShipmentData([
+            'cod_amount' => $targetCodAmount,
+            'actual_received_amount' => $targetActualReceivedAmount,
+        ]);
+    }
+
+    private function resolveOrderItemRevenue(Order $order): float
+    {
+        if (Schema::hasTable('order_items')) {
+            try {
+                return round(
+                    (float) $order->items()
+                        ->selectRaw('COALESCE(SUM(price * quantity), 0) as aggregate')
+                        ->value('aggregate'),
+                    2
+                );
+            } catch (\Throwable $exception) {
+                Log::warning('Cannot resolve order item revenue for shipment financial sync.', [
+                    'order_id' => $order->id,
+                    'message' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return round(
+            (float) ($order->total_price ?? 0)
+            + (float) ($order->discount ?? 0),
+            2
+        );
+    }
+
+    private function syncOrderCodAdjustmentNote(
+        Order $order,
+        ?Shipment $shipment = null,
+        ?float $adjustmentAmount = null,
+        bool $isAdditional = false
+    ): bool {
+        $targetNotes = $this->resolveOrderCodAdjustmentNotes($order, $shipment, $adjustmentAmount, $isAdditional);
+        $currentNotes = $this->normalizeOrderNotes($order->notes);
+
+        if ($currentNotes === $targetNotes) {
+            return false;
+        }
+
+        $order->forceFill([
+            'notes' => $targetNotes,
+        ])->save();
+
+        $order->setAttribute('notes', $targetNotes);
+
+        return true;
+    }
+
+    private function resolveOrderCodAdjustmentNotes(
+        Order $order,
+        ?Shipment $shipment = null,
+        ?float $adjustmentAmount = null,
+        bool $isAdditional = false
+    ): ?string {
+        $resolvedShipment = $shipment;
+
+        if ($resolvedShipment === null) {
+            $resolvedShipment = $order->relationLoaded('activeShipment')
+                ? $order->activeShipment
+                : $order->activeShipment()->first();
+        }
+
+        $effectiveAdjustmentAmount = $resolvedShipment && (string) $resolvedShipment->shipment_status !== 'canceled'
+            ? round((float) ($adjustmentAmount ?? 0), 2)
+            : 0.0;
+
+        return OrderCodAdjustmentSystemNote::sync($order->notes, $effectiveAdjustmentAmount, $isAdditional);
+    }
+
+    private function resolveCurrentSystemAdjustmentAmount(Order $order): float
+    {
+        return round(OrderCodAdjustmentSystemNote::extractAdjustmentAmount($order->notes), 2);
+    }
+
+    private function resolveManualDiscountBase(Order $order, ?float $currentSystemAdjustment = null): float
+    {
+        $resolvedSystemAdjustment = round((float) ($currentSystemAdjustment ?? $this->resolveCurrentSystemAdjustmentAmount($order)), 2);
+
+        return round((float) ($order->discount ?? 0) - $resolvedSystemAdjustment, 2);
+    }
+
+    private function normalizeOrderNotes(?string $notes): ?string
+    {
+        $normalized = str_replace(["\r\n", "\r"], "\n", trim((string) ($notes ?? '')));
+
+        return $normalized === '' ? null : $normalized;
+    }
+
+    private function filterPersistableOrderData(array $data): array
+    {
+        return collect($data)
+            ->filter(fn ($value, $column) => Schema::hasColumn('orders', (string) $column))
+            ->all();
+    }
+
+    private function filterPersistableShipmentData(array $data): array
+    {
+        return collect($data)
+            ->filter(fn ($value, $column) => Schema::hasColumn('shipments', (string) $column))
+            ->all();
+    }
+
+    private function hasModelDifferences(object $model, array $data): bool
+    {
+        foreach ($data as $column => $value) {
+            $currentValue = $model->{$column} ?? null;
+
+            if (is_numeric($value) || is_numeric($currentValue)) {
+                if (abs((float) ($currentValue ?? 0) - (float) $value) >= 0.01) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            if ($currentValue !== $value) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function syncInvoiceAmountFromOrder(Order $order, array $updatedOrderData): void
+    {
+        if (!array_key_exists('total_price', $updatedOrderData) || !Schema::hasTable('invoices')) {
+            return;
+        }
+
+        Invoice::query()
+            ->where('order_id', $order->id)
+            ->update(['amount' => (float) $updatedOrderData['total_price']]);
     }
 
     public function canManuallyEditOrderShipping(Order $order): array

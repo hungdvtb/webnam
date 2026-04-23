@@ -10,10 +10,12 @@ const Hero = () => {
 
     useEffect(() => {
         const fetchBanners = async () => {
+            const siteScopedParams = siteConfig.SITE_CODE
+                ? { site_code: siteConfig.SITE_CODE }
+                : {};
+
             try {
-                const response = await cmsApi.banners.getAll({
-                    site_code: siteConfig.SITE_CODE
-                });
+                const response = await cmsApi.banners.getAll(siteScopedParams);
                 setBanners(response.data);
             } catch (error) {
                 console.error("Error fetching banners", error);

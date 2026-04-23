@@ -1062,6 +1062,41 @@ const parseMoneyNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const parseSignedMoneyInputValue = (value) => {
+    const rawValue = String(value ?? '').replace(/\s+/g, '');
+    if (rawValue === '' || rawValue === '-') {
+        return null;
+    }
+
+    const isNegative = rawValue.startsWith('-');
+    const digits = rawValue.replace(/[^0-9]/g, '');
+    if (!digits) {
+        return null;
+    }
+
+    const numericValue = Number.parseInt(digits, 10);
+    if (!Number.isFinite(numericValue)) {
+        return null;
+    }
+
+    return isNegative ? -numericValue : numericValue;
+};
+const normalizeSignedMoneyInputValue = (value) => {
+    const rawValue = String(value ?? '').replace(/\s+/g, '');
+    if (rawValue === '') {
+        return '';
+    }
+
+    const isNegative = rawValue.startsWith('-');
+    const digits = rawValue.replace(/[^0-9]/g, '');
+    if (!digits) {
+        return isNegative ? '-' : '';
+    }
+
+    const formattedValue = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number.parseInt(digits, 10) || 0);
+    return isNegative ? `-${formattedValue}` : formattedValue;
+};
+const formatSignedMoneyInputValue = (value) => normalizeSignedMoneyInputValue(parseMoneyNumber(value, 0) || 0);
 const parseQuantityNumber = (value, fallback = null) => {
     if (value === null || value === undefined || value === '') {
         return fallback;
@@ -1080,6 +1115,19 @@ const resolveMoneyValue = (...candidates) => {
 
     return 0;
 };
+const resolveDisplayedShippingFee = (source = {}) => {
+    const candidates = [
+        parseMoneyNumber(source?.display_shipping_fee),
+        parseMoneyNumber(source?.internal_shipping_fee),
+        parseMoneyNumber(source?.active_shipment?.shipping_cost),
+        parseMoneyNumber(source?.activeShipment?.shipping_cost),
+        parseMoneyNumber(source?.external_delivery_meta?.shipping_cost),
+    ]
+        .filter((candidate) => candidate !== null)
+        .map((candidate) => Math.max(candidate, 0));
+
+    return candidates.length > 0 ? Math.max(...candidates) : 0;
+};
 const calculateQuoteItemsSubtotal = (items = []) => (
     (Array.isArray(items) ? items : []).reduce((sum, item) => (
         sum
@@ -1087,6 +1135,7 @@ const calculateQuoteItemsSubtotal = (items = []) => (
     ), 0)
 );
 const buildQuotePricingSummary = (formData = {}) => {
+    return buildOrderPricingSummary(formData);
     const subtotal = calculateQuoteItemsSubtotal(formData?.items);
     const shippingFee = parseMoneyNumber(formData?.shipping_fee, 0) || 0;
     const discountAmount = parseMoneyNumber(formData?.discount, 0) || 0;
@@ -1108,6 +1157,39 @@ const buildQuotePricingSummary = (formData = {}) => {
         discountAmount,
         totalPayment,
         hasDiscount,
+        extraRows,
+    };
+};
+const buildOrderPricingSummary = (formData = {}) => {
+    const subtotal = calculateQuoteItemsSubtotal(formData?.items);
+    const shippingFee = resolveDisplayedShippingFee(formData);
+    const discountAmount = parseMoneyNumber(formData?.discount, 0) || 0;
+    const totalPayment = subtotal - discountAmount;
+    const hasAdjustment = discountAmount !== 0;
+    const extraRows = [
+        ...(shippingFee > 0
+            ? [{ key: 'shipping_fee', label: 'Phí vận chuyển', value: shippingFee }]
+            : []),
+        ...(hasAdjustment
+            ? [{
+                key: 'discount',
+                label: 'Chiết khấu/Giảm',
+                value: Math.abs(discountAmount),
+                prefix: discountAmount > 0 ? '-' : '+',
+                isDeduction: discountAmount > 0,
+            }]
+            : []),
+        ...((shippingFee > 0 || hasAdjustment)
+            ? [{ key: 'total_payment', label: 'Tổng thanh toán', value: totalPayment, isEmphasis: true }]
+            : []),
+    ];
+
+    return {
+        subtotal,
+        shippingFee,
+        discountAmount,
+        totalPayment,
+        hasDiscount: hasAdjustment,
         extraRows,
     };
 };
@@ -2179,7 +2261,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
         .join('\n');
     const hasLogo = Boolean(quoteSettings.quote_logo_url);
     const sheetTitle = orderId ? `Báo giá đơn #${orderId}` : 'Báo giá sản phẩm';
-    const resolvedPricingSummary = pricingSummary || buildQuotePricingSummary(formData);
+    const resolvedPricingSummary = pricingSummary || buildOrderPricingSummary(formData);
     const quoteSubtotal = resolvedPricingSummary.subtotal;
     const quoteExtraRows = resolvedPricingSummary.extraRows;
 
@@ -2262,7 +2344,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                 <td className="border border-[#2F1A14] px-4 py-3" colSpan={4}>&nbsp;</td>
                                 <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-right">{row.label}</td>
                                 <td className={`border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right ${row.isDeduction ? 'text-[#8E0B0B]' : 'text-slate-900'}`}>
-                                    {row.isDeduction ? '-' : ''}{formatQuoteMoney(row.value)}
+                                    {row.prefix || ''}{formatQuoteMoney(row.value)}
                                 </td>
                             </tr>
                         ))}
@@ -3115,11 +3197,13 @@ const OrderForm = () => {
         supplement_items: [],
         custom_attributes: {},
         shipping_fee: 0,
+        display_shipping_fee: 0,
         discount: 0,
         cost_total: 0,
         status: 'new',
         province: ''
     });
+    const [discountInputValue, setDiscountInputValue] = useState(() => formatSignedMoneyInputValue(0));
     const activeOrderAiReplaceLine = useMemo(
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
@@ -3144,6 +3228,9 @@ const OrderForm = () => {
 
         setSelectedOrderLineId('');
     }, [selectedOrderLine, selectedOrderLineId]);
+    useEffect(() => {
+        setDiscountInputValue(formatSignedMoneyInputValue(formData.discount));
+    }, [formData.discount]);
     const selectedQuickSetupProductIds = useMemo(
         () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
         [activeProductQuickSetupItems]
@@ -5230,8 +5317,9 @@ const OrderForm = () => {
                 })) || [], */
                 supplement_items: resolvedSupplementItems,
                 custom_attributes: customAttrValues,
-                shipping_fee: order.shipping_fee || 0,
-                discount: order.discount || 0,
+                shipping_fee: isDuplicating ? 0 : (order.shipping_fee || 0),
+                display_shipping_fee: isDuplicating ? 0 : resolveDisplayedShippingFee(order),
+                discount: parseMoneyNumber(order.discount, 0) || 0,
                 cost_total: order.cost_total || 0,
                 status: isDuplicating ? 'new' : (order.status || 'new'),
                 source: order.source || 'Website',
@@ -5335,7 +5423,8 @@ const OrderForm = () => {
                 supplement_items: [],
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
-                discount: Number(draft.discount) || 0,
+                display_shipping_fee: resolveDisplayedShippingFee(draft),
+                discount: parseMoneyNumber(draft.discount, 0) || 0,
                 cost_total: draftCostTotal,
                 status: draft.status || 'new'
             }));
@@ -5448,6 +5537,8 @@ const OrderForm = () => {
                 ...formData,
                 customer_name: trimmedCustomerName,
                 customer_phone: trimmedCustomerPhone,
+                shipping_fee: parseMoneyNumber(formData.shipping_fee, 0) || 0,
+                discount: parseSignedMoneyInputValue(discountInputValue) ?? (parseMoneyNumber(formData.discount, 0) || 0),
                 items: normalizedItems,
                 order_kind: normalizedOrderKind,
                 order_type: normalizedOrderType,
@@ -5534,6 +5625,31 @@ const OrderForm = () => {
             ...prev,
             settlement_delta: Number.isFinite(numericValue) ? numericValue : 0,
         }));
+    };
+    const handleDiscountInputChange = (event) => {
+        const normalizedValue = normalizeSignedMoneyInputValue(event.target.value);
+        setDiscountInputValue(normalizedValue);
+
+        const parsedValue = parseSignedMoneyInputValue(normalizedValue);
+        if (parsedValue === null) {
+            return;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            discount: parsedValue,
+        }));
+    };
+    const handleDiscountInputBlur = () => {
+        const normalizedDiscount = parseSignedMoneyInputValue(discountInputValue);
+        const nextDiscount = normalizedDiscount ?? 0;
+
+        setFormData((prev) => (
+            prev.discount === nextDiscount
+                ? prev
+                : { ...prev, discount: nextDiscount }
+        ));
+        setDiscountInputValue(formatSignedMoneyInputValue(nextDiscount));
     };
 
     const handleShippingAddressChange = (e) => {
@@ -5736,7 +5852,7 @@ const OrderForm = () => {
     const normalizedOrderType = normalizeOrderType(formData.order_type);
     const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
     const specialOrderType = isSpecialOrderType(normalizedOrderType);
-    const quotePricingSummary = buildQuotePricingSummary(formData);
+    const quotePricingSummary = buildOrderPricingSummary(formData);
     const subtotalAmount = quotePricingSummary.subtotal;
     const totalPaymentAmount = quotePricingSummary.totalPayment;
     const costTotalAmount = parseMoneyNumber(formData.cost_total, 0) || 0;
@@ -8402,15 +8518,13 @@ const OrderForm = () => {
 
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/40 text-[12px]">Phí vận chuyển:</span>
-                                    <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
+                                    <div className="flex items-center gap-1 border-b border-blue-600/10 transition-colors">
                                         <input
                                             type="text"
-                                            value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.shipping_fee)}
-                                            onChange={(e) => {
-                                                const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                                setFormData(prev => ({ ...prev, shipping_fee: parseInt(val) || 0 }));
-                                            }}
-                                            className="w-24 text-right bg-transparent py-1 font-bold text-blue-600 text-[15px] focus:outline-none placeholder:text-blue-600/10"
+                                            value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(quotePricingSummary.shippingFee)}
+                                            readOnly
+                                            title="Tự động đồng bộ từ vận đơn hoặc trạng thái gửi hàng."
+                                            className="w-24 text-right bg-transparent py-1 font-bold text-blue-600 text-[15px] focus:outline-none cursor-default placeholder:text-blue-600/10"
                                         />
                                         <span className="font-bold text-blue-600 text-[15px]">₫</span>
                                     </div>
@@ -8421,11 +8535,9 @@ const OrderForm = () => {
                                     <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
                                         <input
                                             type="text"
-                                            value={new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(formData.discount)}
-                                            onChange={(e) => {
-                                                const val = e.target.value.replace(/\./g, '').replace(/[^0-9]/g, '');
-                                                setFormData(prev => ({ ...prev, discount: parseInt(val) || 0 }));
-                                            }}
+                                            value={discountInputValue}
+                                            onChange={handleDiscountInputChange}
+                                            onBlur={handleDiscountInputBlur}
                                             className="w-24 text-right bg-transparent py-1 font-bold text-brick text-[15px] focus:outline-none placeholder:text-blue-600/10"
                                         />
                                         <span className="font-bold text-brick text-[15px]">₫</span>

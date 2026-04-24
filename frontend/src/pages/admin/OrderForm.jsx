@@ -9,6 +9,7 @@ import SearchableSelect from '../../components/SearchableSelect';
 import OrderSupplementItemsSection from '../../components/admin/OrderSupplementItemsSection';
 import OrderAiSearchPanel from '../../components/admin/OrderAiSearchPanel';
 import OrderAiRuleManagerModal from '../../components/admin/OrderAiRuleManagerModal';
+import ProductBulkReplaceModal from '../../components/admin/ProductBulkReplaceModal';
 import {
     ORDER_TYPE_OPTIONS,
     ORDER_TYPE_EXCHANGE_RETURN,
@@ -95,6 +96,7 @@ const defaultQuoteSettings = {
 };
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
+const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
 const SEARCH_ENTRY_PRODUCT = 'product';
@@ -114,11 +116,12 @@ const orderFormAvailableToSellVisibleMigrationStorageKey = 'added_available_to_s
 const ORDER_FORM_AVAILABLE_TO_SELL_TOOLTIP = 'Có thể bán = Tồn kho - SL chờ xuất';
 const ORDER_FORM_COLUMN_WIDTH_MODE_AUTO = 'auto';
 const ORDER_FORM_COLUMN_WIDTH_MODE_MANUAL = 'manual';
-const ORDER_FORM_DEFAULT_COLUMN_IDS = ['stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
+const ORDER_FORM_DEFAULT_COLUMN_IDS = ['selection', 'stt', 'sku', 'name', 'quantity', 'unit', 'available_to_sell', 'price', 'cost_price', 'total', 'actions'];
 const ORDER_FORM_REQUIRED_VISIBLE_COLUMN_IDS = ['available_to_sell'];
 const ORDER_FORM_TABLE_DRAG_COLUMN_WIDTH = 44;
 const ORDER_FORM_DEFAULT_COLUMN_WIDTHS = {
     stt: 48,
+    selection: 44,
     sku: 120,
     name: 280,
     quantity: 68,
@@ -134,6 +137,7 @@ const ORDER_FORM_TABLE_DENSITY_METRICS = {
         defaultWidths: ORDER_FORM_DEFAULT_COLUMN_WIDTHS,
         minWidths: {
             stt: 48,
+            selection: 44,
             sku: 104,
             name: 220,
             quantity: 62,
@@ -160,6 +164,7 @@ const ORDER_FORM_TABLE_DENSITY_METRICS = {
     compact: {
         defaultWidths: {
             stt: 44,
+            selection: 44,
             sku: 112,
             name: 238,
             quantity: 64,
@@ -172,6 +177,7 @@ const ORDER_FORM_TABLE_DENSITY_METRICS = {
         },
         minWidths: {
             stt: 42,
+            selection: 40,
             sku: 92,
             name: 176,
             quantity: 56,
@@ -198,6 +204,7 @@ const ORDER_FORM_TABLE_DENSITY_METRICS = {
     tight: {
         defaultWidths: {
             stt: 40,
+            selection: 40,
             sku: 104,
             name: 210,
             quantity: 58,
@@ -210,6 +217,7 @@ const ORDER_FORM_TABLE_DENSITY_METRICS = {
         },
         minWidths: {
             stt: 38,
+            selection: 36,
             sku: 84,
             name: 148,
             quantity: 50,
@@ -384,10 +392,14 @@ const normalizeStoredOrderFormColumnOrder = (value) => {
     const nextColumnIds = normalizeStoredOrderFormColumnIds(value);
 
     ORDER_FORM_DEFAULT_COLUMN_IDS.forEach((columnId) => {
-        if (!['unit', 'available_to_sell'].includes(columnId) && !nextColumnIds.includes(columnId)) {
+        if (!['selection', 'unit', 'available_to_sell'].includes(columnId) && !nextColumnIds.includes(columnId)) {
             nextColumnIds.push(columnId);
         }
     });
+
+    if (!nextColumnIds.includes('selection')) {
+        nextColumnIds.unshift('selection');
+    }
 
     if (!nextColumnIds.includes('unit')) {
         const targetIndex = nextColumnIds.indexOf('quantity');
@@ -423,6 +435,10 @@ const normalizeStoredOrderFormVisibleColumns = (value) => {
     const normalizedColumnIds = value.length > 0 && nextColumnIds.length === 0
         ? [...ORDER_FORM_DEFAULT_COLUMN_IDS]
         : nextColumnIds;
+
+    if (!normalizedColumnIds.includes('selection')) {
+        normalizedColumnIds.unshift('selection');
+    }
 
     let ensuredColumnIds = [...normalizedColumnIds];
     const hasUnitColumn = ensuredColumnIds.includes('unit');
@@ -737,6 +753,17 @@ const getStoredProductQuickFilterAttributeId = () => {
     } catch (error) {
         console.error('Unable to read product quick filter attribute', error);
         return '';
+    }
+};
+const getStoredProductQuickFilterAttribute2Map = () => {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const raw = window.localStorage.getItem(productQuickFilterAttribute2MapStorageKey);
+        return raw ? JSON.parse(raw) : {};
+    } catch (error) {
+        console.error('Unable to read product quick filter attribute 2 map', error);
+        return {};
     }
 };
 const resolveProductQuickSetupNamespace = () => {
@@ -1602,6 +1629,8 @@ const createOrderLineItem = (payload = {}) => {
         available_to_sell = null,
         options = undefined,
         ai_meta = undefined,
+        category_id = undefined,
+        product_attributes = undefined,
     } = payload || {};
     const normalizedOptions = normalizeOrderLineOptions(options);
     const inventorySnapshot = resolveInventorySnapshot({
@@ -1656,6 +1685,9 @@ const createOrderLineItem = (payload = {}) => {
         available_to_sell: inventorySnapshot.available_to_sell,
         options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
         ai_meta: normalizedAiMeta,
+        category_id: Number(category_id) || undefined,
+        parent_product_id: Number(payload.parent_product_id ?? normalizedOptions?.variant_parent_id) || undefined,
+        product_attributes: product_attributes ? { ...product_attributes } : undefined,
     };
 };
 const hasActualOrderProductOverride = (item) => hasOrderItemActualProductOverride(item);
@@ -1778,6 +1810,8 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 computed_stock: bundleItem?.computed_stock,
                 pending_export_quantity: bundleItem?.pending_export_quantity,
                 available_to_sell: bundleItem?.available_to_sell,
+                category_id: bundleItem?.category_id,
+                product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
                 options: {
                     bundle_parent_id: bundleParentId || undefined,
                     bundle_parent_name: bundleParentName,
@@ -1820,6 +1854,8 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         computed_stock: entry?.computed_stock,
         pending_export_quantity: entry?.pending_export_quantity,
         available_to_sell: entry?.available_to_sell,
+        category_id: entry?.category_id,
+        product_attributes: entry?.attributes_map || entry?.product_attributes,
         options: baseOptions,
     })];
 };
@@ -2122,6 +2158,10 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
         mergedEntries.push(entry);
     };
 
+    fetchedEntries.forEach((entry) => {
+        pushEntry(entry);
+    });
+
     (Array.isArray(selectedItems) ? selectedItems : []).forEach((item) => {
         const entryId = getProductQuickSetupEntryId(item);
         if (entryId <= 0) return;
@@ -2137,10 +2177,6 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
         });
 
         pushEntry(fetchedMap.get(entryId) || fallbackEntry);
-    });
-
-    fetchedEntries.forEach((entry) => {
-        pushEntry(entry);
     });
 
     return mergedEntries;
@@ -2768,6 +2804,13 @@ const OrderForm = () => {
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
     const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
     const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
+    const [productQuickFilterAttributeId2, setProductQuickFilterAttributeId2] = useState(() => {
+        const primaryId = getStoredProductQuickFilterAttributeId();
+        if (!primaryId) return '';
+        const map = getStoredProductQuickFilterAttribute2Map();
+        return map[primaryId] || '';
+    });
+    const [productQuickFilterValues2, setProductQuickFilterValues2] = useState([]);
     const [productQuickSetupStore, setProductQuickSetupStore] = useState(() => getStoredProductQuickSetupStore());
     const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(false);
     const [showProductQuickSetupPanel, setShowProductQuickSetupPanel] = useState(false);
@@ -2775,6 +2818,8 @@ const OrderForm = () => {
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
+    const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
+    const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [orderFormTableViewportWidth, setOrderFormTableViewportWidth] = useState(0);
     const [isCapturing, setIsCapturing] = useState(false);
@@ -2855,17 +2900,36 @@ const OrderForm = () => {
         () => Array.from(new Set(productQuickFilterValues.map(normalizeQuickFilterOptionValue).filter(Boolean))).slice(0, 1),
         [productQuickFilterValues]
     );
+
+    const activeProductQuickFilterAttribute2 = useMemo(
+        () => productQuickFilterAttributes.find((attribute) => String(attribute.id) === String(productQuickFilterAttributeId2)) || null,
+        [productQuickFilterAttributeId2, productQuickFilterAttributes]
+    );
+    const normalizedProductQuickFilterValues2 = useMemo(
+        () => Array.from(new Set(productQuickFilterValues2.map(normalizeQuickFilterOptionValue).filter(Boolean))).slice(0, 1),
+        [productQuickFilterValues2]
+    );
+
     const activeProductQuickFilterSummary = useMemo(() => {
         if (!activeProductQuickFilterAttribute || normalizedProductQuickFilterValues.length === 0) return '';
 
-        return `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
-    }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
+        let summary = `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
+        if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2.length > 0) {
+            summary += ` | ${activeProductQuickFilterAttribute2.name}: ${normalizedProductQuickFilterValues2[0]}`;
+        }
+        return summary;
+    }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
+
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
-    const activeProductQuickSetupKey = useMemo(() => (
-        hasActiveProductQuickFilter
-            ? buildProductQuickSetupKey(activeProductQuickFilterAttribute?.id, normalizedProductQuickFilterValues[0])
-            : ''
-    ), [activeProductQuickFilterAttribute, hasActiveProductQuickFilter, normalizedProductQuickFilterValues]);
+    const activeProductQuickSetupKey = useMemo(() => {
+        if (!hasActiveProductQuickFilter) return '';
+
+        let key = buildProductQuickSetupKey(activeProductQuickFilterAttribute?.id, normalizedProductQuickFilterValues[0]);
+        if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2.length > 0) {
+            key += `|${buildProductQuickSetupKey(activeProductQuickFilterAttribute2?.id, normalizedProductQuickFilterValues2[0])}`;
+        }
+        return key;
+    }, [activeProductQuickFilterAttribute, hasActiveProductQuickFilter, normalizedProductQuickFilterValues, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
     const activeProductQuickSetupItems = useMemo(() => {
         if (!activeProductQuickSetupKey) return [];
 
@@ -3064,6 +3128,7 @@ const OrderForm = () => {
     }, [leadId, navigate, orderKind, returnTo]);
 
     const COLUMN_DEFS = {
+        selection: { label: '', align: 'center' },
         stt: { label: 'STT', align: 'center' },
         sku: { label: 'Mã sản phẩm', align: 'left' },
         name: { label: 'Tên sản phẩm', align: 'left' },
@@ -3266,10 +3331,24 @@ const OrderForm = () => {
         () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
         [activeProductQuickSetupItems]
     );
-    const visibleProductQuickSetupProducts = useMemo(
-        () => mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems),
-        [activeProductQuickSetupItems, productQuickSetupProducts]
-    );
+    const visibleProductQuickSetupProducts = useMemo(() => {
+        let filtered = productQuickSetupProducts;
+
+        if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2[0]) {
+            const attrId2 = String(activeProductQuickFilterAttribute2.id);
+            const attrValue2 = String(normalizedProductQuickFilterValues2[0]);
+
+            filtered = productQuickSetupProducts.filter((product) => {
+                const productAttrs = product.custom_attributes || {};
+                const val = productAttrs[attrId2];
+
+                // Logic: Match if value is exact OR if value is missing (shared item)
+                return !val || String(val) === attrValue2;
+            });
+        }
+
+        return mergeProductQuickSetupEntries(filtered, activeProductQuickSetupItems);
+    }, [activeProductQuickSetupItems, productQuickSetupProducts, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
     const syncOrderFormTableViewportWidth = useCallback(() => {
         const viewportNode = orderFormTableViewportRef.current;
         if (!viewportNode) return;
@@ -3414,6 +3493,16 @@ const OrderForm = () => {
 
         window.localStorage.removeItem(productQuickFilterAttributeStorageKey);
     }, [productQuickFilterAttributeId]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined' || !productQuickFilterAttributeId || !productQuickFilterAttributeId2) return;
+
+        const map = getStoredProductQuickFilterAttribute2Map();
+        if (map[productQuickFilterAttributeId] === productQuickFilterAttributeId2) return;
+
+        const nextMap = { ...map, [productQuickFilterAttributeId]: productQuickFilterAttributeId2 };
+        window.localStorage.setItem(productQuickFilterAttribute2MapStorageKey, JSON.stringify(nextMap));
+    }, [productQuickFilterAttributeId, productQuickFilterAttributeId2]);
 
     useEffect(() => {
         const nextProvinces = sortRegionObjects(VN_REGIONS[regionType] || []);
@@ -4369,6 +4458,64 @@ const OrderForm = () => {
         }
     }, [showModal, showTransientNotification]);
 
+    const toggleLineItemSelection = useCallback((lineId) => {
+        setSelectedLineItemIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(lineId)) {
+                next.delete(lineId);
+            } else {
+                next.add(lineId);
+            }
+            return next;
+        });
+    }, []);
+
+    const toggleAllLineItemSelection = useCallback(() => {
+        setSelectedLineItemIds((prev) => {
+            if (prev.size === formData.items.length) {
+                return new Set();
+            }
+            return new Set(formData.items.map((item) => item.line_id));
+        });
+    }, [formData.items]);
+
+    const handleBulkReplace = useCallback(() => {
+        if (selectedLineItemIds.size === 0) return;
+        setShowBulkReplaceModal(true);
+    }, [selectedLineItemIds.size]);
+
+    const applyBulkReplacements = useCallback((replacements) => {
+        if (!Array.isArray(replacements) || replacements.length === 0) return;
+
+        setFormData((prev) => {
+            const nextItems = [...prev.items];
+            replacements.forEach(({ lineId, product }) => {
+                const index = nextItems.findIndex((item) => item.line_id === lineId);
+                if (index === -1) return;
+
+                const originalItem = nextItems[index];
+                const addition = buildOrderItemsFromSearchEntry(product)[0];
+                
+                if (addition) {
+                    nextItems[index] = {
+                        ...addition,
+                        line_id: originalItem.line_id,
+                        quantity: originalItem.quantity,
+                        notes: originalItem.notes,
+                        ai_meta: mergeOrderAiItemMeta(originalItem.ai_meta, addition.ai_meta),
+                    };
+                }
+            });
+            return { ...prev, items: nextItems };
+        });
+
+        setSelectedLineItemIds(new Set());
+        showTransientNotification('success', `Đã đổi thành công ${replacements.length} sản phẩm.`);
+    }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
+
+    const isAllLineItemsSelected = formData.items.length > 0 && selectedLineItemIds.size === formData.items.length;
+    const hasAnyLineItemSelected = selectedLineItemIds.size > 0;
+
     const handleApplyOrderAiPreview = useCallback(async () => {
         if (!orderAiPreview || !Array.isArray(orderAiPreview.items) || orderAiPreview.items.length === 0) {
             showTransientNotification('error', 'Chưa có kết quả AI để đưa vào đơn.');
@@ -4755,6 +4902,21 @@ const OrderForm = () => {
     const handleProductQuickFilterAttributeChange = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);
+
+        // Restore secondary attribute for this primary attribute
+        const map = getStoredProductQuickFilterAttribute2Map();
+        setProductQuickFilterAttributeId2(map[nextAttributeId] || '');
+        setProductQuickFilterValues2([]);
+
+        setShowProductQuickFilterPanel(true);
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, []);
+
+    const handleProductQuickFilterAttributeChange2 = useCallback((nextAttributeId) => {
+        setProductQuickFilterAttributeId2(nextAttributeId);
+        setProductQuickFilterValues2([]);
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
@@ -4775,13 +4937,34 @@ const OrderForm = () => {
 
         const nextValues = normalizedProductQuickFilterValues[0] === normalizedValue ? [] : [normalizedValue];
         setProductQuickFilterValues(nextValues);
+
+        // If primary value is cleared, clear secondary as well
+        if (nextValues.length === 0) {
+            setProductQuickFilterValues2([]);
+            setProductQuickFilterAttributeId2('');
+        }
+
+        // If we have secondary filter, we might want to keep the panel open to choose the secondary value
+        setShowProductQuickFilterPanel(nextValues.length === 0 || !normalizedProductQuickFilterValues2[0]);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, [normalizedProductQuickFilterValues, normalizedProductQuickFilterValues2]);
+
+    const toggleProductQuickFilterValue2 = useCallback((value) => {
+        const normalizedValue = normalizeQuickFilterOptionValue(value);
+        if (!normalizedValue) return;
+
+        const nextValues = normalizedProductQuickFilterValues2[0] === normalizedValue ? [] : [normalizedValue];
+        setProductQuickFilterValues2(nextValues);
         setShowProductQuickFilterPanel(nextValues.length === 0);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [normalizedProductQuickFilterValues]);
+    }, [normalizedProductQuickFilterValues2]);
 
     const clearProductQuickFilterValues = useCallback(() => {
         setProductQuickFilterValues([]);
+        setProductQuickFilterValues2([]);
+        setProductQuickFilterAttributeId2('');
         setShowProductQuickFilterPanel(false);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
@@ -5248,6 +5431,9 @@ const OrderForm = () => {
                     item?.product?.cost_price ?? item?.product?.expected_cost ?? item?.cost_price ?? 0
                 ),
                 options: item.options || {},
+                category_id: item.product?.category_id,
+                parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
+                product_attributes: item.product?.attributes_map || item.product?.product_attributes,
             })) || [];
             const resolvedLoadedItems = order.items?.map((item, index) => {
                 const fallbackName = `San pham #${item.product_id}`;
@@ -5294,6 +5480,9 @@ const OrderForm = () => {
                         item?.product?.cost_price ?? item?.product?.expected_cost ?? item?.cost_price ?? 0
                     ),
                     options: item.options || {},
+                    category_id: item.product?.category_id,
+                    parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
+                    product_attributes: item.product?.attributes_map || item.product?.product_attributes,
                 });
             }) || [];
             const mappedSupplementItems = (order.supplement_items || order.supplementItems || []).map((item) => ({
@@ -6714,17 +6903,35 @@ const OrderForm = () => {
                                         <span className="material-symbols-outlined text-[16px]">tune</span>
                                         <span>Lọc nhanh</span>
                                     </div>
-                                    <select
-                                        value={productQuickFilterAttributeId || ''}
-                                        onChange={(event) => handleProductQuickFilterAttributeChange(event.target.value)}
-                                        className="h-9 min-w-0 flex-1 rounded-[12px] border border-primary/15 bg-white px-3 text-[14px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
-                                    >
-                                        {productQuickFilterAttributes.map((attribute) => (
-                                            <option key={attribute.id} value={attribute.id}>
-                                                {attribute.name}
-                                            </option>
-                                        ))}
-                                    </select>
+                                    <div className="flex flex-1 flex-col gap-2">
+                                        <select
+                                            value={productQuickFilterAttributeId || ''}
+                                            onChange={(event) => handleProductQuickFilterAttributeChange(event.target.value)}
+                                            className="h-9 min-w-0 flex-1 rounded-[12px] border border-primary/15 bg-white px-3 text-[14px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                        >
+                                            {productQuickFilterAttributes.map((attribute) => (
+                                                <option key={attribute.id} value={attribute.id}>
+                                                    Lọc 1: {attribute.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {normalizedProductQuickFilterValues[0] && (
+                                            <select
+                                                value={productQuickFilterAttributeId2 || ''}
+                                                onChange={(event) => handleProductQuickFilterAttributeChange2(event.target.value)}
+                                                className="h-9 min-w-0 flex-1 rounded-[12px] border border-primary/15 bg-white px-3 text-[14px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                            >
+                                                <option value="">-- Lọc 2 (Mẫu mã) --</option>
+                                                {productQuickFilterAttributes
+                                                    .filter(attr => String(attr.id) !== String(productQuickFilterAttributeId))
+                                                    .map((attribute) => (
+                                                        <option key={attribute.id} value={attribute.id}>
+                                                            {attribute.name}
+                                                        </option>
+                                                    ))}
+                                            </select>
+                                        )}
+                                    </div>
                                     {hasActiveProductQuickFilter && (
                                         <button
                                             type="button"
@@ -6737,7 +6944,7 @@ const OrderForm = () => {
                                     )}
                                 </div>
 
-                                {activeProductQuickFilterAttribute.options?.length > 0 ? (
+                                {activeProductQuickFilterAttribute.options?.length > 0 && (
                                     <div className="custom-scrollbar mt-2 flex items-center gap-1.5 overflow-x-auto pb-1">
                                         {activeProductQuickFilterAttribute.options.map((option) => {
                                             const isSelected = normalizedProductQuickFilterValues.includes(option.value);
@@ -6755,9 +6962,25 @@ const OrderForm = () => {
                                             );
                                         })}
                                     </div>
-                                ) : (
-                                    <div className="mt-3 text-[14px] italic leading-[1.45] text-primary/35">
-                                        Thuộc tính này chưa có giá trị để lọc nhanh.
+                                )}
+
+                                {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                    <div className="custom-scrollbar mt-1.5 flex items-center gap-1.5 border-t border-primary/5 overflow-x-auto pt-1.5 pb-1">
+                                        {activeProductQuickFilterAttribute2.options.map((option) => {
+                                            const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
+
+                                            return (
+                                                <button
+                                                    key={`${activeProductQuickFilterAttribute2.id}-${option.id || option.value}`}
+                                                    type="button"
+                                                    onClick={() => toggleProductQuickFilterValue2(option.value)}
+                                                    className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[14px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-brick/10 bg-brick/[0.03] text-brick/70 hover:border-brick/25 hover:bg-white'}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">{isSelected ? 'check' : 'add'}</span>
+                                                    <span>{option.value}</span>
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>
@@ -7036,7 +7259,7 @@ const OrderForm = () => {
 
                                         <div className="mt-2 text-[10px] font-semibold text-primary/40">
                                             {activeProductQuickSetupItems.length > 0
-                                                ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này. Các sản phẩm đã chọn sẽ tự ghim lên đầu danh sách để bạn kiểm tra nhanh.`
+                                                ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này.`
                                                 : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                         </div>
 
@@ -7110,54 +7333,95 @@ const OrderForm = () => {
                         {shouldShowProductQuickFilterPanel && !mobile && (
                             <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
                                 <div className="flex flex-col gap-2">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                            Lọc nhanh
-                                        </div>
-                                        <select
-                                            value={productQuickFilterAttributeId || ''}
-                                            onChange={(e) => handleProductQuickFilterAttributeChange(e.target.value)}
-                                            className="h-8 min-w-[180px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
-                                        >
-                                            {productQuickFilterAttributes.map((attribute) => (
-                                                <option key={attribute.id} value={attribute.id}>
-                                                    {attribute.name}
-                                                </option>
-                                            ))}
-                                        </select>
-                                        {hasActiveProductQuickFilter && (
-                                            <button
-                                                type="button"
-                                                onClick={clearProductQuickFilterValues}
-                                                className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
-                                            >
-                                                Xóa lọc
-                                            </button>
-                                        )}
-                                    </div>
-                                    {activeProductQuickFilterAttribute?.options?.length > 0 ? (
-                                        <div className="flex flex-wrap gap-2">
-                                            {activeProductQuickFilterAttribute.options.map((option) => {
-                                                const isSelected = normalizedProductQuickFilterValues.includes(option.value);
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            <div className="flex items-center gap-2">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Lọc 1
+                                                </div>
+                                                <select
+                                                    value={productQuickFilterAttributeId || ''}
+                                                    onChange={(e) => handleProductQuickFilterAttributeChange(e.target.value)}
+                                                    className="h-8 min-w-[140px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                                >
+                                                    {productQuickFilterAttributes.map((attribute) => (
+                                                        <option key={attribute.id} value={attribute.id}>
+                                                            {attribute.name}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
 
-                                                return (
-                                                    <button
-                                                        key={`${activeProductQuickFilterAttribute.id}-${option.id || option.value}`}
-                                                        type="button"
-                                                        onClick={() => toggleProductQuickFilterValue(option.value)}
-                                                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
+                                            {normalizedProductQuickFilterValues[0] && (
+                                                <div className="flex items-center gap-2">
+                                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                        Lọc 2
+                                                    </div>
+                                                    <select
+                                                        value={productQuickFilterAttributeId2 || ''}
+                                                        onChange={(e) => handleProductQuickFilterAttributeChange2(e.target.value)}
+                                                        className="h-8 min-w-[140px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
                                                     >
-                                                        <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
-                                                        <span>{option.value}</span>
-                                                    </button>
-                                                );
-                                            })}
+                                                        <option value="">-- Chọn mẫu mã --</option>
+                                                        {productQuickFilterAttributes
+                                                            .filter(attr => String(attr.id) !== String(productQuickFilterAttributeId))
+                                                            .map((attribute) => (
+                                                                <option key={attribute.id} value={attribute.id}>
+                                                                    {attribute.name}
+                                                                </option>
+                                                            ))}
+                                                    </select>
+                                                </div>
+                                            )}
+
+                                            {hasActiveProductQuickFilter && (
+                                                <button
+                                                    type="button"
+                                                    onClick={clearProductQuickFilterValues}
+                                                    className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
+                                                >
+                                                    Xóa lọc
+                                                </button>
+                                            )}
                                         </div>
-                                    ) : (
-                                        <div className="text-[11px] italic text-primary/30">
-                                            Thuộc tính này chưa có giá trị để lọc nhanh.
-                                        </div>
-                                    )}
+                                        {activeProductQuickFilterAttribute?.options?.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                                {activeProductQuickFilterAttribute.options.map((option) => {
+                                                    const isSelected = normalizedProductQuickFilterValues.includes(option.value);
+
+                                                    return (
+                                                        <button
+                                                            key={`${activeProductQuickFilterAttribute.id}-${option.id || option.value}`}
+                                                            type="button"
+                                                            onClick={() => toggleProductQuickFilterValue(option.value)}
+                                                            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                                            <span>{option.value}</span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+
+                                        {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                            <div className="mt-2 flex flex-wrap gap-2 border-t border-primary/5 pt-2">
+                                                {activeProductQuickFilterAttribute2.options.map((option) => {
+                                                    const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
+
+                                                    return (
+                                                        <button
+                                                            key={`${activeProductQuickFilterAttribute2.id}-${option.id || option.value}`}
+                                                            type="button"
+                                                            onClick={() => toggleProductQuickFilterValue2(option.value)}
+                                                            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-brick/25 hover:bg-brick/5'}`}
+                                                        >
+                                                            <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                                            <span>{option.value}</span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
                                 </div>
                             </div>
                         )}
@@ -7553,7 +7817,7 @@ const OrderForm = () => {
 
                                                                 <div className="mt-2 text-[10px] font-semibold text-primary/40">
                                                                     {activeProductQuickSetupItems.length > 0
-                                                                        ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này. Các sản phẩm đã chọn sẽ tự ghim lên đầu danh sách để bạn kiểm tra nhanh.`
+                                                                        ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này.`
                                                                         : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                                                 </div>
 
@@ -7626,31 +7890,58 @@ const OrderForm = () => {
                                                     <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-3">
                                                         <div className="flex flex-col gap-2">
                                                             <div className="flex flex-wrap items-center gap-2">
-                                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                                    {'Lọc nhanh'}
+                                                                <div className="flex flex-wrap items-center gap-3">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                                            Lọc 1
+                                                                        </div>
+                                                                        <select
+                                                                            value={productQuickFilterAttributeId || ''}
+                                                                            onChange={(e) => handleProductQuickFilterAttributeChange(e.target.value)}
+                                                                            className="h-8 min-w-[140px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                                                        >
+                                                                            {productQuickFilterAttributes.map((attribute) => (
+                                                                                <option key={attribute.id} value={attribute.id}>
+                                                                                    {attribute.name}
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                    </div>
+
+                                                                    {normalizedProductQuickFilterValues[0] && (
+                                                                        <div className="flex items-center gap-2">
+                                                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                                                Lọc 2
+                                                                            </div>
+                                                                            <select
+                                                                                value={productQuickFilterAttributeId2 || ''}
+                                                                                onChange={(e) => handleProductQuickFilterAttributeChange2(e.target.value)}
+                                                                                className="h-8 min-w-[140px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                                                                            >
+                                                                                <option value="">-- Chọn mẫu mã --</option>
+                                                                                {productQuickFilterAttributes
+                                                                                    .filter(attr => String(attr.id) !== String(productQuickFilterAttributeId))
+                                                                                    .map((attribute) => (
+                                                                                        <option key={attribute.id} value={attribute.id}>
+                                                                                            {attribute.name}
+                                                                                        </option>
+                                                                                    ))}
+                                                                            </select>
+                                                                        </div>
+                                                                    )}
+
+                                                                    {hasActiveProductQuickFilter && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={clearProductQuickFilterValues}
+                                                                            className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
+                                                                        >
+                                                                            Xóa lọc
+                                                                        </button>
+                                                                    )}
                                                                 </div>
-                                                                <select
-                                                                    value={productQuickFilterAttributeId || ''}
-                                                                    onChange={(e) => handleProductQuickFilterAttributeChange(e.target.value)}
-                                                                    className="h-8 min-w-[180px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:outline-none focus:border-primary/30"
-                                                                >
-                                                                    {productQuickFilterAttributes.map((attribute) => (
-                                                                        <option key={attribute.id} value={attribute.id}>
-                                                                            {attribute.name}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
-                                                                {hasActiveProductQuickFilter && (
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={clearProductQuickFilterValues}
-                                                                        className="text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 hover:text-brick transition-colors"
-                                                                    >
-                                                                        {'Xóa lọc'}
-                                                                    </button>
-                                                                )}
                                                             </div>
-                                                            {activeProductQuickFilterAttribute?.options?.length > 0 ? (
+                                                            {activeProductQuickFilterAttribute?.options?.length > 0 && (
                                                                 <div className="flex flex-wrap gap-2">
                                                                     {activeProductQuickFilterAttribute.options.map((option) => {
                                                                         const isSelected = normalizedProductQuickFilterValues.includes(option.value);
@@ -7668,9 +7959,25 @@ const OrderForm = () => {
                                                                         );
                                                                     })}
                                                                 </div>
-                                                            ) : (
-                                                                <div className="text-[11px] italic text-primary/30">
-                                                                    {'Thuộc tính này chưa có giá trị để lọc nhanh.'}
+                                                            )}
+
+                                                            {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                                                <div className="mt-2 flex flex-wrap gap-2 border-t border-primary/5 pt-2">
+                                                                    {activeProductQuickFilterAttribute2.options.map((option) => {
+                                                                        const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
+
+                                                                        return (
+                                                                            <button
+                                                                                key={`${activeProductQuickFilterAttribute2.id}-${option.id || option.value}`}
+                                                                                type="button"
+                                                                                onClick={() => toggleProductQuickFilterValue2(option.value)}
+                                                                                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-brick/25 hover:bg-brick/5'}`}
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                                                                <span>{option.value}</span>
+                                                                            </button>
+                                                                        );
+                                                                    })}
                                                                 </div>
                                                             )}
                                                         </div>
@@ -8258,16 +8565,43 @@ const OrderForm = () => {
                                                     >
                                                         <div className={`flex min-w-0 items-center ${getOrderFormHeaderJustifyClass(def.align)}`}>
                                                             {isActionColumn ? (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={handleRemoveAllItems}
-                                                                    onMouseDown={(event) => event.stopPropagation()}
-                                                                    disabled={formData.items.length === 0}
-                                                                    className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
-                                                                    title="Xóa toàn bộ sản phẩm trong đơn"
-                                                                >
-                                                                    <span className="order-form-action-icon material-symbols-outlined">delete_sweep</span>
-                                                                </button>
+                                                                <div className="flex items-center justify-center gap-1">
+                                                                    <AnimatePresence>
+                                                                        {hasAnyLineItemSelected && (
+                                                                            <motion.button
+                                                                                initial={{ opacity: 0, scale: 0.5 }}
+                                                                                animate={{ opacity: 1, scale: 1 }}
+                                                                                exit={{ opacity: 0, scale: 0.5 }}
+                                                                                type="button"
+                                                                                onClick={handleBulkReplace}
+                                                                                onMouseDown={(event) => event.stopPropagation()}
+                                                                                className="order-form-header-action-icon flex items-center justify-center rounded-sm text-sky-600 transition-all hover:bg-sky-50 hover:text-sky-700"
+                                                                                title="Đổi mẫu mã hàng loạt cho các mục đã chọn"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
+                                                                            </motion.button>
+                                                                        )}
+                                                                    </AnimatePresence>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={handleRemoveAllItems}
+                                                                        onMouseDown={(event) => event.stopPropagation()}
+                                                                        disabled={formData.items.length === 0}
+                                                                        className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
+                                                                        title="Xóa toàn bộ sản phẩm trong đơn"
+                                                                    >
+                                                                        <span className="order-form-action-icon material-symbols-outlined">delete_sweep</span>
+                                                                    </button>
+                                                                </div>
+                                                            ) : colId === 'selection' ? (
+                                                                <div className="flex items-center justify-center">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={isAllLineItemsSelected}
+                                                                        onChange={toggleAllLineItemSelection}
+                                                                        className="size-4 rounded border-primary/20 text-primary focus:ring-primary/30 cursor-pointer"
+                                                                    />
+                                                                </div>
                                                             ) : (
                                                                 <OrderFormHeaderLabel label={def.label} tooltip={def.tooltip} />
                                                             )}
@@ -8296,6 +8630,18 @@ const OrderForm = () => {
                                                 </td>
                                                 {desktopVisibleColumnIds.map(colId => {
                                                     switch (colId) {
+                                                        case 'selection':
+                                                            return (
+                                                                <td key={colId} className="order-form-cell order-form-cell-tight text-center border border-primary/10">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={selectedLineItemIds.has(item.line_id)}
+                                                                        onChange={() => toggleLineItemSelection(item.line_id)}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="size-4 rounded border-primary/20 text-primary focus:ring-primary/30 cursor-pointer"
+                                                                    />
+                                                                </td>
+                                                            );
                                                         case 'stt':
                                                             return <td key={colId} className="order-form-cell order-form-cell-tight text-center text-primary/30 font-sans font-bold border border-primary/10">{index + 1}</td>;
                                                         case 'sku':
@@ -9257,6 +9603,15 @@ const OrderForm = () => {
                     />
                 </div>
             )}
+
+            <ProductBulkReplaceModal
+                show={showBulkReplaceModal}
+                onClose={() => setShowBulkReplaceModal(false)}
+                selectedItems={formData.items.filter(item => selectedLineItemIds.has(item.line_id))}
+                attributes={productQuickFilterAttributes}
+                onApply={applyBulkReplacements}
+                currencyFormatter={formatQuoteMoney}
+            />
         </div>
     );
 };

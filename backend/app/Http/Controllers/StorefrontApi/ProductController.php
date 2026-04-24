@@ -409,6 +409,18 @@ class ProductController extends Controller
             });
         }
 
+        // Parent Filter (for sibling variations)
+        // parentConfigurable() is belongsToMany via product_links(product_id->parent, linked_product_id->child)
+        // whereHas on belongsToMany can't filter pivot columns reliably, so we query product_links directly.
+        if ($request->filled('parent_id')) {
+            $parentId = (int) $request->parent_id;
+            $childIds = \Illuminate\Support\Facades\DB::table('product_links')
+                ->where('product_id', $parentId)
+                ->where('link_type', 'super_link')
+                ->pluck('linked_product_id');
+            $query->whereIn('products.id', $childIds);
+        }
+
         // Price range
         if ($request->filled('min_price')) $query->where('price', '>=', $request->min_price);
         if ($request->filled('max_price')) $query->where('price', '<=', $request->max_price);
@@ -477,6 +489,35 @@ class ProductController extends Controller
                 $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug'])
             ->paginate($perPage);
+
+        // Build parent_product_id map for all products in this page (for picker mode)
+        $pageProductIds = $products->getCollection()->pluck('id')->all();
+        $parentIdMap = [];
+        $attrValuesMap = [];
+        if (!empty($pageProductIds)) {
+            // parent_product_id: find which products are children (variations)
+            $parentLinks = \Illuminate\Support\Facades\DB::table('product_links')
+                ->whereIn('linked_product_id', $pageProductIds)
+                ->where('link_type', 'super_link')
+                ->get(['linked_product_id', 'product_id']);
+            foreach ($parentLinks as $link) {
+                $parentIdMap[(int) $link->linked_product_id] = (int) $link->product_id;
+            }
+
+            // attribute_values: fetch all attribute values for these products
+            $attrRows = \Illuminate\Support\Facades\DB::table('product_attribute_values as pav')
+                ->join('attributes as a', 'a.id', '=', 'pav.attribute_id')
+                ->whereIn('pav.product_id', $pageProductIds)
+                ->get(['pav.product_id', 'pav.attribute_id', 'a.code as attribute_code', 'a.name as attribute_name', 'pav.value']);
+            foreach ($attrRows as $row) {
+                $attrValuesMap[(int) $row->product_id][] = [
+                    'attribute_id' => (int) $row->attribute_id,
+                    'attribute_code' => $row->attribute_code,
+                    'attribute_name' => $row->attribute_name,
+                    'value' => $row->value,
+                ];
+            }
+        }
 
         $products->getCollection()->transform(function ($product) {
             $itemType = $this->isBundleOptionAssignment(
@@ -679,7 +720,7 @@ class ProductController extends Controller
 
         $responseData = $products->toArray();
         $responseData['data'] = collect($responseData['data'] ?? [])
-            ->map(function (array $product) use ($bundleOptionCatalog) {
+            ->map(function (array $product) use ($bundleOptionCatalog, $parentIdMap, $attrValuesMap) {
                 $productId = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $bundleOptionKey = $this->resolveAssignmentBundleOptionKey(
                     $product['bundle_option_key'] ?? null,
@@ -700,6 +741,10 @@ class ProductController extends Controller
                     ? ($bundleOptionCatalog[$productId][$bundleOptionKey] ?? null)
                     : null;
 
+                $pid = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
+                $enrichedParentId = $parentIdMap[$pid] ?? null;
+                $enrichedAttrValues = $attrValuesMap[$pid] ?? [];
+
                 if (!is_array($optionMeta)) {
                     return [
                         ...$product,
@@ -707,6 +752,8 @@ class ProductController extends Controller
                         'bundle_option_key' => $bundleOptionKey,
                         'bundle_option_post_id' => $itemType === 'bundle_option' ? ($product['bundle_option_post_id'] ?? null) : null,
                         'bundle_option_title' => $bundleOptionTitle,
+                        'parent_product_id' => $enrichedParentId,
+                        'attribute_values' => $enrichedAttrValues,
                     ];
                 }
 
@@ -736,6 +783,8 @@ class ProductController extends Controller
                     'bundle_option_post_title' => $optionMeta['bundle_option_post_title'] ?? null,
                     'bundle_option_post_slug' => $optionMeta['bundle_option_post_slug'] ?? null,
                     'bundle_parent_name' => $baseProductName,
+                    'parent_product_id' => $enrichedParentId,
+                    'attribute_values' => $enrichedAttrValues,
                 ];
             })
             ->values()

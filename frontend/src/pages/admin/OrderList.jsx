@@ -41,6 +41,14 @@ import {
     getOrderItemDisplaySku,
 } from '../../utils/orderItemDisplay';
 import { getStatusBadgeStyle } from '../../utils/statusBadge';
+import {
+    ACTIVE_ACCOUNT_CHANGED_EVENT,
+    readActiveAccountId,
+} from '../../utils/activeAccount';
+import {
+    readOrderReportDrilldownScope,
+    removeOrderReportDrilldownScope,
+} from '../../utils/orderReportDrilldown';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -594,6 +602,7 @@ const parseOrderListRouteScope = (search = '') => {
         orderIds,
         focusOrderId,
         batchReturnDocumentNumber: String(params.get('batch_return_document_number') || '').trim(),
+        reportScopeKey: String(params.get('report_scope_key') || '').trim(),
     };
 };
 const resolveOrderTypeFilterCandidate = (value) => {
@@ -646,6 +655,7 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     search_terms: parseKeywordTokens(search),
     search_input: '',
     status: [],
+    status_exclude: [],
     customer_name: '',
     order_number: '',
     created_at_from: '',
@@ -711,6 +721,7 @@ const normalizeStoredOrderFilters = (value, fallbackSearch = '', orderIds = []) 
         search_terms: parseKeywordTokens(value.search_terms),
         search_input: String(value.search_input || ''),
         status: normalizeOrderListFilterValues(value.status),
+        status_exclude: normalizeOrderListFilterValues(value.status_exclude),
         customer_name: String(value.customer_name || ''),
         order_number: String(value.order_number || ''),
         created_at_from: String(value.created_at_from || ''),
@@ -743,6 +754,9 @@ const createEmptyOrderListSummary = () => ({
     shipping_fee_total: 0,
     shipping_fee: 0,
     goods_total: 0,
+    report_revenue_total: 0,
+    report_cost_total: 0,
+    report_profit_total: 0,
 });
 
 const ORDER_SUMMARY_COMPACT_LABELS = {
@@ -753,6 +767,9 @@ const ORDER_SUMMARY_COMPACT_LABELS = {
     shipping_fee_total: 'Tổng ship',
     shipping_fee: 'Tổng ship',
     goods_total: 'Tổng tiền hàng',
+    report_revenue_total: 'Doanh thu báo cáo',
+    report_cost_total: 'Tiền hàng thực tế',
+    report_profit_total: 'Lãi lỗ báo cáo',
 };
 
 const normalizeOrderListSummary = (value, fallbackCount = 0) => {
@@ -764,6 +781,9 @@ const normalizeOrderListSummary = (value, fallbackCount = 0) => {
     const parsedShippingFeeTotal = Number(value?.shipping_fee_total ?? value?.shipping_fee);
     const parsedShippingFee = Number(value?.shipping_fee);
     const parsedGoodsTotal = Number(value?.goods_total);
+    const parsedReportRevenueTotal = Number(value?.report_revenue_total);
+    const parsedReportCostTotal = Number(value?.report_cost_total);
+    const parsedReportProfitTotal = Number(value?.report_profit_total);
     const normalizedShippingFeeRecorded = Number.isFinite(parsedShippingFeeRecorded) ? parsedShippingFeeRecorded : 0;
     const normalizedShippingFeeEstimated = Number.isFinite(parsedShippingFeeEstimated) ? parsedShippingFeeEstimated : 0;
     const normalizedShippingFeeTotal = Number.isFinite(parsedShippingFeeTotal)
@@ -782,6 +802,9 @@ const normalizeOrderListSummary = (value, fallbackCount = 0) => {
         shipping_fee_total: normalizedShippingFeeTotal,
         shipping_fee: normalizedShippingFeeTotal,
         goods_total: Number.isFinite(parsedGoodsTotal) ? parsedGoodsTotal : 0,
+        report_revenue_total: Number.isFinite(parsedReportRevenueTotal) ? parsedReportRevenueTotal : 0,
+        report_cost_total: Number.isFinite(parsedReportCostTotal) ? parsedReportCostTotal : 0,
+        report_profit_total: Number.isFinite(parsedReportProfitTotal) ? parsedReportProfitTotal : 0,
     };
 };
 
@@ -796,6 +819,7 @@ const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
     const nextFilters = {
         ...sourceFilters,
         status: normalizeOrderListFilterValues(sourceFilters?.status),
+        status_exclude: normalizeOrderListFilterValues(sourceFilters?.status_exclude),
         order_type: normalizeOrderTypeFilterValues(sourceFilters?.order_type),
         order_ids: parseOrderIdList(sourceFilters?.order_ids),
         attributes: { ...(sourceFilters?.attributes || {}) },
@@ -810,6 +834,13 @@ const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
         nextFilters.status = value == null
             ? []
             : nextFilters.status.filter((statusCode) => String(statusCode) !== String(value));
+        return nextFilters;
+    }
+
+    if (key === 'status_exclude') {
+        nextFilters.status_exclude = value == null
+            ? []
+            : nextFilters.status_exclude.filter((statusCode) => String(statusCode) !== String(value));
         return nextFilters;
     }
 
@@ -1013,29 +1044,15 @@ const resolveOrderInternalShippingFee = (order) => {
     const directValue = Number(order?.internal_shipping_fee);
     const activeShipmentValue = Number(order?.active_shipment?.shipping_cost);
     const outsideValue = Number(outsideMeta?.shipping_cost);
+    const resolvedValues = [directValue, activeShipmentValue, outsideValue]
+        .filter((value) => Number.isFinite(value))
+        .map((value) => Math.max(0, value));
 
-    if (Number.isFinite(directValue) && directValue > 0) {
-        return directValue;
+    if (!resolvedValues.length) {
+        return 0;
     }
 
-    if (Number.isFinite(activeShipmentValue) && activeShipmentValue > 0) {
-        return activeShipmentValue;
-    }
-
-    if (Number.isFinite(outsideValue) && outsideValue > 0) {
-        return outsideValue;
-    }
-
-    return Math.max(
-        0,
-        Number.isFinite(directValue)
-            ? directValue
-            : Number.isFinite(activeShipmentValue)
-                ? activeShipmentValue
-                : Number.isFinite(outsideValue)
-                    ? outsideValue
-                    : 0
-    );
+    return Math.max(...resolvedValues);
 };
 
 const hasLegacyQuickDispatchMarker = (order) => Boolean(
@@ -1128,6 +1145,7 @@ const buildOrderListRequestParams = ({
     }
     if (effectiveScopedIds.length) params.order_ids = effectiveScopedIds.join(',');
     if (filters.status?.length) params.status = normalizeOrderListFilterValues(filters.status).join(',');
+    if (filters.status_exclude?.length) params.status_exclude = normalizeOrderListFilterValues(filters.status_exclude).join(',');
     if (filters.customer_name?.trim()) params.customer_name = filters.customer_name.trim();
     if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
     if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
@@ -2294,12 +2312,12 @@ const OrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
-    const activeAccountStorageKey = typeof window === 'undefined'
-        ? 'default'
-        : (window.localStorage.getItem('activeAccountId') || 'default');
+    const [activeAccountId, setActiveAccountId] = useState(() => readActiveAccountId());
+    const activeAccountStorageKey = activeAccountId || 'default';
     const activeSiteStorageKey = typeof window === 'undefined'
         ? 'default'
         : (window.localStorage.getItem('activeSiteCode') || 'default');
+    const isActiveAccountReady = Boolean(activeAccountId);
     const returnWorkbenchStorageScopeKey = `${activeAccountStorageKey}::${activeSiteStorageKey}`;
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
@@ -2339,15 +2357,28 @@ const OrderList = () => {
     const [showColumnSettings, setShowColumnSettings] = useState(false);
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
-    const routeOrderIdsKey = routeOrderScope.orderIds.join(',');
+    const routeReportScope = useMemo(
+        () => readOrderReportDrilldownScope(routeOrderScope.reportScopeKey),
+        [routeOrderScope.reportScopeKey],
+    );
+    const routeScopedOrderIds = useMemo(
+        () => parseOrderIdList(routeReportScope?.filters?.order_ids?.length ? routeReportScope.filters.order_ids : routeOrderScope.orderIds),
+        [routeOrderScope.orderIds, routeReportScope?.filters?.order_ids],
+    );
+    const routeOrderIdsKey = routeScopedOrderIds.join(',');
+    const routeScopedFilters = useMemo(() => (
+        routeReportScope?.filters
+            ? normalizeStoredOrderFilters(routeReportScope.filters, '', routeScopedOrderIds)
+            : null
+    ), [routeOrderIdsKey, routeReportScope?.filters]);
     const initialView = useMemo(() => getOrderListViewFromParams(initialListParams), [initialListParams]);
     const initialStoredListState = useMemo(() => readPersistedOrderListState({
         expectedView: initialView,
-        fallbackSearch: routeOrderScope.orderIds.length
+        fallbackSearch: routeScopedOrderIds.length
             ? ''
             : (typeof window === 'undefined' ? '' : (window.localStorage.getItem('order_list_search_current') || '')),
-        orderIds: routeOrderScope.orderIds,
-    }), [initialView, routeOrderIdsKey, routeOrderScope.orderIds]);
+        orderIds: routeScopedOrderIds,
+    }), [initialView, routeOrderIdsKey, routeScopedOrderIds]);
     const [currentView, setCurrentView] = useState(() => initialView);
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
@@ -2443,12 +2474,37 @@ const OrderList = () => {
     const hasInitializedCurrentViewRef = useRef(false);
 
     const [pagination, setPagination] = useState(() => initialStoredListState.pagination);
-    const [filters, setFilters] = useState(() => initialStoredListState.filters);
+    const [filters, setFilters] = useState(() => routeScopedFilters || initialStoredListState.filters);
 
     const [sortConfig, setSortConfig] = useState(() => {
         const saved = localStorage.getItem('order_list_sort');
         return saved ? JSON.parse(saved) : { key: 'created_at', direction: 'desc', phase: 1 };
     });
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const syncActiveAccount = (event) => {
+            const nextAccountId = String(event?.detail?.accountId || readActiveAccountId()).trim();
+            setActiveAccountId((current) => (current === nextAccountId ? current : nextAccountId));
+        };
+
+        const handleStorage = (event) => {
+            if (!event || event.key === null || event.key === 'activeAccountId') {
+                syncActiveAccount(event);
+            }
+        };
+
+        window.addEventListener(ACTIVE_ACCOUNT_CHANGED_EVENT, syncActiveAccount);
+        window.addEventListener('storage', handleStorage);
+
+        return () => {
+            window.removeEventListener(ACTIVE_ACCOUNT_CHANGED_EVENT, syncActiveAccount);
+            window.removeEventListener('storage', handleStorage);
+        };
+    }, []);
 
     useEffect(() => {
         ensureOrderListFinancialColumnPreference();
@@ -2487,6 +2543,10 @@ const OrderList = () => {
     const activeStatusFilters = useMemo(
         () => buildOrderStatusFilterSelections(filters.status, statusMap),
         [filters.status, statusMap]
+    );
+    const activeStatusExcludeFilters = useMemo(
+        () => buildOrderStatusFilterSelections(filters.status_exclude, statusMap),
+        [filters.status_exclude, statusMap]
     );
     const tempStatusFilters = useMemo(
         () => buildOrderStatusFilterSelections(tempFilters?.status, statusMap),
@@ -2558,6 +2618,26 @@ const OrderList = () => {
         orderSummary.total_price,
         visibleGoodsTotal,
     ]);
+    const reportScopeSummaryItem = useMemo(() => {
+        const summaryField = String(routeReportScope?.summary_field || '').trim();
+        if (!summaryField) {
+            return null;
+        }
+
+        const rawValue = orderSummary?.[summaryField];
+        const isCountMetric = summaryField === 'order_count';
+
+        return {
+            key: `report-scope-${summaryField}`,
+            label: routeReportScope?.metric_label || ORDER_SUMMARY_COMPACT_LABELS[summaryField] || 'Đang đối soát',
+            value: isCountMetric ? formatNumber(rawValue) : formatMoney(rawValue),
+            className: 'text-emerald-700',
+        };
+    }, [orderSummary, routeReportScope]);
+    const displayedOrderSummaryItems = useMemo(
+        () => (reportScopeSummaryItem ? [reportScopeSummaryItem, ...orderSummaryItems] : orderSummaryItems),
+        [orderSummaryItems, reportScopeSummaryItem],
+    );
     const carrierMap = useMemo(
         () => new Map(connectedCarriers.map((carrier) => [String(carrier.carrier_code), carrier])),
         [connectedCarriers]
@@ -2730,7 +2810,11 @@ const OrderList = () => {
         }));
     }, []);
 
-    const fetchInitialData = async () => {
+    const fetchInitialData = useCallback(async () => {
+        if (!isActiveAccountReady) {
+            return;
+        }
+
         try {
             const response = await orderApi.getBootstrap({ mode: 'list' });
             const bootstrap = response.data || {};
@@ -2780,7 +2864,7 @@ const OrderList = () => {
             }
             orderApi.preloadBootstrap({ mode: 'form' });
         } catch (error) { console.error("Error initial data", error); }
-    };
+    }, [isActiveAccountReady, setAvailableColumns, setVisibleColumns]);
 
     const addToSearchHistory = (term) => {
         const normalizedTerm = serializeKeywordTokens(parseKeywordTokens(term));
@@ -2794,6 +2878,12 @@ const OrderList = () => {
     };
 
     const fetchOrders = useCallback(async (page = 1, currentFilters = filters, perPage = pagination.per_page, currentSort = sortConfig) => {
+        if (!isActiveAccountReady) {
+            orderRequestAbortRef.current?.abort();
+            setLoading(true);
+            return;
+        }
+
         if (isReturnFollowupView) {
             orderRequestAbortRef.current?.abort();
             setLoading(false);
@@ -2861,7 +2951,7 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [filters, isDraftView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+    }, [filters, isActiveAccountReady, isDraftView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
 
     const handleBatchReturnSaved = useCallback(async (payload) => {
         closeBatchReturnModal();
@@ -3077,7 +3167,13 @@ const OrderList = () => {
         }
     }, [fetchOrders, filters, isReturnWorkbenchView, returnWorkbenchIds.length]);
 
-    useEffect(() => { fetchInitialData(); }, []);
+    useEffect(() => {
+        if (!isActiveAccountReady) {
+            return;
+        }
+
+        fetchInitialData();
+    }, [fetchInitialData, isActiveAccountReady]);
 
     useEffect(() => {
         const params = new URLSearchParams(location.search);
@@ -3093,6 +3189,10 @@ const OrderList = () => {
     }, [currentView]);
 
     useEffect(() => {
+        if (!isActiveAccountReady) {
+            return;
+        }
+
         if (!routeOrderIdsKey) {
             if (filters.order_ids?.length) {
                 const nextFilters = { ...filters, order_ids: [] };
@@ -3106,9 +3206,10 @@ const OrderList = () => {
         localStorage.removeItem('order_list_search_current');
         suppressSearchSyncRef.current = true;
 
-        const nextFilters = createDefaultOrderFilters('', routeOrderScope.orderIds);
+        const nextFilters = routeScopedFilters || createDefaultOrderFilters('', routeScopedOrderIds);
         setFilters((prev) => (
             areOrderIdListsEqual(prev.order_ids, nextFilters.order_ids) && !prev.search_terms?.length && !prev.search_input && !prev.status?.length
+                && !prev.status_exclude?.length
                 && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
                 && !prev.customer_phone && !prev.order_type?.length && !prev.shipping_address
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
@@ -3123,7 +3224,7 @@ const OrderList = () => {
         setProductPopupOrderId(null);
         setInventorySlipOrderId(null);
         fetchOrders(1, nextFilters);
-    }, [routeOrderIdsKey]);
+    }, [fetchOrders, filters, isActiveAccountReady, routeOrderIdsKey, routeScopedFilters, routeScopedOrderIds]);
 
     useEffect(() => {
         if (!pendingPersistedStateHydrationRef.current || routeOrderIdsKey) {
@@ -3174,6 +3275,10 @@ const OrderList = () => {
     }, [activeSearchValue, filters.search_input]);
 
     useEffect(() => {
+        if (!isActiveAccountReady) {
+            return;
+        }
+
         if (!routeOrderIdsKey) {
             const nextFilters = { ...filters, order_ids: [] };
             const targetPage = hasInitializedCurrentViewRef.current ? 1 : initialRestoredPageRef.current;
@@ -3186,7 +3291,7 @@ const OrderList = () => {
 
             fetchOrders(targetPage, nextFilters);
         }
-    }, [currentView]);
+    }, [currentView, fetchOrders, filters, isActiveAccountReady, routeOrderIdsKey]);
 
     useEffect(() => {
         if (routeOrderIdsKey) {
@@ -3220,7 +3325,19 @@ const OrderList = () => {
 
     useEffect(() => {
         const handleClickOutside = (e) => {
-            if (filterRef.current && !filterRef.current.contains(e.target) && !e.target.closest('[data-filter-btn]')) setShowFilters(false);
+            const clickedInsideFilterPortalControl = Boolean(
+                e.target?.closest?.('[data-admin-multiselect-root]')
+                || e.target?.closest?.('[data-admin-multiselect-dropdown]')
+            );
+
+            if (
+                filterRef.current
+                && !filterRef.current.contains(e.target)
+                && !e.target.closest('[data-filter-btn]')
+                && !clickedInsideFilterPortalControl
+            ) {
+                setShowFilters(false);
+            }
             if (columnSettingsRef.current && !columnSettingsRef.current.contains(e.target) && !e.target.closest('[data-column-settings-btn]')) setShowColumnSettings(false);
             if (statusMenuRef.current && !statusMenuRef.current.contains(e.target) && !e.target.closest('[data-status-edit-btn]')) setStatusMenuOrderId(null);
             if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) setShowSearchHistory(false);
@@ -3991,9 +4108,11 @@ const OrderList = () => {
         params.delete('order_ids');
         params.delete('focus_order_id');
         params.delete('batch_return_document_number');
+        params.delete('report_scope_key');
+        removeOrderReportDrilldownScope(routeOrderScope.reportScopeKey);
         const nextSearch = params.toString();
         navigate(`${location.pathname}${nextSearch ? `?${nextSearch}` : ''}`, { replace: true });
-    }, [location.pathname, location.search, navigate]);
+    }, [location.pathname, location.search, navigate, routeOrderScope.reportScopeKey]);
 
     const exitSpecialListView = useCallback(() => {
         setCurrentView('main');
@@ -4244,6 +4363,7 @@ const OrderList = () => {
         let c = 0;
         if (filters.order_ids?.length) c++;
         if (filters.status?.length) c++;
+        if (filters.status_exclude?.length) c++;
         if (filters.customer_name) c++;
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
@@ -4291,7 +4411,7 @@ const OrderList = () => {
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                     <h1 className="admin-header-title italic">{listTitle}</h1>
-                    <AccountSelector user={user} />
+                    <AccountSelector user={user} reloadOnAutoSelect={false} />
                 </div>
 
                 <div className="flex flex-col gap-3 rounded-[22px] border border-primary/10 bg-white p-3 shadow-sm lg:flex-row lg:items-center lg:gap-2 lg:rounded-sm lg:p-2">
@@ -5134,6 +5254,15 @@ const OrderList = () => {
                     {activeCount() > 0 && (
                         <div className="flex flex-wrap items-center gap-2 mb-4 bg-primary/5 p-2 border border-primary/10 rounded-sm animate-in fade-in duration-300">
                             <span className="text-[13px] font-bold text-primary px-1 mr-1 border-r border-primary/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[16px]">filter_list</span>Đang lọc:</span>
+                            {routeReportScope?.scope_label && (
+                                <div className="bg-white border border-emerald-300 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-emerald-700/70">Báo cáo tháng:</span>
+                                    <span className="text-[13px] font-bold text-emerald-900">{routeReportScope.scope_label}</span>
+                                    <button onClick={handleReset} className="text-emerald-700/60 hover:text-brick">
+                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            )}
                             {filters.order_ids?.length > 0 && (
                                 <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                                     <span className="text-[11px] text-primary/40">{routeOrderScope.batchReturnDocumentNumber ? 'Đơn nguồn:' : 'Chọn nhanh:'}</span>
@@ -5161,6 +5290,22 @@ const OrderList = () => {
                                     </div>
                                     <button type="button" onClick={() => removeFilter('status')} className="text-[11px] font-bold text-brick hover:text-brick/80">Xoa het</button>
                                     <button type="button" onClick={() => removeFilter('status')} className="text-[11px] font-bold text-brick hover:text-brick/80">XÃ³a háº¿t</button>
+                                </div>
+                            )}
+                            {activeStatusExcludeFilters.length > 0 && (
+                                <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Loại trừ trạng thái:</span>
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        {activeStatusExcludeFilters.map(({ code, name }) => (
+                                            <span key={code} className="inline-flex items-center gap-1 rounded-sm border border-amber-200 bg-amber-50 px-2 py-1">
+                                                <span className="text-[12px] font-bold text-[#0F172A]">{name}</span>
+                                                <button type="button" onClick={() => removeFilter('status_exclude', code)} className="text-primary/40 hover:text-brick">
+                                                    <span className="material-symbols-outlined text-[14px]">close</span>
+                                                </button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                    <button type="button" onClick={() => removeFilter('status_exclude')} className="text-[11px] font-bold text-brick hover:text-brick/80">Xóa hết</button>
                                 </div>
                             )}
                             {filters.customer_name && (
@@ -5890,7 +6035,7 @@ const OrderList = () => {
                             </select>
                         </div>
                         <div className="h-4 w-px shrink-0 bg-primary/10" aria-hidden="true" />
-                        {orderSummaryItems.map((item) => {
+                        {displayedOrderSummaryItems.map((item) => {
                             return (
                                 <div key={item.key} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/10 bg-white px-2.5 py-1">
                                     <span className="text-primary/45">{ORDER_SUMMARY_COMPACT_LABELS[item.key] || item.label}:</span>

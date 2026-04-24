@@ -8,6 +8,13 @@ const getMonthStartInputDate = () => {
     const now = new Date();
     return `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-01`;
 };
+const getStartOfWeek = (date) => {
+    const start = new Date(date);
+    const day = start.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    start.setDate(start.getDate() + diff);
+    return start;
+};
 const formatDisplayDate = (value) => {
     if (!value) return '-';
 
@@ -137,7 +144,7 @@ const DailyProfitReport = () => {
         'revenue_actual': 'Doanh thu gốc - Dự phòng rủi ro hoàn (Dựa theo % Tỉ lệ hoàn cài đặt).',
         'cost_raw': 'Tổng giá vốn nhập hàng của các đơn hàng mới trong ngày.',
         'cost_actual': 'Giá vốn gốc x (1 - Tỉ lệ hoàn). Phản ánh giá vốn thực tế của hàng đã bán đi.',
-        'shipping_fee': '(Phí ship đi trên đơn) + (Phí ship hoàn dự tính = 50% phí đi x % Tỉ lệ hoàn).',
+        'shipping_fee': 'Tổng ship của các đơn trong ngày theo đúng bảng quản lí đơn hàng: đơn có ship > 0 lấy ship thật, đơn chưa có ship lấy 5% x tổng tiền đơn.',
         'packaging_fee': 'Tổng số đơn hàng x Phí gói hàng định mức (VNĐ/đơn).',
         'ads_spend': 'Chi phí quảng cáo Facebook từ tài khoản quảng cáo liên kết.',
         'tax': 'Tỉ lệ thuế % x (Doanh thu thực - Chi phí vận chuyển).',
@@ -269,6 +276,44 @@ const DailyProfitReport = () => {
             default: return null;
         }
     };
+
+    const renderExtraProfitOrderMeta = ({
+        totalCount = 0,
+        exchangeCount = 0,
+        partialCount = 0,
+        textClassName = 'text-gray-400',
+    }) => (
+        <span className={`group/extra-profit relative inline-flex cursor-help items-center ${textClassName}`}>
+            <span className="text-[11px] font-medium leading-none underline decoration-dotted underline-offset-2">
+                ({totalCount} đơn)
+            </span>
+            <span className="pointer-events-none absolute top-full left-1/2 z-[90] mt-1 w-max min-w-[170px] -translate-x-1/2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-left text-[11px] font-medium text-gray-700 shadow-xl opacity-0 transition-opacity duration-200 group-hover/extra-profit:opacity-100">
+                <span className="block">Đơn đổi trả: {exchangeCount} đơn</span>
+                <span className="mt-1 block">Đơn giao hàng 1 phần: {partialCount} đơn</span>
+                <span className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-l border-t border-gray-200 bg-white"></span>
+            </span>
+        </span>
+    );
+
+    const renderExtraProfitValue = ({
+        amount = 0,
+        totalCount = 0,
+        exchangeCount = 0,
+        partialCount = 0,
+        amountClassName = '',
+        countClassName = 'text-gray-400',
+    }) => (
+        <div className="inline-flex max-w-full flex-wrap items-center justify-center gap-1.5 leading-tight">
+            <span className={amountClassName}>{formatNumber(amount)}</span>
+            {renderExtraProfitOrderMeta({
+                totalCount,
+                exchangeCount,
+                partialCount,
+                textClassName: countClassName,
+            })}
+        </div>
+    );
+
     const renderTotal = (id) => {
         switch(id) {
             case 'date': return (
@@ -337,8 +382,13 @@ const DailyProfitReport = () => {
 );
             case 'extra_profit': return (
 <td  key='extra_profit' className={`px-3 py-3 text-[13px] font-bold text-center bg-white/10 ${aggregatedTotal.extra_profit < 0 ? 'text-red-200' : 'text-orange-200'}`}>
-                                     {formatNumber(aggregatedTotal.extra_profit)}<br/>
-                                     <span className="text-[13px] font-normal opacity-80">-</span>
+                                     {renderExtraProfitValue({
+                                         amount: aggregatedTotal.extra_profit,
+                                         totalCount: aggregatedTotal.extra_profit_order_count,
+                                         exchangeCount: aggregatedTotal.exchange_return_order_count,
+                                         partialCount: aggregatedTotal.partial_delivery_order_count,
+                                         countClassName: 'text-white/70',
+                                     })}
                                  </td>
 );
             case 'profit': return (
@@ -431,8 +481,12 @@ const DailyProfitReport = () => {
 );
             case 'extra_profit': return (
 <td  key='extra_profit' className={`px-3 py-3 text-[13px] font-bold text-center bg-orange-50/10 ${row.extra_profit < 0 ? 'text-red-500' : 'text-orange-600'}`}>
-                                             {formatNumber(row.extra_profit)}<br/>
-                                             <span className="text-[13px] text-gray-400 font-normal">-</span>
+                                             {renderExtraProfitValue({
+                                                 amount: row.extra_profit,
+                                                 totalCount: row.extra_profit_order_count,
+                                                 exchangeCount: row.exchange_return_order_count,
+                                                 partialCount: row.partial_delivery_order_count,
+                                             })}
                                          </td>
 );
             case 'profit': return (
@@ -466,7 +520,7 @@ const DailyProfitReport = () => {
 
     const [filters, setFilters] = useState({
         start_date: getMonthStartInputDate(),
-        end_date: formatInputDate(new Date())
+        end_date: formatInputDate(new Date()),
     });
 
     const [showConfig, setShowConfig] = useState(false);
@@ -613,9 +667,10 @@ const DailyProfitReport = () => {
         }
     };
 
-    const setQuickFilter = (type) => {
+    const getQuickFilterRange = (type) => {
         const now = new Date();
-        let start, end;
+        let start;
+        let end;
 
         switch(type) {
             case 'this_month':
@@ -626,29 +681,65 @@ const DailyProfitReport = () => {
                 start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
                 end = new Date(now.getFullYear(), now.getMonth(), 0);
                 break;
+            case 'this_week':
+                start = getStartOfWeek(now);
+                end = now;
+                break;
+            case 'last_week':
+                end = new Date(getStartOfWeek(now));
+                end.setDate(end.getDate() - 1);
+                start = getStartOfWeek(end);
+                break;
             case 'last_30_days':
-                start = new Date();
+                start = new Date(now);
                 start.setDate(now.getDate() - 30);
                 end = now;
                 break;
             default:
-                return;
+                return null;
         }
 
-        setFilters({
-            start_date: formatInputDate(start),
-            end_date: formatInputDate(end)
-        });
+        return { start, end };
+    };
+
+    const isQuickFilterActive = (type) => {
+        const range = getQuickFilterRange(type);
+        return range
+            ? filters.start_date === formatInputDate(range.start) && filters.end_date === formatInputDate(range.end)
+            : false;
+    };
+
+    const getQuickFilterButtonClass = (type) => (
+        `px-3 py-1 text-[13px] font-bold rounded-md transition-all ${
+            isQuickFilterActive(type) ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+        }`
+    );
+
+    const setQuickFilter = (type) => {
+        const range = getQuickFilterRange(type);
+        if (!range) return;
+
+        setFilters((previous) => ({
+            ...previous,
+            start_date: formatInputDate(range.start),
+            end_date: formatInputDate(range.end)
+        }));
     };
 
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
             // Auto sync latest FB Ads data before loading the report
-            await financeApi.syncFbAdSpend(filters).catch(e => console.error("Auto sync FB failed", e));
+            await financeApi.syncFbAdSpend({
+                start_date: filters.start_date,
+                end_date: filters.end_date
+            }).catch(e => console.error("Auto sync FB failed", e));
 
             const [reportRes, configRes] = await Promise.all([
-                financeApi.getDailyPnlReport(filters),
+                financeApi.getDailyPnlReport({
+                    start_date: filters.start_date,
+                    end_date: filters.end_date,
+                }),
                 financeApi.getDailyPnlConfig()
             ]);
 
@@ -721,11 +812,15 @@ const DailyProfitReport = () => {
         ads_spend_raw: (acc.ads_spend_raw || 0) + (row.ads_spend_raw || 0),
         tax: acc.tax + (row.tax || 0),
         fixed_cost: acc.fixed_cost + (row.fixed_cost || 0),
+        exchange_return_order_count: acc.exchange_return_order_count + (row.exchange_return_order_count || 0),
+        partial_delivery_order_count: acc.partial_delivery_order_count + (row.partial_delivery_order_count || 0),
+        extra_profit_order_count: acc.extra_profit_order_count + (row.extra_profit_order_count || 0),
         extra_profit: acc.extra_profit + (row.extra_profit || 0),
         profit: acc.profit + (row.profit || 0),
     }), {
         order_count: 0, revenue_raw: 0, revenue_actual: 0, cost_raw: 0, cost_actual: 0,
-        shipping_fee: 0, packaging_fee: 0, ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0, extra_profit: 0, profit: 0
+        shipping_fee: 0, packaging_fee: 0, ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0,
+        exchange_return_order_count: 0, partial_delivery_order_count: 0, extra_profit_order_count: 0, extra_profit: 0, profit: 0
     });
 
     const totalPercentProfit = aggregatedTotal.revenue_actual > 0
@@ -743,27 +838,39 @@ const DailyProfitReport = () => {
                     <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
                         <button
                             onClick={() => setQuickFilter('this_month')}
-                            className={`px-3 py-1 text-[13px] font-bold rounded-md transition-all ${filters.start_date === getMonthStartInputDate() ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            className={getQuickFilterButtonClass('this_month')}
                         >
                             Tháng này
                         </button>
                         <button
                             onClick={() => setQuickFilter('last_month')}
-                            className="px-3 py-1 text-[13px] font-bold text-gray-500 hover:text-gray-700 rounded-md transition-all"
+                            className={getQuickFilterButtonClass('last_month')}
                         >
                             Tháng trước
                         </button>
                         <button
+                            onClick={() => setQuickFilter('this_week')}
+                            className={getQuickFilterButtonClass('this_week')}
+                        >
+                            Tuần này
+                        </button>
+                        <button
+                            onClick={() => setQuickFilter('last_week')}
+                            className={getQuickFilterButtonClass('last_week')}
+                        >
+                            Tuần trước
+                        </button>
+                        <button
                             onClick={() => setQuickFilter('last_30_days')}
-                            className="px-3 py-1 text-[13px] font-bold text-gray-500 hover:text-gray-700 rounded-md transition-all"
+                            className={getQuickFilterButtonClass('last_30_days')}
                         >
                             30 ngày qua
                         </button>
                     </div>
 
-                    <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
-                        <Filter size={14} className="text-gray-400" />
-                        <div className="flex items-center gap-1">
+                     <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                         <Filter size={14} className="text-gray-400" />
+                         <div className="flex items-center gap-1">
                             <input
                                 type="date"
                                 value={filters.start_date}
@@ -776,10 +883,11 @@ const DailyProfitReport = () => {
                                 value={filters.end_date}
                                 onChange={(e) => setFilters({...filters, end_date: e.target.value})}
                                 className="text-[13px] border border-gray-200 rounded-md p-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-32"
-                            />
-                        </div>
-                    </div>
-                </div>
+                             />
+                         </div>
+                     </div>
+
+                 </div>
 
                 <div className="flex items-center gap-2">
                     <button
@@ -887,28 +995,11 @@ const DailyProfitReport = () => {
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-600 flex items-center justify-between">
-                                Định mức phí Ship
-                                <select
-                                    value={config.shipping_fee_type || '%'}
-                                    onChange={(e) => setConfig({...config, shipping_fee_type: e.target.value})}
-                                    className="text-[12px] bg-transparent border-none text-emerald-600 font-bold focus:ring-0 cursor-pointer p-0"
-                                >
-                                    <option value="%">Tính theo %</option>
-                                    <option value="fixed">Tính VNĐ/đơn</option>
-                                </select>
-                            </label>
-                            <div className="relative">
-                                <input
-                                    type="number"
-                                    value={config.shipping_estimate_rate}
-                                    onChange={(e) => setConfig({...config, shipping_estimate_rate: e.target.value})}
-                                    className="w-full border border-gray-200 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none"
-                                />
-                                <span className="absolute right-3 top-2.5 text-gray-400 font-medium">
-                                    {config.shipping_fee_type === 'fixed' ? 'đ' : '%'}
-                                </span>
+                            <label className="text-sm font-medium text-gray-600">Công thức phí Ship ngày</label>
+                            <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-3 py-3 text-[13px] leading-relaxed text-emerald-700">
+                                Đơn có ship &gt; 0 lấy ship thật. Đơn chưa có ship hoặc ship = 0 lấy 5% x tổng tiền đơn.
                             </div>
+                            <p className="text-[12px] text-gray-500">Cột này đã đồng bộ theo đúng logic Tổng ship của bảng quản lí đơn hàng.</p>
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-gray-600">Thuế suất định mức (%)</label>

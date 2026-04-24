@@ -106,6 +106,95 @@ class ProductVariantIsolationTest extends TestCase
         );
     }
 
+    public function test_show_returns_all_variants_for_configurable_product_even_when_some_are_inactive(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Configurable',
+            'slug' => 'parent-configurable-show',
+            'sku' => 'PARENT-CONFIG-SHOW',
+            'type' => 'configurable',
+        ]);
+        $activeVariant = $this->createProduct([
+            'name' => 'Variant Active',
+            'slug' => 'variant-active',
+            'sku' => 'PARENT-CONFIG-SHOW-V1',
+            'status' => true,
+        ]);
+        $inactiveVariant = $this->createProduct([
+            'name' => 'Variant Inactive',
+            'slug' => 'variant-inactive',
+            'sku' => 'PARENT-CONFIG-SHOW-V2',
+            'status' => false,
+        ]);
+
+        $parent->linkedProducts()->attach($activeVariant->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($inactiveVariant->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $response = $this->getJson("/api/products/{$parent->id}")
+            ->assertOk();
+
+        $variationIds = collect($response->json('variations'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertSame([$activeVariant->id, $inactiveVariant->id], $variationIds);
+    }
+
+    public function test_updating_a_variant_directly_changes_only_that_variant(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Configurable',
+            'slug' => 'parent-configurable-update',
+            'sku' => 'PARENT-CONFIG-UPDATE',
+            'type' => 'configurable',
+            'price' => 500000,
+            'expected_cost' => 250000,
+        ]);
+        $variantA = $this->createProduct([
+            'name' => 'Variant A',
+            'slug' => 'variant-a-update',
+            'sku' => 'PARENT-CONFIG-UPDATE-V1',
+            'price' => 120000,
+            'expected_cost' => 70000,
+        ]);
+        $variantB = $this->createProduct([
+            'name' => 'Variant B',
+            'slug' => 'variant-b-update',
+            'sku' => 'PARENT-CONFIG-UPDATE-V2',
+            'price' => 135000,
+            'expected_cost' => 80000,
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $this->postJson("/api/products/{$variantA->id}", [
+            'price' => 155000,
+            'expected_cost' => 91000,
+        ])->assertOk();
+
+        $this->assertDatabaseHas('products', [
+            'id' => $variantA->id,
+            'price' => 155000,
+            'expected_cost' => 91000,
+        ]);
+        $this->assertDatabaseHas('products', [
+            'id' => $parent->id,
+            'price' => 500000,
+            'expected_cost' => 250000,
+        ]);
+        $this->assertDatabaseHas('products', [
+            'id' => $variantB->id,
+            'price' => 135000,
+            'expected_cost' => 80000,
+        ]);
+    }
+
     public function test_trashing_and_restoring_configurable_product_cascades_to_variant_children(): void
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));

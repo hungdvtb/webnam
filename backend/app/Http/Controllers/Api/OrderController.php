@@ -22,6 +22,8 @@ use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
 use App\Support\ImportCostRounding;
 use App\Support\OrderBootstrapCache;
+use App\Support\OrderCodAdjustmentSystemNote;
+use App\Support\OrderShippingFeeCalculator;
 use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
@@ -620,21 +622,7 @@ class OrderController extends Controller
 
     private function resolveOrderInternalShippingFee(Order $order): float
     {
-        $storedShippingFee = $this->orderTableHasColumn('internal_shipping_fee')
-            ? max(0, round((float) ($order->internal_shipping_fee ?? 0), 2))
-            : 0.0;
-
-        $outsideDeliveryFee = 0.0;
-        if ($this->orderTableHasColumn('external_delivery_meta') && is_array($order->external_delivery_meta)) {
-            $outsideDeliveryFee = max(0, round((float) data_get($order->external_delivery_meta, 'shipping_cost', 0), 2));
-        }
-
-        $activeShipmentFee = 0.0;
-        if ($order->relationLoaded('activeShipment') && $order->activeShipment) {
-            $activeShipmentFee = max(0, round((float) ($order->activeShipment->shipping_cost ?? 0), 2));
-        }
-
-        return max($storedShippingFee, $outsideDeliveryFee, $activeShipmentFee);
+        return OrderShippingFeeCalculator::resolveRecordedShippingFee($order);
     }
 
     private function attachResolvedInternalShippingFee(Order $order): void
@@ -794,6 +782,100 @@ class OrderController extends Controller
         return $order;
     }
 
+    private function resolveAutomaticDiscountAdjustment(?string $orderType, ?float $supplementTotalPrice = null): float
+    {
+        if ($this->normalizeOrderType($orderType) !== self::ORDER_TYPE_PARTIAL_DELIVERY) {
+            return 0.0;
+        }
+
+        return round(max(0, (float) ($supplementTotalPrice ?? 0)), 2);
+    }
+
+    private function resolveStoredManagedDiscountAdjustment(?string $notes): float
+    {
+        return round(OrderCodAdjustmentSystemNote::extractAdjustmentAmount($notes), 2);
+    }
+
+    private function resolveStoredManualDiscount(Order $order, ?float $managedAdjustment = null): float
+    {
+        $effectiveDiscount = round((float) ($order->discount ?? 0), 2);
+        if ($this->normalizeOrderType((string) $order->order_type) !== self::ORDER_TYPE_PARTIAL_DELIVERY) {
+            return $effectiveDiscount;
+        }
+
+        $resolvedManagedAdjustment = $managedAdjustment ?? $this->resolveStoredManagedDiscountAdjustment($order->notes);
+        if (abs($resolvedManagedAdjustment) < 0.01) {
+            return $effectiveDiscount;
+        }
+
+        return round($effectiveDiscount - $resolvedManagedAdjustment, 2);
+    }
+
+    private function resolveRequestedManualDiscount(Request $request, ?Order $existingOrder = null): float
+    {
+        if ($request->has('manual_discount')) {
+            return round((float) $request->input('manual_discount', 0), 2);
+        }
+
+        $requestedDiscount = round((float) $request->input('discount', $existingOrder?->discount ?? 0), 2);
+        $notesSource = $request->input('notes', $existingOrder?->notes);
+        $managedAdjustment = $this->resolveStoredManagedDiscountAdjustment(
+            $notesSource === null ? null : (string) $notesSource
+        );
+
+        return abs($managedAdjustment) >= 0.01
+            ? round($requestedDiscount - $managedAdjustment, 2)
+            : $requestedDiscount;
+    }
+
+    private function syncPartialDeliveryAdjustmentState(
+        Order $order,
+        Request $request,
+        ?string $orderType,
+        array $supplementItems,
+        float $supplementTotalPrice
+    ): void {
+        $normalizedOrderType = $this->normalizeOrderType($orderType);
+        $returnedItems = $supplementItems;
+        if ($normalizedOrderType === self::ORDER_TYPE_PARTIAL_DELIVERY && $this->orderSupplementItemsTableExists()) {
+            $order->load('supplementItems');
+            $returnedItems = $order->relationLoaded('supplementItems')
+                ? $order->supplementItems->all()
+                : $returnedItems;
+        }
+
+        $manualDiscount = $this->resolveRequestedManualDiscount($request, $order);
+        $automaticAdjustment = $this->resolveAutomaticDiscountAdjustment($normalizedOrderType, $supplementTotalPrice);
+        $effectiveDiscount = $normalizedOrderType === self::ORDER_TYPE_PARTIAL_DELIVERY
+            ? round($manualDiscount + $automaticAdjustment, 2)
+            : $manualDiscount;
+        $syncedNotes = OrderCodAdjustmentSystemNote::sync(
+            (string) $request->input('notes', $order->notes),
+            $automaticAdjustment,
+            $normalizedOrderType === self::ORDER_TYPE_PARTIAL_DELIVERY ? $returnedItems : []
+        );
+
+        $order->forceFill($this->filterPersistableOrderData([
+            'notes' => $syncedNotes,
+            'discount' => $effectiveDiscount,
+        ]))->save();
+    }
+
+    private function discountAdjustmentPayload(Order $order): array
+    {
+        $managedAdjustment = $this->resolveStoredManagedDiscountAdjustment($order->notes);
+        $automaticAdjustment = $this->resolveAutomaticDiscountAdjustment(
+            (string) $order->order_type,
+            (float) ($order->supplement_items_total_price ?? 0)
+        );
+
+        return [
+            'manual_discount' => $this->resolveStoredManualDiscount($order, $managedAdjustment),
+            'automatic_discount_adjustment' => $automaticAdjustment,
+            'stored_discount_adjustment' => $managedAdjustment,
+        ];
+    }
+
     private function mutationResponsePayload(Order $order): array
     {
         $order->refresh();
@@ -801,7 +883,7 @@ class OrderController extends Controller
             'activeShipment:id,order_id,shipping_cost',
         ]);
 
-        return $this->appendOrderTimePayload([
+        return array_merge($this->appendOrderTimePayload([
             'id' => (int) $order->id,
             'order_number' => $order->order_number,
             'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
@@ -830,7 +912,7 @@ class OrderController extends Controller
             'converted_from_kind' => $order->converted_from_kind,
             'created_at' => $order->created_at?->toISOString(),
             'updated_at' => $order->updated_at?->toISOString(),
-        ], $order);
+        ], $order), $this->discountAdjustmentPayload($order));
     }
 
     private function appendOrderTimePayload(array $payload, Order $order): array
@@ -2108,9 +2190,11 @@ class OrderController extends Controller
         $effectiveSupplementCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
             ? 0
             : round((float) ($supplementCostTotal ?? $order->supplement_items_cost_total ?? 0), 2);
-        $reportRevenueTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
-            ? $finalTotal
-            : round($finalTotal - $effectiveSupplementTotalPrice + $effectiveSettlementDelta, 2);
+        $reportRevenueTotal = match ($normalizedOrderType) {
+            self::ORDER_TYPE_PARTIAL_DELIVERY => round($finalTotal + $effectiveSettlementDelta, 2),
+            self::ORDER_TYPE_STANDARD => $finalTotal,
+            default => round($finalTotal - $effectiveSupplementTotalPrice + $effectiveSettlementDelta, 2),
+        };
         $reportCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
             ? $baseCostTotal
             : round($baseCostTotal - $effectiveSupplementCostTotal, 2);
@@ -3016,6 +3100,15 @@ class OrderController extends Controller
 
                 $q->whereIn('status', $statuses->all());
             })
+            ->when($request->filled('status_exclude'), function ($q) use ($request) {
+                $excludedStatuses = $this->extractRequestedStatusCodes($request->input('status_exclude'));
+
+                if ($excludedStatuses->isEmpty()) {
+                    return;
+                }
+
+                $q->whereNotIn('status', $excludedStatuses->all());
+            })
             ->when($request->filled('created_at_from'), function ($q) use ($request) {
                 $this->applyOrderDisplayDateFilter($q, '>=', (string) $request->input('created_at_from'));
             })
@@ -3072,6 +3165,9 @@ class OrderController extends Controller
             'shipping_fee_total' => 0.0,
             'shipping_fee' => 0.0,
             'goods_total' => 0.0,
+            'report_revenue_total' => 0.0,
+            'report_cost_total' => 0.0,
+            'report_profit_total' => 0.0,
         ];
     }
 
@@ -3086,21 +3182,7 @@ class OrderController extends Controller
 
     private function resolveOrderListShippingSummary(Order $order): array
     {
-        $recordedShippingFee = $this->resolveOrderInternalShippingFee($order);
-        $recordedShippingFee = $recordedShippingFee > 0
-            ? round($recordedShippingFee, 2)
-            : 0.0;
-
-        $estimatedShippingFee = 0.0;
-        if ($recordedShippingFee <= 0) {
-            $estimatedShippingFee = round(max(0, (float) ($order->total_price ?? 0)) * 0.05, 2);
-        }
-
-        return [
-            'shipping_fee_recorded' => $recordedShippingFee,
-            'shipping_fee_estimated' => $estimatedShippingFee,
-            'shipping_fee_total' => round($recordedShippingFee + $estimatedShippingFee, 2),
-        ];
+        return OrderShippingFeeCalculator::resolveShippingSummary($order);
     }
 
     private function calculateOrderListSummary($query): array
@@ -3115,9 +3197,13 @@ class OrderController extends Controller
         $summaryQuery->select($this->selectExistingOrderColumns([
             'id',
             'total_price',
+            'cost_total',
             'discount',
             'internal_shipping_fee',
             'external_delivery_meta',
+            'report_revenue_total',
+            'report_cost_total',
+            'report_profit_total',
         ]));
 
         $summaryQuery->chunkById(200, function (Collection $orders) use (&$summary) {
@@ -3131,6 +3217,9 @@ class OrderController extends Controller
                 $summary['shipping_fee_total'] += $shippingSummary['shipping_fee_total'];
                 $summary['shipping_fee'] += $shippingSummary['shipping_fee_total'];
                 $summary['goods_total'] += $this->resolveOrderListGoodsTotal($order);
+                $summary['report_revenue_total'] += round((float) ($order->report_revenue_total ?? $order->total_price ?? 0), 2);
+                $summary['report_cost_total'] += round((float) ($order->report_cost_total ?? $order->cost_total ?? 0), 2);
+                $summary['report_profit_total'] += round((float) ($order->report_profit_total ?? 0), 2);
             }
         }, 'orders.id', 'id');
 
@@ -3142,6 +3231,9 @@ class OrderController extends Controller
             'shipping_fee_total' => round((float) $summary['shipping_fee_total'], 2),
             'shipping_fee' => round((float) $summary['shipping_fee'], 2),
             'goods_total' => round((float) $summary['goods_total'], 2),
+            'report_revenue_total' => round((float) $summary['report_revenue_total'], 2),
+            'report_cost_total' => round((float) $summary['report_cost_total'], 2),
+            'report_profit_total' => round((float) $summary['report_profit_total'], 2),
         ];
     }
 
@@ -4051,6 +4143,7 @@ class OrderController extends Controller
             'supplement_items.*.price' => 'nullable|numeric',
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',
+            'manual_discount' => 'nullable|numeric',
         ]);
 
         $orderKind = $this->normalizeOrderKind($validated['order_kind'] ?? null);
@@ -4133,6 +4226,13 @@ class OrderController extends Controller
             $supplementSummary = $orderType === self::ORDER_TYPE_STANDARD
                 ? $this->syncSupplementItems($order, [])
                 : $this->syncSupplementItems($order, (array) $request->input('supplement_items', []));
+            $this->syncPartialDeliveryAdjustmentState(
+                $order,
+                $request,
+                $orderType,
+                (array) ($supplementSummary['items'] ?? []),
+                (float) ($supplementSummary['total_price'] ?? 0)
+            );
             $this->recalculateOrderTotals(
                 $order,
                 (float) ($summary['total_price'] ?? 0),
@@ -4179,7 +4279,15 @@ class OrderController extends Controller
                 ])->save();
             }
 
-                return response()->json($this->mutationResponsePayload($order), 201);
+            $this->syncPartialDeliveryAdjustmentState(
+                $order,
+                $request,
+                $orderType,
+                [],
+                (float) ($order->supplement_items_total_price ?? 0)
+            );
+
+            return response()->json($this->mutationResponsePayload($order), 201);
             });
         });
     }
@@ -4238,6 +4346,9 @@ class OrderController extends Controller
 
         $this->appendCurrentCostMetrics($order);
         $this->attachResolvedInternalShippingFee($order);
+        foreach ($this->discountAdjustmentPayload($order) as $key => $value) {
+            $order->setAttribute($key, $value);
+        }
         $order->setAttribute('draft_created_at', $this->resolveOrderDraftCreatedAt($order));
         $order->setAttribute('officialized_at', $this->resolveOrderOfficializedAt($order));
         $order->setAttribute('displayed_at', $this->resolveOrderDisplayedAt($order));
@@ -4389,6 +4500,13 @@ class OrderController extends Controller
                 'total_price' => (float) ($order->supplement_items_total_price ?? 0),
                 'cost_total' => (float) ($order->supplement_items_cost_total ?? 0),
             ];
+        $this->syncPartialDeliveryAdjustmentState(
+            $order,
+            $request,
+            $requestedOrderType,
+            (array) ($supplementSummary['items'] ?? []),
+            (float) ($supplementSummary['total_price'] ?? 0)
+        );
 
         $this->recalculateOrderTotals(
             $order,
@@ -4417,6 +4535,13 @@ class OrderController extends Controller
         }
 
         $this->syncActiveShipmentFinancials($order);
+        $this->syncPartialDeliveryAdjustmentState(
+            $order,
+            $request,
+            $requestedOrderType,
+            [],
+            (float) ($order->supplement_items_total_price ?? 0)
+        );
 
         return $order;
     }
@@ -4446,6 +4571,7 @@ class OrderController extends Controller
             'supplement_items.*.price' => 'nullable|numeric',
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',
+            'manual_discount' => 'nullable|numeric',
         ]);
 
         if ($validator->fails()) {

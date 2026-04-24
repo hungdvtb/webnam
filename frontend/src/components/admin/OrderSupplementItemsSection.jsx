@@ -20,9 +20,316 @@ const toNumber = (value, fallback = 0) => {
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
 
+const normalizeSearchText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\u0111\u0110]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+const compactSearchText = (value) => normalizeSearchText(value).replace(/\s+/g, '');
+
+const splitCompactSearchTokens = (value) => Array.from(new Set(
+    (compactSearchText(value).match(/[a-z]+|\d+/g) || [])
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2 || /^\d+$/.test(token))
+));
+
+const tokenizeSearch = (value) => {
+    const normalizedTokens = normalizeSearchText(value)
+        .split(' ')
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2 || /^\d+$/.test(token));
+    const compactTokens = normalizedTokens.length <= 1 ? splitCompactSearchTokens(value) : [];
+
+    return Array.from(new Set(
+        compactTokens.length > 1
+            ? compactTokens
+            : [...normalizedTokens, ...compactTokens]
+    )).slice(0, 12);
+};
+
+const parseAttributeValueList = (value) => {
+    if (Array.isArray(value)) {
+        return value.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+    }
+
+    if (typeof value !== 'string') {
+        return value == null ? [] : [String(value).trim()].filter(Boolean);
+    }
+
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+        return [];
+    }
+
+    if (
+        (trimmedValue.startsWith('[') && trimmedValue.endsWith(']'))
+        || (trimmedValue.startsWith('{') && trimmedValue.endsWith('}'))
+    ) {
+        try {
+            const parsed = JSON.parse(trimmedValue);
+            if (Array.isArray(parsed)) {
+                return parsed.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+            }
+
+            if (parsed && typeof parsed === 'object') {
+                return Object.values(parsed).map((entry) => String(entry ?? '').trim()).filter(Boolean);
+            }
+        } catch {
+            return [trimmedValue];
+        }
+    }
+
+    return [trimmedValue];
+};
+
+const getAttributeValues = (product) => (
+    Array.isArray(product?.attribute_values)
+        ? product.attribute_values
+        : (Array.isArray(product?.attributeValues) ? product.attributeValues : [])
+);
+
+const buildAttributeSummary = (product) => Array.from(new Set(
+    getAttributeValues(product)
+        .flatMap((attributeValue) => parseAttributeValueList(attributeValue?.value))
+        .filter(Boolean)
+)).join(' / ');
+
+const getParentConfigurable = (product) => {
+    if (!product || typeof product !== 'object') {
+        return null;
+    }
+
+    if (Array.isArray(product.parent_configurable) && product.parent_configurable.length > 0) {
+        return product.parent_configurable[0] || null;
+    }
+
+    if (product.parent_configurable && !Array.isArray(product.parent_configurable) && typeof product.parent_configurable === 'object') {
+        return product.parent_configurable;
+    }
+
+    if (Array.isArray(product.parentConfigurable) && product.parentConfigurable.length > 0) {
+        return product.parentConfigurable[0] || null;
+    }
+
+    if (product.parentConfigurable && !Array.isArray(product.parentConfigurable) && typeof product.parentConfigurable === 'object') {
+        return product.parentConfigurable;
+    }
+
+    return null;
+};
+
+const buildSearchEntryFromProduct = (product, parentProduct = null, sourceRank = 0) => {
+    const productId = Number(product?.id ?? product?.product_id ?? 0);
+    if (!productId) {
+        return null;
+    }
+
+    const resolvedParent = parentProduct || getParentConfigurable(product);
+    const parentName = String(resolvedParent?.name || '').trim();
+    const parentSku = String(resolvedParent?.sku || '').trim();
+    const attributeSummary = buildAttributeSummary(product);
+    const name = String(product?.name || '').trim() || `San pham #${productId}`;
+    const displayName = String(product?.display_name || '').trim()
+        || ((parentName && attributeSummary && name === parentName) ? `${parentName} - ${attributeSummary}` : name);
+
+    return {
+        id: productId,
+        entry_kind: parentName ? 'variation' : 'product',
+        name,
+        display_name: displayName,
+        sku: String(product?.sku || '').trim(),
+        price: toNumber(product?.price, 0),
+        expected_cost: toNumber(product?.expected_cost, 0),
+        cost_price: normalizeRoundedImportCostNumber(product?.cost_price ?? product?.expected_cost) ?? 0,
+        attribute_summary: attributeSummary,
+        parent_name: parentName,
+        parent_sku: parentSku,
+        type: String(product?.type || '').trim(),
+        search_keywords: [
+            name,
+            displayName,
+            String(product?.sku || '').trim(),
+            parentName,
+            parentSku,
+            attributeSummary,
+        ].filter(Boolean),
+        source_rank: sourceRank,
+        server_search_score: toNumber(product?.search_score, 0),
+    };
+};
+
+const buildSearchableText = (product) => (
+    Array.isArray(product?.search_keywords)
+        ? product.search_keywords.join(' ')
+        : [
+            product?.display_name,
+            product?.name,
+            product?.sku,
+            product?.parent_name,
+            product?.parent_sku,
+            product?.attribute_summary,
+        ].filter(Boolean).join(' ')
+);
+
+const isStrictDetailedSearch = (rawTerm) => {
+    const tokens = tokenizeSearch(rawTerm);
+    const compactQuery = compactSearchText(rawTerm);
+    const hasNumericToken = tokens.some((token) => /\d/.test(token));
+
+    return tokens.length >= 3 || (hasNumericToken && tokens.length >= 2) || compactQuery.length >= 10;
+};
+
+const scoreSearchEntry = (product, rawTerm) => {
+    const query = normalizeSearchText(rawTerm);
+    if (!query) {
+        return 1;
+    }
+
+    const searchText = buildSearchableText(product);
+    const normalizedSearchableText = normalizeSearchText(searchText);
+    const compactSearchableText = compactSearchText(searchText);
+    const name = normalizeSearchText(product?.display_name || product?.name);
+    const compactName = compactSearchText(product?.display_name || product?.name);
+    const sku = normalizeSearchText(product?.sku);
+    const keywordText = normalizeSearchText(
+        Array.isArray(product?.search_keywords)
+            ? product.search_keywords.join(' ')
+            : ''
+    );
+    const compactSku = compactSearchText(product?.sku);
+    const compactKeywordText = compactSearchText(
+        Array.isArray(product?.search_keywords)
+            ? product.search_keywords.join(' ')
+            : ''
+    );
+    const compactQuery = compactSearchText(rawTerm);
+    const tokens = tokenizeSearch(rawTerm);
+    const phraseInName = Boolean(query) && name.includes(query);
+    const phraseInCompactName = Boolean(compactQuery) && compactName.includes(compactQuery);
+    const phraseInSku = Boolean(query) && sku.includes(query);
+    const phraseInCompactSku = Boolean(compactQuery) && compactSku.includes(compactQuery);
+    const phraseInKeywords = Boolean(query) && keywordText.includes(query);
+    const phraseInCompactKeywords = Boolean(compactQuery) && compactKeywordText.includes(compactQuery);
+
+    const nameTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactSearchText(token);
+        return count + Number(name.includes(token) || (compactToken && compactName.includes(compactToken)));
+    }, 0);
+    const skuTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactSearchText(token);
+        return count + Number(sku.includes(token) || (compactToken && compactSku.includes(compactToken)));
+    }, 0);
+    const keywordTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactSearchText(token);
+        return count + Number(
+            keywordText.includes(token)
+            || (compactToken && compactKeywordText.includes(compactToken))
+        );
+    }, 0);
+    const combinedTokenMatches = tokens.reduce((count, token) => {
+        const compactToken = compactSearchText(token);
+        return count + Number(
+            name.includes(token)
+            || (compactToken && compactName.includes(compactToken))
+            || sku.includes(token)
+            || (compactToken && compactSku.includes(compactToken))
+            || keywordText.includes(token)
+            || (compactToken && compactKeywordText.includes(compactToken))
+        );
+    }, 0);
+    const strictTokenMatches = tokens.every((token) => {
+        const compactToken = compactSearchText(token);
+
+        return normalizedSearchableText.includes(token)
+            || (compactToken && compactSearchableText.includes(compactToken));
+    });
+
+    const minimumRelevantMatches = tokens.length <= 1 ? 1 : Math.max(2, tokens.length - 1);
+    if (isStrictDetailedSearch(rawTerm) && !strictTokenMatches) {
+        return 0;
+    }
+
+    if (!phraseInName && !phraseInCompactName && !phraseInSku && !phraseInCompactSku && !phraseInKeywords && !phraseInCompactKeywords) {
+        if (tokens.length === 0) return 0;
+        if (combinedTokenMatches < minimumRelevantMatches) return 0;
+    }
+
+    let score = Math.min(toNumber(product?.server_search_score, 0), 1200);
+
+    if (sku === query || (compactQuery && compactSku === compactQuery)) score += 1500;
+    if (name === query) score += 1400;
+    if (compactQuery && compactName === compactQuery) score += 1320;
+    if (phraseInSku || phraseInCompactSku) score += 880;
+    if (phraseInName) score += 820;
+    if (phraseInCompactName) score += 780;
+    if (phraseInKeywords || phraseInCompactKeywords) score += 540;
+    if (sku.startsWith(query) || (compactQuery && compactSku.startsWith(compactQuery))) score += 760;
+    if (name.startsWith(query)) score += 700;
+    if (compactQuery && compactName.startsWith(compactQuery)) score += 640;
+
+    score += combinedTokenMatches * 140;
+    score += nameTokenMatches * 50;
+    score += skuTokenMatches * 70;
+    score += keywordTokenMatches * 65;
+
+    if (tokens.length > 1 && combinedTokenMatches === tokens.length) score += 260;
+    if (tokens.length > 1 && nameTokenMatches === tokens.length) score += 120;
+    if (tokens.length > 2 && combinedTokenMatches === minimumRelevantMatches) score -= 40;
+
+    return Math.max(score, 0);
+};
+
+const buildSearchResults = (products, rawTerm) => {
+    const entries = [];
+    const seenIds = new Set();
+
+    const pushEntry = (entry) => {
+        if (!entry?.id || seenIds.has(entry.id)) {
+            return;
+        }
+
+        seenIds.add(entry.id);
+        entries.push(entry);
+    };
+
+    (Array.isArray(products) ? products : []).forEach((rawProduct, sourceRank) => {
+        const baseEntry = buildSearchEntryFromProduct(rawProduct, null, sourceRank);
+        if (baseEntry) {
+            pushEntry(baseEntry);
+        }
+    });
+
+    (Array.isArray(products) ? products : []).forEach((rawProduct, sourceRank) => {
+        (Array.isArray(rawProduct?.variations) ? rawProduct.variations : []).forEach((variation) => {
+            const variationEntry = buildSearchEntryFromProduct(variation, rawProduct, sourceRank);
+            if (variationEntry) {
+                pushEntry(variationEntry);
+            }
+        });
+    });
+
+    return entries
+        .map((entry) => ({
+            ...entry,
+            search_score: scoreSearchEntry(entry, rawTerm),
+        }))
+        .filter((entry) => entry.search_score > 0)
+        .sort((left, right) => (
+            right.search_score - left.search_score
+            || right.server_search_score - left.server_search_score
+            || left.source_rank - right.source_rank
+            || String(left.display_name || left.name || '').localeCompare(String(right.display_name || right.name || ''), 'vi')
+        ))
+        .slice(0, 12);
+};
+
 const buildItemFromProduct = (product) => ({
     product_id: Number(product?.id) || 0,
-    name: product?.name || '',
+    name: product?.display_name || product?.name || '',
     sku: product?.sku || '',
     quantity: 1,
     price: toNumber(product?.price, 0),
@@ -50,6 +357,7 @@ const OrderSupplementItemsSection = ({
     const normalizedReturnStatus = normalizeSupplementReturnStatus(returnStatus);
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState([]);
+    const [hasSearchAttempt, setHasSearchAttempt] = useState(false);
     const [loading, setLoading] = useState(false);
     const abortRef = useRef(null);
 
@@ -60,6 +368,7 @@ const OrderSupplementItemsSection = ({
         abortRef.current = null;
         setSearchTerm('');
         setSearchResults([]);
+        setHasSearchAttempt(false);
         setLoading(false);
 
         return undefined;
@@ -96,6 +405,7 @@ const OrderSupplementItemsSection = ({
         const trimmedSearch = searchTerm.trim();
         if (!trimmedSearch) {
             setSearchResults([]);
+            setHasSearchAttempt(false);
             setLoading(false);
             return undefined;
         }
@@ -104,32 +414,20 @@ const OrderSupplementItemsSection = ({
         abortRef.current?.abort();
         abortRef.current = controller;
         setLoading(true);
+        setHasSearchAttempt(false);
 
         const timeoutId = window.setTimeout(async () => {
             try {
-                const response = await productApi.getAll({ search: trimmedSearch, per_page: 8, picker: 1 }, controller.signal);
+                const response = await productApi.getAll({ search: trimmedSearch, per_page: 40 }, controller.signal);
                 if (controller.signal.aborted) return;
                 const rawData = Array.isArray(response?.data?.data) ? response.data.data : [];
-                const flattened = [];
-                
-                rawData.forEach(item => {
-                    if (item.type === 'configurable' && Array.isArray(item.variations) && item.variations.length > 0) {
-                        item.variations.forEach(v => {
-                            flattened.push({
-                                ...v,
-                                parent_name: item.name
-                            });
-                        });
-                    } else if (item.type !== 'configurable') {
-                        flattened.push(item);
-                    }
-                });
-
-                setSearchResults(flattened);
+                setSearchResults(buildSearchResults(rawData, trimmedSearch));
+                setHasSearchAttempt(true);
             } catch (error) {
                 if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
                 console.error('Error loading supplement products', error);
                 setSearchResults([]);
+                setHasSearchAttempt(true);
             } finally {
                 if (abortRef.current === controller) {
                     abortRef.current = null;
@@ -270,6 +568,7 @@ const OrderSupplementItemsSection = ({
                                                 onClick={() => {
                                                     setSearchTerm('');
                                                     setSearchResults([]);
+                                                    setHasSearchAttempt(false);
                                                 }}
                                                 className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-sm text-primary/35 transition-all hover:bg-primary/5 hover:text-brick"
                                                 title="Xóa từ khóa tìm kiếm"
@@ -278,7 +577,7 @@ const OrderSupplementItemsSection = ({
                                             </button>
                                         )}
 
-                                        {(loading || searchResults.length > 0) && searchTerm.trim() && (
+                                        {(loading || hasSearchAttempt) && searchTerm.trim() && (
                                             <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
                                                 {loading ? (
                                                     <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
@@ -296,14 +595,21 @@ const OrderSupplementItemsSection = ({
                                                                 <div className="flex items-center justify-between gap-3">
                                                                     <div className="min-w-0">
                                                                         <div className="truncate text-[13px] font-bold text-primary">
-                                                                            {product.name}
+                                                                            {product.display_name || product.name}
                                                                         </div>
-                                                                        <div className="mt-0.5 text-[11px] font-black text-orange-600/70">
-                                                                            {product.attribute_summary && (
-                                                                                <div className="mt-0.5 text-[11px] italic text-primary/60">
+                                                                        <div className="mt-0.5 text-[11px] text-primary/60">
+                                                                            {product.parent_name ? (
+                                                                                <div className="truncate italic">
+                                                                                    Thuộc: {product.parent_name}
+                                                                                </div>
+                                                                            ) : null}
+                                                                            {product.attribute_summary ? (
+                                                                                <div className="truncate italic">
                                                                                     {product.attribute_summary}
                                                                                 </div>
-                                                                            )}
+                                                                            ) : null}
+                                                                        </div>
+                                                                        <div className="mt-0.5 text-[11px] font-black text-orange-600/70">
                                                                             {product.sku || 'Không có SKU'}
                                                                         </div>
                                                                     </div>

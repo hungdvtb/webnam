@@ -871,9 +871,9 @@ const SalesReportPage = () => {
                 ) : null}
             </div>
 
-            <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl">
+            <div className="relative isolate overflow-hidden rounded-sm border border-primary/10 bg-white shadow-xl">
                 {errorMessage ? <div className="border-b border-primary/10 bg-brick/5 px-5 py-4 text-[13px] font-bold text-brick">{errorMessage}</div> : null}
-                <div ref={tableViewportRef} className="relative max-h-[calc(100vh-230px)] min-h-[460px] overflow-auto table-scrollbar">
+                <div ref={tableViewportRef} className="relative z-0 max-h-[calc(100vh-230px)] min-h-[460px] overflow-auto table-scrollbar">
                     <table className="border-collapse text-left" style={{ width: `${tableWidth}px`, minWidth: `${tableWidth}px` }}>
                         <thead className="sticky top-0 z-40 bg-[#F8FAFC] shadow-sm">
                             <tr>

@@ -6,8 +6,11 @@ use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
 use App\Models\InventoryDocument;
 use App\Models\Order;
+use App\Support\OrderShippingFeeCalculator;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Collection;
 
 class FinDailyProfitReportController extends Controller
 {
@@ -39,6 +42,56 @@ class FinDailyProfitReportController extends Controller
         'fixed_cost',
         'total_profit',
         'profit_per_house',
+    ];
+    private const MONTHLY_REPORT_DRILLDOWN_METRICS = [
+        'order_count' => [
+            'label' => 'Đơn hàng',
+            'summary_field' => 'order_count',
+            'date_filter_mode' => 'shipping_dispatched',
+            'status' => [],
+            'status_exclude' => self::EXCLUDED_ORDER_STATUSES,
+            'order_type' => [],
+        ],
+        'revenue' => [
+            'label' => 'Doanh thu',
+            'summary_field' => 'report_revenue_total',
+            'date_filter_mode' => 'created',
+            'status' => [self::MONTHLY_REPORT_INCLUDED_STATUS],
+            'status_exclude' => [],
+            'order_type' => [Order::TYPE_STANDARD],
+        ],
+        'cost_actual' => [
+            'label' => 'Tiền hàng thực tế',
+            'summary_field' => 'report_cost_total',
+            'date_filter_mode' => 'created',
+            'status' => [self::MONTHLY_REPORT_INCLUDED_STATUS],
+            'status_exclude' => [],
+            'order_type' => [Order::TYPE_STANDARD],
+        ],
+        'shipping_fee' => [
+            'label' => 'Tiền ship hàng',
+            'summary_field' => 'shipping_fee_total',
+            'date_filter_mode' => 'created',
+            'status' => [],
+            'status_exclude' => self::EXCLUDED_ORDER_STATUSES,
+            'order_type' => [],
+        ],
+        'exchange_profit_loss' => [
+            'label' => 'Lãi lỗ đổi trả',
+            'summary_field' => 'report_profit_total',
+            'date_filter_mode' => 'created',
+            'status' => [],
+            'status_exclude' => self::EXCLUDED_ORDER_STATUSES,
+            'order_type' => [Order::TYPE_EXCHANGE_RETURN],
+        ],
+        'partial_delivery_profit_loss' => [
+            'label' => 'Lãi lỗ giao 1 phần',
+            'summary_field' => 'report_profit_total',
+            'date_filter_mode' => 'created',
+            'status' => [],
+            'status_exclude' => self::EXCLUDED_ORDER_STATUSES,
+            'order_type' => [Order::TYPE_PARTIAL_DELIVERY],
+        ],
     ];
 
     public function getConfig()
@@ -97,34 +150,209 @@ class FinDailyProfitReportController extends Controller
             ->toArray();
     }
 
-    private function buildDailyReportPayload(string $startDate, string $endDate): array
+    private function extractRequestedValues(mixed $values): array
     {
-        $config = FinDailyReportConfig::first();
-        $returnRate = $config ? (float) $config->return_rate : 2.0;
-        $packFee = $config ? (float) $config->packaging_fee : 2000.0;
-        $shipEstRate = $config ? (float) $config->shipping_estimate_rate : 10.0;
-        $shipFeeType = $config ? $config->shipping_fee_type : '%';
-        $taxRate = $config ? (float) $config->tax_rate : 1.5;
+        $rawValues = is_array($values) ? $values : explode(',', (string) $values);
+        $seen = [];
+        $result = [];
 
-        $dataRaw = Order::query()
+        foreach ($rawValues as $value) {
+            $normalized = trim((string) $value);
+            if ($normalized === '' || isset($seen[$normalized])) {
+                continue;
+            }
+
+            $seen[$normalized] = true;
+            $result[] = $normalized;
+        }
+
+        return $result;
+    }
+
+    private function extractRequestedStatusCodes(mixed $statuses): array
+    {
+        return $this->extractRequestedValues($statuses);
+    }
+
+    private function extractRequestedOrderTypes(mixed $orderTypes): array
+    {
+        $seen = [];
+        $result = [];
+
+        foreach ($this->extractRequestedValues($orderTypes) as $candidate) {
+            $normalized = strtolower(trim($candidate));
+
+            if (!in_array($normalized, Order::TYPES, true)) {
+                if ($normalized !== Order::TYPE_STANDARD) {
+                    continue;
+                }
+            }
+
+            if (isset($seen[$normalized])) {
+                continue;
+            }
+
+            $seen[$normalized] = true;
+            $result[] = $normalized;
+        }
+
+        return $result;
+    }
+
+    private function applyRequestedOrderTypeFilter($query, array $requestedOrderTypes, string $column = 'order_type'): void
+    {
+        if ($requestedOrderTypes === []) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $includesStandard = in_array(Order::TYPE_STANDARD, $requestedOrderTypes, true);
+        $specialTypes = array_values(array_filter(
+            $requestedOrderTypes,
+            fn (string $type) => $type !== Order::TYPE_STANDARD
+        ));
+
+        $query->where(function ($typeQuery) use ($column, $includesStandard, $specialTypes) {
+            if ($includesStandard) {
+                $typeQuery->where(function ($standardQuery) use ($column) {
+                    $standardQuery->where($column, Order::TYPE_STANDARD)
+                        ->orWhereNull($column)
+                        ->orWhere($column, '');
+                });
+
+                if ($specialTypes !== []) {
+                    $typeQuery->orWhereIn($column, $specialTypes);
+                }
+
+                return;
+            }
+
+            $typeQuery->whereIn($column, $specialTypes);
+        });
+    }
+
+    private function applyDailyReportOptionalFilters($query, array $filters = []): void
+    {
+        if (array_key_exists('status', $filters) && $filters['status'] !== null && $filters['status'] !== '') {
+            $statuses = $this->extractRequestedStatusCodes($filters['status']);
+
+            if ($statuses === []) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->whereIn('status', $statuses);
+            }
+        }
+
+        if (array_key_exists('order_type', $filters) && $filters['order_type'] !== null && $filters['order_type'] !== '') {
+            $this->applyRequestedOrderTypeFilter(
+                $query,
+                $this->extractRequestedOrderTypes($filters['order_type'])
+            );
+        }
+    }
+
+    private function dailyReportBaseOrdersQuery(string $startDate, string $endDate, array $filters = [])
+    {
+        $query = Order::query()
             ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->where(function ($query) {
-                $query->where('order_kind', 'official')
-                    ->orWhereNull('order_kind');
+            ->where(function ($kindQuery) {
+                $kindQuery->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
             })
-            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+
+        $this->applyDailyReportOptionalFilters($query, $filters);
+
+        return $query;
+    }
+
+    private function dailySpecialProfitOrdersQuery(string $startDate, string $endDate, array $filters = [])
+    {
+        $startAt = $startDate . ' 00:00:00';
+        $endAt = $endDate . ' 23:59:59';
+
+        $query = Order::query()
+            ->where(function ($kindQuery) {
+                $kindQuery->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
+            ->where(function ($dateQuery) use ($startAt, $endAt) {
+                $dateQuery->whereBetween('officialized_at', [$startAt, $endAt])
+                    ->orWhere(function ($fallbackQuery) use ($startAt, $endAt) {
+                        $fallbackQuery->whereNull('officialized_at')
+                            ->whereBetween('created_at', [$startAt, $endAt]);
+                    });
+            })
+            ->whereIn('order_type', [
+                Order::TYPE_EXCHANGE_RETURN,
+                Order::TYPE_PARTIAL_DELIVERY,
+            ])
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+
+        $this->applyDailyReportOptionalFilters($query, $filters);
+
+        return $query;
+    }
+
+    private function dailySpecialProfitLossByDate(string $startDate, string $endDate, array $filters = [])
+    {
+        return $this->dailySpecialProfitOrdersQuery($startDate, $endDate, $filters)
             ->select(
-                DB::raw('DATE(officialized_at) as date'),
-                DB::raw('COUNT(*) as order_count'),
-                DB::raw("SUM(CASE WHEN order_type NOT IN ('exchange_return', 'partial_delivery') THEN total_price ELSE 0 END) as revenue_total"),
-                DB::raw("SUM(CASE WHEN order_type NOT IN ('exchange_return', 'partial_delivery') THEN cost_total ELSE 0 END) as cost_total"),
-                DB::raw("SUM(CASE WHEN order_type IN ('exchange_return', 'partial_delivery') THEN shipping_fee ELSE 0 END) as shipping_explicit"),
+                DB::raw('DATE(COALESCE(officialized_at, created_at)) as date'),
+                DB::raw("SUM(CASE WHEN order_type = 'exchange_return' THEN 1 ELSE 0 END) as exchange_return_order_count"),
+                DB::raw("SUM(CASE WHEN order_type = 'partial_delivery' THEN 1 ELSE 0 END) as partial_delivery_order_count"),
                 DB::raw("SUM(CASE WHEN order_type = 'exchange_return' THEN COALESCE(report_profit_total, 0) ELSE 0 END) as exchange_profit_loss"),
                 DB::raw("SUM(CASE WHEN order_type = 'partial_delivery' THEN COALESCE(report_profit_total, 0) ELSE 0 END) as partial_delivery_profit_loss")
             )
             ->groupBy('date')
             ->get()
             ->keyBy('date');
+    }
+
+    private function resolveRecordedShippingFee(Order $order): float
+    {
+        return OrderShippingFeeCalculator::resolveRecordedShippingFee($order);
+    }
+
+    private function resolveOrderShippingSummary(Order $order): array
+    {
+        return OrderShippingFeeCalculator::resolveShippingSummary($order);
+    }
+
+    private function buildDailyReportPayload(string $startDate, string $endDate, array $filters = []): array
+    {
+        $config = FinDailyReportConfig::first();
+        $returnRate = $config ? (float) $config->return_rate : 2.0;
+        $packFee = $config ? (float) $config->packaging_fee : 2000.0;
+        $taxRate = $config ? (float) $config->tax_rate : 1.5;
+
+        $baseOrdersQuery = $this->dailyReportBaseOrdersQuery($startDate, $endDate, $filters);
+
+        $dataRaw = (clone $baseOrdersQuery)
+            ->select(
+                DB::raw('DATE(officialized_at) as date'),
+                DB::raw('COUNT(*) as order_count'),
+                DB::raw("SUM(CASE WHEN order_type IS NULL OR order_type = '' OR order_type NOT IN ('exchange_return', 'partial_delivery') THEN total_price ELSE 0 END) as revenue_total"),
+                DB::raw("SUM(CASE WHEN order_type IS NULL OR order_type = '' OR order_type NOT IN ('exchange_return', 'partial_delivery') THEN cost_total ELSE 0 END) as cost_total")
+            )
+            ->groupBy('date')
+            ->get()
+            ->keyBy('date');
+
+        $specialProfitByDate = $this->dailySpecialProfitLossByDate($startDate, $endDate, $filters);
+
+        $shippingOrdersByDate = (clone $baseOrdersQuery)
+            ->with(['activeShipment:id,order_id,shipping_cost'])
+            ->get([
+                'id',
+                'officialized_at',
+                'total_price',
+                'internal_shipping_fee',
+                'external_delivery_meta',
+            ])
+            ->groupBy(fn (Order $order) => optional($order->officialized_at)?->format('Y-m-d'));
 
         $fixedCosts = \App\Models\FixedCostDailySnapshot::query()
             ->whereBetween('date', [$startDate, $endDate])
@@ -151,43 +379,11 @@ class FinDailyProfitReportController extends Controller
             $revenueActual = $revenueRaw - $estimatedReturns;
             $costActual = $costRaw * (1 - $returnRate / 100);
 
-            $dailyShip = 0;
-            $standardOrderCount = 0;
-
-            if ($dayData) {
-                $ordersOfDay = Order::query()
-                    ->whereDate('officialized_at', $dateStr)
-                    ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
-                    ->where(function ($query) {
-                        $query->where('order_kind', 'official')
-                            ->orWhereNull('order_kind');
-                    })
-                    ->where(function ($query) {
-                        $query->whereNotIn('order_type', ['exchange_return', 'partial_delivery'])
-                            ->orWhereNull('order_type');
-                    })
-                    ->get();
-
-                $dailyShip = $ordersOfDay->sum(function ($order) use ($shipEstRate, $shipFeeType) {
-                    $shipValue = (float) $order->shipping_fee;
-                    if ($shipValue > 0) {
-                        return $shipValue;
-                    }
-
-                    if ($shipFeeType === 'fixed') {
-                        return $shipEstRate;
-                    }
-
-                    return (float) $order->total_price * $shipEstRate / 100;
-                });
-
-                $standardOrderCount = $ordersOfDay->count();
-            }
-
-            $avgShipSent = $standardOrderCount > 0 ? ($dailyShip / $standardOrderCount) : 0;
-            $returnedOrdersCount = $orderCount * ($returnRate / 100);
-            $returnedShipFee = round($returnedOrdersCount * ($avgShipSent * 0.5));
-            $shippingFee = $dailyShip + $returnedShipFee;
+            $ordersOfDay = $shippingOrdersByDate->get($dateStr, collect());
+            $dailyShip = round((float) $ordersOfDay->sum(
+                fn (Order $order) => $this->resolveOrderShippingSummary($order)['shipping_fee_total']
+            ), 2);
+            $shippingFee = $dailyShip;
 
             $packagingFee = $orderCount * $packFee;
             $tax = ($taxRate / 100) * ($revenueActual - $shippingFee);
@@ -198,8 +394,12 @@ class FinDailyProfitReportController extends Controller
             $adsSpendDaily = round($adsSpendRawDaily * (1 + $fbTaxRate / 100), 2);
 
             $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $adsSpendDaily;
-            $exchangeProfitLoss = $dayData ? (float) $dayData->exchange_profit_loss : 0;
-            $partialDeliveryProfitLoss = $dayData ? (float) $dayData->partial_delivery_profit_loss : 0;
+            $specialProfit = $specialProfitByDate->get($dateStr);
+            $exchangeReturnOrderCount = $specialProfit ? (int) $specialProfit->exchange_return_order_count : 0;
+            $partialDeliveryOrderCount = $specialProfit ? (int) $specialProfit->partial_delivery_order_count : 0;
+            $extraProfitOrderCount = $exchangeReturnOrderCount + $partialDeliveryOrderCount;
+            $exchangeProfitLoss = $specialProfit ? (float) $specialProfit->exchange_profit_loss : 0;
+            $partialDeliveryProfitLoss = $specialProfit ? (float) $specialProfit->partial_delivery_profit_loss : 0;
             $extraProfit = $exchangeProfitLoss + $partialDeliveryProfitLoss;
             $profit = $profitFromNewOrders + $extraProfit;
 
@@ -212,12 +412,15 @@ class FinDailyProfitReportController extends Controller
                 'cost_actual' => $costActual,
                 'shipping_fee' => $shippingFee,
                 'shipping_out' => $dailyShip,
-                'shipping_return' => $returnedShipFee,
+                'shipping_return' => 0,
                 'packaging_fee' => $packagingFee,
                 'tax' => $tax,
                 'fixed_cost' => $fixedCostDaily,
                 'ads_spend_raw' => $adsSpendRawDaily,
                 'ads_spend' => $adsSpendDaily,
+                'exchange_return_order_count' => $exchangeReturnOrderCount,
+                'partial_delivery_order_count' => $partialDeliveryOrderCount,
+                'extra_profit_order_count' => $extraProfitOrderCount,
                 'exchange_profit_loss' => $exchangeProfitLoss,
                 'partial_delivery_profit_loss' => $partialDeliveryProfitLoss,
                 'extra_profit' => $extraProfit,
@@ -241,6 +444,12 @@ class FinDailyProfitReportController extends Controller
                 'total_profit' => round((float) $reportCollection->sum('profit'), 2),
                 'total_revenue' => round((float) $reportCollection->sum('revenue_raw'), 2),
                 'total_orders' => (int) $reportCollection->sum('order_count'),
+                'exchange_return_order_count' => (int) $reportCollection->sum('exchange_return_order_count'),
+                'partial_delivery_order_count' => (int) $reportCollection->sum('partial_delivery_order_count'),
+                'extra_profit_order_count' => (int) $reportCollection->sum('extra_profit_order_count'),
+                'exchange_profit_loss' => round((float) $reportCollection->sum('exchange_profit_loss'), 2),
+                'partial_delivery_profit_loss' => round((float) $reportCollection->sum('partial_delivery_profit_loss'), 2),
+                'total_extra_profit' => round((float) $reportCollection->sum('extra_profit'), 2),
             ],
         ];
     }
@@ -490,17 +699,7 @@ class FinDailyProfitReportController extends Controller
 
     private function resolveMonthlyReportShippingFee(Order $order): float
     {
-        $storedShippingFee = max(0, round((float) ($order->internal_shipping_fee ?? 0), 2));
-        $activeShipmentFee = max(0, round((float) ($order->activeShipment?->shipping_cost ?? 0), 2));
-        $outsideDeliveryFee = max(0, round((float) data_get($order->external_delivery_meta, 'shipping_cost', 0), 2));
-
-        $resolvedShippingFee = max($storedShippingFee, $activeShipmentFee, $outsideDeliveryFee);
-
-        if ($resolvedShippingFee > 0) {
-            return $resolvedShippingFee;
-        }
-
-        return round((float) ($order->total_price ?? 0) * 0.05, 2);
+        return OrderShippingFeeCalculator::resolveTotalShippingFee($order);
     }
 
     private function monthlyOrderShippingFee(string $startDate, string $endDate)
@@ -508,6 +707,7 @@ class FinDailyProfitReportController extends Controller
         return $this->shippingOrdersForMonthlyReport($startDate, $endDate)
             ->with(['activeShipment:id,order_id,shipping_cost'])
             ->get([
+                'id',
                 'officialized_at',
                 'internal_shipping_fee',
                 'external_delivery_meta',
@@ -528,6 +728,7 @@ class FinDailyProfitReportController extends Controller
         return $this->successfulOrdersForMonthlyReport($startDate, $endDate)
             ->with(['activeShipment:id,order_id,shipping_cost'])
             ->get([
+                'id',
                 'officialized_at',
                 'report_revenue_total',
                 'internal_shipping_fee',
@@ -572,12 +773,267 @@ class FinDailyProfitReportController extends Controller
             });
     }
 
+    private function normalizeMonthlyReportDrilldownMetric(?string $metric): ?string
+    {
+        $normalized = trim((string) $metric);
+
+        return array_key_exists($normalized, self::MONTHLY_REPORT_DRILLDOWN_METRICS)
+            ? $normalized
+            : null;
+    }
+
+    private function resolveMonthlyReportDrilldownRange(string $monthKey, string $reportStartDate, string $reportEndDate): ?array
+    {
+        if (!preg_match('/^\d{4}-\d{2}$/', $monthKey)) {
+            return null;
+        }
+
+        try {
+            $monthStart = Carbon::createFromFormat('Y-m-d', $monthKey . '-01')->startOfDay();
+            $monthEnd = (clone $monthStart)->endOfMonth()->endOfDay();
+            $reportStart = Carbon::createFromFormat('Y-m-d', $reportStartDate)->startOfDay();
+            $reportEnd = Carbon::createFromFormat('Y-m-d', $reportEndDate)->endOfDay();
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if ($reportStart->greaterThan($reportEnd)) {
+            return null;
+        }
+
+        $effectiveStart = $monthStart->greaterThan($reportStart) ? clone $monthStart : clone $reportStart;
+        $effectiveEnd = $monthEnd->lessThan($reportEnd) ? clone $monthEnd : clone $reportEnd;
+
+        if ($effectiveStart->greaterThan($effectiveEnd)) {
+            return null;
+        }
+
+        return [
+            'month_key' => $monthStart->format('Y-m'),
+            'month_label' => sprintf('Tháng %d/%d', (int) $monthStart->format('n'), (int) $monthStart->format('Y')),
+            'start_date' => $effectiveStart->format('Y-m-d'),
+            'end_date' => $effectiveEnd->format('Y-m-d'),
+        ];
+    }
+
+    private function dispatchedOrdersForMonthlyReport(string $startDate, string $endDate)
+    {
+        return Order::query()
+            ->whereNotNull('shipping_dispatched_at')
+            ->whereBetween('shipping_dispatched_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->where(function ($query) {
+                $query->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+    }
+
+    private function specialOrdersForMonthlyReport(string $startDate, string $endDate, string $orderType)
+    {
+        $startAt = $startDate . ' 00:00:00';
+        $endAt = $endDate . ' 23:59:59';
+
+        return Order::query()
+            ->where(function ($query) {
+                $query->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            })
+            ->where(function ($query) use ($startAt, $endAt) {
+                $query->whereBetween('officialized_at', [$startAt, $endAt])
+                    ->orWhere(function ($fallbackQuery) use ($startAt, $endAt) {
+                        $fallbackQuery->whereNull('officialized_at')
+                            ->whereBetween('created_at', [$startAt, $endAt]);
+                    });
+            })
+            ->where('order_type', $orderType)
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+    }
+
+    private function monthlyReportDrilldownOrders(string $metric, string $startDate, string $endDate): Collection
+    {
+        return match ($metric) {
+            'order_count' => $this->dispatchedOrdersForMonthlyReport($startDate, $endDate)
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'shipping_dispatched_at',
+                ]),
+            'revenue' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate)
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'officialized_at',
+                    'created_at',
+                    'total_price',
+                    'report_revenue_total',
+                ]),
+            'cost_actual' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate)
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'officialized_at',
+                    'created_at',
+                    'cost_total',
+                    'report_cost_total',
+                ]),
+            'shipping_fee' => $this->shippingOrdersForMonthlyReport($startDate, $endDate)
+                ->with(['activeShipment:id,order_id,shipping_cost'])
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'officialized_at',
+                    'created_at',
+                    'internal_shipping_fee',
+                    'external_delivery_meta',
+                    'total_price',
+                ]),
+            'exchange_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_EXCHANGE_RETURN)
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'officialized_at',
+                    'created_at',
+                    'report_profit_total',
+                ]),
+            'partial_delivery_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_PARTIAL_DELIVERY)
+                ->get([
+                    'id',
+                    'status',
+                    'order_type',
+                    'officialized_at',
+                    'created_at',
+                    'report_profit_total',
+                ]),
+            default => collect(),
+        };
+    }
+
+    private function calculateMonthlyReportDrilldownMetricValue(string $metric, Collection $orders): int|float
+    {
+        return match ($metric) {
+            'order_count' => $orders->count(),
+            'revenue' => round((float) $orders->sum(
+                fn (Order $order) => (float) ($order->report_revenue_total ?? $order->total_price ?? 0)
+            ), 2),
+            'cost_actual' => round((float) $orders->sum(
+                fn (Order $order) => (float) ($order->report_cost_total ?? $order->cost_total ?? 0)
+            ), 2),
+            'shipping_fee' => round((float) $orders->sum(
+                fn (Order $order) => $this->resolveMonthlyReportShippingFee($order)
+            ), 2),
+            'exchange_profit_loss',
+            'partial_delivery_profit_loss' => round((float) $orders->sum(
+                fn (Order $order) => (float) ($order->report_profit_total ?? 0)
+            ), 2),
+            default => 0,
+        };
+    }
+
+    private function buildMonthlyReportDrilldownFilters(string $metric, array $range, array $orderIds): array
+    {
+        return [
+            'order_ids' => array_values(array_unique(array_map('intval', $orderIds))),
+        ];
+    }
+
+    private function buildMonthlyReportDrilldownContextFilters(string $metric, array $range): array
+    {
+        $metricConfig = self::MONTHLY_REPORT_DRILLDOWN_METRICS[$metric] ?? [];
+        $dateFilterMode = (string) ($metricConfig['date_filter_mode'] ?? 'created');
+        $filters = [
+            'status' => $metricConfig['status'] ?? [],
+            'status_exclude' => $metricConfig['status_exclude'] ?? [],
+            'order_type' => $metricConfig['order_type'] ?? [],
+            'created_at_from' => '',
+            'created_at_to' => '',
+            'shipping_dispatched_from' => '',
+            'shipping_dispatched_to' => '',
+        ];
+
+        if ($dateFilterMode === 'shipping_dispatched') {
+            $filters['shipping_dispatched_from'] = $range['start_date'];
+            $filters['shipping_dispatched_to'] = $range['end_date'];
+        } else {
+            $filters['created_at_from'] = $range['start_date'];
+            $filters['created_at_to'] = $range['end_date'];
+        }
+
+        return $filters;
+    }
+
+    public function getMonthlyReportDrilldown(Request $request)
+    {
+        $request->validate([
+            'metric' => ['required', 'string'],
+            'month' => ['required', 'regex:/^\d{4}-\d{2}$/'],
+            'start_date' => ['nullable', 'date_format:Y-m-d'],
+            'end_date' => ['nullable', 'date_format:Y-m-d'],
+        ]);
+
+        $metric = $this->normalizeMonthlyReportDrilldownMetric($request->input('metric'));
+        if (!$metric) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Chỉ số drilldown không hợp lệ.',
+            ], 422);
+        }
+
+        $reportStartDate = (string) ($request->input('start_date') ?: date('Y-01-01'));
+        $reportEndDate = (string) ($request->input('end_date') ?: date('Y-m-d'));
+        $range = $this->resolveMonthlyReportDrilldownRange((string) $request->input('month'), $reportStartDate, $reportEndDate);
+
+        if (!$range) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Không thể xác định phạm vi tháng cần drilldown.',
+            ], 422);
+        }
+
+        $metricConfig = self::MONTHLY_REPORT_DRILLDOWN_METRICS[$metric];
+        $orders = $this->monthlyReportDrilldownOrders($metric, $range['start_date'], $range['end_date']);
+        $orderIds = $orders
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'metric' => $metric,
+                'metric_label' => $metricConfig['label'],
+                'summary_field' => $metricConfig['summary_field'],
+                'month_key' => $range['month_key'],
+                'month_label' => $range['month_label'],
+                'start_date' => $range['start_date'],
+                'end_date' => $range['end_date'],
+                'scope_label' => sprintf('Báo cáo tháng · %s · %s', $metricConfig['label'], $range['month_label']),
+                'value' => $this->calculateMonthlyReportDrilldownMetricValue($metric, $orders),
+                'order_ids' => $orderIds,
+                'filters' => $this->buildMonthlyReportDrilldownFilters($metric, $range, $orderIds),
+                'context_filters' => $this->buildMonthlyReportDrilldownContextFilters($metric, $range),
+            ],
+        ]);
+    }
+
     public function getReport(Request $request)
     {
         $startDate = $request->start_date ?: date('Y-m-01');
         $endDate = $request->end_date ?: date('Y-m-d');
 
-        $payload = $this->buildDailyReportPayload($startDate, $endDate);
+        $payload = $this->buildDailyReportPayload($startDate, $endDate, [
+            'status' => $request->input('status'),
+            'order_type' => $request->input('order_type'),
+        ]);
 
         return response()->json([
             'status' => 'success',

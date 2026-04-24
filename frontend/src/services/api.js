@@ -257,6 +257,32 @@ const multipartConfig = (data) => (
         : undefined
 );
 
+const sanitizeProductUpdatePayload = (data) => {
+    if (data instanceof FormData) {
+        const rawStockQuantity = data.get('stock_quantity');
+        if (typeof rawStockQuantity === 'string' && rawStockQuantity.trim() === '') {
+            data.delete('stock_quantity');
+        }
+
+        return data;
+    }
+
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const normalizedData = { ...data };
+        if (
+            normalizedData.stock_quantity === ''
+            || normalizedData.stock_quantity === null
+            || normalizedData.stock_quantity === undefined
+        ) {
+            delete normalizedData.stock_quantity;
+        }
+
+        return normalizedData;
+    }
+
+    return data;
+};
+
 const requestCache = {
     orderBootstrap: new Map(),
     orderDetail: new Map(),
@@ -336,7 +362,10 @@ export const productApi = {
     refreshOrderItems: (data) => api.post('/products/refresh-order-items', data),
     convertToConfigurable: (id, data) => api.post(`/products/${id}/convert-to-configurable`, data, multipartConfig(data)),
     store: (data) => api.post('/products', data, multipartConfig(data)),
-    update: (id, data) => api.post(`/products/${id}`, data, multipartConfig(data)), // POST for multipart support
+    update: (id, data) => {
+        const normalizedData = sanitizeProductUpdatePayload(data);
+        return api.post(`/products/${id}`, normalizedData, multipartConfig(normalizedData));
+    }, // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
     duplicate: (id) => api.post(`/products/${id}/duplicate`),
     restore: (id) => api.post(`/products/${id}/restore`),
@@ -722,6 +751,9 @@ export const financeApi = {
     // New Fixed Cost Tracker endpoints
     getFixedCostTracker: (params) => api.get('/finance/fixed-costs', { params }),
     applyFixedCosts: (data) => api.post('/finance/fixed-costs/apply', data),
+    createFixedCostCategory: (data) => api.post('/finance/fixed-costs/categories', data),
+    updateFixedCostCategory: (id, data) => api.put(`/finance/fixed-costs/categories/${id}`, data),
+    deleteFixedCostCategory: (id) => api.delete(`/finance/fixed-costs/categories/${id}`),
 
     getDailyProfitTable: (params) => api.get('/finance/daily-profit', { params }),
     saveDailyProfitConfig: (data) => api.post('/finance/daily-profit/config', data),
@@ -752,6 +784,7 @@ export const financeApi = {
     // Daily Profit/Loss Report (P&L)
     getDailyPnlReport: (params) => api.get('/finance/daily-pnl/report', { params }),
     getMonthlyPnlReport: (params) => api.get('/finance/daily-pnl/monthly-report', { params }),
+    getMonthlyPnlReportDrilldown: (params) => api.get('/finance/daily-pnl/monthly-report/drilldown', { params }),
     getDailyPnlConfig: () => api.get('/finance/daily-pnl/config'),
     updateDailyPnlConfig: (data) => api.post('/finance/daily-pnl/config', data),
     getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),

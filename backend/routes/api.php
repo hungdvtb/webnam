@@ -366,6 +366,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // New Fixed Cost Tracker with Snapshots (Google Sheets style)
     Route::get('/finance/fixed-costs', [\App\Http\Controllers\FixedCostController::class, 'index']);
+    Route::post('/finance/fixed-costs/categories', [\App\Http\Controllers\FixedCostController::class, 'storeCategory']);
+    Route::put('/finance/fixed-costs/categories/{id}', [\App\Http\Controllers\FixedCostController::class, 'updateCategory'])->whereNumber('id');
+    Route::delete('/finance/fixed-costs/categories/{id}', [\App\Http\Controllers\FixedCostController::class, 'destroyCategory'])->whereNumber('id');
     Route::post('/finance/fixed-costs/apply', [\App\Http\Controllers\FixedCostController::class, 'apply']);
     Route::get('/finance/daily-profit', [FinanceController::class, 'dailyProfitTable']);
     Route::post('/finance/daily-profit/config', [FinanceController::class, 'storeDailyProfitConfig']);
@@ -374,6 +377,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('finance/daily-pnl')->group(function () {
         Route::get('report', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getReport']);
         Route::get('monthly-report', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getMonthlyReport']);
+        Route::get('monthly-report/drilldown', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getMonthlyReportDrilldown']);
         Route::get('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getConfig']);
         Route::post('config', [\App\Http\Controllers\FinDailyProfitReportController::class, 'updateConfig']);
         Route::get('fb-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFacebookAdAccounts']);

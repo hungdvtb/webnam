@@ -131,6 +131,39 @@ class OrderListStatusFilterTest extends TestCase
         $this->assertNotContains($otherStatusOrder->id, $returnedIds);
     }
 
+    public function test_status_exclude_filter_removes_matching_statuses_from_order_list(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $newOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-STATUS-EXCLUDE-NEW-0001',
+            'status' => 'new',
+        ]);
+        $processingOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-STATUS-EXCLUDE-PROCESSING-0001',
+            'status' => 'processing',
+        ]);
+        $cancelledOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-STATUS-EXCLUDE-CANCELLED-0001',
+            'status' => 'cancelled',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?per_page=100&status_exclude=processing,cancelled');
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($newOrder->id, $returnedIds);
+        $this->assertNotContains($processingOrder->id, $returnedIds);
+        $this->assertNotContains($cancelledOrder->id, $returnedIds);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([

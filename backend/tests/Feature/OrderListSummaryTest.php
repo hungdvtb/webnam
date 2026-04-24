@@ -112,6 +112,58 @@ class OrderListSummaryTest extends TestCase
         $this->assertNotContains($shipmentBackedOrder->id, $returnedIds);
     }
 
+    public function test_order_list_summary_includes_report_totals_and_honors_status_exclude_filter(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $reportRevenueOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-REPORT-REV-0001',
+            'status' => 'completed',
+            'total_price' => 120000,
+            'cost_total' => 70000,
+            'report_revenue_total' => 105000,
+            'report_cost_total' => 68000,
+            'report_profit_total' => 37000,
+        ]);
+
+        $reportProfitOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-REPORT-PROFIT-0001',
+            'status' => 'processing',
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'total_price' => 0,
+            'cost_total' => 0,
+            'report_profit_total' => -5000,
+        ]);
+
+        $excludedOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-REPORT-EXCLUDED-0001',
+            'status' => 'cancelled',
+            'total_price' => 999999,
+            'cost_total' => 888888,
+            'report_revenue_total' => 777777,
+            'report_cost_total' => 666666,
+            'report_profit_total' => 555555,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?per_page=100&status_exclude=cancelled');
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($reportRevenueOrder->id, $returnedIds);
+        $this->assertContains($reportProfitOrder->id, $returnedIds);
+        $this->assertNotContains($excludedOrder->id, $returnedIds);
+        $this->assertSame(105000.0, (float) $response->json('summary.report_revenue_total'));
+        $this->assertSame(68000.0, (float) $response->json('summary.report_cost_total'));
+        $this->assertSame(32000.0, (float) $response->json('summary.report_profit_total'));
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([

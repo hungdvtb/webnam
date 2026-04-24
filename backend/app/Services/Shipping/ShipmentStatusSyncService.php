@@ -510,6 +510,7 @@ class ShipmentStatusSyncService
             try {
                 return round(
                     (float) $order->items()
+                        ->reorder()
                         ->selectRaw('COALESCE(SUM(price * quantity), 0) as aggregate')
                         ->value('aggregate'),
                     2
@@ -519,6 +520,10 @@ class ShipmentStatusSyncService
                     'order_id' => $order->id,
                     'message' => $exception->getMessage(),
                 ]);
+
+                if (DB::connection()->transactionLevel() > 0) {
+                    throw $exception;
+                }
             }
         }
 

@@ -65,12 +65,18 @@ function App() {
   useEffect(() => {
     const resolveSite = async () => {
       const configuredSiteCode = String(siteConfig.SITE_CODE || '').trim();
+      const isAdminRoute = typeof window !== 'undefined' && window.location.pathname.startsWith('/admin');
 
       if (!configuredSiteCode) {
         siteConfig.accountId = null;
         siteConfig.accountName = null;
-        localStorage.removeItem('activeAccountId');
-        localStorage.removeItem('activeSiteCode');
+
+        // Keep the active admin account across reloads when the app runs without a fixed site code.
+        if (!isAdminRoute) {
+          localStorage.removeItem('activeAccountId');
+          localStorage.removeItem('activeSiteCode');
+        }
+
         setSiteReady(true);
         return;
       }

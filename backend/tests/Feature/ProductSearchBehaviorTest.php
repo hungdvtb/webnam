@@ -422,30 +422,44 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BAT-HUONG-LAM-018');
     }
 
-    public function test_attribute_filter_matches_multiselect_json_values(): void
+    public function test_attribute_filter_matches_only_exact_attribute_values(): void
     {
         $account = $this->authenticate();
         $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
             'Men lam',
             'Men ran',
-            'Men trang',
+            'Men lam ve vang',
         ], [
             'frontend_type' => 'multiselect',
         ]);
 
         $matching = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam',
+            'sku' => 'BUNDLE-MEN-LAM',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($matching, $glazeAttribute, 'Men lam');
+
+        $matchingSingleJson = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam json',
+            'sku' => 'BUNDLE-MEN-LAM-JSON',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($matchingSingleJson, $glazeAttribute, ['Men lam']);
+
+        $mixed = $this->createProduct($account, [
             'name' => 'Bo do tho nhieu loai men',
             'sku' => 'BUNDLE-MEN-LAM-RAN',
             'type' => 'bundle',
         ]);
-        $this->attachProductAttributeValue($matching, $glazeAttribute, ['Men lam', 'Men ran']);
+        $this->attachProductAttributeValue($mixed, $glazeAttribute, ['Men lam', 'Men ran']);
 
-        $other = $this->createProduct($account, [
-            'name' => 'Bo do tho men trang',
-            'sku' => 'BUNDLE-MEN-TRANG',
+        $closeMatch = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam ve vang',
+            'sku' => 'BUNDLE-MEN-LAM-VE-VANG',
             'type' => 'bundle',
         ]);
-        $this->attachProductAttributeValue($other, $glazeAttribute, ['Men trang']);
+        $this->attachProductAttributeValue($closeMatch, $glazeAttribute, 'Men lam ve vang');
 
         $response = $this
             ->withHeaders($this->headers($account))
@@ -456,11 +470,70 @@ class ProductSearchBehaviorTest extends TestCase
                 ],
             ]));
 
-        $response
-            ->assertOk()
-            ->assertJsonPath('total', 1)
-            ->assertJsonPath('data.0.id', $matching->id)
-            ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-RAN');
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertEqualsCanonicalizing(
+            [$matching->id, $matchingSingleJson->id],
+            $returnedIds
+        );
+        $this->assertNotContains($mixed->id, $returnedIds);
+        $this->assertNotContains($closeMatch->id, $returnedIds);
+    }
+
+    public function test_admin_attribute_filter_does_not_match_bundle_parent_by_child_item_attributes(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+        ]);
+
+        $matching = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam chuan',
+            'sku' => 'BUNDLE-MEN-LAM-EXACT',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($matching, $glazeAttribute, 'Men lam');
+
+        $child = $this->createProduct($account, [
+            'name' => 'Chan nen men lam',
+            'sku' => 'CHAN-NEN-MEN-LAM-CHILD',
+        ]);
+        $this->attachProductAttributeValue($child, $glazeAttribute, 'Men lam');
+
+        $leakingBundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men ran',
+            'sku' => 'BUNDLE-MEN-RAN-LEAK',
+            'type' => 'bundle',
+        ]);
+        $this->attachProductAttributeValue($leakingBundle, $glazeAttribute, 'Men ran');
+        $this->attachBundleItem($leakingBundle, $child, [
+            'option_title' => 'Ban 1m',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($matching->id, $returnedIds);
+        $this->assertNotContains($leakingBundle->id, $returnedIds);
     }
 
     public function test_picker_attribute_filter_can_match_bundle_by_child_item_attributes(): void

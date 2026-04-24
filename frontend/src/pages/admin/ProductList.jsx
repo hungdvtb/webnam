@@ -476,7 +476,69 @@ function getDefaultProductFilters() {
     };
 }
 
-function sanitizeProductFilters(rawFilters) {
+function sanitizeAttributeFilterValues(rawValues, allowedValues = null) {
+    const candidates = [];
+
+    const pushCandidate = (value) => {
+        if (value === null || value === undefined) {
+            return;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach(pushCandidate);
+            return;
+        }
+
+        const normalizedValue = String(value).trim();
+        if (normalizedValue !== '') {
+            candidates.push(normalizedValue);
+        }
+    };
+
+    pushCandidate(rawValues);
+
+    const uniqueCandidates = Array.from(new Set(candidates));
+    if (!(allowedValues instanceof Set) || allowedValues.size === 0) {
+        return uniqueCandidates;
+    }
+
+    return uniqueCandidates.filter((value) => allowedValues.has(value));
+}
+
+function sanitizeAttributeFilters(rawAttributes, attributeCatalog = []) {
+    if (!rawAttributes || typeof rawAttributes !== 'object' || Array.isArray(rawAttributes)) {
+        return {};
+    }
+
+    const catalogLookup = new Map(
+        (Array.isArray(attributeCatalog) ? attributeCatalog : []).map((attribute) => [
+            String(attribute?.id ?? '').trim(),
+            new Set(
+                (Array.isArray(attribute?.options) ? attribute.options : [])
+                    .map((option) => String(option?.value ?? '').trim())
+                    .filter(Boolean)
+            ),
+        ]).filter(([attributeId]) => attributeId !== '')
+    );
+
+    return Object.entries(rawAttributes).reduce((nextFilters, [attributeId, rawValues]) => {
+        const normalizedAttributeId = String(attributeId ?? '').trim();
+        if (normalizedAttributeId === '') {
+            return nextFilters;
+        }
+
+        const allowedValues = catalogLookup.get(normalizedAttributeId) ?? null;
+        const normalizedValues = sanitizeAttributeFilterValues(rawValues, allowedValues);
+        if (normalizedValues.length === 0) {
+            return nextFilters;
+        }
+
+        nextFilters[normalizedAttributeId] = normalizedValues;
+        return nextFilters;
+    }, {});
+}
+
+function sanitizeProductFilters(rawFilters, attributeCatalog = []) {
     const normalizeBinary = (value) => (value === true || value === 1 || value === '1') ? '1' : ((value === false || value === 0 || value === '0') ? '0' : '');
     
     const normalizedHasImages = normalizeBinary(rawFilters?.has_images);
@@ -490,6 +552,7 @@ function sanitizeProductFilters(rawFilters) {
         has_description: normalizedHasDescription,
         inventory_unit_filter: normalizeInventoryUnitFilterValue(rawFilters?.inventory_unit_filter),
         type: sanitizeActiveProductTypeValues(rawFilters?.type),
+        attributes: sanitizeAttributeFilters(rawFilters?.attributes, attributeCatalog),
     };
 }
 
@@ -716,6 +779,122 @@ function getQuickEditAttributeValue(product, attribute) {
     return normalizeQuickEditAttributeValue(attribute, attributeValue?.value);
 }
 
+function normalizeQuickEditProductType(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function getQuickEditConfigurableSourceId(product) {
+    if (!product || typeof product !== 'object') {
+        return null;
+    }
+
+    const parentProduct = getConfigurableParentProduct(product);
+    if (parentProduct?.id !== undefined && parentProduct?.id !== null) {
+        return normalizeStoredId(parentProduct.id);
+    }
+
+    if (normalizeQuickEditProductType(product?.type) === 'configurable') {
+        return normalizeStoredId(product?.id);
+    }
+
+    return null;
+}
+
+function normalizeQuickEditAttributeSummaryValue(rawValue) {
+    if (rawValue === null || rawValue === undefined) {
+        return '';
+    }
+
+    if (Array.isArray(rawValue)) {
+        return rawValue
+            .map((item) => normalizeQuickEditAttributeSummaryValue(item))
+            .filter(Boolean)
+            .join(', ');
+    }
+
+    if (typeof rawValue === 'string') {
+        const trimmedValue = rawValue.trim();
+        if (!trimmedValue) {
+            return '';
+        }
+
+        try {
+            return normalizeQuickEditAttributeSummaryValue(JSON.parse(trimmedValue));
+        } catch (_error) {
+            return trimmedValue;
+        }
+    }
+
+    if (typeof rawValue === 'object') {
+        const objectValues = Object.values(rawValue)
+            .map((item) => normalizeQuickEditAttributeSummaryValue(item))
+            .filter(Boolean);
+
+        return objectValues.length > 0
+            ? objectValues.join(', ')
+            : JSON.stringify(rawValue);
+    }
+
+    return String(rawValue);
+}
+
+function buildQuickEditAttributeSummary(product, attributes = []) {
+    const attributeLookup = new Map(
+        (Array.isArray(attributes) ? attributes : []).map((attribute) => [String(attribute.id), attribute]),
+    );
+
+    return (Array.isArray(product?.attribute_values) ? product.attribute_values : [])
+        .map((attributeValue) => {
+            const attribute = attributeValue?.attribute || attributeLookup.get(String(attributeValue?.attribute_id));
+            const label = String(attribute?.name || '').trim();
+            const value = normalizeQuickEditAttributeSummaryValue(attributeValue?.value);
+
+            if (!value) {
+                return '';
+            }
+
+            return label ? `${label}: ${value}` : value;
+        })
+        .filter(Boolean)
+        .join(' • ');
+}
+
+function buildQuickEditEditableProduct(product, attributes = [], options = {}) {
+    const parentProduct = options.parentProduct || null;
+
+    return {
+        ...product,
+        quick_edit_row_type: options.rowType || 'product',
+        quick_edit_parent_id: parentProduct?.id ?? null,
+        quick_edit_parent_name: String(parentProduct?.name || ''),
+        quick_edit_parent_sku: String(parentProduct?.sku || ''),
+        quick_edit_variant_count: Number(options.variantCount ?? 0) || 0,
+        quick_edit_attribute_summary: buildQuickEditAttributeSummary(product, attributes),
+    };
+}
+
+function expandQuickEditProducts(product, attributes = []) {
+    if (!product || typeof product !== 'object') {
+        return [];
+    }
+
+    const variations = Array.isArray(product?.variations) ? product.variations : [];
+    if (normalizeQuickEditProductType(product?.type) === 'configurable' && variations.length > 0) {
+        return [
+            buildQuickEditEditableProduct(product, attributes, {
+                rowType: 'parent',
+                variantCount: variations.length,
+            }),
+            ...variations.map((variation) => buildQuickEditEditableProduct(variation, attributes, {
+                rowType: 'variant',
+                parentProduct: product,
+            })),
+        ];
+    }
+
+    return [buildQuickEditEditableProduct(product, attributes)];
+}
+
 function buildQuickEditProductDraft(product, attributes = []) {
     const customAttributes = Object.fromEntries(
         attributes.map((attribute) => [String(attribute.id), getQuickEditAttributeValue(product, attribute)]),
@@ -804,6 +983,75 @@ function findQuickEditGlazeAttribute(attributes = []) {
     return (Array.isArray(attributes) ? attributes : []).find((attribute) => (
         normalizeQuickEditSearchText(attribute?.name).includes('loai men')
     )) || null;
+}
+
+function buildQuickEditSearchIndex(product, draft = null, original = null) {
+    const values = [];
+
+    const pushValue = (value) => {
+        if (value === null || value === undefined) {
+            return;
+        }
+
+        if (Array.isArray(value)) {
+            value.forEach(pushValue);
+            return;
+        }
+
+        const normalizedValue = String(value).trim();
+        if (!normalizedValue) {
+            return;
+        }
+
+        values.push(normalizedValue);
+    };
+
+    const pushProductReferences = (item) => {
+        if (!item || typeof item !== 'object') {
+            return;
+        }
+
+        pushValue(item.name);
+        pushValue(item.sku);
+        pushValue(item.variant_sku);
+        pushValue(item.variant_code);
+        pushValue(item.variation_sku);
+        pushValue(item.variation_code);
+        pushValue(item.supplier_product_code);
+    };
+
+    pushProductReferences(product);
+    pushValue(product?.slug);
+    pushValue(product?.id);
+    pushValue(draft?.name);
+    pushValue(draft?.sku);
+    pushValue(original?.name);
+    pushValue(original?.sku);
+    pushValue(product?.quick_edit_parent_name);
+    pushValue(product?.quick_edit_attribute_summary);
+    pushProductReferences(getVariantParentProduct(product));
+    pushProductReferences(getConfigurableParentProduct(product));
+
+    (Array.isArray(product?.parent_products) ? product.parent_products : []).forEach(pushProductReferences);
+    (Array.isArray(product?.parent_configurable) ? product.parent_configurable : []).forEach(pushProductReferences);
+    (Array.isArray(product?.variations) ? product.variations : []).forEach(pushProductReferences);
+
+    return normalizeQuickEditSearchText(values.join(' '));
+}
+
+function formatQuickEditMoneyPreview(value, normalizer = normalizeWholeMoneyNumber) {
+    const normalizedValue = normalizer(value);
+
+    if (normalizedValue === null || normalizedValue === undefined) {
+        return '--';
+    }
+
+    const numericValue = Number(normalizedValue);
+    if (!Number.isFinite(numericValue)) {
+        return '--';
+    }
+
+    return `${new Intl.NumberFormat('vi-VN').format(Math.round(numericValue))}₫`;
 }
 
 const ProductList = () => {
@@ -923,6 +1171,8 @@ const ProductList = () => {
     const [quickEditLoading, setQuickEditLoading] = useState(false);
     const [quickEditSubmitting, setQuickEditSubmitting] = useState(false);
     const [quickEditRowErrors, setQuickEditRowErrors] = useState({});
+    const [quickEditSearchQuery, setQuickEditSearchQuery] = useState('');
+    const [quickEditExpanded, setQuickEditExpanded] = useState(false);
     const quickEditTableScrollRef = useRef(null);
     const quickEditTopScrollbarRef = useRef(null);
     const quickEditHorizontalSyncSourceRef = useRef(null);
@@ -939,6 +1189,23 @@ const ProductList = () => {
     ));
     const quickEditSelectedCoreFieldKey = quickEditSelectedCoreFields.join('|');
     const quickEditSelectedAttributeKey = quickEditSelectedAttributeIds.join('|');
+    const quickEditNormalizedSearchQuery = normalizeQuickEditSearchText(quickEditSearchQuery);
+    const quickEditFilteredProducts = useMemo(() => {
+        if (!quickEditNormalizedSearchQuery) {
+            return quickEditProducts;
+        }
+
+        return quickEditProducts.filter((product) => {
+            const productKey = String(product?.id ?? '');
+            const searchIndex = buildQuickEditSearchIndex(
+                product,
+                quickEditDrafts[productKey],
+                quickEditOriginals[productKey],
+            );
+
+            return searchIndex.includes(quickEditNormalizedSearchQuery);
+        });
+    }, [quickEditDrafts, quickEditNormalizedSearchQuery, quickEditOriginals, quickEditProducts]);
     const quickEditHasHorizontalOverflow = quickEditTableMetrics.scrollWidth > (quickEditTableMetrics.clientWidth + 1);
     const quickEditTopScrollbarWidth = Math.max(quickEditTableMetrics.scrollWidth, quickEditTableMetrics.clientWidth, 0);
 
@@ -1035,11 +1302,24 @@ const ProductList = () => {
     }, [
         showQuickEditModal,
         quickEditLoading,
-        quickEditProducts.length,
+        quickEditFilteredProducts.length,
         quickEditSelectedCoreFieldKey,
         quickEditSelectedAttributeKey,
+        quickEditExpanded,
+        quickEditNormalizedSearchQuery,
         measureQuickEditTableMetrics,
     ]);
+
+    useEffect(() => {
+        if (!showQuickEditModal) {
+            return;
+        }
+
+        const tableScrollElement = quickEditTableScrollRef.current;
+        if (tableScrollElement) {
+            tableScrollElement.scrollTop = 0;
+        }
+    }, [showQuickEditModal, quickEditNormalizedSearchQuery]);
 
     const resetQuickEditState = () => {
         setShowQuickEditModal(false);
@@ -1052,6 +1332,8 @@ const ProductList = () => {
         setQuickEditLoading(false);
         setQuickEditSubmitting(false);
         setQuickEditRowErrors({});
+        setQuickEditSearchQuery('');
+        setQuickEditExpanded(false);
         setQuickEditTableMetrics({ scrollWidth: 0, clientWidth: 0 });
         quickEditHorizontalSyncSourceRef.current = null;
     };
@@ -1169,29 +1451,31 @@ const ProductList = () => {
         setShowQuickEditModal(true);
         setQuickEditLoading(true);
         setQuickEditRowErrors({});
+        setQuickEditSearchQuery('');
+        setQuickEditExpanded(false);
 
         try {
             const visibleLookup = createQuickEditProductLookup(products);
-            const resolvedLookup = new Map();
+            const selectedLookup = new Map();
 
             normalizedIds.forEach((id) => {
                 const matched = visibleLookup.get(String(id));
                 if (matched) {
-                    resolvedLookup.set(String(id), matched);
+                    selectedLookup.set(String(id), matched);
                 }
             });
 
-            const missingIds = normalizedIds.filter((id) => !resolvedLookup.has(String(id)));
+            const missingIds = normalizedIds.filter((id) => !selectedLookup.has(String(id)));
+            let failedCount = 0;
             if (missingIds.length > 0) {
                 const loadedProducts = await Promise.allSettled(
                     missingIds.map((id) => productApi.getOne(id)),
                 );
 
-                let failedCount = 0;
                 loadedProducts.forEach((result, index) => {
                     const targetId = missingIds[index];
                     if (result.status === 'fulfilled' && result.value?.data) {
-                        resolvedLookup.set(String(targetId), result.value.data);
+                        selectedLookup.set(String(targetId), result.value.data);
                     } else {
                         failedCount += 1;
                     }
@@ -1206,9 +1490,79 @@ const ProductList = () => {
                 }
             }
 
-            const resolvedProducts = normalizedIds
-                .map((id) => resolvedLookup.get(String(id)))
-                .filter(Boolean);
+            const configurableSourceIds = Array.from(
+                new Map(
+                    normalizedIds
+                        .map((id) => getQuickEditConfigurableSourceId(selectedLookup.get(String(id))))
+                        .filter((value) => value !== null)
+                        .map((value) => [String(value), value]),
+                ).values(),
+            );
+
+            const configurableLookup = new Map();
+            let failedConfigurableCount = 0;
+            if (configurableSourceIds.length > 0) {
+                const loadedConfigurableProducts = await Promise.allSettled(
+                    configurableSourceIds.map((id) => productApi.getOne(id)),
+                );
+
+                loadedConfigurableProducts.forEach((result, index) => {
+                    const targetId = configurableSourceIds[index];
+                    if (result.status === 'fulfilled' && result.value?.data) {
+                        configurableLookup.set(String(targetId), result.value.data);
+                    } else {
+                        failedConfigurableCount += 1;
+                    }
+                });
+            }
+
+            if (failedConfigurableCount > 0) {
+                const messageParts = [];
+
+                if (failedCount > 0) {
+                    messageParts.push(`không tải được ${failedCount} sản phẩm`);
+                }
+
+                if (failedConfigurableCount > 0) {
+                    messageParts.push(`không tải đủ chi tiết biến thể cho ${failedConfigurableCount} sản phẩm có biến thể`);
+                }
+
+                setNotification({
+                    type: 'error',
+                    message: `Chế độ sửa nhanh: ${messageParts.join(' và ')}.`,
+                });
+                setTimeout(() => setNotification(null), 5000);
+            }
+
+            const resolvedProducts = [];
+            const resolvedRowIds = new Set();
+
+            normalizedIds.forEach((id) => {
+                const selectedProduct = selectedLookup.get(String(id));
+                if (!selectedProduct) {
+                    return;
+                }
+
+                const configurableSourceId = getQuickEditConfigurableSourceId(selectedProduct);
+                const expandedProducts = configurableSourceId !== null
+                    ? expandQuickEditProducts(
+                        configurableLookup.get(String(configurableSourceId))
+                        || visibleLookup.get(String(configurableSourceId))
+                        || (normalizeQuickEditProductType(selectedProduct?.type) === 'configurable' ? selectedProduct : null)
+                        || selectedProduct,
+                        allAttributes,
+                    )
+                    : expandQuickEditProducts(selectedProduct, allAttributes);
+
+                expandedProducts.forEach((product) => {
+                    if (!product?.id || resolvedRowIds.has(String(product.id))) {
+                        return;
+                    }
+
+                    resolvedRowIds.add(String(product.id));
+                    resolvedProducts.push(product);
+                });
+            });
 
             if (resolvedProducts.length === 0) {
                 resetQuickEditState();
@@ -1996,9 +2350,28 @@ const ProductList = () => {
     }, [loading, pagination.current_page, products.length, writeWorkingStateSnapshot]);
 
     useEffect(() => {
-        fetchInitialData();
-        // Load with persisted page/filters
-        fetchProducts(pagination.current_page);
+        let isMounted = true;
+
+        const initialize = async () => {
+            const attributeCatalog = await fetchInitialData();
+            if (!isMounted) {
+                return;
+            }
+
+            fetchProducts(
+                pagination.current_page,
+                filters,
+                sortConfig,
+                pagination.per_page,
+                attributeCatalog
+            );
+        };
+
+        initialize();
+
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
     useEffect(() => {
@@ -2050,18 +2423,21 @@ const ProductList = () => {
         try {
             const [catRes, attrRes, supplierRes, unitRes, domainRes] = await Promise.all([
                 categoryApi.getAll(),
-                attributeApi.getAll({ active_only: true }),
+                attributeApi.getAll({ entity_type: 'product', active_only: true }),
                 inventoryApi.getSuppliers({ per_page: 500 }),
                 inventoryApi.getUnits(),
                 cmsApi.domains.getAll().catch(() => ({ data: [] })),
             ]);
+            const productAttributes = Array.isArray(attrRes.data) ? attrRes.data : [];
             setCategories(catRes.data || []);
-            setAllAttributes(attrRes.data || []);
+            setAllAttributes(productAttributes);
+            setFilters((prev) => sanitizeProductFilters(prev, productAttributes));
+            setTempFilters((prev) => prev ? sanitizeProductFilters(prev, productAttributes) : prev);
             setSuppliers(supplierRes.data?.data || []);
             setInventoryUnits(Array.isArray(unitRes.data) ? unitRes.data : []);
             setDomains((domainRes.data || []).filter((item) => item?.is_active));
 
-            const attrColumns = (attrRes.data || []).map(attr => ({
+            const attrColumns = productAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
                 label: attr.name,
                 minWidth: '150px',
@@ -2121,11 +2497,15 @@ const ProductList = () => {
             } else {
                 setVisibleColumns(sortedColumns.map(c => c.id));
             }
-        } catch (error) { console.error("Error fetching initial data", error); }
+            return productAttributes;
+        } catch (error) {
+            console.error("Error fetching initial data", error);
+            return [];
+        }
     };
 
-    const buildQueryParams = useCallback((page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
-        const normalizedFilters = sanitizeProductFilters(currentFilters);
+    const buildQueryParams = useCallback((page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page, attributeCatalog = allAttributes) => {
+        const normalizedFilters = sanitizeProductFilters(currentFilters, attributeCatalog);
         const selectedOnlyIds = showSelectedOnlyRef.current
             ? sanitizeStoredIdList(selectedIdsRef.current)
             : [];
@@ -2187,7 +2567,7 @@ const ProductList = () => {
         }
 
         return params;
-    }, [filters, isTrashView, pagination.per_page, sortConfig]);
+    }, [allAttributes, filters, isTrashView, pagination.per_page, sortConfig]);
 
     const imageManagerScopeLabel = selectedIds.length > 0
         ? `${selectedIds.length} sản phẩm đã chọn`
@@ -2223,10 +2603,11 @@ const ProductList = () => {
         } catch (error) { console.error("Error fetching trash count", error); }
     };
 
-    const fetchProducts = async (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page) => {
+    const fetchProducts = async (page = 1, currentFilters = filters, currentSort = sortConfig, limit = pagination.per_page, attributeCatalog = allAttributes) => {
         setLoading(true);
         try {
-            const params = buildQueryParams(page, currentFilters, currentSort, limit);
+            const normalizedFilters = sanitizeProductFilters(currentFilters, attributeCatalog);
+            const params = buildQueryParams(page, normalizedFilters, currentSort, limit, attributeCatalog);
             const response = await productApi.getAll(params);
             setProducts(response.data.data);
             setPagination({
@@ -2404,7 +2785,7 @@ const ProductList = () => {
     };
 
     const applyFilters = () => {
-        const normalizedFilters = sanitizeProductFilters(tempFilters);
+        const normalizedFilters = sanitizeProductFilters(tempFilters, allAttributes);
         setTempFilters(normalizedFilters);
         setFilters(normalizedFilters);
         setShowAdvanced(false);
@@ -2435,7 +2816,7 @@ const ProductList = () => {
             } else {
                 newFilters[key] = '';
             }
-            const normalizedFilters = sanitizeProductFilters(newFilters);
+            const normalizedFilters = sanitizeProductFilters(newFilters, allAttributes);
             fetchProducts(1, normalizedFilters);
             return normalizedFilters;
         });
@@ -3234,6 +3615,21 @@ const ProductList = () => {
                 return;
             }
             basic_info.expected_cost = normalizedExpectedCost;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(basic_info, 'stock_quantity')) {
+            const rawStockQuantity = String(basic_info.stock_quantity ?? '').trim();
+            if (rawStockQuantity === '') {
+                delete basic_info.stock_quantity;
+            } else {
+                const normalizedStockQuantity = Number(rawStockQuantity);
+                if (!Number.isInteger(normalizedStockQuantity) || normalizedStockQuantity < 0) {
+                    setNotification({ type: 'error', message: 'Tồn kho phải là số nguyên không âm.' });
+                    setTimeout(() => setNotification(null), 4000);
+                    return;
+                }
+                basic_info.stock_quantity = normalizedStockQuantity;
+            }
         }
         
         if (Object.prototype.hasOwnProperty.call(basic_info, 'inventory_unit_id')) {
@@ -4569,7 +4965,7 @@ const ProductList = () => {
                         <button 
                             data-filter-btn 
                             onClick={() => {
-                                if (!showAdvanced) setTempFilters(sanitizeProductFilters(filters));
+                                if (!showAdvanced) setTempFilters(sanitizeProductFilters(filters, allAttributes));
                                 setShowAdvanced(!showAdvanced);
                             }} 
                             className={`p-1.5 border transition-all rounded-sm w-9 h-9 ${showAdvanced ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} 
@@ -5927,12 +6323,20 @@ const ProductList = () => {
 
             {showQuickEditModal && (
                 <div
-                    className="fixed inset-0 z-[105] bg-black/60 flex items-center justify-center p-4"
+                    className={`fixed inset-0 z-[105] bg-black/60 flex ${
+                        quickEditExpanded
+                            ? 'items-stretch justify-stretch p-2 sm:p-3'
+                            : 'items-center justify-center p-4'
+                    }`}
                     onClick={closeQuickEditModal}
                 >
                     <div
                         data-quick-edit-modal="true"
-                        className="bg-white rounded p-6 w-full max-w-7xl max-h-[92vh] flex flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+                        className={`bg-white rounded p-6 w-full flex min-h-0 flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200 transition-all ${
+                            quickEditExpanded
+                                ? 'h-full max-h-none max-w-none'
+                                : 'max-w-7xl max-h-[92vh]'
+                        }`}
                         onClick={(event) => event.stopPropagation()}
                     >
                         <div className="flex justify-between items-center gap-4 mb-4 border-b border-primary/10 pb-4">
@@ -5955,7 +6359,7 @@ const ProductList = () => {
                             </button>
                         </div>
 
-                        <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 space-y-4">
+                        <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 min-h-0 space-y-4">
                             <div className="rounded-sm border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] text-sky-950">
                                 Đang chuẩn bị sửa nhanh cho <strong>{quickEditProducts.length}</strong> sản phẩm.
                                 Hiện có <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật.
@@ -6050,15 +6454,58 @@ const ProductList = () => {
                             </div>
 
                             <section className="space-y-3">
-                                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                                     <div>
                                         <h3 className="text-[14px] font-black uppercase tracking-[0.16em] text-primary">Bảng sửa nhanh</h3>
                                         <p className="mt-2 text-[12px] text-primary/60">
                                             Chỉnh trực tiếp từng ô, sau đó bấm <strong>Lưu sửa nhanh</strong>. Nút <strong>Hủy</strong> sẽ đóng cửa sổ mà không ghi thay đổi nào.
                                         </p>
                                     </div>
-                                    <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/65">
-                                        <strong>{quickEditProducts.length}</strong> sản phẩm • <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                                        <div className="relative min-w-0 sm:w-[320px]">
+                                            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/40">
+                                                search
+                                            </span>
+                                            <input
+                                                type="text"
+                                                value={quickEditSearchQuery}
+                                                onChange={(event) => setQuickEditSearchQuery(event.target.value)}
+                                                placeholder="Tìm tên sản phẩm, SKU, mã biến thể..."
+                                                className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-10 text-[12px] font-semibold text-primary outline-none transition-all focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                                                data-quick-edit-search="true"
+                                            />
+                                            {quickEditSearchQuery ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setQuickEditSearchQuery('')}
+                                                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-primary/45 transition-colors hover:bg-primary/5 hover:text-primary"
+                                                    aria-label="Xóa tìm kiếm sửa nhanh"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setQuickEditExpanded((prev) => !prev)}
+                                            className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-3 text-[12px] font-bold transition-all ${
+                                                quickEditExpanded
+                                                    ? 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100'
+                                                    : 'border-primary/15 bg-white text-primary/75 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                            }`}
+                                            data-quick-edit-zoom="true"
+                                            aria-pressed={quickEditExpanded}
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">
+                                                {quickEditExpanded ? 'fullscreen_exit' : 'open_in_full'}
+                                            </span>
+                                            {quickEditExpanded ? 'Thu gọn' : 'Phóng to'}
+                                        </button>
+                                        <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/65">
+                                            <strong>{quickEditFilteredProducts.length}</strong>
+                                            {quickEditNormalizedSearchQuery ? `/${quickEditProducts.length}` : ''}
+                                            {' '}sản phẩm • <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật
+                                        </div>
                                     </div>
                                 </div>
 
@@ -6072,6 +6519,21 @@ const ProductList = () => {
                                 ) : quickEditProducts.length === 0 ? (
                                     <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
                                         Không có sản phẩm nào sẵn sàng để sửa nhanh.
+                                    </div>
+                                ) : quickEditFilteredProducts.length === 0 ? (
+                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                        <div className="flex flex-col items-center gap-3">
+                                            <span className="material-symbols-outlined text-[24px] text-primary/35">search_off</span>
+                                            <p>Không tìm thấy sản phẩm phù hợp trong danh sách đang sửa nhanh.</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuickEditSearchQuery('')}
+                                                className="inline-flex items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 py-2 font-bold text-primary/75 transition-colors hover:border-primary/30 hover:bg-primary/[0.03]"
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                                                Xóa tìm kiếm
+                                            </button>
+                                        </div>
                                     </div>
                                 ) : (
                                     <div className="rounded-sm border border-primary/10 overflow-hidden bg-white shadow-sm">
@@ -6100,7 +6562,11 @@ const ProductList = () => {
                                             ref={quickEditTableScrollRef}
                                             data-quick-edit-table-scroll="true"
                                             onScroll={handleQuickEditTableScroll}
-                                            className="max-h-[54vh] overflow-auto custom-scrollbar"
+                                            className={`overflow-auto custom-scrollbar ${
+                                                quickEditExpanded
+                                                    ? 'max-h-[68vh] md:max-h-[72vh] xl:max-h-[74vh]'
+                                                    : 'max-h-[54vh]'
+                                            }`}
                                         >
                                             <table data-quick-edit-table="true" className="min-w-full border-collapse">
                                                 <thead className="sticky top-0 z-20 bg-[#F8FAFC] shadow-sm">
@@ -6121,8 +6587,21 @@ const ProductList = () => {
                                                     </tr>
                                                 </thead>
                                                 <tbody>
-                                                    {quickEditProducts.map((product) => {
+                                                    {quickEditFilteredProducts.map((product) => {
                                                         const rowError = quickEditRowErrors[String(product.id)];
+                                                        const draft = quickEditDrafts[String(product.id)] || {};
+                                                        const rowType = String(product?.quick_edit_row_type || 'product');
+                                                        const isVariantRow = rowType === 'variant';
+                                                        const isParentRow = rowType === 'parent';
+                                                        const displaySalePrice = formatQuickEditMoneyPreview(
+                                                            draft.price ?? product?.price,
+                                                            normalizeWholeMoneyNumber,
+                                                        );
+                                                        const displayExpectedCost = formatQuickEditMoneyPreview(
+                                                            draft.expected_cost ?? product?.expected_cost ?? product?.cost_price,
+                                                            normalizeRoundedImportCostNumber,
+                                                        );
+                                                        const attributeSummary = String(product?.quick_edit_attribute_summary || '').trim();
                                                         const categoryLabel = product?.category?.name
                                                             || categories.find((category) => String(category.id) === String(product?.category_id))?.name
                                                             || 'Chưa gắn danh mục';
@@ -6133,12 +6612,37 @@ const ProductList = () => {
                                                                     <div className="space-y-2">
                                                                         <div className="flex flex-wrap items-center gap-2">
                                                                             <p className="text-[13px] font-black text-[#0F172A]">{product.name || `Sản phẩm #${product.id}`}</p>
+                                                                            {isVariantRow ? (
+                                                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700">
+                                                                                    Biến thể
+                                                                                </span>
+                                                                            ) : isParentRow ? (
+                                                                                <span className="rounded-sm border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
+                                                                                    Sản phẩm cha
+                                                                                </span>
+                                                                            ) : null}
                                                                             <span className={`rounded-sm px-2 py-0.5 text-[10px] font-black ${TYPE_LABELS[product.type]?.cls || 'border border-primary/10 bg-primary/[0.04] text-primary/70'}`}>
                                                                                 {TYPE_LABELS[product.type]?.label || product.type || 'Sản phẩm'}
                                                                             </span>
                                                                         </div>
                                                                         <div className="text-[11px] text-primary/55 space-y-1">
-                                                                            <div>SKU hiện tại: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
+                                                                            {isVariantRow ? (
+                                                                                <div>Biến thể của: <span className="font-bold text-primary/75">{product.quick_edit_parent_name || `Sản phẩm #${product.quick_edit_parent_id}`}</span></div>
+                                                                            ) : null}
+                                                                            {isParentRow ? (
+                                                                                <div>Có <span className="font-bold text-primary/75">{product.quick_edit_variant_count || 0}</span> biến thể trong bảng sửa nhanh này</div>
+                                                                            ) : null}
+                                                                            {attributeSummary ? (
+                                                                                <div>Thuộc tính: <span className="font-semibold text-primary/75">{attributeSummary}</span></div>
+                                                                            ) : null}
+                                                                            <div>Giá bán: <span className="font-bold text-primary/75">{displaySalePrice}</span></div>
+                                                                            <div>Giá nhập dự kiến: <span className="font-bold text-primary/75">{displayExpectedCost}</span></div>
+                                                                            {isVariantRow ? (
+                                                                                <div>Mã biến thể: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
+                                                                            ) : null}
+                                                                            {!isVariantRow ? (
+                                                                                <div>SKU hiện tại: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
+                                                                            ) : null}
                                                                             <div>Danh mục: <span className="font-bold text-primary/75">{categoryLabel}</span></div>
                                                                         </div>
                                                                         {rowError ? (
@@ -6306,7 +6810,7 @@ const ProductList = () => {
                                             type="number" 
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="Số lượng"
-                                            value={bulkUpdateData.stock_quantity || ''} 
+                                            value={bulkUpdateData.stock_quantity ?? ''} 
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, stock_quantity: e.target.value})}
                                         />
                                     </div>

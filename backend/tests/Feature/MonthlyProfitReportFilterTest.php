@@ -8,6 +8,7 @@ use App\Models\FinDailyReportConfig;
 use App\Models\FixedCostDailySnapshot;
 use App\Models\InventoryDocument;
 use App\Models\Order;
+use App\Models\Shipment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -649,6 +650,233 @@ class MonthlyProfitReportFilterTest extends TestCase
         $this->assertSame(2263.75, (float) ($summary['profit_per_house'] ?? 0));
     }
 
+    public function test_monthly_report_drilldown_returns_exact_scope_for_all_clickable_metrics(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'Monthly Drilldown Test Account',
+        ]);
+
+        $user = User::factory()->create();
+        $user->accounts()->attach($account->id, ['role' => 'owner']);
+
+        Sanctum::actingAs($user);
+
+        $headers = [
+            'X-Account-Id' => (string) $account->id,
+        ];
+
+        $standardFirst = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-STANDARD-1',
+            'officialized_at' => '2026-04-05 09:00:00',
+            'shipping_dispatched_at' => '2026-04-06 10:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 10000,
+            'cost_total' => 4000,
+            'report_revenue_total' => 9000,
+            'report_cost_total' => 3500,
+            'internal_shipping_fee' => 500,
+        ]);
+
+        $standardSecond = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-STANDARD-2',
+            'officialized_at' => '2026-04-20 09:00:00',
+            'shipping_dispatched_at' => '2026-04-21 08:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 5000,
+            'cost_total' => 2200,
+            'report_revenue_total' => 4800,
+            'report_cost_total' => 1800,
+            'external_delivery_meta' => ['shipping_cost' => 200],
+        ]);
+
+        $processingOrder = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-PROCESSING',
+            'officialized_at' => '2026-04-22 11:00:00',
+            'shipping_dispatched_at' => '2026-04-24 11:00:00',
+            'status' => 'processing',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 7000,
+            'cost_total' => 2600,
+            'internal_shipping_fee' => 300,
+        ]);
+
+        $processingShipmentOrder = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-PROCESSING-SHIPMENT',
+            'officialized_at' => '2026-04-18 14:00:00',
+            'status' => 'processing',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 100000,
+            'cost_total' => 1000,
+            'internal_shipping_fee' => 0,
+        ]);
+        $this->createShipment($account, $processingShipmentOrder, [
+            'shipment_number' => 'MONTHLY-DRILLDOWN-SHIPMENT-LOWER',
+            'shipment_status' => 'processing',
+            'shipping_cost' => 2000,
+        ]);
+
+        $exchangeOrder = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-EXCHANGE',
+            'officialized_at' => '2026-04-10 08:00:00',
+            'shipping_dispatched_at' => '2026-04-11 08:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'report_profit_total' => 250,
+            'internal_shipping_fee' => 50,
+        ]);
+
+        $partialOrder = $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-PARTIAL',
+            'officialized_at' => '2026-04-12 08:00:00',
+            'shipping_dispatched_at' => '2026-04-13 09:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+            'report_profit_total' => -100,
+            'external_delivery_meta' => ['shipping_cost' => 75],
+        ]);
+
+        $this->createOrder($account, [
+            'order_number' => 'MONTHLY-DRILLDOWN-CANCELLED',
+            'officialized_at' => '2026-04-26 07:00:00',
+            'shipping_dispatched_at' => '2026-04-26 12:00:00',
+            'status' => 'cancelled',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 9999,
+            'cost_total' => 9999,
+            'report_revenue_total' => 9999,
+            'report_cost_total' => 9999,
+            'report_profit_total' => 9999,
+            'internal_shipping_fee' => 999,
+        ]);
+
+        $revenueResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=revenue', $headers)
+            ->assertOk();
+
+        $this->assertSame(13800.0, (float) $revenueResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id],
+            $revenueResponse->json('data.order_ids')
+        );
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id],
+            $revenueResponse->json('data.filters.order_ids')
+        );
+        $this->assertSame(['completed'], $revenueResponse->json('data.context_filters.status'));
+        $this->assertSame([Order::TYPE_STANDARD], $revenueResponse->json('data.context_filters.order_type'));
+        $this->assertSame('2026-04-01', $revenueResponse->json('data.context_filters.created_at_from'));
+        $this->assertSame('2026-04-30', $revenueResponse->json('data.context_filters.created_at_to'));
+        $this->assertSame('report_revenue_total', $revenueResponse->json('data.summary_field'));
+
+        $costResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=cost_actual', $headers)
+            ->assertOk();
+
+        $this->assertSame(5300.0, (float) $costResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id],
+            $costResponse->json('data.order_ids')
+        );
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id],
+            $costResponse->json('data.filters.order_ids')
+        );
+        $this->assertSame('report_cost_total', $costResponse->json('data.summary_field'));
+
+        $shippingResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=shipping_fee', $headers)
+            ->assertOk();
+
+        $this->assertSame(3125.0, (float) $shippingResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id, $processingOrder->id, $processingShipmentOrder->id, $exchangeOrder->id, $partialOrder->id],
+            $shippingResponse->json('data.order_ids')
+        );
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id, $processingOrder->id, $processingShipmentOrder->id, $exchangeOrder->id, $partialOrder->id],
+            $shippingResponse->json('data.filters.order_ids')
+        );
+        $this->assertSame(['cancelled', 'canceled'], $shippingResponse->json('data.context_filters.status_exclude'));
+        $this->assertSame('2026-04-01', $shippingResponse->json('data.context_filters.created_at_from'));
+        $this->assertSame('2026-04-30', $shippingResponse->json('data.context_filters.created_at_to'));
+
+        $monthlyReportResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report?start_date=2026-04-01&end_date=2026-04-30', $headers)
+            ->assertOk();
+        $monthlyRows = collect($monthlyReportResponse->json('data'))->keyBy('key');
+        $this->assertSame(3125.0, (float) ($monthlyRows['2026-04']['shipping_fee'] ?? 0));
+
+        $countResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=order_count', $headers)
+            ->assertOk();
+
+        $this->assertSame(5, (int) $countResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id, $processingOrder->id, $exchangeOrder->id, $partialOrder->id],
+            $countResponse->json('data.order_ids')
+        );
+        $this->assertEqualsCanonicalizing(
+            [$standardFirst->id, $standardSecond->id, $processingOrder->id, $exchangeOrder->id, $partialOrder->id],
+            $countResponse->json('data.filters.order_ids')
+        );
+        $this->assertSame(['cancelled', 'canceled'], $countResponse->json('data.context_filters.status_exclude'));
+        $this->assertSame('2026-04-01', $countResponse->json('data.context_filters.shipping_dispatched_from'));
+        $this->assertSame('2026-04-30', $countResponse->json('data.context_filters.shipping_dispatched_to'));
+
+        $exchangeResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=exchange_profit_loss', $headers)
+            ->assertOk();
+
+        $this->assertSame(250.0, (float) $exchangeResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing([$exchangeOrder->id], $exchangeResponse->json('data.order_ids'));
+        $this->assertSame([$exchangeOrder->id], $exchangeResponse->json('data.filters.order_ids'));
+        $this->assertSame([Order::TYPE_EXCHANGE_RETURN], $exchangeResponse->json('data.context_filters.order_type'));
+        $this->assertSame('report_profit_total', $exchangeResponse->json('data.summary_field'));
+
+        $partialResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=partial_delivery_profit_loss', $headers)
+            ->assertOk();
+
+        $this->assertSame(-100.0, (float) $partialResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing([$partialOrder->id], $partialResponse->json('data.order_ids'));
+        $this->assertSame([$partialOrder->id], $partialResponse->json('data.filters.order_ids'));
+        $this->assertSame([Order::TYPE_PARTIAL_DELIVERY], $partialResponse->json('data.context_filters.order_type'));
+
+        $partialRangeRevenueResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-15&end_date=2026-04-30&month=2026-04&metric=revenue', $headers)
+            ->assertOk();
+
+        $this->assertSame(4800.0, (float) $partialRangeRevenueResponse->json('data.value'));
+        $this->assertEqualsCanonicalizing([$standardSecond->id], $partialRangeRevenueResponse->json('data.order_ids'));
+        $this->assertSame([$standardSecond->id], $partialRangeRevenueResponse->json('data.filters.order_ids'));
+        $this->assertSame('2026-04-15', $partialRangeRevenueResponse->json('data.start_date'));
+        $this->assertSame('2026-04-30', $partialRangeRevenueResponse->json('data.end_date'));
+
+        $shippingOrderListResponse = $this
+            ->withHeaders($headers)
+            ->call('GET', '/api/orders', [
+                'per_page' => 100,
+                'order_ids' => $shippingResponse->json('data.filters.order_ids'),
+            ]);
+
+        $shippingOrderListResponse->assertOk();
+        $this->assertSame(6, (int) $shippingOrderListResponse->json('summary.order_count'));
+        $this->assertSame(3125.0, (float) $shippingOrderListResponse->json('summary.shipping_fee_total'));
+        $this->assertSame(
+            (float) $shippingResponse->json('data.value'),
+            (float) $shippingOrderListResponse->json('summary.shipping_fee_total')
+        );
+    }
+
     private function createOrder(Account $account, array $attributes): Order
     {
         $order = new Order(array_merge([
@@ -672,5 +900,17 @@ class MonthlyProfitReportFilterTest extends TestCase
         $order->save();
 
         return $order->fresh();
+    }
+
+    private function createShipment(Account $account, Order $order, array $attributes = []): Shipment
+    {
+        return Shipment::query()->create(array_merge([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'shipment_number' => 'SHP-' . uniqid(),
+            'shipment_status' => 'processing',
+            'status' => 'processing',
+            'shipping_cost' => 0,
+        ], $attributes));
     }
 }

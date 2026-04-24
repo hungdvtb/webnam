@@ -2928,7 +2928,33 @@ class ProductController extends Controller
 
     protected function loadProductResource(Product $product): Product
     {
-        return $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+        $product = $this->appendSupplierMeta($product->load($this->productResourceRelations()));
+
+        return $this->syncProductResourceInventoryStocks(request(), $product);
+    }
+
+    protected function syncProductResourceInventoryStocks(Request $request, Product $product): Product
+    {
+        $productIds = collect([(int) $product->id]);
+
+        foreach (['variations', 'groupedItems', 'bundleItems', 'linkedProducts'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $productIds = $productIds->merge(
+                $product->{$relation}
+                    ->pluck('id')
+                    ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            );
+        }
+
+        $stockMap = $this->buildInventorySnapshotMap(
+            $request,
+            $productIds->filter()->unique()->values()->all()
+        );
+
+        return $this->syncProductStocksFromInventory($product, $stockMap);
     }
 
     protected function generateUniqueAttributeCode(string $seed): string
@@ -3318,6 +3344,35 @@ class ProductController extends Controller
         }
 
         $validated['expected_cost'] = $request->input('cost_price');
+    }
+
+    protected function prepareOptionalStockQuantityForPersistence(
+        Request $request,
+        array &$payload,
+        string $requestKey = 'stock_quantity',
+        string $payloadKey = 'stock_quantity'
+    ): void
+    {
+        if (!$request->exists($requestKey) && !array_key_exists($payloadKey, $payload)) {
+            return;
+        }
+
+        $rawValue = array_key_exists($payloadKey, $payload)
+            ? $payload[$payloadKey]
+            : $request->input($requestKey);
+
+        if (is_string($rawValue)) {
+            $rawValue = trim($rawValue);
+        }
+
+        if ($rawValue === '' || $rawValue === null) {
+            unset($payload[$payloadKey]);
+            return;
+        }
+
+        if (is_numeric($rawValue)) {
+            $payload[$payloadKey] = (int) $rawValue;
+        }
     }
 
     protected function normalizeSupplierIds(Request $request, array $validated = []): array
@@ -4585,24 +4640,55 @@ class ProductController extends Controller
         int $attributeId,
         array $valueArray
     ): void {
+        $exactValueCandidates = $this->buildExactAttributeValueCandidates($valueArray);
+
+        if (empty($exactValueCandidates)) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
         $query
             ->where($attributeIdColumn, $attributeId)
-            ->where(function (Builder $valueQuery) use ($valueArray, $valueColumn) {
-                foreach ($valueArray as $value) {
-                    $escapedValue = $this->escapeLike($value);
-
-                    $valueQuery
-                        ->orWhere($valueColumn, $value)
-                        ->orWhereRaw("{$valueColumn} LIKE ? ESCAPE '\\'", ['%"' . $escapedValue . '"%']);
+            ->where(function (Builder $valueQuery) use ($exactValueCandidates, $valueColumn) {
+                foreach ($exactValueCandidates as $candidate) {
+                    $valueQuery->orWhere($valueColumn, $candidate);
                 }
             });
     }
 
-    protected function applyProductAttributeFilters(Builder $query, $inputAttributes): void
+    protected function buildExactAttributeValueCandidates(array $valueArray): array
+    {
+        return collect($valueArray)
+            ->flatMap(function ($value) {
+                $normalizedValue = trim((string) $value);
+                if ($normalizedValue === '') {
+                    return [];
+                }
+
+                return array_values(array_unique([
+                    $normalizedValue,
+                    json_encode([$normalizedValue]),
+                    json_encode([$normalizedValue], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ]));
+            })
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function applyProductAttributeFilters(Builder $query, $inputAttributes, array $options = []): void
     {
         if (!is_array($inputAttributes) || empty($inputAttributes)) {
             return;
         }
+
+        $includeVariationMatches = array_key_exists('include_variations', $options)
+            ? (bool) $options['include_variations']
+            : true;
+        $includeBundleItemMatches = array_key_exists('include_bundle_items', $options)
+            ? (bool) $options['include_bundle_items']
+            : false;
 
         foreach ($inputAttributes as $attrId => $values) {
             if (!is_numeric($attrId)) {
@@ -4628,18 +4714,27 @@ class ProductController extends Controller
 
             $attributeId = (int) $attrId;
 
-            $query->where(function (Builder $attributeQuery) use ($attributeId, $valueArray) {
-                $attributeQuery
-                    ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
-                        $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
-                    })
-                    ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+            $query->where(function (Builder $attributeQuery) use (
+                $attributeId,
+                $valueArray,
+                $includeVariationMatches,
+                $includeBundleItemMatches
+            ) {
+                $attributeQuery->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                });
+
+                if ($includeVariationMatches) {
+                    $attributeQuery->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
                         $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
                             $productQuery->where('status', true);
                         });
                         $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
-                    })
-                    ->orWhereHas('bundleItems', function (Builder $bundleItemQuery) use ($attributeId, $valueArray) {
+                    });
+                }
+
+                if ($includeBundleItemMatches) {
+                    $attributeQuery->orWhereHas('bundleItems', function (Builder $bundleItemQuery) use ($attributeId, $valueArray) {
                         $bundleItemQuery->where(function (Builder $resolvedBundleItemQuery) use ($attributeId, $valueArray) {
                             $resolvedBundleItemQuery
                                 ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
@@ -4653,6 +4748,7 @@ class ProductController extends Controller
                                 });
                         });
                     });
+                }
             });
         }
     }
@@ -5214,7 +5310,10 @@ class ProductController extends Controller
         $searchRankingSql = null;
         $searchRankingBindings = [];
 
-        $this->applyProductAttributeFilters($query, $request->input('attributes'));
+        $this->applyProductAttributeFilters($query, $request->input('attributes'), [
+            'include_variations' => true,
+            'include_bundle_items' => true,
+        ]);
 
         if ($request->filled('search')) {
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
@@ -5657,7 +5756,10 @@ class ProductController extends Controller
         }
 
         // Filter by EAV Attributes
-        $this->applyProductAttributeFilters($query, $request->input('attributes'));
+        $this->applyProductAttributeFilters($query, $request->input('attributes'), [
+            'include_variations' => true,
+            'include_bundle_items' => false,
+        ]);
         // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
         // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
         $searchTerm = trim((string) $request->input('search', ''));
@@ -8684,7 +8786,7 @@ class ProductController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         $product = Product::with($this->productResourceRelations())->findOrFail($id);
 
@@ -8724,7 +8826,9 @@ class ProductController extends Controller
             $product->setRelation('variations', $variations);
         }
 
-        return response()->json($this->appendSupplierMeta($product));
+        return response()->json(
+            $this->syncProductResourceInventoryStocks($request, $this->appendSupplierMeta($product))
+        );
     }
 
     public function refreshOrderItems(Request $request)
@@ -9075,7 +9179,7 @@ class ProductController extends Controller
             'description' => 'nullable|string',
             'is_featured' => 'boolean',
             'is_new' => 'boolean',
-            'stock_quantity' => 'nullable|integer|min:0',
+            'stock_quantity' => 'sometimes|nullable|integer|min:0',
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|max:120',
@@ -9131,6 +9235,7 @@ class ProductController extends Controller
         $this->applyLegacyExpectedCostAlias($request, $validated);
         $this->applyCompositeAutoPrice($request, $validated, $product);
         $this->prepareAdditionalInfoForPersistence($request, $validated);
+        $this->prepareOptionalStockQuantityForPersistence($request, $validated);
 
         $incomingCategoryIds = $request->has('category_ids') || $request->has('category_id') || $request->boolean('clear_category_ids');
         $categoryIds = $incomingCategoryIds
@@ -9936,6 +10041,7 @@ class ProductController extends Controller
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
+            'basic_info.stock_quantity' => 'sometimes|nullable|integer|min:0',
             'basic_info.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'basic_info.specifications' => 'nullable|string',
             'basic_info.additional_info' => 'nullable',
@@ -9987,6 +10093,8 @@ class ProductController extends Controller
                 ? json_encode($normalizedAdditionalInfo, JSON_UNESCAPED_UNICODE)
                 : null;
         }
+
+        $this->prepareOptionalStockQuantityForPersistence($request, $basicInfo, 'basic_info.stock_quantity', 'stock_quantity');
 
         if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
             $basicInfo['expected_cost'] = $basicInfo['cost_price'];

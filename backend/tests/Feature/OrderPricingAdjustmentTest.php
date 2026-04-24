@@ -67,6 +67,201 @@ class OrderPricingAdjustmentTest extends TestCase
         $this->assertSame(430000.0, (float) ($order->report_revenue_total ?? 0));
     }
 
+    public function test_partial_delivery_order_automatically_moves_return_value_into_discount_and_notes(): void
+    {
+        [$account] = $this->authenticate();
+        $mainProduct = $this->createProduct($account, [
+            'name' => 'Don giao 1 phan',
+            'sku' => 'PD-MAIN-001',
+            'price' => 2200000,
+        ]);
+        $returnProduct = $this->createProduct($account, [
+            'name' => 'Bo that bao',
+            'sku' => 'PD-RETURN-001',
+            'price' => 100000,
+            'cost_price' => 40000,
+        ]);
+
+        $this->createBatch($account, $mainProduct, 5, 1000000, 'partial-delivery-main');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_OFFICIAL,
+                'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+                'customer_name' => 'Khach giao 1 phan',
+                'customer_phone' => '0911111111',
+                'customer_email' => 'partial-delivery@example.com',
+                'shipping_address' => '456 Nguyen Hue',
+                'province' => 'Tinh test',
+                'district' => 'Huyen test',
+                'ward' => 'Xa test',
+                'notes' => 'Ghi chu tay cua nhan vien',
+                'source' => 'Website',
+                'type' => 'Le',
+                'shipment_status' => 'Chua giao',
+                'shipping_fee' => 0,
+                'manual_discount' => 0,
+                'discount' => 300000,
+                'items' => [[
+                    'product_id' => $mainProduct->id,
+                    'quantity' => 3,
+                    'price' => 2200000,
+                ]],
+                'supplement_items' => [[
+                    'product_id' => $returnProduct->id,
+                    'quantity' => 3,
+                    'price' => 100000,
+                    'cost_price' => 40000,
+                    'name' => 'Bo that bao',
+                    'sku' => 'PD-RETURN-001',
+                ]],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('manual_discount', 0)
+            ->assertJsonPath('automatic_discount_adjustment', 300000)
+            ->assertJsonPath('discount', 300000)
+            ->assertJsonPath('total_price', 6300000)
+            ->assertJsonPath('supplement_items_total_price', 300000)
+            ->assertJsonPath('report_revenue_total', 6300000)
+            ->assertJsonPath('report_cost_total', 2880000)
+            ->assertJsonPath('report_profit_total', 3420000);
+
+        $storedNotes = (string) $response->json('notes');
+        $this->assertStringContainsString('Ghi chu tay cua nhan vien', $storedNotes);
+        $this->assertStringContainsString('Ghi chú hệ thống: khách trả về 3 Bo that bao, phần điều chỉnh +300.000đ', $storedNotes);
+        $this->assertSame(1, substr_count($storedNotes, 'Ghi chú hệ thống:'));
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+
+        $this->assertSame(300000.0, (float) $order->discount);
+        $this->assertSame(6300000.0, (float) $order->total_price);
+        $this->assertSame(6300000.0, (float) ($order->report_revenue_total ?? 0));
+        $this->assertSame(2880000.0, (float) ($order->report_cost_total ?? 0));
+        $this->assertSame(3420000.0, (float) ($order->report_profit_total ?? 0));
+        $this->assertSame($storedNotes, (string) $order->notes);
+    }
+
+    public function test_partial_delivery_update_recalculates_discount_and_rewrites_single_system_note_when_return_items_change_or_are_removed(): void
+    {
+        [$account] = $this->authenticate();
+        $mainProduct = $this->createProduct($account, [
+            'name' => 'Don sua giao 1 phan',
+            'sku' => 'PD-UPD-MAIN-001',
+            'price' => 2200000,
+        ]);
+        $returnProduct = $this->createProduct($account, [
+            'name' => 'Bo that bao',
+            'sku' => 'PD-UPD-RETURN-001',
+            'price' => 100000,
+            'cost_price' => 40000,
+        ]);
+
+        $this->createBatch($account, $mainProduct, 5, 1000000, 'partial-delivery-update-main');
+
+        $created = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_OFFICIAL,
+                'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+                'customer_name' => 'Khach sua giao 1 phan',
+                'customer_phone' => '0922222222',
+                'customer_email' => 'partial-delivery-update@example.com',
+                'shipping_address' => '789 Le Loi',
+                'province' => 'Tinh test',
+                'district' => 'Huyen test',
+                'ward' => 'Xa test',
+                'notes' => 'Ghi chu tay giu lai',
+                'source' => 'Website',
+                'type' => 'Le',
+                'shipment_status' => 'Chua giao',
+                'shipping_fee' => 0,
+                'manual_discount' => 50000,
+                'discount' => 350000,
+                'items' => [[
+                    'product_id' => $mainProduct->id,
+                    'quantity' => 3,
+                    'price' => 2200000,
+                ]],
+                'supplement_items' => [[
+                    'product_id' => $returnProduct->id,
+                    'quantity' => 3,
+                    'price' => 100000,
+                    'cost_price' => 40000,
+                    'name' => 'Bo that bao',
+                    'sku' => 'PD-UPD-RETURN-001',
+                ]],
+            ])
+            ->assertCreated();
+
+        $orderId = (int) $created->json('id');
+        $initialNotes = (string) $created->json('notes');
+
+        $updated = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+                'notes' => $initialNotes,
+                'discount' => 350000,
+                'supplement_items' => [[
+                    'product_id' => $returnProduct->id,
+                    'quantity' => 1,
+                    'price' => 100000,
+                    'cost_price' => 40000,
+                    'name' => 'Bo that bao',
+                    'sku' => 'PD-UPD-RETURN-001',
+                ]],
+            ]);
+
+        $updated
+            ->assertOk()
+            ->assertJsonPath('discount', 150000)
+            ->assertJsonPath('manual_discount', 50000)
+            ->assertJsonPath('automatic_discount_adjustment', 100000)
+            ->assertJsonPath('total_price', 6450000)
+            ->assertJsonPath('report_revenue_total', 6450000)
+            ->assertJsonPath('report_cost_total', 2960000)
+            ->assertJsonPath('report_profit_total', 3490000);
+
+        $updatedNotes = (string) $updated->json('notes');
+        $this->assertStringContainsString('Ghi chu tay giu lai', $updatedNotes);
+        $this->assertStringContainsString('Ghi chú hệ thống: khách trả về 1 Bo that bao, phần điều chỉnh +100.000đ', $updatedNotes);
+        $this->assertSame(1, substr_count($updatedNotes, 'Ghi chú hệ thống:'));
+
+        $removed = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$orderId}", [
+                'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+                'notes' => $updatedNotes,
+                'discount' => 150000,
+                'supplement_items' => [],
+            ]);
+
+        $removed
+            ->assertOk()
+            ->assertJsonPath('discount', 50000)
+            ->assertJsonPath('manual_discount', 50000)
+            ->assertJsonPath('automatic_discount_adjustment', 0)
+            ->assertJsonPath('total_price', 6550000)
+            ->assertJsonPath('report_revenue_total', 6550000)
+            ->assertJsonPath('report_cost_total', 3000000)
+            ->assertJsonPath('report_profit_total', 3550000);
+
+        $removedNotes = (string) $removed->json('notes');
+        $this->assertSame('Ghi chu tay giu lai', $removedNotes);
+
+        $order = Order::query()->findOrFail($orderId);
+
+        $this->assertSame(50000.0, (float) $order->discount);
+        $this->assertSame(6550000.0, (float) $order->total_price);
+        $this->assertSame(6550000.0, (float) ($order->report_revenue_total ?? 0));
+        $this->assertSame(3000000.0, (float) ($order->report_cost_total ?? 0));
+        $this->assertSame(3550000.0, (float) ($order->report_profit_total ?? 0));
+        $this->assertSame('Ghi chu tay giu lai', (string) $order->notes);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([

@@ -1894,7 +1894,7 @@ const ProductForm = () => {
         is_featured: false,
         is_new: true,
         status: true,
-        stock_quantity: 10,
+        stock_quantity: '',
         sku: '',
         meta_title: '',
         meta_description: '',
@@ -1909,6 +1909,7 @@ const ProductForm = () => {
         bundle_title: '',
         site_domain_id: ''
     });
+    const initialStockQuantityRef = useRef('');
     const normalizeSelectedCategoryIds = useCallback((values) => normalizeCategoryIds(values), []);
     const applySelectedCategoryIds = useCallback((nextValuesOrUpdater) => {
         setFormData((prev) => {
@@ -2095,6 +2096,22 @@ const ProductForm = () => {
     const normalizeImportCostValue = (value) => {
         const parsedValue = normalizeRoundedImportCostNumber(value);
         return parsedValue ?? '';
+    };
+
+    const normalizeStockQuantityComparableValue = (value) => {
+        if (value === '' || value === null || value === undefined) {
+            return '';
+        }
+
+        const normalizedText = String(value).trim();
+        if (normalizedText === '') {
+            return '';
+        }
+
+        const numericValue = Number(normalizedText);
+        return Number.isFinite(numericValue) && Number.isInteger(numericValue)
+            ? numericValue
+            : normalizedText;
     };
 
     const normalizeImportCostDraftValue = (value) => {
@@ -3927,6 +3944,8 @@ const ProductForm = () => {
                 sku: data.sku,
             }));
             const resolvedCategoryIds = getProductCategoryIds(data);
+            const resolvedStockQuantity = isDuplicate ? 0 : (data.stock_quantity ?? '');
+            initialStockQuantityRef.current = normalizeStockQuantityComparableValue(resolvedStockQuantity);
             setFormData({
                 type: data.type || 'simple',
                 name: duplicateName,
@@ -3972,7 +3991,7 @@ const ProductForm = () => {
                 is_featured: !!data.is_featured,
                 is_new: isDuplicate ? true : !!data.is_new,
                 status: isDuplicate ? false : (data.hasOwnProperty('status') ? !!data.status : true),
-                stock_quantity: isDuplicate ? 0 : (data.stock_quantity ?? 0),
+                stock_quantity: resolvedStockQuantity,
                 sku: duplicateParentSku,
                 meta_title: data.meta_title || '',
                 meta_description: data.meta_description || '',
@@ -6121,6 +6140,14 @@ const ProductForm = () => {
                     } else {
                         submitData.append('clear_supplier_ids', '1');
                     }
+                } else if (key === 'stock_quantity') {
+                    const normalizedCurrentStock = normalizeStockQuantityComparableValue(val);
+                    if (
+                        normalizedCurrentStock !== ''
+                        && normalizedCurrentStock !== initialStockQuantityRef.current
+                    ) {
+                        submitData.append(key, String(val).trim());
+                    }
                 } else if (Array.isArray(val)) {
                     val.forEach(v => submitData.append(`${key}[]`, v));
                 } else if (typeof val === 'boolean') {
@@ -6231,6 +6258,10 @@ const ProductForm = () => {
             } else {
                 response = await productApi.store(submitData);
             }
+
+            initialStockQuantityRef.current = normalizeStockQuantityComparableValue(
+                response.data?.stock_quantity ?? formData.stock_quantity
+            );
 
             const productId = response.data.id;
 

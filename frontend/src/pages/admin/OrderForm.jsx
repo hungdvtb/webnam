@@ -1357,6 +1357,19 @@ const calculateSupplementItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
     0
 );
+const calculateAutomaticDiscountAdjustment = (orderType, items = []) => (
+    normalizeOrderType(orderType) === ORDER_TYPE_PARTIAL_DELIVERY
+        ? calculateSupplementItemsTotal(items)
+        : 0
+);
+const calculateEffectiveDiscountValue = (manualDiscount, orderType, items = []) => (
+    (parseMoneyNumber(manualDiscount, 0) || 0) + calculateAutomaticDiscountAdjustment(orderType, items)
+);
+const calculateManualDiscountValue = (effectiveDiscount, orderType, items = []) => (
+    normalizeOrderType(orderType) === ORDER_TYPE_PARTIAL_DELIVERY
+        ? ((parseMoneyNumber(effectiveDiscount, 0) || 0) - calculateAutomaticDiscountAdjustment(orderType, items))
+        : (parseMoneyNumber(effectiveDiscount, 0) || 0)
+);
 const collectSupplementDeclarationCodes = (items = []) => Array.from(new Set(
     (Array.isArray(items) ? items : [])
         .map((item) => String(item?.sku || '').trim() || (item?.product_id ? `SP#${item.product_id}` : ''))
@@ -3198,6 +3211,7 @@ const OrderForm = () => {
         custom_attributes: {},
         shipping_fee: 0,
         display_shipping_fee: 0,
+        manual_discount: 0,
         discount: 0,
         cost_total: 0,
         status: 'new',
@@ -3228,6 +3242,23 @@ const OrderForm = () => {
 
         setSelectedOrderLineId('');
     }, [selectedOrderLine, selectedOrderLineId]);
+    const automaticDiscountAdjustment = useMemo(
+        () => calculateAutomaticDiscountAdjustment(formData.order_type, formData.supplement_items),
+        [formData.order_type, formData.supplement_items]
+    );
+    useEffect(() => {
+        const nextDiscount = calculateEffectiveDiscountValue(
+            formData.manual_discount,
+            formData.order_type,
+            formData.supplement_items
+        );
+
+        setFormData((prev) => (
+            prev.discount === nextDiscount
+                ? prev
+                : { ...prev, discount: nextDiscount }
+        ));
+    }, [automaticDiscountAdjustment, formData.manual_discount, formData.order_type, formData.supplement_items]);
     useEffect(() => {
         setDiscountInputValue(formatSignedMoneyInputValue(formData.discount));
     }, [formData.discount]);
@@ -5319,6 +5350,7 @@ const OrderForm = () => {
                 custom_attributes: customAttrValues,
                 shipping_fee: isDuplicating ? 0 : (order.shipping_fee || 0),
                 display_shipping_fee: isDuplicating ? 0 : resolveDisplayedShippingFee(order),
+                manual_discount: parseMoneyNumber(order.manual_discount, parseMoneyNumber(order.discount, 0) || 0) || 0,
                 discount: parseMoneyNumber(order.discount, 0) || 0,
                 cost_total: order.cost_total || 0,
                 status: isDuplicating ? 'new' : (order.status || 'new'),
@@ -5424,6 +5456,7 @@ const OrderForm = () => {
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
                 display_shipping_fee: resolveDisplayedShippingFee(draft),
+                manual_discount: parseMoneyNumber(draft.manual_discount, parseMoneyNumber(draft.discount, 0) || 0) || 0,
                 discount: parseMoneyNumber(draft.discount, 0) || 0,
                 cost_total: draftCostTotal,
                 status: draft.status || 'new'
@@ -5538,6 +5571,7 @@ const OrderForm = () => {
                 customer_name: trimmedCustomerName,
                 customer_phone: trimmedCustomerPhone,
                 shipping_fee: parseMoneyNumber(formData.shipping_fee, 0) || 0,
+                manual_discount: parseMoneyNumber(formData.manual_discount, 0) || 0,
                 discount: parseSignedMoneyInputValue(discountInputValue) ?? (parseMoneyNumber(formData.discount, 0) || 0),
                 items: normalizedItems,
                 order_kind: normalizedOrderKind,
@@ -5637,17 +5671,31 @@ const OrderForm = () => {
 
         setFormData((prev) => ({
             ...prev,
+            manual_discount: calculateManualDiscountValue(parsedValue, prev.order_type, prev.supplement_items),
             discount: parsedValue,
         }));
     };
     const handleDiscountInputBlur = () => {
         const normalizedDiscount = parseSignedMoneyInputValue(discountInputValue);
-        const nextDiscount = normalizedDiscount ?? 0;
+        const nextDiscount = normalizedDiscount ?? calculateEffectiveDiscountValue(
+            formData.manual_discount,
+            formData.order_type,
+            formData.supplement_items
+        );
+        const nextManualDiscount = calculateManualDiscountValue(
+            nextDiscount,
+            formData.order_type,
+            formData.supplement_items
+        );
 
         setFormData((prev) => (
-            prev.discount === nextDiscount
+            prev.discount === nextDiscount && prev.manual_discount === nextManualDiscount
                 ? prev
-                : { ...prev, discount: nextDiscount }
+                : {
+                    ...prev,
+                    manual_discount: nextManualDiscount,
+                    discount: nextDiscount,
+                }
         ));
         setDiscountInputValue(formatSignedMoneyInputValue(nextDiscount));
     };
@@ -5859,9 +5907,12 @@ const OrderForm = () => {
     const grossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
     const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
     const supplementItemsCostTotal = calculateSupplementItemsCostTotal(formData.supplement_items);
-    const reportRevenueTotal = specialOrderType
-        ? (totalPaymentAmount - supplementItemsTotal + (parseMoneyNumber(formData.settlement_delta, 0) || 0))
-        : totalPaymentAmount;
+    const settlementDeltaAmount = parseMoneyNumber(formData.settlement_delta, 0) || 0;
+    const reportRevenueTotal = normalizedOrderType === ORDER_TYPE_PARTIAL_DELIVERY
+        ? (totalPaymentAmount + settlementDeltaAmount)
+        : (specialOrderType
+            ? (totalPaymentAmount - supplementItemsTotal + settlementDeltaAmount)
+            : totalPaymentAmount);
     const reportCostTotal = specialOrderType
         ? (costTotalAmount - supplementItemsCostTotal)
         : costTotalAmount;
@@ -8543,6 +8594,12 @@ const OrderForm = () => {
                                         <span className="font-bold text-brick text-[15px]">₫</span>
                                     </div>
                                 </div>
+                                {normalizedOrderType === ORDER_TYPE_PARTIAL_DELIVERY && automaticDiscountAdjustment > 0 && (
+                                    <div className="text-right text-[11px] font-semibold text-blue-600/45" data-screenshot-hide="true">
+                                        Da gom hang tra ve: +
+                                        {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(automaticDiscountAdjustment)} VND
+                                    </div>
+                                )}
 
                                 <div className="flex justify-between items-center pt-4 mt-4 border-t-2 border-blue-600/10" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/30 text-[12px]">Tổng giá vốn nhập:</span>

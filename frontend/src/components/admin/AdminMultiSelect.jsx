@@ -233,6 +233,8 @@ function AdminMultiSelect({
         <div
             ref={dropdownRef}
             data-admin-multiselect-dropdown
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
             style={portal ? {
                 position: 'fixed',
                 top: dropdownPosition?.top || 0,

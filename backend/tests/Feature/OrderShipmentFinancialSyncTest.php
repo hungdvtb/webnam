@@ -304,6 +304,56 @@ class OrderShipmentFinancialSyncTest extends TestCase
         $this->assertSame(1420000.0, (float) $order->discount);
     }
 
+    public function test_quick_dispatch_manual_shipment_creates_shipment_and_syncs_order(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Bo su tap gui nhanh',
+            'sku' => 'SYNC-QUICK-DISPATCH-001',
+            'price' => 2330000,
+        ]);
+        $order = $this->createOfficialOrder($account, $user, $product, [
+            'status' => 'printed',
+            'total_price' => 2330000,
+            'discount' => 0,
+            'profit_total' => 2330000,
+            'report_revenue_total' => 2330000,
+            'report_profit_total' => 2330000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/quick-dispatch', [
+                'shipments' => [[
+                    'order_id' => $order->id,
+                    'dispatch_mode' => 'manual_shipment',
+                    'tracking_number' => 'TRACK-QUICK-DISPATCH-001',
+                    'carrier_name' => 'GHTK',
+                    'shipping_cost' => 25000,
+                ]],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('success_count', 1)
+            ->assertJsonPath('failed_count', 0)
+            ->assertJsonPath('results.0.success', true)
+            ->assertJsonPath('results.0.tracking_number', 'TRACK-QUICK-DISPATCH-001');
+
+        $order->refresh();
+        $shipment = Shipment::query()->where('order_id', $order->id)->firstOrFail();
+
+        $this->assertSame('TRACK-QUICK-DISPATCH-001', (string) $shipment->tracking_number);
+        $this->assertSame('TRACK-QUICK-DISPATCH-001', (string) $shipment->carrier_tracking_code);
+        $this->assertSame('out_for_delivery', (string) $shipment->shipment_status);
+        $this->assertSame('shipping', (string) $order->status);
+        $this->assertSame('out_for_delivery', (string) $order->shipping_status);
+        $this->assertSame('TRACK-QUICK-DISPATCH-001', (string) $order->shipping_tracking_code);
+        $this->assertSame('GHTK', (string) $order->shipping_carrier_name);
+        $this->assertSame(25000.0, (float) $order->internal_shipping_fee);
+        $this->assertSame(2330000.0, (float) $order->total_price);
+    }
+
     private function authenticate(): array
     {
         $account = Account::query()->create([

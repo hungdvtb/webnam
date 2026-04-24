@@ -1,14 +1,38 @@
 import React from 'react';
 import { accountApi } from '../services/api';
 import { flushUserSettingsSync } from '../services/userSettingsSync';
+import {
+    dispatchActiveAccountChanged,
+    readActiveAccountId,
+} from '../utils/activeAccount';
 
-const AccountSelector = ({ user }) => {
+const parseCachedAccounts = (value) => {
+    if (!value) {
+        return [];
+    }
+
+    try {
+        const parsedValue = JSON.parse(value);
+        return Array.isArray(parsedValue) ? parsedValue : [];
+    } catch (error) {
+        console.warn('Cannot parse cached accounts list.', error);
+        return [];
+    }
+};
+
+const AccountSelector = ({ reloadOnAutoSelect = true }) => {
     const [accounts, setAccounts] = React.useState([]);
-    const [activeId, setActiveId] = React.useState(localStorage.getItem('activeAccountId') || 'all');
+    const [activeId, setActiveId] = React.useState(() => readActiveAccountId() || 'all');
 
     const commitActiveAccount = React.useCallback(async (nextId, shouldReload = false) => {
-        localStorage.setItem('activeAccountId', nextId);
-        setActiveId(nextId);
+        const normalizedId = String(nextId || '').trim();
+        if (!normalizedId) {
+            return;
+        }
+
+        localStorage.setItem('activeAccountId', normalizedId);
+        setActiveId(normalizedId);
+        dispatchActiveAccountChanged(normalizedId);
 
         if (shouldReload) {
             await flushUserSettingsSync();
@@ -19,23 +43,23 @@ const AccountSelector = ({ user }) => {
     React.useEffect(() => {
         const cachedAccounts = sessionStorage.getItem('accounts_list');
         if (cachedAccounts) {
-            const parsedAccounts = JSON.parse(cachedAccounts);
+            const parsedAccounts = parseCachedAccounts(cachedAccounts);
             setAccounts(parsedAccounts);
             if ((activeId === 'all' || !activeId) && parsedAccounts.length > 0) {
-                const firstId = parsedAccounts[0].id;
-                void commitActiveAccount(firstId, activeId === 'all');
+                const firstId = String(parsedAccounts[0].id || '').trim();
+                void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all');
             }
         } else {
             accountApi.getAll().then(res => {
                 sessionStorage.setItem('accounts_list', JSON.stringify(res.data));
                 setAccounts(res.data);
                 if ((activeId === 'all' || !activeId) && res.data.length > 0) {
-                    const firstId = res.data[0].id;
-                    void commitActiveAccount(firstId, activeId === 'all');
+                    const firstId = String(res.data[0].id || '').trim();
+                    void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all');
                 }
             }).catch(console.error);
         }
-    }, [activeId, commitActiveAccount]);
+    }, [activeId, commitActiveAccount, reloadOnAutoSelect]);
 
     const handleAccountChange = async (e) => {
         const newId = e.target.value;

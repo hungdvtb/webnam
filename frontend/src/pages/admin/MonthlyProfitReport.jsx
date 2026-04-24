@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { financeApi } from '../../services/api';
+import { saveOrderReportDrilldownScope } from '../../utils/orderReportDrilldown';
 
 const formatNumber = (value) =>
     new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -49,6 +51,14 @@ const renderAdsSpendBreakdown = (taxedValue, rawValue, rawClassName) => (
         ) : null}
     </div>
 );
+const MONTHLY_REPORT_DRILLDOWN_COLUMNS = new Set([
+    'order_count',
+    'revenue',
+    'cost_actual',
+    'shipping_fee',
+    'exchange_profit_loss',
+    'partial_delivery_profit_loss',
+]);
 
 const getReportRange = (year) => {
     const today = new Date();
@@ -93,6 +103,7 @@ const RefreshCw = ({ size, className }) => (
 );
 
 const MonthlyProfitReport = () => {
+    const navigate = useNavigate();
     const currentYear = new Date().getFullYear();
     const [selectedYear, setSelectedYear] = useState(currentYear);
     const [quickFilter, setQuickFilter] = useState('year'); // 'year', '3months', '6months', 'custom'
@@ -105,6 +116,7 @@ const MonthlyProfitReport = () => {
     const [reportData, setReportData] = useState([]);
     const [reportSummary, setReportSummary] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const [drilldownCellKey, setDrilldownCellKey] = useState('');
 
     const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
 
@@ -276,6 +288,71 @@ const MonthlyProfitReport = () => {
         return rightKey.localeCompare(leftKey);
     });
 
+    const handleMonthlyMetricDrilldown = useCallback(async (row, metric) => {
+        if (!row?.key || !MONTHLY_REPORT_DRILLDOWN_COLUMNS.has(metric)) {
+            return;
+        }
+
+        if (Number(row?.[metric] || 0) === 0) {
+            return;
+        }
+
+        const cellKey = `${row.key}:${metric}`;
+        setDrilldownCellKey(cellKey);
+
+        try {
+            const range = getQueryRange();
+            const response = await financeApi.getMonthlyPnlReportDrilldown({
+                metric,
+                month: row.key,
+                ...range,
+            });
+            const scope = response?.data?.data || null;
+            const scopeKey = saveOrderReportDrilldownScope(scope);
+
+            if (!scopeKey) {
+                throw new Error('Không thể lưu bộ lọc drilldown.');
+            }
+
+            navigate(`/admin/orders?report_scope_key=${encodeURIComponent(scopeKey)}`);
+        } catch (requestError) {
+            setError(requestError.response?.data?.message || requestError.message || 'Không thể mở danh sách đơn hàng cho số liệu này.');
+        } finally {
+            setDrilldownCellKey((current) => (current === cellKey ? '' : current));
+        }
+    }, [customRange, navigate, quickFilter, selectedYear]);
+
+    const renderMetricCellContent = (metric, row, content) => {
+        const value = Number(row?.[metric] || 0);
+        const cellKey = `${row?.key || row?.month || 'unknown'}:${metric}`;
+        const isActive = drilldownCellKey === cellKey;
+
+        if (!MONTHLY_REPORT_DRILLDOWN_COLUMNS.has(metric) || value === 0) {
+            return content;
+        }
+
+        return (
+            <button
+                type="button"
+                onClick={() => handleMonthlyMetricDrilldown(row, metric)}
+                disabled={isActive}
+                title="Mở bảng quản lí đơn hàng theo số liệu này"
+                className="group/drilldown inline-flex items-center justify-center rounded-sm px-1 transition hover:underline hover:decoration-dotted hover:underline-offset-4 disabled:cursor-wait disabled:opacity-70"
+            >
+                <span>{content}</span>
+                <span
+                    className={`material-symbols-outlined overflow-hidden text-[15px] transition-all duration-150 ${
+                        isActive
+                            ? 'ml-1 w-[15px] opacity-100 animate-pulse'
+                            : 'ml-0 w-0 opacity-0 group-hover/drilldown:ml-1 group-hover/drilldown:w-[15px] group-hover/drilldown:opacity-100 group-focus-visible/drilldown:ml-1 group-focus-visible/drilldown:w-[15px] group-focus-visible/drilldown:opacity-100'
+                    }`}
+                >
+                    {isActive ? 'sync' : 'open_in_new'}
+                </span>
+            </button>
+        );
+    };
+
     const renderHeader = (id) => {
         const tooltip = columnFormulas[id];
         const renderTH = (className, content) => (
@@ -376,13 +453,29 @@ const MonthlyProfitReport = () => {
             case 'month':
                 return <td key="month" className="border-r border-gray-50 px-3 py-3 text-center text-[13px] font-bold text-gray-700">{row.month}</td>;
             case 'order_count':
-                return <td key="order_count" className="px-3 py-3 text-center text-[13px] font-bold text-gray-700">{formatNumber(row.order_count)}</td>;
+                return (
+                    <td key="order_count" className="px-3 py-3 text-center text-[13px] font-bold text-gray-700">
+                        {renderMetricCellContent('order_count', row, formatNumber(row.order_count))}
+                    </td>
+                );
             case 'revenue':
-                return <td key="revenue" className="bg-yellow-50/30 px-3 py-3 text-center text-[13px] font-bold text-gray-800">{row.revenue !== 0 ? formatNumber(row.revenue) : '-'}</td>;
+                return (
+                    <td key="revenue" className="bg-yellow-50/30 px-3 py-3 text-center text-[13px] font-bold text-gray-800">
+                        {row.revenue !== 0 ? renderMetricCellContent('revenue', row, formatNumber(row.revenue)) : '-'}
+                    </td>
+                );
             case 'cost_actual':
-                return <td key="cost_actual" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.cost_actual !== 0 ? formatNumber(row.cost_actual) : '-'}</td>;
+                return (
+                    <td key="cost_actual" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {row.cost_actual !== 0 ? renderMetricCellContent('cost_actual', row, formatNumber(row.cost_actual)) : '-'}
+                    </td>
+                );
             case 'shipping_fee':
-                return <td key="shipping_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.shipping_fee !== 0 ? formatNumber(row.shipping_fee) : '-'}</td>;
+                return (
+                    <td key="shipping_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {row.shipping_fee !== 0 ? renderMetricCellContent('shipping_fee', row, formatNumber(row.shipping_fee)) : '-'}
+                    </td>
+                );
             case 'damaged_goods':
                 return <td key="damaged_goods" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.damaged_goods !== 0 ? formatNumber(row.damaged_goods) : '-'}</td>;
             case 'exchange_profit_loss':
@@ -391,7 +484,7 @@ const MonthlyProfitReport = () => {
                         key="exchange_profit_loss"
                         className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.exchange_profit_loss < 0 ? 'text-red-600' : 'text-emerald-600'}`}
                     >
-                        {row.exchange_profit_loss !== 0 ? formatNumber(row.exchange_profit_loss) : '-'}
+                        {row.exchange_profit_loss !== 0 ? renderMetricCellContent('exchange_profit_loss', row, formatNumber(row.exchange_profit_loss)) : '-'}
                     </td>
                 );
             case 'partial_delivery_profit_loss':
@@ -400,7 +493,7 @@ const MonthlyProfitReport = () => {
                         key="partial_delivery_profit_loss"
                         className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.partial_delivery_profit_loss < 0 ? 'text-red-600' : 'text-emerald-600'}`}
                     >
-                        {row.partial_delivery_profit_loss !== 0 ? formatNumber(row.partial_delivery_profit_loss) : '-'}
+                        {row.partial_delivery_profit_loss !== 0 ? renderMetricCellContent('partial_delivery_profit_loss', row, formatNumber(row.partial_delivery_profit_loss)) : '-'}
                     </td>
                 );
             case 'salary':

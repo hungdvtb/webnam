@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\Carrier;
 use App\Models\Cart;
@@ -931,6 +932,40 @@ class OrderController extends Controller
             ->filter(fn (string $value) => in_array($value, Order::TYPES, true))
             ->unique()
             ->values();
+    }
+
+    private function applyRequestedOrderTypeFilter($query, Collection $requestedOrderTypes, string $column = 'orders.order_type'): void
+    {
+        if ($requestedOrderTypes->isEmpty()) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $query->where(function ($orderTypeQuery) use ($requestedOrderTypes, $column) {
+            $explicitTypes = $requestedOrderTypes
+                ->reject(fn (string $type) => $type === self::ORDER_TYPE_STANDARD)
+                ->values()
+                ->all();
+
+            if (!empty($explicitTypes)) {
+                $orderTypeQuery->whereIn($column, $explicitTypes);
+            }
+
+            if ($requestedOrderTypes->contains(self::ORDER_TYPE_STANDARD)) {
+                $standardScope = function ($standardQuery) use ($column) {
+                    $standardQuery
+                        ->where($column, self::ORDER_TYPE_STANDARD)
+                        ->orWhereNull($column)
+                        ->orWhere($column, '');
+                };
+
+                if (!empty($explicitTypes)) {
+                    $orderTypeQuery->orWhere($standardScope);
+                } else {
+                    $orderTypeQuery->where($standardScope);
+                }
+            }
+        });
     }
 
     private function extractRequestedStatusCodes(mixed $statuses): Collection
@@ -2833,7 +2868,49 @@ class OrderController extends Controller
 
     private function resolveAccountId(Request $request): int
     {
-        return (int) $request->header('X-Account-Id');
+        $headerAccountId = trim((string) $request->header('X-Account-Id', ''));
+        if ($headerAccountId !== '' && Str::lower($headerAccountId) !== 'all') {
+            $resolvedHeaderId = (int) $headerAccountId;
+            if ($resolvedHeaderId > 0) {
+                return $resolvedHeaderId;
+            }
+        }
+
+        $sessionAccountId = session()->get('active_account_id');
+        if ($sessionAccountId !== null && $sessionAccountId !== '' && $sessionAccountId !== 'all') {
+            $resolvedSessionId = (int) $sessionAccountId;
+            if ($resolvedSessionId > 0) {
+                return $resolvedSessionId;
+            }
+        }
+
+        $siteCode = trim((string) $request->header('X-Site-Code', ''));
+        if ($siteCode !== '') {
+            $resolvedSiteAccountId = (int) (Account::query()
+                ->where('site_code', $siteCode)
+                ->value('id') ?? 0);
+
+            if ($resolvedSiteAccountId > 0) {
+                return $resolvedSiteAccountId;
+            }
+        }
+
+        $user = $request->user() ?: Auth::user();
+        if ($user) {
+            $resolvedUserAccountId = (int) ($user->accounts()
+                ->orderBy('accounts.id')
+                ->value('accounts.id') ?? 0);
+
+            if ($resolvedUserAccountId > 0) {
+                return $resolvedUserAccountId;
+            }
+
+            if (!empty($user->is_admin)) {
+                return (int) (Account::query()->orderBy('id')->value('id') ?? 0);
+            }
+        }
+
+        return 0;
     }
 
     private function scopedOrderQuery(Request $request, bool $withTrashed = false)
@@ -2882,36 +2959,7 @@ class OrderController extends Controller
 
         if ($request->filled('order_type')) {
             $requestedOrderTypes = $this->extractRequestedOrderTypes($request->input('order_type'));
-
-            if ($requestedOrderTypes->isEmpty()) {
-                $query->whereRaw('1 = 0');
-            } else {
-                $query->where(function ($orderTypeQuery) use ($requestedOrderTypes) {
-                    $explicitTypes = $requestedOrderTypes
-                        ->reject(fn (string $type) => $type === self::ORDER_TYPE_STANDARD)
-                        ->values()
-                        ->all();
-
-                    if (!empty($explicitTypes)) {
-                        $orderTypeQuery->whereIn('order_type', $explicitTypes);
-                    }
-
-                    if ($requestedOrderTypes->contains(self::ORDER_TYPE_STANDARD)) {
-                        $standardScope = function ($standardQuery) {
-                            $standardQuery
-                                ->where('order_type', self::ORDER_TYPE_STANDARD)
-                                ->orWhereNull('order_type')
-                                ->orWhere('order_type', '');
-                        };
-
-                        if (!empty($explicitTypes)) {
-                            $orderTypeQuery->orWhere($standardScope);
-                        } else {
-                            $orderTypeQuery->where($standardScope);
-                        }
-                    }
-                });
-            }
+            $this->applyRequestedOrderTypeFilter($query, $requestedOrderTypes);
         }
 
         if ($request->filled('order_ids')) {
@@ -3019,6 +3067,9 @@ class OrderController extends Controller
         return [
             'order_count' => 0,
             'total_price' => 0.0,
+            'shipping_fee_recorded' => 0.0,
+            'shipping_fee_estimated' => 0.0,
+            'shipping_fee_total' => 0.0,
             'shipping_fee' => 0.0,
             'goods_total' => 0.0,
         ];
@@ -3031,6 +3082,25 @@ class OrderController extends Controller
             : 0.0;
 
         return round((float) ($order->total_price ?? 0) + $discount, 2);
+    }
+
+    private function resolveOrderListShippingSummary(Order $order): array
+    {
+        $recordedShippingFee = $this->resolveOrderInternalShippingFee($order);
+        $recordedShippingFee = $recordedShippingFee > 0
+            ? round($recordedShippingFee, 2)
+            : 0.0;
+
+        $estimatedShippingFee = 0.0;
+        if ($recordedShippingFee <= 0) {
+            $estimatedShippingFee = round(max(0, (float) ($order->total_price ?? 0)) * 0.05, 2);
+        }
+
+        return [
+            'shipping_fee_recorded' => $recordedShippingFee,
+            'shipping_fee_estimated' => $estimatedShippingFee,
+            'shipping_fee_total' => round($recordedShippingFee + $estimatedShippingFee, 2),
+        ];
     }
 
     private function calculateOrderListSummary($query): array
@@ -3052,9 +3122,14 @@ class OrderController extends Controller
 
         $summaryQuery->chunkById(200, function (Collection $orders) use (&$summary) {
             foreach ($orders as $order) {
+                $shippingSummary = $this->resolveOrderListShippingSummary($order);
+
                 $summary['order_count']++;
                 $summary['total_price'] += round((float) ($order->total_price ?? 0), 2);
-                $summary['shipping_fee'] += $this->resolveOrderInternalShippingFee($order);
+                $summary['shipping_fee_recorded'] += $shippingSummary['shipping_fee_recorded'];
+                $summary['shipping_fee_estimated'] += $shippingSummary['shipping_fee_estimated'];
+                $summary['shipping_fee_total'] += $shippingSummary['shipping_fee_total'];
+                $summary['shipping_fee'] += $shippingSummary['shipping_fee_total'];
                 $summary['goods_total'] += $this->resolveOrderListGoodsTotal($order);
             }
         }, 'orders.id', 'id');
@@ -3062,6 +3137,9 @@ class OrderController extends Controller
         return [
             'order_count' => (int) $summary['order_count'],
             'total_price' => round((float) $summary['total_price'], 2),
+            'shipping_fee_recorded' => round((float) $summary['shipping_fee_recorded'], 2),
+            'shipping_fee_estimated' => round((float) $summary['shipping_fee_estimated'], 2),
+            'shipping_fee_total' => round((float) $summary['shipping_fee_total'], 2),
             'shipping_fee' => round((float) $summary['shipping_fee'], 2),
             'goods_total' => round((float) $summary['goods_total'], 2),
         ];
@@ -3958,7 +4036,7 @@ class OrderController extends Controller
 
     public function store(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = $this->resolveAccountId($request);
         $validated = $request->validate([
             'lead_id' => 'nullable|integer|exists:leads,id',
             'order_kind' => 'nullable|string|in:official,template,draft',
@@ -5276,7 +5354,7 @@ class OrderController extends Controller
 
     public function shippingAlerts(Request $request, ShippingAlertService $shippingAlertService)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = $this->resolveAccountId($request);
         $perPage = min(max((int) $request->input('per_page', 20), 1), 50);
         $alerts = $shippingAlertService->activeAlerts($accountId, $perPage);
 

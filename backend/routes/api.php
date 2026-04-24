@@ -126,9 +126,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/accounts/with-user', [\App\Http\Controllers\AccountController::class , 'storeWithUser']);
     Route::get('/accounts', [\App\Http\Controllers\AccountController::class , 'index']);
     Route::post('/accounts', [\App\Http\Controllers\AccountController::class , 'store']);
-    Route::get('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'show']);
-    Route::put('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'update']);
-    Route::delete('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'destroy']);
+    Route::get('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'show'])->whereNumber('id');
+    Route::put('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'update'])->whereNumber('id');
+    Route::delete('/accounts/{id}', [\App\Http\Controllers\AccountController::class , 'destroy'])->whereNumber('id');
 
     // Admin User routes
     Route::get('/users', [\App\Http\Controllers\Api\UserController::class , 'index']);

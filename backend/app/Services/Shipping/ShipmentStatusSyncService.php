@@ -256,6 +256,8 @@ class ShipmentStatusSyncService
         );
 
         $oldOrderStatus = $order->status;
+        $isCurrentOrderTerminal = in_array($oldOrderStatus, ['returned', 'completed', 'cancelled', OrderStatusCatalog::EXCHANGE_COMPLETED_CODE, OrderStatusCatalog::PARTIAL_DELIVERY_CODE]);
+        
         $shouldSyncOrderStatus = $syncOrderStatus && ($orderSync['should_sync_order_status'] ?? false);
         $newOrderStatus = $shouldSyncOrderStatus
             ? $this->resolveOrderStatusForSpecialOrderType(
@@ -264,6 +266,16 @@ class ShipmentStatusSyncService
                 (string) ($orderSync['order_status'] ?? $oldOrderStatus)
             )
             : $oldOrderStatus;
+
+        // Protection: If current order status is terminal, do not allow syncing back to non-terminal status
+        // unless it's a specific terminal-to-terminal transition (e.g. from returned to exchange_completed).
+        if ($isCurrentOrderTerminal && $newOrderStatus) {
+            $isNewOrderTerminal = in_array($newOrderStatus, ['returned', 'completed', 'cancelled', OrderStatusCatalog::EXCHANGE_COMPLETED_CODE, OrderStatusCatalog::PARTIAL_DELIVERY_CODE]);
+            if (!$isNewOrderTerminal) {
+                $shouldSyncOrderStatus = false;
+                $newOrderStatus = $oldOrderStatus;
+            }
+        }
         $oldShippingStatus = $order->shipping_status;
         $newShippingStatus = $shipment->shipment_status;
         $statusChanged = $shouldSyncOrderStatus

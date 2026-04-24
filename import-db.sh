@@ -18,4 +18,10 @@ echo "Restoring database into webnam-db container..."
 # Use -i to stream input from host file into docker exec
 docker exec -i webnam-db pg_restore -U postgres -d webnam < "$DUMP_FILE"
 
+echo "Repairing local admin login after restore..."
+(
+    cd /root/www/webname/backend || exit 1
+    php artisan db:seed --class=LocalAdminAccessSeeder --force
+)
+
 echo "Import complete."

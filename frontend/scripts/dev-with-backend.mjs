@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -13,6 +13,7 @@ const BACKEND_HOST = process.env.WEBNAM_BACKEND_HOST || '127.0.0.1';
 const BACKEND_PORT = Number(process.env.WEBNAM_BACKEND_PORT || 8003);
 const STARTUP_TIMEOUT_MS = Number(process.env.WEBNAM_BACKEND_STARTUP_TIMEOUT_MS || 15000);
 const POLL_INTERVAL_MS = 350;
+const LOCAL_ADMIN_SEEDER_CLASS = 'LocalAdminAccessSeeder';
 
 const windowsPhpCandidates = [
     path.join(projectRoot, 'php84', 'php.exe'),
@@ -44,6 +45,38 @@ const resolvePhpCommand = () => {
     return 'php';
 };
 
+const ensureLocalAdminAccess = () => {
+    if (process.env.WEBNAM_SKIP_LOCAL_ADMIN_SEED === '1') {
+        return;
+    }
+
+    const phpCommand = resolvePhpCommand();
+    const seeded = spawnSync(phpCommand, [
+        'artisan',
+        'db:seed',
+        `--class=${LOCAL_ADMIN_SEEDER_CLASS}`,
+        '--force',
+    ], {
+        cwd: backendDir,
+        env: {
+            ...process.env,
+            APPDATA: path.join(backendDir, '.tmp-appdata'),
+        },
+        encoding: 'utf8',
+        stdio: 'pipe',
+        windowsHide: false,
+        shell: false,
+    });
+
+    if (seeded.status !== 0) {
+        const stderr = String(seeded.stderr || '').trim();
+        const stdout = String(seeded.stdout || '').trim();
+        const details = stderr || stdout || 'Unknown seeding error.';
+
+        throw new Error(`Local admin repair failed: ${details}`);
+    }
+};
+
 const waitForBackend = async () => {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
 
@@ -62,6 +95,8 @@ const startBackendIfNeeded = async () => {
     if (process.env.WEBNAM_SKIP_BACKEND_BOOT === '1') {
         return;
     }
+
+    ensureLocalAdminAccess();
 
     if (await isPortOpen(BACKEND_HOST, BACKEND_PORT)) {
         return;
@@ -90,8 +125,13 @@ const startVite = async () => {
 
     const viteBinary = path.join(frontendDir, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite');
     const viteArgs = process.argv.slice(2);
+    const viteEnv = { ...process.env };
+    delete viteEnv.VITE_API_BASE_URL;
+    delete viteEnv.VITE_STORAGE_BASE_URL;
+    delete viteEnv.VITE_DEV_API_PROXY_TARGET;
     const viteProcess = spawn(viteBinary, viteArgs, {
         cwd: frontendDir,
+        env: viteEnv,
         stdio: 'inherit',
         windowsHide: false,
         shell: process.platform === 'win32',

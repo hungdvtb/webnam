@@ -7,6 +7,15 @@ cd /d "%~dp0backend"
 set "PHP_EXE=C:\xampp\htdocs\webnam\php84\php.exe"
 if not exist "%PHP_EXE%" set "PHP_EXE=C:\xampp\php\php.exe"
 if not exist "%PHP_EXE%" set "PHP_EXE=php"
+if not exist ".tmp-appdata" mkdir ".tmp-appdata" >nul 2>nul
+set "APPDATA=%CD%\.tmp-appdata"
+
+"%PHP_EXE%" artisan db:seed --class=LocalAdminAccessSeeder --force
+if errorlevel 1 (
+echo.
+echo Khong the sua tai khoan admin local.
+exit /b 1
+)
 
 echo.
 echo ============================================

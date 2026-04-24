@@ -95,6 +95,11 @@ const RefreshCw = ({ size, className }) => (
 const MonthlyProfitReport = () => {
     const currentYear = new Date().getFullYear();
     const [selectedYear, setSelectedYear] = useState(currentYear);
+    const [quickFilter, setQuickFilter] = useState('year'); // 'year', '3months', '6months', 'custom'
+    const [customRange, setCustomRange] = useState({
+        start: formatInputDate(new Date(new Date().getFullYear(), new Date().getMonth() - 2, 1)),
+        end: formatInputDate(new Date())
+    });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [reportData, setReportData] = useState([]);
@@ -102,6 +107,28 @@ const MonthlyProfitReport = () => {
     const [reloadKey, setReloadKey] = useState(0);
 
     const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
+
+    const getQueryRange = () => {
+        if (quickFilter === '3months') {
+            const end = new Date();
+            const start = new Date();
+            start.setMonth(end.getMonth() - 2);
+            start.setDate(1);
+            return { start_date: formatInputDate(start), end_date: formatInputDate(end) };
+        }
+        if (quickFilter === '6months') {
+            const end = new Date();
+            const start = new Date();
+            start.setMonth(end.getMonth() - 5);
+            start.setDate(1);
+            return { start_date: formatInputDate(start), end_date: formatInputDate(end) };
+        }
+        if (quickFilter === 'custom') {
+            return { start_date: customRange.start, end_date: customRange.end };
+        }
+        // Fallback to year
+        return getReportRange(selectedYear);
+    };
 
     const defaultCols = [
         'month',
@@ -150,7 +177,7 @@ const MonthlyProfitReport = () => {
             setError('');
 
             try {
-                const range = getReportRange(selectedYear);
+                const range = getQueryRange();
 
                 await financeApi.syncFbAdSpend(range).catch(() => null);
 
@@ -177,7 +204,7 @@ const MonthlyProfitReport = () => {
         return () => {
             ignore = true;
         };
-    }, [reloadKey, selectedYear]);
+    }, [reloadKey, selectedYear, quickFilter, customRange]);
 
     const normalizedReportData = reportData.map((row) => normalizeMonthlyProfitRow(row));
     const normalizedReportSummary = reportSummary ? normalizeMonthlyProfitRow(reportSummary) : null;
@@ -422,18 +449,32 @@ const MonthlyProfitReport = () => {
                     <h1 className="whitespace-nowrap text-xl font-bold text-gray-800">Báo cáo lãi lỗ tháng</h1>
                     <div className="hidden h-6 w-px bg-gray-200 md:block" />
 
-                    <div className="flex items-center gap-1 rounded-lg bg-gray-100 p-1">
+                    <div className="flex flex-wrap items-center gap-1 rounded-lg bg-gray-100 p-1">
                         <button
                             type="button"
-                            onClick={() => setSelectedYear(currentYear)}
-                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${selectedYear === currentYear ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            onClick={() => { setQuickFilter('3months'); setSelectedYear(currentYear); }}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${quickFilter === '3months' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            3 tháng gần nhất
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setQuickFilter('6months'); setSelectedYear(currentYear); }}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${quickFilter === '6months' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            6 tháng gần nhất
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setQuickFilter('year'); setSelectedYear(currentYear); }}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${quickFilter === 'year' && selectedYear === currentYear ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             Năm nay
                         </button>
                         <button
                             type="button"
-                            onClick={() => setSelectedYear(currentYear - 1)}
-                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${selectedYear === currentYear - 1 ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            onClick={() => { setQuickFilter('year'); setSelectedYear(currentYear - 1); }}
+                            className={`rounded-md px-3 py-1 text-[13px] font-bold transition-all ${quickFilter === 'year' && selectedYear === currentYear - 1 ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                         >
                             Năm trước
                         </button>
@@ -441,17 +482,21 @@ const MonthlyProfitReport = () => {
 
                     <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
                         <Filter size={14} className="text-gray-400" />
-                        <select
-                            value={selectedYear}
-                            onChange={(event) => setSelectedYear(Number(event.target.value))}
-                            className="rounded-md border border-gray-200 p-1.5 text-[13px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        >
-                            {yearOptions.map((year) => (
-                                <option key={year} value={year}>
-                                    {year}
-                                </option>
-                            ))}
-                        </select>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="date"
+                                value={customRange.start}
+                                onChange={(e) => { setCustomRange({ ...customRange, start: e.target.value }); setQuickFilter('custom'); }}
+                                className="rounded-md border border-gray-200 p-1.5 text-[12px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            />
+                            <span className="text-gray-400">→</span>
+                            <input
+                                type="date"
+                                value={customRange.end}
+                                onChange={(e) => { setCustomRange({ ...customRange, end: e.target.value }); setQuickFilter('custom'); }}
+                                className="rounded-md border border-gray-200 p-1.5 text-[12px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            />
+                        </div>
                     </div>
                 </div>
 

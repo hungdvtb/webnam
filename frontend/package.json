@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node ./scripts/dev-with-backend.mjs --host 127.0.0.1 --port 3003",
+    "dev": "node ./scripts/dev-with-backend.mjs",
     "dev:vite": "vite",
     "build": "vite build",
     "lint": "eslint .",

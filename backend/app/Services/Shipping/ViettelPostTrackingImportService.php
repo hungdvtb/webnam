@@ -222,15 +222,23 @@ class ViettelPostTrackingImportService
                 $shipment->update($shipmentData);
             }
 
-            // Sync back to order
-            $order->update([
-                'status' => 'shipping',
+            // Sync back to order (only if not already in a terminal status)
+            $currentStatus = $order->status;
+            $isTerminal = in_array($currentStatus, ['returned', 'completed', 'cancelled', 'exchange_completed', 'partial_delivery']);
+
+            $orderUpdateData = [
                 'shipping_status' => 'confirmed',
                 'shipping_tracking_code' => $trackingNumber,
                 'shipping_fee' => $shippingFee,
                 'internal_shipping_fee' => $shippingFee,
-                'shipping_dispatched_at' => now(),
-            ]);
+                'shipping_dispatched_at' => $order->shipping_dispatched_at ?: now(),
+            ];
+
+            if (!$isTerminal) {
+                $orderUpdateData['status'] = 'shipping';
+            }
+
+            $order->update($orderUpdateData);
         });
     }
 }

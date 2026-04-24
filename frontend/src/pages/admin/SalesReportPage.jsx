@@ -99,15 +99,9 @@ const toDateInputValue = (date) => {
     return new Date(safeDate.getTime() - offset).toISOString().slice(0, 10);
 };
 
-const getDefaultDateRange = () => {
-    const to = new Date();
-    const from = new Date();
-    from.setDate(to.getDate() - 6);
-    return { date_from: toDateInputValue(from), date_to: toDateInputValue(to) };
-};
-
 const createDefaultFilters = () => ({
-    ...getDefaultDateRange(),
+    date_from: '',
+    date_to: '',
     search: '',
     status: [],
     customer_name: '',
@@ -139,8 +133,7 @@ const normalizeDatePair = (fromValue, toValue) => {
 };
 
 const normalizeFilters = (rawFilters) => {
-    const fallback = getDefaultDateRange();
-    const reportRange = normalizeDatePair(rawFilters?.date_from || fallback.date_from, rawFilters?.date_to || fallback.date_to);
+    const reportRange = normalizeDatePair(rawFilters?.date_from, rawFilters?.date_to);
     const createdRange = normalizeDatePair(rawFilters?.created_at_from, rawFilters?.created_at_to);
     const shippingRange = normalizeDatePair(rawFilters?.shipping_dispatched_from, rawFilters?.shipping_dispatched_to);
     const status = Array.isArray(rawFilters?.status) ? rawFilters.status : String(rawFilters?.status || '').split(',');
@@ -172,7 +165,9 @@ const normalizeFilters = (rawFilters) => {
 
 const buildReportParams = (rawFilters, options = {}) => {
     const filters = normalizeFilters(rawFilters);
-    const params = { date_from: filters.date_from, date_to: filters.date_to };
+    const params = {};
+    if (filters.date_from) params.date_from = filters.date_from;
+    if (filters.date_to) params.date_to = filters.date_to;
     ['search', 'customer_name', 'order_number', 'customer_phone', 'created_at_from', 'created_at_to', 'shipping_carrier_code', 'export_slip_state', 'return_slip_state', 'damaged_slip_state', 'shipping_dispatched_from', 'shipping_dispatched_to']
         .forEach((key) => {
             if (String(filters[key] || '').trim()) params[key] = String(filters[key]).trim();
@@ -433,7 +428,13 @@ const SalesReportPage = () => {
         try {
             const response = await reportApi.getProductSalesByDay(buildReportParams(normalized, options));
             if (requestId !== requestIdRef.current) return;
-            setReportState({ ...createEmptyState(), ...(response?.data || {}) });
+            const payload = { ...createEmptyState(), ...(response?.data || {}) };
+            setReportState(payload);
+            const resolvedFilters = normalizeFilters(payload.filters || {});
+            if (!normalized.date_from && !normalized.date_to && resolvedFilters.date_from && resolvedFilters.date_to) {
+                setFilters((current) => normalizeFilters({ ...current, date_from: resolvedFilters.date_from, date_to: resolvedFilters.date_to }));
+                setTempFilters((current) => normalizeFilters({ ...current, date_from: resolvedFilters.date_from, date_to: resolvedFilters.date_to }));
+            }
             if (normalized.search.trim()) addToSearchHistory(normalized.search.trim());
         } catch (error) {
             if (requestId !== requestIdRef.current) return;

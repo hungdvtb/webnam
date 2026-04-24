@@ -14,14 +14,16 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       // Listen on all interfaces so Vite can serve both localhost and LAN access.
-      // Leaving HMR host unset lets the client reuse the actual browser origin
-      // instead of always forcing ws://localhost:3003.
+      // Use 127.0.0.1 for HMR to avoid IPv6/localhost resolution instability on some Windows machines.
       host: true,
       port: 3003,
       strictPort: true,
-      // Ignore Codex/browser automation artifacts so temporary HTML or screenshots
-      // do not trigger full-page reloads while long-running uploads are in flight.
+      hmr: {
+        host: '127.0.0.1',
+      },
+      // Polling can be heavy on resources; disabling it unless strictly needed.
       watch: {
+        usePolling: false,
         ignored: ignoredTempArtifacts,
       },
       proxy: {

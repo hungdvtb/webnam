@@ -24,12 +24,12 @@ class ProductSalesByDayReportService
     public function build(int $accountId, array $filters = []): array
     {
         $normalizedFilters = $this->normalizeFilters($filters);
-        [$from, $to] = $this->resolveDateRange($normalizedFilters);
-        $dates = $this->buildDateHeaders($from, $to);
         $requestedStatuses = $normalizedFilters['status'];
         $effectiveStatuses = $requestedStatuses !== []
             ? $requestedStatuses
             : $this->resolveEffectiveStatuses($accountId);
+        [$from, $to] = $this->resolveDateRange($accountId, $normalizedFilters, $effectiveStatuses);
+        $dates = $this->buildDateHeaders($from, $to);
         $effectiveStatusOptions = $requestedStatuses !== []
             ? $this->statusOptionsForCodes($accountId, $effectiveStatuses)
             : $this->validStatusOptions($accountId)
@@ -354,20 +354,53 @@ class ProductSalesByDayReportService
             ->orderBy('child_product_name');
     }
 
-    private function resolveDateRange(array $filters): array
+    private function resolveDateRange(int $accountId, array $filters, array $effectiveStatuses): array
     {
-        $to = !empty($filters['date_to'])
-            ? Carbon::parse($filters['date_to'])
-            : now();
-        $from = !empty($filters['date_from'])
-            ? Carbon::parse($filters['date_from'])
-            : $to->copy()->subDays(6);
+        $hasExplicitFrom = !empty($filters['date_from']);
+        $hasExplicitTo = !empty($filters['date_to']);
+
+        if ($hasExplicitFrom || $hasExplicitTo) {
+            $to = $hasExplicitTo
+                ? Carbon::parse($filters['date_to'])
+                : now();
+            $from = $hasExplicitFrom
+                ? Carbon::parse($filters['date_from'])
+                : $to->copy()->subDays(6);
+        } else {
+            $latestAvailableTimestamp = $this->latestAvailableReportTimestamp($accountId, $effectiveStatuses);
+            $to = $latestAvailableTimestamp !== null
+                ? Carbon::parse($latestAvailableTimestamp)
+                : now();
+            $from = $to->copy()->subDays(6);
+        }
 
         if ($from->gt($to)) {
             [$from, $to] = [$to->copy(), $from->copy()];
         }
 
         return [$from->startOfDay(), $to->endOfDay()];
+    }
+
+    private function latestAvailableReportTimestamp(int $accountId, array $effectiveStatuses): ?string
+    {
+        if ($accountId <= 0 || $effectiveStatuses === []) {
+            return null;
+        }
+
+        $latestReportedAt = DB::table('orders')
+            ->where('orders.account_id', $accountId)
+            ->whereNull('orders.deleted_at')
+            ->where(function ($kindQuery) {
+                $kindQuery
+                    ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('orders.order_kind')
+                    ->orWhere('orders.order_kind', '');
+            })
+            ->whereIn('orders.status', $effectiveStatuses)
+            ->selectRaw('MAX(' . $this->reportTimestampExpression('orders') . ') AS latest_reported_at')
+            ->value('latest_reported_at');
+
+        return $latestReportedAt ? (string) $latestReportedAt : null;
     }
 
     private function normalizeFilters(array $filters): array

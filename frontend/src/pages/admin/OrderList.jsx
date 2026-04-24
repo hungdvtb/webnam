@@ -299,6 +299,11 @@ const SHIPPING_ALERT_SEEN_STORAGE_KEY = 'order_shipping_alert_seen_v1';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
+const getOrderCostTotalValue = (order) => {
+    const parsedValue = Number(order?.cost_total ?? 0);
+    return Number.isFinite(parsedValue) ? parsedValue : 0;
+};
+const getOrderCostTotalSummaryValue = (order) => Math.round(getOrderCostTotalValue(order));
 
 const normalizeImportCostRefreshAttributeValues = (value) => {
     if (Array.isArray(value)) {
@@ -733,21 +738,49 @@ const normalizeStoredOrderPagination = (value) => ({
 const createEmptyOrderListSummary = () => ({
     order_count: 0,
     total_price: 0,
+    shipping_fee_recorded: 0,
+    shipping_fee_estimated: 0,
+    shipping_fee_total: 0,
     shipping_fee: 0,
     goods_total: 0,
 });
+
+const ORDER_SUMMARY_COMPACT_LABELS = {
+    order_count: 'Tổng đơn',
+    total_price: 'Tổng tiền đơn',
+    shipping_fee_recorded: 'Ship đã có',
+    shipping_fee_estimated: 'Ship tạm tính',
+    shipping_fee_total: 'Tổng ship',
+    shipping_fee: 'Tổng ship',
+    goods_total: 'Tổng tiền hàng',
+};
 
 const normalizeOrderListSummary = (value, fallbackCount = 0) => {
     const parsedCount = Number.parseInt(value?.order_count, 10);
     const parsedFallbackCount = Number.parseInt(fallbackCount, 10);
     const parsedTotalPrice = Number(value?.total_price);
+    const parsedShippingFeeRecorded = Number(value?.shipping_fee_recorded);
+    const parsedShippingFeeEstimated = Number(value?.shipping_fee_estimated);
+    const parsedShippingFeeTotal = Number(value?.shipping_fee_total ?? value?.shipping_fee);
     const parsedShippingFee = Number(value?.shipping_fee);
     const parsedGoodsTotal = Number(value?.goods_total);
+    const normalizedShippingFeeRecorded = Number.isFinite(parsedShippingFeeRecorded) ? parsedShippingFeeRecorded : 0;
+    const normalizedShippingFeeEstimated = Number.isFinite(parsedShippingFeeEstimated) ? parsedShippingFeeEstimated : 0;
+    const normalizedShippingFeeTotal = Number.isFinite(parsedShippingFeeTotal)
+        ? parsedShippingFeeTotal
+        : (
+            Number.isFinite(parsedShippingFee)
+                ? parsedShippingFee
+                : (normalizedShippingFeeRecorded + normalizedShippingFeeEstimated)
+        );
 
     return {
         order_count: Math.max(0, Number.isFinite(parsedCount) ? parsedCount : (Number.isFinite(parsedFallbackCount) ? parsedFallbackCount : 0)),
         total_price: Number.isFinite(parsedTotalPrice) ? parsedTotalPrice : 0,
-        shipping_fee: Number.isFinite(parsedShippingFee) ? parsedShippingFee : 0,
+        shipping_fee_recorded: normalizedShippingFeeRecorded,
+        shipping_fee_estimated: normalizedShippingFeeEstimated,
+        shipping_fee_total: normalizedShippingFeeTotal,
+        shipping_fee: normalizedShippingFeeTotal,
         goods_total: Number.isFinite(parsedGoodsTotal) ? parsedGoodsTotal : 0,
     };
 };
@@ -2471,6 +2504,10 @@ const OrderList = () => {
         () => activeSearchTerms.map((term) => term.toLowerCase()),
         [activeSearchTerms]
     );
+    const visibleGoodsTotal = useMemo(
+        () => orders.reduce((total, order) => total + getOrderCostTotalSummaryValue(order), 0),
+        [orders]
+    );
     const matchesAnySearchKeyword = useCallback((...values) => (
         normalizedActiveSearchTerms.some((term) => (
             values.some((value) => String(value || '').toLowerCase().includes(term))
@@ -2490,18 +2527,37 @@ const OrderList = () => {
             className: 'text-brick',
         },
         {
-            key: 'shipping_fee',
-            label: 'Tổng tiền ship',
-            value: formatMoney(orderSummary.shipping_fee),
+            key: 'shipping_fee_recorded',
+            label: 'Ship đã có',
+            value: formatMoney(orderSummary.shipping_fee_recorded),
             className: 'text-stone-600',
+        },
+        {
+            key: 'shipping_fee_estimated',
+            label: 'Ship tạm tính',
+            value: formatMoney(orderSummary.shipping_fee_estimated),
+            className: 'text-amber-700',
+        },
+        {
+            key: 'shipping_fee_total',
+            label: 'Tổng ship',
+            value: formatMoney(orderSummary.shipping_fee_total),
+            className: 'text-rose-700',
         },
         {
             key: 'goods_total',
             label: 'Tổng tiền hàng',
-            value: formatMoney(orderSummary.goods_total),
+            value: formatMoney(visibleGoodsTotal),
             className: 'text-sky-700',
         },
-    ]), [orderSummary.goods_total, orderSummary.order_count, orderSummary.shipping_fee, orderSummary.total_price]);
+    ]), [
+        orderSummary.order_count,
+        orderSummary.shipping_fee_estimated,
+        orderSummary.shipping_fee_recorded,
+        orderSummary.shipping_fee_total,
+        orderSummary.total_price,
+        visibleGoodsTotal,
+    ]);
     const carrierMap = useMemo(
         () => new Map(connectedCarriers.map((carrier) => [String(carrier.carrier_code), carrier])),
         [connectedCarriers]
@@ -5241,7 +5297,7 @@ const OrderList = () => {
                                             <div className="shrink-0 text-right">
                                                 <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Tổng tiền</div>
                                                 <div className="mt-1 text-[18px] font-black leading-none text-brick">{formatMoney(o.total_price || 0)}</div>
-                                                <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-sky-700/80">Giá vốn nhập {formatMoney(o.cost_total || 0)}</div>
+                                                <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-sky-700/80">Giá vốn nhập {formatMoney(getOrderCostTotalValue(o))}</div>
                                                 <div className="mt-1 whitespace-nowrap text-[11px] font-bold text-primary/55">Phí ship {formatMoney(shippingFee)}</div>
                                                 <div className="mt-1 text-[11px] font-semibold text-primary/45">{dateDisplay.date}</div>
                                             </div>
@@ -5583,7 +5639,7 @@ const OrderList = () => {
                                             );
                                         }
                                         if (c.id === 'cost_total') {
-                                            const costTotal = Number(o.cost_total || 0);
+                                            const costTotal = getOrderCostTotalValue(o);
                                             const costTotalCopyValue = String(Math.round(costTotal));
                                             return (
                                                 <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 font-black text-sky-700 group/cost_total relative">
@@ -5823,37 +5879,29 @@ const OrderList = () => {
                 {loading && <div className="absolute inset-0 bg-white/40 flex items-center justify-center z-50"><div className="w-8 h-8 border-4 border-gold/10 border-t-gold rounded-full animate-refresh-spin"></div></div>}
             </div>
 
-            <div className="mt-4 flex-none border-t border-primary/10 pt-4">
-                <div className="rounded-[18px] border border-primary/10 bg-white/70 px-3 py-3 shadow-sm">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/40">Tổng hợp theo bộ lọc hiện tại</div>
-                            <div className="mt-1 text-[12px] font-bold text-primary/55">Luôn bám đúng danh sách đang lọc trên bảng</div>
-                        </div>
-                        <div className="rounded-full border border-primary/10 bg-primary/[0.03] px-3 py-1 text-[11px] font-black text-primary/55">
-                            {formatNumber(orderSummary.order_count)} đơn
-                        </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 xl:grid-cols-4">
-                        {orderSummaryItems.map((item) => (
-                            <div key={item.key} className="rounded-[14px] border border-primary/10 bg-white px-3 py-2.5">
-                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">{item.label}</div>
-                                <div className={`mt-1 text-[15px] font-black leading-tight ${item.className}`}>{item.value}</div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-                <div className="mt-4 flex flex-col gap-3 text-[13px] font-bold text-primary/40 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex flex-wrap items-center gap-4">
-                        <span>Hiển thị {orders.length} / {pagination.total}</span>
-                        <div className="flex items-center gap-2">
+            <div className="mt-4 flex-none border-t border-primary/10 pt-3">
+                <div className="overflow-x-auto pb-1">
+                    <div className="flex min-w-max items-center gap-3 text-[12px] font-bold text-primary/45 lg:text-[13px]">
+                        <span className="shrink-0">Hiển thị {orders.length} / {pagination.total}</span>
+                        <div className="flex shrink-0 items-center gap-2">
                             <span>Số dòng:</span>
-                            <select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value))} className="bg-transparent border-none outline-none font-black text-primary cursor-pointer">
+                            <select value={pagination.per_page} onChange={(e) => fetchOrders(1, filters, parseInt(e.target.value, 10))} className="rounded-full border border-primary/10 bg-white px-2.5 py-1 text-[12px] font-black text-primary outline-none transition-all hover:border-primary/25">
                                 {[20, 50, 100].map(v => <option key={v} value={v}>{v}</option>)}
                             </select>
                         </div>
+                        <div className="h-4 w-px shrink-0 bg-primary/10" aria-hidden="true" />
+                        {orderSummaryItems.map((item) => {
+                            return (
+                                <div key={item.key} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/10 bg-white px-2.5 py-1">
+                                    <span className="text-primary/45">{ORDER_SUMMARY_COMPACT_LABELS[item.key] || item.label}:</span>
+                                    <span className={`font-black ${item.className}`}>{item.value}</span>
+                                </div>
+                            );
+                        })}
+                        <div className="ml-1 shrink-0">
+                            <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
+                        </div>
                     </div>
-                    <Pagination pagination={pagination} onPageChange={(page) => fetchOrders(page)} />
                 </div>
             </div>
 

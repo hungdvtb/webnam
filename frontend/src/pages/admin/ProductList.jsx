@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -208,6 +209,8 @@ const DEFAULT_IMPORT_MODE = 'replace_all';
 const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
 const INVENTORY_UNIT_FILTER_ASSIGNED = 'assigned';
 const INVENTORY_UNIT_FILTER_UNASSIGNED = 'unassigned';
+const SHOW_BULK_COPY_ACTION = false;
+const SHOW_BULK_IMAGE_APPEND_ACTION = false;
 const EXTRA_EXPORT_FIELDS = [
     { id: 'id', label: 'ID' },
     { id: 'slug', label: 'Slug' },
@@ -895,6 +898,86 @@ function expandQuickEditProducts(product, attributes = []) {
     return [buildQuickEditEditableProduct(product, attributes)];
 }
 
+function groupQuickEditProducts(products = []) {
+    const groups = [];
+    const groupMap = new Map();
+    let fallbackGroupIndex = 0;
+
+    const ensureGroup = (rawGroupId) => {
+        const groupId = rawGroupId === null || rawGroupId === undefined || rawGroupId === ''
+            ? `quick-edit-group-${fallbackGroupIndex++}`
+            : String(rawGroupId);
+
+        if (!groupMap.has(groupId)) {
+            const nextGroup = {
+                id: groupId,
+                parent: null,
+                variants: [],
+            };
+
+            groupMap.set(groupId, nextGroup);
+            groups.push(nextGroup);
+        }
+
+        return groupMap.get(groupId);
+    };
+
+    (Array.isArray(products) ? products : []).forEach((product) => {
+        const rowType = String(product?.quick_edit_row_type || 'product');
+
+        if (rowType === 'variant') {
+            const variantGroup = ensureGroup(product?.quick_edit_parent_id ?? product?.id);
+            variantGroup.variants.push(product);
+            return;
+        }
+
+        const parentGroup = ensureGroup(product?.id);
+        parentGroup.parent = product;
+    });
+
+    return groups
+        .map((group) => {
+            if (group.parent) {
+                return group;
+            }
+
+            if (group.variants.length === 0) {
+                return null;
+            }
+
+            return {
+                ...group,
+                parent: group.variants[0],
+                variants: group.variants.slice(1),
+            };
+        })
+        .filter(Boolean);
+}
+
+function getQuickEditRowLabel({ isVariantRow = false, isParentRow = false, hasVariants = false } = {}) {
+    if (isVariantRow) {
+        return 'Biến thể';
+    }
+
+    if (isParentRow || hasVariants) {
+        return 'Sản phẩm cha';
+    }
+
+    return 'Sản phẩm đơn';
+}
+
+function getQuickEditRowLabelClass({ isVariantRow = false, isParentRow = false, hasVariants = false } = {}) {
+    if (isVariantRow) {
+        return 'border-sky-200 bg-sky-50 text-sky-700';
+    }
+
+    if (isParentRow || hasVariants) {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+
+    return 'border-primary/15 bg-primary/[0.04] text-primary/75';
+}
+
 function buildQuickEditProductDraft(product, attributes = []) {
     const customAttributes = Object.fromEntries(
         attributes.map((attribute) => [String(attribute.id), getQuickEditAttributeValue(product, attribute)]),
@@ -1039,21 +1122,6 @@ function buildQuickEditSearchIndex(product, draft = null, original = null) {
     return normalizeQuickEditSearchText(values.join(' '));
 }
 
-function formatQuickEditMoneyPreview(value, normalizer = normalizeWholeMoneyNumber) {
-    const normalizedValue = normalizer(value);
-
-    if (normalizedValue === null || normalizedValue === undefined) {
-        return '--';
-    }
-
-    const numericValue = Number(normalizedValue);
-    if (!Number.isFinite(numericValue)) {
-        return '--';
-    }
-
-    return `${new Intl.NumberFormat('vi-VN').format(Math.round(numericValue))}₫`;
-}
-
 const ProductList = () => {
     const { user } = useAuth();
     const { available: aiAvailable, disabledReason } = useAiAvailability();
@@ -1173,6 +1241,7 @@ const ProductList = () => {
     const [quickEditRowErrors, setQuickEditRowErrors] = useState({});
     const [quickEditSearchQuery, setQuickEditSearchQuery] = useState('');
     const [quickEditExpanded, setQuickEditExpanded] = useState(false);
+    const [quickEditExpandedGroupIds, setQuickEditExpandedGroupIds] = useState([]);
     const quickEditTableScrollRef = useRef(null);
     const quickEditTopScrollbarRef = useRef(null);
     const quickEditHorizontalSyncSourceRef = useRef(null);
@@ -1190,24 +1259,82 @@ const ProductList = () => {
     const quickEditSelectedCoreFieldKey = quickEditSelectedCoreFields.join('|');
     const quickEditSelectedAttributeKey = quickEditSelectedAttributeIds.join('|');
     const quickEditNormalizedSearchQuery = normalizeQuickEditSearchText(quickEditSearchQuery);
-    const quickEditFilteredProducts = useMemo(() => {
-        if (!quickEditNormalizedSearchQuery) {
-            return quickEditProducts;
-        }
+    const quickEditProductGroups = useMemo(() => groupQuickEditProducts(quickEditProducts), [quickEditProducts]);
+    const quickEditExpandedGroupIdSet = useMemo(
+        () => new Set(quickEditExpandedGroupIds.map((id) => String(id))),
+        [quickEditExpandedGroupIds],
+    );
+    const quickEditFilteredGroups = useMemo(() => (
+        quickEditProductGroups
+            .filter((group) => {
+                if (!quickEditNormalizedSearchQuery) {
+                    return true;
+                }
 
-        return quickEditProducts.filter((product) => {
-            const productKey = String(product?.id ?? '');
-            const searchIndex = buildQuickEditSearchIndex(
-                product,
-                quickEditDrafts[productKey],
-                quickEditOriginals[productKey],
-            );
+                const parent = group?.parent;
+                if (!parent) {
+                    return false;
+                }
 
-            return searchIndex.includes(quickEditNormalizedSearchQuery);
-        });
-    }, [quickEditDrafts, quickEditNormalizedSearchQuery, quickEditOriginals, quickEditProducts]);
+                const parentKey = String(parent?.id ?? '');
+                const parentMatches = buildQuickEditSearchIndex(
+                    parent,
+                    quickEditDrafts[parentKey],
+                    quickEditOriginals[parentKey],
+                ).includes(quickEditNormalizedSearchQuery);
+
+                if (parentMatches) {
+                    return true;
+                }
+
+                return group.variants.some((variant) => {
+                    const variantKey = String(variant?.id ?? '');
+                    const searchIndex = buildQuickEditSearchIndex(
+                        variant,
+                        quickEditDrafts[variantKey],
+                        quickEditOriginals[variantKey],
+                    );
+
+                    return searchIndex.includes(quickEditNormalizedSearchQuery);
+                });
+            })
+            .map((group) => ({
+                ...group,
+                isExpanded: quickEditExpandedGroupIdSet.has(String(group.id)),
+                visibleVariants: quickEditExpandedGroupIdSet.has(String(group.id))
+                    ? group.variants
+                    : [],
+            }))
+    ), [
+        quickEditDrafts,
+        quickEditExpandedGroupIdSet,
+        quickEditNormalizedSearchQuery,
+        quickEditOriginals,
+        quickEditProductGroups,
+    ]);
+    const quickEditRenderedRowCount = useMemo(
+        () => quickEditFilteredGroups.reduce((total, group) => total + 1 + group.visibleVariants.length, 0),
+        [quickEditFilteredGroups],
+    );
     const quickEditHasHorizontalOverflow = quickEditTableMetrics.scrollWidth > (quickEditTableMetrics.clientWidth + 1);
     const quickEditTopScrollbarWidth = Math.max(quickEditTableMetrics.scrollWidth, quickEditTableMetrics.clientWidth, 0);
+
+    const toggleQuickEditGroupExpansion = useCallback((groupId, event = null) => {
+        if (event) {
+            event.stopPropagation();
+        }
+
+        const normalizedGroupId = String(groupId ?? '').trim();
+        if (!normalizedGroupId) {
+            return;
+        }
+
+        setQuickEditExpandedGroupIds((prev) => (
+            prev.includes(normalizedGroupId)
+                ? prev.filter((value) => value !== normalizedGroupId)
+                : [...prev, normalizedGroupId]
+        ));
+    }, []);
 
     const measureQuickEditTableMetrics = useCallback(() => {
         const scrollElement = quickEditTableScrollRef.current;
@@ -1302,7 +1429,7 @@ const ProductList = () => {
     }, [
         showQuickEditModal,
         quickEditLoading,
-        quickEditFilteredProducts.length,
+        quickEditRenderedRowCount,
         quickEditSelectedCoreFieldKey,
         quickEditSelectedAttributeKey,
         quickEditExpanded,
@@ -1321,7 +1448,7 @@ const ProductList = () => {
         }
     }, [showQuickEditModal, quickEditNormalizedSearchQuery]);
 
-    const resetQuickEditState = () => {
+    const resetQuickEditState = useCallback(() => {
         setShowQuickEditModal(false);
         setQuickEditTargetIds([]);
         setQuickEditProducts([]);
@@ -1334,17 +1461,39 @@ const ProductList = () => {
         setQuickEditRowErrors({});
         setQuickEditSearchQuery('');
         setQuickEditExpanded(false);
+        setQuickEditExpandedGroupIds([]);
         setQuickEditTableMetrics({ scrollWidth: 0, clientWidth: 0 });
         quickEditHorizontalSyncSourceRef.current = null;
-    };
+    }, []);
 
-    const closeQuickEditModal = () => {
+    const closeQuickEditModal = useCallback(() => {
         if (quickEditSubmitting) {
             return;
         }
 
         resetQuickEditState();
-    };
+    }, [quickEditSubmitting, resetQuickEditState]);
+
+    useEffect(() => {
+        if (!showQuickEditModal || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const previousOverflow = window.document.body.style.overflow;
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape' && !quickEditSubmitting) {
+                closeQuickEditModal();
+            }
+        };
+
+        window.document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            window.document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [closeQuickEditModal, quickEditSubmitting, showQuickEditModal]);
 
     const updateQuickEditDraft = (productId, field, value) => {
         const draftKey = String(productId);
@@ -1453,6 +1602,7 @@ const ProductList = () => {
         setQuickEditRowErrors({});
         setQuickEditSearchQuery('');
         setQuickEditExpanded(false);
+        setQuickEditExpandedGroupIds([]);
 
         try {
             const visibleLookup = createQuickEditProductLookup(products);
@@ -1573,6 +1723,23 @@ const ProductList = () => {
             const nextDrafts = Object.fromEntries(
                 resolvedProducts.map((product) => [String(product.id), buildQuickEditProductDraft(product, allAttributes)]),
             );
+            const nextExpandedGroupIds = Array.from(
+                new Map(
+                    normalizedIds
+                        .map((id) => {
+                            const selectedProduct = selectedLookup.get(String(id));
+                            if (!isVariantChildProduct(selectedProduct)) {
+                                return null;
+                            }
+
+                            const sourceGroupId = getQuickEditConfigurableSourceId(selectedProduct);
+                            return sourceGroupId === null
+                                ? null
+                                : [String(sourceGroupId), String(sourceGroupId)];
+                        })
+                        .filter(Boolean),
+                ).values(),
+            );
 
             setQuickEditTargetIds(resolvedProducts.map((product) => product.id));
             setQuickEditProducts(resolvedProducts);
@@ -1580,6 +1747,7 @@ const ProductList = () => {
             setQuickEditOriginals(nextDrafts);
             setQuickEditSelectedCoreFields(QUICK_EDIT_DEFAULT_CORE_FIELD_IDS);
             setQuickEditSelectedAttributeIds(glazeAttribute ? [String(glazeAttribute.id)] : []);
+            setQuickEditExpandedGroupIds(nextExpandedGroupIds);
         } catch (error) {
             console.error('Quick edit load error:', error);
             setNotification({
@@ -1666,14 +1834,19 @@ const ProductList = () => {
                 }
 
                 if (fieldId === 'expected_cost') {
-                    const nextExpectedCost = normalizeRoundedImportCostNumber(draft.expected_cost);
-                    if (nextExpectedCost === null) {
+                    const rawExpectedCost = draft.expected_cost;
+                    const trimmedExpectedCost = rawExpectedCost === null || rawExpectedCost === undefined
+                        ? ''
+                        : String(rawExpectedCost).trim();
+                    const nextExpectedCost = normalizeRoundedImportCostNumber(rawExpectedCost);
+
+                    if (trimmedExpectedCost && nextExpectedCost === null) {
                         rowError = 'Giá nhập dự kiến phải là số hợp lệ.';
                         return;
                     }
 
-                    if (getQuickEditCoreComparableValue(fieldId, nextExpectedCost) !== getQuickEditCoreComparableValue(fieldId, original.expected_cost)) {
-                        payload.expected_cost = nextExpectedCost;
+                    if (getQuickEditCoreComparableValue(fieldId, rawExpectedCost) !== getQuickEditCoreComparableValue(fieldId, original.expected_cost)) {
+                        payload.expected_cost = trimmedExpectedCost ? nextExpectedCost : null;
                     }
                     return;
                 }
@@ -5049,14 +5222,16 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">tune</span>
                             </button>
-                            <button 
-                                disabled={selectedIds.length === 0 || isTrashView}
-                                onClick={() => setShowBulkCopyModal(true)}
-                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
-                                title="Sao chép 2 mục từ 1 sản phẩm nguồn sang các sản phẩm đã chọn"
-                            >
-                                <span className="material-symbols-outlined text-[18px]">conversion_path</span>
-                            </button>
+                            {SHOW_BULK_COPY_ACTION && (
+                                <button
+                                    disabled={selectedIds.length === 0 || isTrashView}
+                                    onClick={() => setShowBulkCopyModal(true)}
+                                    className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                                    title="Sao chép 2 mục từ 1 sản phẩm nguồn sang các sản phẩm đã chọn"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">conversion_path</span>
+                                </button>
+                            )}
                             {!isTrashView && (
                                 <button
                                     type="button"
@@ -5072,7 +5247,7 @@ const ProductList = () => {
                                     <span className="material-symbols-outlined text-[18px]">photo_library</span>
                                 </button>
                             )}
-                            {!isTrashView && (
+                            {!isTrashView && SHOW_BULK_IMAGE_APPEND_ACTION && (
                                 <button
                                     type="button"
                                     onClick={() => setShowBulkImageAppendModal(true)}
@@ -6321,396 +6496,418 @@ const ProductList = () => {
                 </div>
             )}
 
-            {showQuickEditModal && (
-                <div
-                    className={`fixed inset-0 z-[105] bg-black/60 flex ${
-                        quickEditExpanded
-                            ? 'items-stretch justify-stretch p-2 sm:p-3'
-                            : 'items-center justify-center p-4'
-                    }`}
-                    onClick={closeQuickEditModal}
-                >
+            {showQuickEditModal && typeof document !== 'undefined'
+                ? createPortal(
                     <div
-                        data-quick-edit-modal="true"
-                        className={`bg-white rounded p-6 w-full flex min-h-0 flex-col shadow-2xl animate-in fade-in zoom-in-95 duration-200 transition-all ${
+                        className={`fixed inset-0 z-[220] flex bg-slate-950/60 ${
                             quickEditExpanded
-                                ? 'h-full max-h-none max-w-none'
-                                : 'max-w-7xl max-h-[92vh]'
+                                ? 'items-stretch justify-stretch p-0'
+                                : 'items-center justify-center p-4'
                         }`}
-                        onClick={(event) => event.stopPropagation()}
+                        onClick={closeQuickEditModal}
                     >
-                        <div className="flex justify-between items-center gap-4 mb-4 border-b border-primary/10 pb-4">
-                            <div>
-                                <h2 className="text-lg font-bold text-primary flex items-center gap-2">
-                                    <span className="material-symbols-outlined text-sky-600">flash_on</span>
-                                    Sửa nhanh sản phẩm
-                                </h2>
-                                <p className="mt-2 text-[13px] text-primary/65">
-                                    Chỉnh trực tiếp ngay tại danh sách. Chỉ những ô thật sự thay đổi trong các cột đang bật mới được gửi lên hệ thống.
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={closeQuickEditModal}
-                                disabled={quickEditSubmitting}
-                                className="text-gray-500 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                                <span className="material-symbols-outlined">close</span>
-                            </button>
-                        </div>
-
-                        <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 min-h-0 space-y-4">
-                            <div className="rounded-sm border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] text-sky-950">
-                                Đang chuẩn bị sửa nhanh cho <strong>{quickEditProducts.length}</strong> sản phẩm.
-                                Hiện có <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật.
-                                Nếu sửa nhiều sản phẩm cùng lúc, hệ thống chỉ lưu những ô bạn đã thay đổi, không ghi đè các trường khác.
-                            </div>
-
-                            <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-4">
-                                <section className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Trường thông dụng</h3>
-                                            <p className="mt-2 text-[12px] text-primary/60">
-                                                Bật cột nào thì cột đó mới xuất hiện trong bảng sửa nhanh bên dưới.
-                                            </p>
-                                        </div>
-                                        <div className="rounded-sm bg-white px-3 py-1.5 text-[11px] font-bold text-primary/65 shadow-sm">
-                                            {quickEditSelectedCoreFields.length}/{QUICK_EDIT_CORE_FIELDS.length} cột
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                        {QUICK_EDIT_CORE_FIELDS.map((field) => {
-                                            const active = quickEditSelectedCoreFields.includes(field.id);
-                                            return (
-                                                <button
-                                                    key={field.id}
-                                                    type="button"
-                                                    onClick={() => toggleQuickEditCoreField(field.id)}
-                                                    data-quick-edit-core-field={field.id}
-                                                    className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
-                                                        active
-                                                            ? 'border-sky-600 bg-sky-600 text-white shadow-sm'
-                                                            : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
-                                                    }`}
-                                                >
-                                                    {field.label}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </section>
-
-                                <section className="rounded-sm border border-primary/10 bg-white p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Thuộc tính thêm</h3>
-                                            <p className="mt-2 text-[12px] text-primary/60">
-                                                Dùng để sửa nhanh các thuộc tính đang có trong hệ thống như loại men hoặc các thông tin cơ bản khác.
-                                            </p>
-                                        </div>
-                                        <div className="rounded-sm bg-primary/[0.04] px-3 py-1.5 text-[11px] font-bold text-primary/65">
-                                            {quickEditSelectedAttributeIds.length} thuộc tính
-                                        </div>
-                                    </div>
-
-                                    {allAttributes.length > 0 ? (
-                                        <div className="mt-3 max-h-36 overflow-y-auto custom-scrollbar flex flex-wrap gap-2 pr-1">
-                                            {[...allAttributes]
-                                                .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
-                                                .map((attribute) => {
-                                                    const active = quickEditSelectedAttributeIds.includes(String(attribute.id));
-                                                    const isGlaze = normalizeQuickEditSearchText(attribute?.name).includes('loai men');
-
-                                                    return (
-                                                        <button
-                                                            key={attribute.id}
-                                                            type="button"
-                                                            onClick={() => toggleQuickEditAttributeField(attribute.id)}
-                                                            data-quick-edit-attribute-field={attribute.id}
-                                                            className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
-                                                                active
-                                                                    ? 'border-gold bg-gold text-white shadow-sm'
-                                                                    : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
-                                                            }`}
-                                                        >
-                                                            <span>{attribute.name}</span>
-                                                            {isGlaze ? (
-                                                                <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${active ? 'bg-white/20 text-white' : 'bg-gold/10 text-gold'}`}>
-                                                                    Gợi ý
-                                                                </span>
-                                                            ) : null}
-                                                        </button>
-                                                    );
-                                                })}
-                                        </div>
-                                    ) : (
-                                        <div className="mt-3 rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-4 text-[12px] text-primary/55">
-                                            Chưa có thuộc tính tùy chỉnh nào để thêm vào chế độ sửa nhanh.
-                                        </div>
-                                    )}
-                                </section>
-                            </div>
-
-                            <section className="space-y-3">
-                                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                                    <div>
-                                        <h3 className="text-[14px] font-black uppercase tracking-[0.16em] text-primary">Bảng sửa nhanh</h3>
-                                        <p className="mt-2 text-[12px] text-primary/60">
-                                            Chỉnh trực tiếp từng ô, sau đó bấm <strong>Lưu sửa nhanh</strong>. Nút <strong>Hủy</strong> sẽ đóng cửa sổ mà không ghi thay đổi nào.
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-                                        <div className="relative min-w-0 sm:w-[320px]">
-                                            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/40">
-                                                search
-                                            </span>
-                                            <input
-                                                type="text"
-                                                value={quickEditSearchQuery}
-                                                onChange={(event) => setQuickEditSearchQuery(event.target.value)}
-                                                placeholder="Tìm tên sản phẩm, SKU, mã biến thể..."
-                                                className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-10 text-[12px] font-semibold text-primary outline-none transition-all focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                                                data-quick-edit-search="true"
-                                            />
-                                            {quickEditSearchQuery ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setQuickEditSearchQuery('')}
-                                                    className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-primary/45 transition-colors hover:bg-primary/5 hover:text-primary"
-                                                    aria-label="Xóa tìm kiếm sửa nhanh"
-                                                >
-                                                    <span className="material-symbols-outlined text-[16px]">close</span>
-                                                </button>
-                                            ) : null}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => setQuickEditExpanded((prev) => !prev)}
-                                            className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-3 text-[12px] font-bold transition-all ${
-                                                quickEditExpanded
-                                                    ? 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100'
-                                                    : 'border-primary/15 bg-white text-primary/75 hover:border-primary/30 hover:bg-primary/[0.03]'
-                                            }`}
-                                            data-quick-edit-zoom="true"
-                                            aria-pressed={quickEditExpanded}
-                                        >
-                                            <span className="material-symbols-outlined text-[16px]">
-                                                {quickEditExpanded ? 'fullscreen_exit' : 'open_in_full'}
-                                            </span>
-                                            {quickEditExpanded ? 'Thu gọn' : 'Phóng to'}
-                                        </button>
-                                        <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/65">
-                                            <strong>{quickEditFilteredProducts.length}</strong>
-                                            {quickEditNormalizedSearchQuery ? `/${quickEditProducts.length}` : ''}
-                                            {' '}sản phẩm • <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật
-                                        </div>
-                                    </div>
+                        <div
+                            data-quick-edit-modal="true"
+                            className={`flex min-h-0 w-full flex-col overflow-hidden bg-white shadow-[0_32px_90px_rgba(15,23,42,0.28)] animate-in fade-in zoom-in-95 duration-200 transition-all ${
+                                quickEditExpanded
+                                    ? 'h-full max-h-none max-w-none rounded-none'
+                                    : 'max-h-[92vh] max-w-7xl rounded-sm'
+                            }`}
+                            onClick={(event) => event.stopPropagation()}
+                        >
+                            <div className="flex items-center justify-between gap-4 border-b border-primary/10 px-6 py-5">
+                                <div>
+                                    <h2 className="flex items-center gap-2 text-lg font-bold text-primary">
+                                        <span className="material-symbols-outlined text-sky-600">flash_on</span>
+                                        Sửa nhanh sản phẩm
+                                    </h2>
+                                    <p className="mt-2 text-[13px] text-primary/65">
+                                        Chỉnh trực tiếp ngay tại danh sách. Chỉ những ô thật sự thay đổi trong các cột đang bật mới được gửi lên hệ thống.
+                                    </p>
                                 </div>
-
-                                {quickEditLoading ? (
-                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
-                                        <div className="flex items-center justify-center gap-2 text-primary">
-                                            <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
-                                            Đang tải dữ liệu sửa nhanh...
-                                        </div>
-                                    </div>
-                                ) : quickEditProducts.length === 0 ? (
-                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
-                                        Không có sản phẩm nào sẵn sàng để sửa nhanh.
-                                    </div>
-                                ) : quickEditFilteredProducts.length === 0 ? (
-                                    <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
-                                        <div className="flex flex-col items-center gap-3">
-                                            <span className="material-symbols-outlined text-[24px] text-primary/35">search_off</span>
-                                            <p>Không tìm thấy sản phẩm phù hợp trong danh sách đang sửa nhanh.</p>
-                                            <button
-                                                type="button"
-                                                onClick={() => setQuickEditSearchQuery('')}
-                                                className="inline-flex items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 py-2 font-bold text-primary/75 transition-colors hover:border-primary/30 hover:bg-primary/[0.03]"
-                                            >
-                                                <span className="material-symbols-outlined text-[16px]">restart_alt</span>
-                                                Xóa tìm kiếm
-                                            </button>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <div className="rounded-sm border border-primary/10 overflow-hidden bg-white shadow-sm">
-                                        {quickEditHasHorizontalOverflow ? (
-                                            <div className="border-b border-primary/10 bg-[#F8FAFC] px-4 py-3">
-                                                <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-3 py-2">
-                                                    <span className="material-symbols-outlined text-[16px] text-sky-600">swap_horiz</span>
-                                                    <div
-                                                        ref={quickEditTopScrollbarRef}
-                                                        data-quick-edit-top-scrollbar="true"
-                                                        onScroll={handleQuickEditTopScrollbarScroll}
-                                                        className="flex-1 overflow-x-auto overflow-y-hidden custom-scrollbar"
-                                                    >
-                                                        <div
-                                                            className="h-2 rounded-full bg-gradient-to-r from-primary/10 via-sky-400/30 to-primary/10"
-                                                            style={{ width: quickEditTopScrollbarWidth }}
-                                                        />
-                                                    </div>
-                                                    <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                        Cuộn ngang nhanh
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        ) : null}
-                                        <div
-                                            ref={quickEditTableScrollRef}
-                                            data-quick-edit-table-scroll="true"
-                                            onScroll={handleQuickEditTableScroll}
-                                            className={`overflow-auto custom-scrollbar ${
-                                                quickEditExpanded
-                                                    ? 'max-h-[68vh] md:max-h-[72vh] xl:max-h-[74vh]'
-                                                    : 'max-h-[54vh]'
-                                            }`}
-                                        >
-                                            <table data-quick-edit-table="true" className="min-w-full border-collapse">
-                                                <thead className="sticky top-0 z-20 bg-[#F8FAFC] shadow-sm">
-                                                    <tr>
-                                                        <th className="min-w-[240px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
-                                                            Sản phẩm
-                                                        </th>
-                                                        {quickEditSelectedCoreFields.map((fieldId) => (
-                                                            <th key={`quick-edit-head-${fieldId}`} className="min-w-[180px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
-                                                                {QUICK_EDIT_CORE_FIELDS.find((field) => field.id === fieldId)?.label || fieldId}
-                                                            </th>
-                                                        ))}
-                                                        {quickEditSelectedAttributes.map((attribute) => (
-                                                            <th key={`quick-edit-head-attr-${attribute.id}`} className="min-w-[220px] px-3 py-3 border border-primary/10 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60 bg-[#F8FAFC]">
-                                                                {attribute.name}
-                                                            </th>
-                                                        ))}
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {quickEditFilteredProducts.map((product) => {
-                                                        const rowError = quickEditRowErrors[String(product.id)];
-                                                        const draft = quickEditDrafts[String(product.id)] || {};
-                                                        const rowType = String(product?.quick_edit_row_type || 'product');
-                                                        const isVariantRow = rowType === 'variant';
-                                                        const isParentRow = rowType === 'parent';
-                                                        const displaySalePrice = formatQuickEditMoneyPreview(
-                                                            draft.price ?? product?.price,
-                                                            normalizeWholeMoneyNumber,
-                                                        );
-                                                        const displayExpectedCost = formatQuickEditMoneyPreview(
-                                                            draft.expected_cost ?? product?.expected_cost ?? product?.cost_price,
-                                                            normalizeRoundedImportCostNumber,
-                                                        );
-                                                        const attributeSummary = String(product?.quick_edit_attribute_summary || '').trim();
-                                                        const categoryLabel = product?.category?.name
-                                                            || categories.find((category) => String(category.id) === String(product?.category_id))?.name
-                                                            || 'Chưa gắn danh mục';
-
-                                                        return (
-                                                            <tr key={`quick-edit-row-${product.id}`} data-quick-edit-row-id={product.id} className={`align-top ${rowError ? 'bg-red-50/60' : 'bg-white'}`}>
-                                                                <td className="px-3 py-3 border border-primary/10 min-w-[240px]">
-                                                                    <div className="space-y-2">
-                                                                        <div className="flex flex-wrap items-center gap-2">
-                                                                            <p className="text-[13px] font-black text-[#0F172A]">{product.name || `Sản phẩm #${product.id}`}</p>
-                                                                            {isVariantRow ? (
-                                                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-700">
-                                                                                    Biến thể
-                                                                                </span>
-                                                                            ) : isParentRow ? (
-                                                                                <span className="rounded-sm border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-black text-amber-700">
-                                                                                    Sản phẩm cha
-                                                                                </span>
-                                                                            ) : null}
-                                                                            <span className={`rounded-sm px-2 py-0.5 text-[10px] font-black ${TYPE_LABELS[product.type]?.cls || 'border border-primary/10 bg-primary/[0.04] text-primary/70'}`}>
-                                                                                {TYPE_LABELS[product.type]?.label || product.type || 'Sản phẩm'}
-                                                                            </span>
-                                                                        </div>
-                                                                        <div className="text-[11px] text-primary/55 space-y-1">
-                                                                            {isVariantRow ? (
-                                                                                <div>Biến thể của: <span className="font-bold text-primary/75">{product.quick_edit_parent_name || `Sản phẩm #${product.quick_edit_parent_id}`}</span></div>
-                                                                            ) : null}
-                                                                            {isParentRow ? (
-                                                                                <div>Có <span className="font-bold text-primary/75">{product.quick_edit_variant_count || 0}</span> biến thể trong bảng sửa nhanh này</div>
-                                                                            ) : null}
-                                                                            {attributeSummary ? (
-                                                                                <div>Thuộc tính: <span className="font-semibold text-primary/75">{attributeSummary}</span></div>
-                                                                            ) : null}
-                                                                            <div>Giá bán: <span className="font-bold text-primary/75">{displaySalePrice}</span></div>
-                                                                            <div>Giá nhập dự kiến: <span className="font-bold text-primary/75">{displayExpectedCost}</span></div>
-                                                                            {isVariantRow ? (
-                                                                                <div>Mã biến thể: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
-                                                                            ) : null}
-                                                                            {!isVariantRow ? (
-                                                                                <div>SKU hiện tại: <span className="font-mono font-bold text-primary/75">{product.sku || '--'}</span></div>
-                                                                            ) : null}
-                                                                            <div>Danh mục: <span className="font-bold text-primary/75">{categoryLabel}</span></div>
-                                                                        </div>
-                                                                        {rowError ? (
-                                                                            <div className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-700">
-                                                                                {rowError}
-                                                                            </div>
-                                                                        ) : null}
-                                                                    </div>
-                                                                </td>
-                                                                {quickEditSelectedCoreFields.map((fieldId) => (
-                                                                    <td key={`quick-edit-cell-${product.id}-${fieldId}`} className="px-3 py-3 border border-primary/10 min-w-[180px]">
-                                                                        {renderQuickEditCoreFieldInput(product, fieldId)}
-                                                                    </td>
-                                                                ))}
-                                                                {quickEditSelectedAttributes.map((attribute) => (
-                                                                    <td key={`quick-edit-cell-${product.id}-attr-${attribute.id}`} className="px-3 py-3 border border-primary/10 min-w-[220px]">
-                                                                        {renderQuickEditAttributeInput(product, attribute)}
-                                                                    </td>
-                                                                ))}
-                                                            </tr>
-                                                        );
-                                                    })}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    </div>
-                                )}
-                            </section>
-                        </div>
-
-                        <div className="mt-6 pt-4 border-t border-primary/10 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                            <p className="text-[12px] text-primary/60">
-                                Hủy sẽ bỏ toàn bộ thay đổi chưa lưu. Lưu sửa nhanh chỉ cập nhật những ô đã đổi trong các cột đang bật.
-                            </p>
-                            <div className="flex justify-end gap-3">
                                 <button
                                     type="button"
                                     onClick={closeQuickEditModal}
                                     disabled={quickEditSubmitting}
-                                    data-quick-edit-cancel="true"
-                                    className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    className="text-gray-500 hover:text-brick disabled:cursor-not-allowed disabled:opacity-40"
                                 >
-                                    Hủy
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleQuickEditSave}
-                                    data-quick-edit-save="true"
-                                    disabled={
-                                        quickEditSubmitting
-                                        || quickEditLoading
-                                        || quickEditProducts.length === 0
-                                        || (quickEditSelectedCoreFields.length === 0 && quickEditSelectedAttributeIds.length === 0)
-                                    }
-                                    className="px-6 py-2 bg-sky-600 text-white rounded-sm font-bold text-[13px] hover:bg-sky-700 flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    {quickEditSubmitting ? (
-                                        <span className="material-symbols-outlined animate-spin text-[16px]">sync</span>
-                                    ) : (
-                                        <span className="material-symbols-outlined text-[16px]">save</span>
-                                    )}
-                                    Lưu sửa nhanh
+                                    <span className="material-symbols-outlined">close</span>
                                 </button>
                             </div>
+
+                            <div className="custom-scrollbar flex-1 min-h-0 space-y-4 overflow-y-auto px-6 pb-6 pt-5">
+                                <div className="rounded-sm border border-sky-200 bg-sky-50 px-4 py-3 text-[13px] text-sky-950">
+                                    Đang chuẩn bị sửa nhanh cho <strong>{quickEditProductGroups.length}</strong> sản phẩm.
+                                    Hiện có <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật.
+                                    Nếu sửa nhiều sản phẩm cùng lúc, hệ thống chỉ lưu những ô bạn đã thay đổi, không ghi đè các trường khác.
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_1fr]">
+                                    <section className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Trường thông dụng</h3>
+                                                <p className="mt-2 text-[12px] text-primary/60">
+                                                    Bật cột nào thì cột đó mới xuất hiện trong bảng sửa nhanh bên dưới.
+                                                </p>
+                                            </div>
+                                            <div className="rounded-sm bg-white px-3 py-1.5 text-[11px] font-bold text-primary/65 shadow-sm">
+                                                {quickEditSelectedCoreFields.length}/{QUICK_EDIT_CORE_FIELDS.length} cột
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-3 flex flex-wrap gap-2">
+                                            {QUICK_EDIT_CORE_FIELDS.map((field) => {
+                                                const active = quickEditSelectedCoreFields.includes(field.id);
+                                                return (
+                                                    <button
+                                                        key={field.id}
+                                                        type="button"
+                                                        onClick={() => toggleQuickEditCoreField(field.id)}
+                                                        data-quick-edit-core-field={field.id}
+                                                        className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
+                                                            active
+                                                                ? 'border-sky-600 bg-sky-600 text-white shadow-sm'
+                                                                : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                                        }`}
+                                                    >
+                                                        {field.label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </section>
+
+                                    <section className="rounded-sm border border-primary/10 bg-white p-4">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <h3 className="text-[13px] font-black uppercase tracking-[0.14em] text-primary">Thuộc tính thêm</h3>
+                                                <p className="mt-2 text-[12px] text-primary/60">
+                                                    Dùng để sửa nhanh các thuộc tính đang có trong hệ thống như loại men hoặc các thông tin cơ bản khác.
+                                                </p>
+                                            </div>
+                                            <div className="rounded-sm bg-primary/[0.04] px-3 py-1.5 text-[11px] font-bold text-primary/65">
+                                                {quickEditSelectedAttributeIds.length} thuộc tính
+                                            </div>
+                                        </div>
+
+                                        {allAttributes.length > 0 ? (
+                                            <div className="custom-scrollbar mt-3 flex max-h-36 flex-wrap gap-2 overflow-y-auto pr-1">
+                                                {[...allAttributes]
+                                                    .sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'vi'))
+                                                    .map((attribute) => {
+                                                        const active = quickEditSelectedAttributeIds.includes(String(attribute.id));
+                                                        const isGlaze = normalizeQuickEditSearchText(attribute?.name).includes('loai men');
+
+                                                        return (
+                                                            <button
+                                                                key={attribute.id}
+                                                                type="button"
+                                                                onClick={() => toggleQuickEditAttributeField(attribute.id)}
+                                                                data-quick-edit-attribute-field={attribute.id}
+                                                                className={`rounded-sm border px-3 py-2 text-[12px] font-bold transition-all ${
+                                                                    active
+                                                                        ? 'border-gold bg-gold text-white shadow-sm'
+                                                                        : 'border-primary/15 bg-white text-primary/70 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                                                }`}
+                                                            >
+                                                                <span>{attribute.name}</span>
+                                                                {isGlaze ? (
+                                                                    <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.12em] ${active ? 'bg-white/20 text-white' : 'bg-gold/10 text-gold'}`}>
+                                                                        Gợi ý
+                                                                    </span>
+                                                                ) : null}
+                                                            </button>
+                                                        );
+                                                    })}
+                                            </div>
+                                        ) : (
+                                            <div className="mt-3 rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-4 text-[12px] text-primary/55">
+                                                Chưa có thuộc tính tùy chỉnh nào để thêm vào chế độ sửa nhanh.
+                                            </div>
+                                        )}
+                                    </section>
+                                </div>
+
+                                <section className="space-y-3">
+                                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                        <div>
+                                            <h3 className="text-[14px] font-black uppercase tracking-[0.16em] text-primary">Bảng sửa nhanh</h3>
+                                            <p className="mt-2 text-[12px] text-primary/60">
+                                                Chỉnh trực tiếp từng ô, sau đó bấm <strong>Lưu sửa nhanh</strong>. Nút <strong>Hủy</strong> sẽ đóng cửa sổ mà không ghi thay đổi nào.
+                                            </p>
+                                        </div>
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+                                            <div className="relative min-w-0 sm:w-[320px]">
+                                                <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/40">
+                                                    search
+                                                </span>
+                                                <input
+                                                    type="text"
+                                                    value={quickEditSearchQuery}
+                                                    onChange={(event) => setQuickEditSearchQuery(event.target.value)}
+                                                    placeholder="Tìm tên sản phẩm, SKU, mã biến thể..."
+                                                    className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-10 text-[12px] font-semibold text-primary outline-none transition-all focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                                                    data-quick-edit-search="true"
+                                                />
+                                                {quickEditSearchQuery ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setQuickEditSearchQuery('')}
+                                                        className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-primary/45 transition-colors hover:bg-primary/5 hover:text-primary"
+                                                        aria-label="Xóa tìm kiếm sửa nhanh"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setQuickEditExpanded((prev) => !prev)}
+                                                className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-3 text-[12px] font-bold transition-all ${
+                                                    quickEditExpanded
+                                                        ? 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100'
+                                                        : 'border-primary/15 bg-white text-primary/75 hover:border-primary/30 hover:bg-primary/[0.03]'
+                                                }`}
+                                                data-quick-edit-zoom="true"
+                                                aria-pressed={quickEditExpanded}
+                                            >
+                                                <span className="material-symbols-outlined text-[16px]">
+                                                    {quickEditExpanded ? 'fullscreen_exit' : 'open_in_full'}
+                                                </span>
+                                                {quickEditExpanded ? 'Thu gọn' : 'Phóng to'}
+                                            </button>
+                                            <div className="rounded-sm bg-primary/[0.04] px-3 py-2 text-[11px] text-primary/65">
+                                                <strong>{quickEditFilteredGroups.length}</strong>
+                                                {quickEditNormalizedSearchQuery ? `/${quickEditProductGroups.length}` : ''}
+                                                {' '}sản phẩm • <strong>{quickEditSelectedCoreFields.length + quickEditSelectedAttributeIds.length}</strong> cột đang bật
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {quickEditLoading ? (
+                                        <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                            <div className="flex items-center justify-center gap-2 text-primary">
+                                                <span className="material-symbols-outlined animate-spin text-[18px]">sync</span>
+                                                Đang tải dữ liệu sửa nhanh...
+                                            </div>
+                                        </div>
+                                    ) : quickEditProducts.length === 0 ? (
+                                        <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                            Không có sản phẩm nào sẵn sàng để sửa nhanh.
+                                        </div>
+                                    ) : quickEditFilteredGroups.length === 0 ? (
+                                        <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.03] px-4 py-10 text-center text-[12px] text-primary/60">
+                                            <div className="flex flex-col items-center gap-3">
+                                                <span className="material-symbols-outlined text-[24px] text-primary/35">search_off</span>
+                                                <p>Không tìm thấy sản phẩm phù hợp trong danh sách đang sửa nhanh.</p>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setQuickEditSearchQuery('')}
+                                                    className="inline-flex items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 py-2 font-bold text-primary/75 transition-colors hover:border-primary/30 hover:bg-primary/[0.03]"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                                                    Xóa tìm kiếm
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
+                                            {quickEditHasHorizontalOverflow ? (
+                                                <div className="border-b border-primary/10 bg-[#F8FAFC] px-4 py-3">
+                                                    <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-3 py-2">
+                                                        <span className="material-symbols-outlined text-[16px] text-sky-600">swap_horiz</span>
+                                                        <div
+                                                            ref={quickEditTopScrollbarRef}
+                                                            data-quick-edit-top-scrollbar="true"
+                                                            onScroll={handleQuickEditTopScrollbarScroll}
+                                                            className="custom-scrollbar flex-1 overflow-x-auto overflow-y-hidden"
+                                                        >
+                                                            <div
+                                                                className="h-2 rounded-full bg-gradient-to-r from-primary/10 via-sky-400/30 to-primary/10"
+                                                                style={{ width: quickEditTopScrollbarWidth }}
+                                                            />
+                                                        </div>
+                                                        <span className="shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                            Cuộn ngang nhanh
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ) : null}
+                                            <div
+                                                ref={quickEditTableScrollRef}
+                                                data-quick-edit-table-scroll="true"
+                                                onScroll={handleQuickEditTableScroll}
+                                                className={`custom-scrollbar overflow-auto ${
+                                                    quickEditExpanded
+                                                        ? 'max-h-[68vh] md:max-h-[72vh] xl:max-h-[74vh]'
+                                                        : 'max-h-[54vh]'
+                                                }`}
+                                            >
+                                                <table data-quick-edit-table="true" className="min-w-full border-collapse">
+                                                    <thead className="sticky top-0 z-20 bg-[#F8FAFC] shadow-sm">
+                                                        <tr>
+                                                            <th className="w-[72px] min-w-[72px] border border-primary/10 bg-[#F8FAFC] px-3 py-3 text-center text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                STT
+                                                            </th>
+                                                            <th className="min-w-[240px] border border-primary/10 bg-[#F8FAFC] px-3 py-3 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                Sản phẩm
+                                                            </th>
+                                                            {quickEditSelectedCoreFields.map((fieldId) => (
+                                                                <th key={`quick-edit-head-${fieldId}`} className="min-w-[180px] border border-primary/10 bg-[#F8FAFC] px-3 py-3 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                    {QUICK_EDIT_CORE_FIELDS.find((field) => field.id === fieldId)?.label || fieldId}
+                                                                </th>
+                                                            ))}
+                                                            {quickEditSelectedAttributes.map((attribute) => (
+                                                                <th key={`quick-edit-head-attr-${attribute.id}`} className="min-w-[220px] border border-primary/10 bg-[#F8FAFC] px-3 py-3 text-left text-[11px] font-black uppercase tracking-[0.16em] text-primary/60">
+                                                                    {attribute.name}
+                                                                </th>
+                                                            ))}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {(() => {
+                                                            let quickEditRowNumber = 0;
+
+                                                            return quickEditFilteredGroups.map((group) => {
+                                                                const parentProduct = group.parent;
+                                                                const groupHasVariants = Array.isArray(group.variants) && group.variants.length > 0;
+
+                                                                return [parentProduct, ...group.visibleVariants].map((product, rowIndex) => {
+                                                                    quickEditRowNumber += 1;
+
+                                                                    const rowError = quickEditRowErrors[String(product.id)];
+                                                                    const rowType = String(product?.quick_edit_row_type || 'product');
+                                                                    const isVariantRow = rowType === 'variant';
+                                                                    const isParentRow = rowType === 'parent';
+                                                                    const canToggleVariants = rowIndex === 0 && groupHasVariants;
+                                                                    const rowLabel = getQuickEditRowLabel({
+                                                                        isVariantRow,
+                                                                        isParentRow,
+                                                                        hasVariants: canToggleVariants,
+                                                                    });
+                                                                    const rowLabelClass = getQuickEditRowLabelClass({
+                                                                        isVariantRow,
+                                                                        isParentRow,
+                                                                        hasVariants: canToggleVariants,
+                                                                    });
+                                                                    const rowBackgroundClass = rowError
+                                                                        ? 'bg-red-50/70'
+                                                                        : (isVariantRow ? 'bg-sky-50/80' : 'bg-white');
+
+                                                                    return (
+                                                                        <tr
+                                                                            key={`quick-edit-row-${product.id}`}
+                                                                            data-quick-edit-row-id={product.id}
+                                                                            className={`align-top ${rowBackgroundClass}`}
+                                                                        >
+                                                                            <td className="w-[72px] min-w-[72px] border border-primary/10 px-3 py-3 text-center">
+                                                                                <span className="text-[12px] font-black text-primary/70">
+                                                                                    {quickEditRowNumber}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td className="min-w-[240px] border border-primary/10 px-3 py-3">
+                                                                                <div className={`flex items-start gap-3 ${isVariantRow ? 'pl-4' : ''}`}>
+                                                                                    {canToggleVariants ? (
+                                                                                        <button
+                                                                                            type="button"
+                                                                                            onClick={(event) => toggleQuickEditGroupExpansion(group.id, event)}
+                                                                                            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border transition-all ${
+                                                                                                group.isExpanded
+                                                                                                    ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                                                                                    : 'border-primary/15 bg-white text-primary/55 hover:border-primary/30 hover:bg-primary/[0.03] hover:text-primary'
+                                                                                            }`}
+                                                                                            title={group.isExpanded ? 'Thu gọn biến thể' : 'Mở biến thể'}
+                                                                                            aria-label={group.isExpanded ? 'Thu gọn biến thể' : 'Mở biến thể'}
+                                                                                            aria-expanded={group.isExpanded}
+                                                                                        >
+                                                                                            <span className={`material-symbols-outlined text-[18px] transition-transform ${group.isExpanded ? 'rotate-180' : ''}`}>
+                                                                                                expand_more
+                                                                                            </span>
+                                                                                        </button>
+                                                                                    ) : (
+                                                                                        <span className="inline-flex h-8 w-8 shrink-0" aria-hidden="true" />
+                                                                                    )}
+                                                                                    <div className={`min-w-0 flex-1 ${isVariantRow ? 'border-l-2 border-sky-200 pl-3' : ''}`}>
+                                                                                        <div className="flex flex-wrap items-center gap-2">
+                                                                                            <p className="text-[13px] font-black text-[#0F172A]">
+                                                                                                {product.name || `Sản phẩm #${product.id}`}
+                                                                                            </p>
+                                                                                            <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${rowLabelClass}`}>
+                                                                                                {rowLabel}
+                                                                                            </span>
+                                                                                        </div>
+                                                                                        {rowError ? (
+                                                                                            <div className="mt-2 rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-700">
+                                                                                                {rowError}
+                                                                                            </div>
+                                                                                        ) : null}
+                                                                                    </div>
+                                                                                </div>
+                                                                            </td>
+                                                                            {quickEditSelectedCoreFields.map((fieldId) => (
+                                                                                <td key={`quick-edit-cell-${product.id}-${fieldId}`} className="min-w-[180px] border border-primary/10 px-3 py-3">
+                                                                                    {renderQuickEditCoreFieldInput(product, fieldId)}
+                                                                                </td>
+                                                                            ))}
+                                                                            {quickEditSelectedAttributes.map((attribute) => (
+                                                                                <td key={`quick-edit-cell-${product.id}-attr-${attribute.id}`} className="min-w-[220px] border border-primary/10 px-3 py-3">
+                                                                                    {renderQuickEditAttributeInput(product, attribute)}
+                                                                                </td>
+                                                                            ))}
+                                                                        </tr>
+                                                                    );
+                                                                });
+                                                            });
+                                                        })()}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+                            </div>
+
+                            <div className="flex flex-col gap-3 border-t border-primary/10 px-6 py-4 md:flex-row md:items-center md:justify-between">
+                                <p className="text-[12px] text-primary/60">
+                                    Hủy sẽ bỏ toàn bộ thay đổi chưa lưu. Lưu sửa nhanh chỉ cập nhật những ô đã đổi trong các cột đang bật.
+                                </p>
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={closeQuickEditModal}
+                                        disabled={quickEditSubmitting}
+                                        data-quick-edit-cancel="true"
+                                        className="rounded-sm border border-primary/20 px-4 py-2 text-[13px] font-bold text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Hủy
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleQuickEditSave}
+                                        data-quick-edit-save="true"
+                                        disabled={
+                                            quickEditSubmitting
+                                            || quickEditLoading
+                                            || quickEditProducts.length === 0
+                                            || (quickEditSelectedCoreFields.length === 0 && quickEditSelectedAttributeIds.length === 0)
+                                        }
+                                        className="flex items-center gap-2 rounded-sm bg-sky-600 px-6 py-2 text-[13px] font-bold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        {quickEditSubmitting ? (
+                                            <span className="material-symbols-outlined animate-spin text-[16px]">sync</span>
+                                        ) : (
+                                            <span className="material-symbols-outlined text-[16px]">save</span>
+                                        )}
+                                        Lưu sửa nhanh
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
-            )}
+                    </div>,
+                    document.body,
+                )
+                : null}
 
             <ProductImageBulkAppendModal
                 open={showBulkImageAppendModal}

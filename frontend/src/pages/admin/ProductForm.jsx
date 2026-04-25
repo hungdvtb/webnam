@@ -39,19 +39,6 @@ const ItemType = {
     BUNDLE_ITEM: 'bundle_item',
 };
 
-const EDIT_IMAGE_UPLOAD_BATCH_SIZE = 2;
-
-const chunkItems = (items = [], size = 1) => {
-    const normalizedSize = Math.max(1, Number(size) || 1);
-    const chunks = [];
-
-    for (let index = 0; index < items.length; index += normalizedSize) {
-        chunks.push(items.slice(index, index + normalizedSize));
-    }
-
-    return chunks;
-};
-
 const resolveAdminImageUrl = (image, fallback = '') => resolveImageObjectUrl(image, 'thumbnail', fallback);
 
 const normalizeAdminPrimarySelection = (items = []) => {
@@ -172,6 +159,47 @@ const getAdminImageDisplayName = (image, index = 0) => {
     return `Ảnh ${index + 1}`;
 };
 
+const PRODUCT_IMAGE_TOKEN_EXISTING_PREFIX = 'existing:';
+const PRODUCT_IMAGE_TOKEN_NEW_PREFIX = 'new:';
+const IMAGE_PREVIEW_DOUBLE_CLICK_DELAY = 320;
+
+const buildProductImageSubmissionPayload = (items = []) => {
+    const order = [];
+    const files = [];
+    let primaryToken = '';
+
+    (Array.isArray(items) ? items : []).forEach((image) => {
+        let token = '';
+
+        if (image?.file) {
+            token = `${PRODUCT_IMAGE_TOKEN_NEW_PREFIX}${files.length}`;
+            files.push(image.file);
+        } else {
+            const persistedId = Number(image?.id);
+            if (!persistedId) {
+                return;
+            }
+
+            token = `${PRODUCT_IMAGE_TOKEN_EXISTING_PREFIX}${persistedId}`;
+        }
+
+        order.push(token);
+        if (!primaryToken && image?.is_primary) {
+            primaryToken = token;
+        }
+    });
+
+    if (!primaryToken && order.length > 0) {
+        primaryToken = order[0];
+    }
+
+    return {
+        order,
+        files,
+        primaryToken,
+    };
+};
+
 const buildVariantImagePickerPosition = (anchorRect, panelWidth = 336, panelHeight = 356) => {
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -211,7 +239,17 @@ const AI_INSTRUCTION_SUGGESTIONS = [
     'Giọng văn sang trọng, dễ hiểu, phù hợp khách mua quà và trưng bày.',
 ];
 
-const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteImage, isSelected, toggleSelectImage, isDragSelecting }) => {
+const DraggableImage = ({
+    img,
+    index,
+    moveImage,
+    handleSetPrimary,
+    handleDeleteImage,
+    isSelected,
+    toggleSelectImage,
+    isDragSelecting,
+    handlePreviewImage,
+}) => {
     const ref = useRef(null);
     const [, drop] = useDrop({
         accept: ItemType.IMAGE,
@@ -284,8 +322,23 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
             )}
 
             {/* Image Thumbnail Area - Fixed small ratio */}
-            <div className="relative aspect-[4/3] w-full bg-stone/5 overflow-hidden shrink-0">
-                <img src={img.image_url || null} alt={fileName} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+            <div
+                className="relative aspect-[4/3] w-full shrink-0 overflow-hidden bg-stone/5"
+                onDoubleClick={(e) => {
+                    if (e.target.closest('button')) {
+                        return;
+                    }
+
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handlePreviewImage?.(img.image_url, fileName);
+                }}
+            >
+                <img
+                    src={img.image_url || null}
+                    alt={fileName}
+                    className="h-full w-full cursor-zoom-in object-cover transition-transform duration-700 group-hover:scale-105"
+                />
 
                 {/* Optimizing Overlay */}
                 {img.optimizing && (
@@ -296,7 +349,7 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
                 )}
 
                 {/* Action Overlay (Hover) */}
-                <div className="absolute inset-0 bg-primary/80 opacity-0 group-hover:opacity-100 transition-opacity z-10 flex flex-col items-center justify-center gap-2 cursor-move">
+                <div className="pointer-events-none absolute inset-0 z-10 flex cursor-move flex-col items-center justify-center gap-2 bg-primary/80 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                     {!img.is_primary && (
                         <button
                             type="button"
@@ -345,6 +398,70 @@ const DraggableImage = ({ img, index, moveImage, handleSetPrimary, handleDeleteI
                     )}
                 </div>
             </div>
+        </div>
+    );
+};
+
+const ImageLightboxModal = ({ image, onClose }) => {
+    useEffect(() => {
+        if (!image?.url) {
+            return undefined;
+        }
+
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', handleEscape);
+        return () => window.removeEventListener('keydown', handleEscape);
+    }, [image?.url, onClose]);
+
+    if (!image?.url) {
+        return null;
+    }
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6">
+            <motion.button
+                type="button"
+                aria-label="Đóng xem ảnh lớn"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={onClose}
+                className="absolute inset-0 bg-black/80 backdrop-blur-[2px]"
+            />
+            <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.98, y: 8 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+                onClick={(e) => e.stopPropagation()}
+                className="relative z-10 flex max-h-full w-full max-w-6xl flex-col overflow-hidden rounded-sm border border-white/10 bg-[#120d08] shadow-[0_30px_80px_rgba(0,0,0,0.45)]"
+            >
+                <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white/80">
+                    <p className="min-w-0 truncate text-[12px] font-bold uppercase tracking-[0.16em]">
+                        {image.alt || 'Xem ảnh lớn'}
+                    </p>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="shrink-0 rounded-full bg-white/10 p-1 text-white transition-colors hover:bg-white/20"
+                        title="Đóng"
+                    >
+                        <span className="material-symbols-outlined text-[20px]">close</span>
+                    </button>
+                </div>
+                <div className="flex min-h-[240px] items-center justify-center bg-black/20 p-4 sm:p-6">
+                    <img
+                        src={image.url}
+                        alt={image.alt || 'Ảnh xem trước'}
+                        className="max-h-[78vh] max-w-full object-contain"
+                    />
+                </div>
+            </motion.div>
         </div>
     );
 };
@@ -1855,6 +1972,7 @@ const ProductForm = () => {
     const [allAttributes, setAllAttributes] = useState([]);
     const [images, setImages] = useState([]);
     const [selectedImages, setSelectedImages] = useState([]);
+    const [lightboxImage, setLightboxImage] = useState(null);
     const [isDragSelecting, setIsDragSelecting] = useState(false);
     const [showSlugModal, setShowSlugModal] = useState(false);
     const [tempSlug, setTempSlug] = useState('');
@@ -1992,6 +2110,8 @@ const ProductForm = () => {
     const variantImageInputRefs = useRef({});
     const variantImagePickerRef = useRef(null);
     const variantImagePickerAnchorRef = useRef(null);
+    const variantImageCellClickTimeoutRef = useRef(null);
+    const variantLibraryImageClickTimeoutRef = useRef(null);
     const ownedVariantPreviewUrlsRef = useRef(new Set());
 
     // Filters for Related Products suggestions
@@ -2977,6 +3097,20 @@ const ProductForm = () => {
 
         return variantImageLibraryItems.find((image) => image?.is_primary) || variantImageLibraryItems[0] || null;
     }, [variantImageLibraryItems, variantImagePickerVariant]);
+    const openImageLightbox = useCallback((url, alt = '') => {
+        const resolvedUrl = String(url || '').trim();
+        if (!resolvedUrl) {
+            return;
+        }
+
+        setLightboxImage({
+            url: resolvedUrl,
+            alt: alt || 'Xem ảnh lớn',
+        });
+    }, []);
+    const closeImageLightbox = useCallback(() => {
+        setLightboxImage(null);
+    }, []);
 
     useEffect(() => {
         setSelectedVariantIds((prev) => {
@@ -2986,6 +3120,16 @@ const ProductForm = () => {
             return next.length === prev.length ? prev : next;
         });
     }, [getVariantSelectionKey, variants]);
+
+    useEffect(() => () => {
+        if (variantImageCellClickTimeoutRef.current) {
+            window.clearTimeout(variantImageCellClickTimeoutRef.current);
+        }
+
+        if (variantLibraryImageClickTimeoutRef.current) {
+            window.clearTimeout(variantLibraryImageClickTimeoutRef.current);
+        }
+    }, []);
 
     useEffect(() => {
         if (variantQuickUpdateScope === 'selected' && selectedVariantCount === 0) {
@@ -3387,6 +3531,8 @@ const ProductForm = () => {
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (e.key === 'Escape') {
+                if (lightboxImage?.url) return;
+
                 // Precedence 1: Don't close form if a global UI Modal is open
                 if (document.body.style.overflow === 'hidden') return;
 
@@ -3406,7 +3552,7 @@ const ProductForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [handleCancel]);
+    }, [handleCancel, lightboxImage?.url]);
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -3466,6 +3612,8 @@ const ProductForm = () => {
     // Keyboard bindings for deletion of selected images
     useEffect(() => {
         const handleKeyDown = (e) => {
+            if (lightboxImage?.url) return;
+
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 const active = document.activeElement;
                 if (active && (
@@ -3482,7 +3630,7 @@ const ProductForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedImages]); // Need selectedImages in deps
+    }, [lightboxImage?.url, selectedImages]); // Need selectedImages in deps
 
     // Global mouse lift to end drag select
     useEffect(() => {
@@ -3915,6 +4063,7 @@ const ProductForm = () => {
             isExistingSourceVariant: false,
             isConvertedSourceVariant: false,
             library_image_id: null,
+            image_reference_url: null,
             image_preview_owned: false,
             label: 'Biến thể tùy chỉnh',
             sku_auto: true,
@@ -4141,6 +4290,7 @@ const ProductForm = () => {
                         sku_auto: false,
                         attributes: attrs,
                         library_image_id: null,
+                        image_reference_url: null,
                         image_preview_owned: false,
                         image_url: primaryImage ? resolveAdminImageUrl(primaryImage, primaryImage.image_url) : null,
                         label: v.name ?? (v.attribute_values || []).map(av => av.value).join(' / ') ?? ''
@@ -4247,49 +4397,16 @@ const ProductForm = () => {
                 processedImages.push({ ...placeholder, file: optimizedFile, optimizing: false });
             }
 
-            // Final check on primary
-            const hasPrimary = images.some(img => img.is_primary);
-            const finalImages = processedImages.map((img, i) => ({
-                ...img,
-                is_primary: !hasPrimary && i === 0 && images.length === 0
-            }));
+            setImages((prev) => {
+                const filtered = prev.filter((img) => !placeholderIds.has(img.id));
+                const hasPrimary = filtered.some((img) => img.is_primary);
+                const finalImages = processedImages.map((img, index) => ({
+                    ...img,
+                    is_primary: !hasPrimary && filtered.length === 0 && index === 0,
+                }));
 
-            if (!isEdit) {
-                setImages(prev => {
-                    const filtered = prev.filter(img => !placeholderIds.has(img.id));
-                    return normalizeAdminPrimarySelection([...filtered, ...finalImages]);
-                });
-            } else {
-                let uploadedCount = 0;
-
-                for (const batch of chunkItems(finalImages, EDIT_IMAGE_UPLOAD_BATCH_SIZE)) {
-                    const formDataToUpload = new FormData();
-                    batch.forEach(img => formDataToUpload.append('images[]', img.file));
-
-                    const response = await productImageApi.upload(id, formDataToUpload);
-                    const uploadedImages = Array.isArray(response.data) ? response.data : [];
-                    const batchIds = new Set(batch.map((img) => img.id));
-
-                    uploadedCount += uploadedImages.length;
-                    setImages(prev => {
-                        const filtered = prev.filter(img => !batchIds.has(img.id));
-                        return normalizeAdminPrimarySelection([...filtered, ...normalizeAdminImages(uploadedImages)]);
-                    });
-
-                    batch.forEach((img) => {
-                        if (img.image_url?.startsWith('blob:')) {
-                            URL.revokeObjectURL(img.image_url);
-                        }
-                    });
-                }
-
-                if (finalImages.length > EDIT_IMAGE_UPLOAD_BATCH_SIZE) {
-                    showToast({
-                        message: `Da tai ${uploadedCount} anh theo tung dot nho de tranh loi server.`,
-                        type: 'success',
-                    });
-                }
-            }
+                return normalizeAdminPrimarySelection([...filtered, ...finalImages]);
+            });
         } catch (error) {
             console.error("Lỗi tối ưu/tải ảnh:", error);
             setImages(prev => normalizeAdminPrimarySelection(
@@ -4302,45 +4419,24 @@ const ProductForm = () => {
             });
 
             const errorMessage = resolveProductImageUploadErrorMessage(error)
-                || (isEdit
-                    ? 'Loi tai anh. He thong da chia anh thanh tung dot nho, vui long thu lai.'
-                    : 'Loi toi uu anh. Vui long thu lai.');
+                || 'Loi toi uu anh. Vui long thu lai.';
 
             showToast({ message: errorMessage, type: 'error', duration: 7000 });
         }
     };
 
-    const handleSetPrimary = async (imgId) => {
-        try {
-            if (isTemporaryProductImageId(imgId)) {
-                setImages(prev => normalizeAdminPrimarySelection(
-                    prev.map(img => ({ ...img, is_primary: img.id === imgId }))
-                ));
-                return;
-            }
-
-            await productImageApi.setPrimary(imgId);
-            setImages(prev => normalizeAdminPrimarySelection(
-                prev.map(img => ({ ...img, is_primary: img.id === imgId }))
-            ));
-        } catch (error) {
-            alert("Lỗi cài đặt ảnh đại diện");
-        }
-    };
-
-    const handleDeleteImage = async (imgId) => {
-        setImages(prev => normalizeAdminPrimarySelection(
-            prev.filter(img => img.id !== imgId)
+    const handleSetPrimary = useCallback((imgId) => {
+        setImages((prev) => normalizeAdminPrimarySelection(
+            prev.map((img) => ({ ...img, is_primary: img.id === imgId }))
         ));
-        setSelectedImages(prev => prev.filter(id => id !== imgId));
+    }, []);
 
-        if (isTemporaryProductImageId(imgId)) return;
-        try {
-            await productImageApi.destroy(imgId);
-        } catch (error) {
-            console.error("Lỗi xoá ảnh", error);
-        }
-    };
+    const handleDeleteImage = useCallback((imgId) => {
+        setImages((prev) => normalizeAdminPrimarySelection(
+            prev.filter((img) => img.id !== imgId)
+        ));
+        setSelectedImages((prev) => prev.filter((id) => id !== imgId));
+    }, []);
 
     const toggleSelectImage = useCallback((id, forceSelect = false) => {
         setSelectedImages(prev => {
@@ -4359,12 +4455,6 @@ const ProductForm = () => {
             prev.filter(img => !toDelete.includes(img.id))
         ));
 
-        toDelete.forEach(async (id) => {
-            if (isTemporaryProductImageId(id)) return;
-            try {
-                await productImageApi.destroy(id);
-            } catch (e) { console.error("Lỗi xóa ảnh nhiều", e) }
-        });
     }, [selectedImages]);
 
     const handleCustomAttributeChange = (attrId, value) => {
@@ -4954,6 +5044,7 @@ const ProductForm = () => {
                 isExistingSourceVariant: false,
                 isConvertedSourceVariant: false,
                 library_image_id: null,
+                image_reference_url: null,
                 image_preview_owned: false,
                 label: `${formData.name} - ${attrLabel}`,
                 sku_auto: true,
@@ -5017,8 +5108,24 @@ const ProductForm = () => {
     }, [closeVariantImagePicker, openVariantUploadDialog, variantImageLibraryItems.length]);
 
     const handleVariantImageCellClick = useCallback((index, anchorElement) => {
-        openVariantImagePickerForIndex(index, anchorElement);
+        if (variantImageCellClickTimeoutRef.current) {
+            window.clearTimeout(variantImageCellClickTimeoutRef.current);
+        }
+
+        variantImageCellClickTimeoutRef.current = window.setTimeout(() => {
+            openVariantImagePickerForIndex(index, anchorElement);
+            variantImageCellClickTimeoutRef.current = null;
+        }, IMAGE_PREVIEW_DOUBLE_CLICK_DELAY);
     }, [openVariantImagePickerForIndex]);
+
+    const handleVariantImageCellDoubleClick = useCallback((imageUrl, alt) => {
+        if (variantImageCellClickTimeoutRef.current) {
+            window.clearTimeout(variantImageCellClickTimeoutRef.current);
+            variantImageCellClickTimeoutRef.current = null;
+        }
+
+        openImageLightbox(imageUrl, alt);
+    }, [openImageLightbox]);
 
     const handleSelectVariantLibraryImage = useCallback((index, image) => {
         if (!image) {
@@ -5041,6 +5148,7 @@ const ProductForm = () => {
                 image_url: clonedPreviewUrl || image?.image_url || '',
                 image_preview_owned: Boolean(clonedPreviewUrl),
                 library_image_id: isPersistedLibraryImage ? (Number(image?.id) || null) : null,
+                image_reference_url: isPersistedLibraryImage ? (image?.image_url || null) : null,
                 remove_image: false,
             };
         }));
@@ -5048,6 +5156,26 @@ const ProductForm = () => {
         clearServerValidationErrors(['variants.']);
         closeVariantImagePicker();
     }, [clearServerValidationErrors, closeVariantImagePicker]);
+
+    const handleVariantLibraryImageClick = useCallback((index, image) => {
+        if (variantLibraryImageClickTimeoutRef.current) {
+            window.clearTimeout(variantLibraryImageClickTimeoutRef.current);
+        }
+
+        variantLibraryImageClickTimeoutRef.current = window.setTimeout(() => {
+            handleSelectVariantLibraryImage(index, image);
+            variantLibraryImageClickTimeoutRef.current = null;
+        }, IMAGE_PREVIEW_DOUBLE_CLICK_DELAY);
+    }, [handleSelectVariantLibraryImage]);
+
+    const handleVariantLibraryImageDoubleClick = useCallback((image) => {
+        if (variantLibraryImageClickTimeoutRef.current) {
+            window.clearTimeout(variantLibraryImageClickTimeoutRef.current);
+            variantLibraryImageClickTimeoutRef.current = null;
+        }
+
+        openImageLightbox(image?.image_url, image?.display_name);
+    }, [openImageLightbox]);
 
     const handleVariantImageUpload = useCallback((index, e) => {
         const file = e.target.files?.[0];
@@ -5065,6 +5193,7 @@ const ProductForm = () => {
                     image_url: previewUrl,
                     image_preview_owned: true,
                     library_image_id: null,
+                    image_reference_url: null,
                     remove_image: false,
                 }
         )));
@@ -5083,6 +5212,7 @@ const ProductForm = () => {
                     image_url: null,
                     image_preview_owned: false,
                     library_image_id: null,
+                    image_reference_url: null,
                     remove_image: true,
                 }
         )));
@@ -6226,6 +6356,9 @@ const ProductForm = () => {
                     } else if (v.library_image_id) {
                         submitData.append(`variants[${idx}][library_image_id]`, v.library_image_id);
                     }
+                    if (v.image_reference_url) {
+                        submitData.append(`variants[${idx}][image_reference_url]`, v.image_reference_url);
+                    }
                     if (v.remove_image) {
                         submitData.append(`variants[${idx}][remove_image]`, 'true');
                     }
@@ -6236,17 +6369,19 @@ const ProductForm = () => {
                 });
             }
 
-            // Add images
-            // 1. Existing image IDs to keep
-            const existingImageIds = images
-                .filter(img => !img.file && !isTemporaryProductImageId(img.id))
-                .map(img => img.id);
-            existingImageIds.forEach(id => submitData.append('existing_image_ids[]', id));
-
-            // 2. New files to upload
-            images.forEach(img => {
-                if (img.file) submitData.append('images[]', img.file);
-            });
+            if (isEdit || isDuplicate) {
+                const imageDraftPayload = buildProductImageSubmissionPayload(images);
+                submitData.append('sync_images', '1');
+                imageDraftPayload.order.forEach((token) => submitData.append('image_order[]', token));
+                if (imageDraftPayload.primaryToken) {
+                    submitData.append('primary_image_token', imageDraftPayload.primaryToken);
+                }
+                imageDraftPayload.files.forEach((file) => submitData.append('images[]', file));
+            } else {
+                images.forEach((img) => {
+                    if (img.file) submitData.append('images[]', img.file);
+                });
+            }
 
             let response;
             if (isDuplicate) {
@@ -6263,40 +6398,42 @@ const ProductForm = () => {
                 response.data?.stock_quantity ?? formData.stock_quantity
             );
 
-            const productId = response.data.id;
+            if (!isEdit && !isDuplicate) {
+                const productId = response.data.id;
 
-            let persistedImages = Array.isArray(response.data?.images) ? response.data.images : [];
-            if (persistedImages.length === 0 && productId) {
-                try {
-                    const refreshedProduct = await productApi.getOne(productId);
-                    persistedImages = Array.isArray(refreshedProduct.data?.images) ? refreshedProduct.data.images : [];
-                } catch (refreshError) {
-                    console.error('Unable to refresh product images after save:', refreshError);
-                }
-            }
-
-            const remainingServerImages = [...persistedImages];
-            const resolvedImageIds = images
-                .map((img) => {
-                    if (!isTemporaryProductImageId(img.id)) {
-                        return Number(img.id) || null;
+                let persistedImages = Array.isArray(response.data?.images) ? response.data.images : [];
+                if (persistedImages.length === 0 && productId) {
+                    try {
+                        const refreshedProduct = await productApi.getOne(productId);
+                        persistedImages = Array.isArray(refreshedProduct.data?.images) ? refreshedProduct.data.images : [];
+                    } catch (refreshError) {
+                        console.error('Unable to refresh product images after save:', refreshError);
                     }
+                }
 
-                    const nextServerImage = remainingServerImages.shift();
-                    return nextServerImage?.id ? Number(nextServerImage.id) : null;
-                })
-                .filter(Boolean);
+                const remainingServerImages = [...persistedImages];
+                const resolvedImageIds = images
+                    .map((img) => {
+                        if (!isTemporaryProductImageId(img.id)) {
+                            return Number(img.id) || null;
+                        }
 
-            const preferredPrimaryIndex = images.findIndex((img) => Boolean(img.is_primary));
-            const preferredPrimaryId = preferredPrimaryIndex >= 0
-                ? resolvedImageIds[preferredPrimaryIndex] || null
-                : (resolvedImageIds[0] || null);
+                        const nextServerImage = remainingServerImages.shift();
+                        return nextServerImage?.id ? Number(nextServerImage.id) : null;
+                    })
+                    .filter(Boolean);
 
-            if (resolvedImageIds.length > 0) {
-                await productImageApi.reorder(resolvedImageIds);
+                const preferredPrimaryIndex = images.findIndex((img) => Boolean(img.is_primary));
+                const preferredPrimaryId = preferredPrimaryIndex >= 0
+                    ? resolvedImageIds[preferredPrimaryIndex] || null
+                    : (resolvedImageIds[0] || null);
 
-                if (preferredPrimaryId) {
-                    await productImageApi.setPrimary(preferredPrimaryId);
+                if (resolvedImageIds.length > 0) {
+                    await productImageApi.reorder(resolvedImageIds);
+
+                    if (preferredPrimaryId) {
+                        await productImageApi.setPrimary(preferredPrimaryId);
+                    }
                 }
             }
 
@@ -7656,6 +7793,11 @@ const ProductForm = () => {
                                                                     tabIndex={0}
                                                                     data-variant-image-anchor="true"
                                                                     onClick={(e) => handleVariantImageCellClick(index, e.currentTarget)}
+                                                                    onDoubleClick={(e) => {
+                                                                        e.preventDefault();
+                                                                        e.stopPropagation();
+                                                                        handleVariantImageCellDoubleClick(displayImageUrl, v.label || v.name || `Biến thể ${index + 1}`);
+                                                                    }}
                                                                     onKeyDown={(e) => {
                                                                         if (e.key === 'Enter' || e.key === ' ') {
                                                                             e.preventDefault();
@@ -7679,13 +7821,17 @@ const ProductForm = () => {
                                                                         onChange={(e) => handleVariantImageUpload(index, e)}
                                                                     />
                                                                     {displayImageUrl ? (
-                                                                        <img src={displayImageUrl || 'https://placehold.co/100'} className="w-full h-full object-cover" alt="" />
+                                                                        <img
+                                                                            src={displayImageUrl || 'https://placehold.co/100'}
+                                                                            className="h-full w-full cursor-zoom-in object-cover"
+                                                                            alt=""
+                                                                        />
                                                                     ) : (
                                                                         <span className="material-symbols-outlined text-stone/20 text-2xl">image</span>
                                                                     )}
 
                                                                     {/* Variant image actions overlay */}
-                                                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/vimg:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+                                                                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-1.5 bg-black/60 opacity-0 transition-opacity group-hover/vimg:pointer-events-auto group-hover/vimg:opacity-100">
                                                                         <button
                                                                             type="button"
                                                                             onClick={(e) => {
@@ -8468,6 +8614,7 @@ const ProductForm = () => {
                                         isSelected={selectedImages.includes(img.id)}
                                         toggleSelectImage={toggleSelectImage}
                                         isDragSelecting={isDragSelecting}
+                                        handlePreviewImage={openImageLightbox}
                                     />
                                 ))}
                                 {images.length === 0 && (
@@ -10048,7 +10195,16 @@ const ProductForm = () => {
                                                         <div className="flex items-center justify-center border-r border-stone/10 px-4 py-3">
                                                             <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-sm border border-stone/10 bg-stone/5">
                                                                 {displayImageUrl ? (
-                                                                    <img src={displayImageUrl} alt="" className="h-full w-full object-cover" />
+                                                                    <img
+                                                                        src={displayImageUrl}
+                                                                        alt=""
+                                                                        className="h-full w-full cursor-zoom-in object-cover"
+                                                                        onDoubleClick={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.stopPropagation();
+                                                                            openImageLightbox(displayImageUrl, variant.label || variant.name || `Biến thể ẩn ${index + 1}`);
+                                                                        }}
+                                                                    />
                                                                 ) : (
                                                                     <span className="material-symbols-outlined text-stone/25">image</span>
                                                                 )}
@@ -10169,13 +10325,22 @@ const ProductForm = () => {
                                         <button
                                             key={String(image?.id || `variant-library-${imageIndex}`)}
                                             type="button"
-                                            onClick={() => handleSelectVariantLibraryImage(variantImagePicker.index, image)}
+                                            onClick={() => handleVariantLibraryImageClick(variantImagePicker.index, image)}
+                                            onDoubleClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                handleVariantLibraryImageDoubleClick(image);
+                                            }}
                                             className={`group/library relative overflow-hidden rounded-sm border bg-stone/5 text-left transition-all ${isActive ? 'border-primary ring-2 ring-primary/20' : 'border-stone/10 hover:border-gold/40 hover:shadow-sm'}`}
                                             title={image.display_name}
                                         >
                                             <div className="aspect-square overflow-hidden bg-stone/5">
                                                 {image?.image_url ? (
-                                                    <img src={image.image_url} alt={image.display_name} className="size-full object-cover transition-transform duration-300 group-hover/library:scale-105" />
+                                                    <img
+                                                        src={image.image_url}
+                                                        alt={image.display_name}
+                                                        className="size-full cursor-zoom-in object-cover transition-transform duration-300 group-hover/library:scale-105"
+                                                    />
                                                 ) : (
                                                     <div className="flex size-full items-center justify-center text-stone/20">
                                                         <span className="material-symbols-outlined text-[24px]">image</span>
@@ -10231,6 +10396,12 @@ const ProductForm = () => {
                             </div>
                         </div>
                     </motion.div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {lightboxImage?.url && (
+                    <ImageLightboxModal image={lightboxImage} onClose={closeImageLightbox} />
                 )}
             </AnimatePresence>
 

@@ -634,7 +634,7 @@ export const orderStatusApi = {
 };
 
 export const reportApi = {
-    getDashboard: () => api.get('/reports/dashboard'),
+    getDashboard: (params) => api.get('/reports/dashboard', params ? { params } : {}),
     getInventory: () => api.get('/reports/inventory'),
     getTopProducts: () => api.get('/reports/top-products'),
     getSales: (days) => api.get('/reports/sales', { params: { days } }),

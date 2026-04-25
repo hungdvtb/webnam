@@ -2148,7 +2148,138 @@ class ProductController extends Controller
         ]);
     }
 
-    private function attachVariantLibraryImage(Product $parentProduct, Product $variantProduct, mixed $libraryImageId, int $variantIndex): void
+    private function syncSubmittedProductImages(Request $request, Product $product): void
+    {
+        if (!$request->boolean('sync_images')) {
+            return;
+        }
+
+        $orderedTokens = collect((array) $request->input('image_order', []))
+            ->map(fn ($token) => trim((string) $token))
+            ->filter()
+            ->values();
+
+        $uploadedFiles = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof \Illuminate\Http\UploadedFile
+        ));
+
+        $existingImages = $product->images()->get()->keyBy(fn (ProductImage $image) => (int) $image->id);
+        $orderedEntries = [];
+        $keptExistingIds = [];
+        $usedNewIndexes = [];
+
+        foreach ($orderedTokens as $token) {
+            if (str_starts_with($token, 'existing:')) {
+                $imageId = (int) substr($token, strlen('existing:'));
+                $existingImage = $existingImages->get($imageId);
+
+                if (!$existingImage || in_array($imageId, $keptExistingIds, true)) {
+                    continue;
+                }
+
+                $keptExistingIds[] = $imageId;
+                $orderedEntries[] = [
+                    'type' => 'existing',
+                    'token' => $token,
+                    'image' => $existingImage,
+                ];
+                continue;
+            }
+
+            if (str_starts_with($token, 'new:')) {
+                $newIndex = (int) substr($token, strlen('new:'));
+                if (isset($usedNewIndexes[$newIndex]) || !isset($uploadedFiles[$newIndex])) {
+                    continue;
+                }
+
+                $usedNewIndexes[$newIndex] = true;
+                $orderedEntries[] = [
+                    'type' => 'new',
+                    'token' => $token,
+                    'file' => $uploadedFiles[$newIndex],
+                ];
+            }
+        }
+
+        $imagesToDelete = $existingImages->filter(
+            fn (ProductImage $image) => !in_array((int) $image->id, $keptExistingIds, true)
+        );
+        $this->deleteProductImageCollection($imagesToDelete);
+
+        if (empty($orderedEntries)) {
+            return;
+        }
+
+        $resolvedPrimaryToken = trim((string) $request->input('primary_image_token', ''));
+        if ($resolvedPrimaryToken === '' || !collect($orderedEntries)->contains(fn ($entry) => $entry['token'] === $resolvedPrimaryToken)) {
+            $resolvedPrimaryToken = $orderedEntries[0]['token'];
+        }
+
+        foreach ($orderedEntries as $sortOrder => $entry) {
+            $isPrimary = $entry['token'] === $resolvedPrimaryToken;
+
+            if ($entry['type'] === 'existing') {
+                /** @var ProductImage $existingImage */
+                $existingImage = $entry['image'];
+                $existingImage->forceFill([
+                    'sort_order' => (int) $sortOrder,
+                    'is_primary' => $isPrimary,
+                ])->save();
+                continue;
+            }
+
+            /** @var \Illuminate\Http\UploadedFile $imageFile */
+            $imageFile = $entry['file'];
+            $this->createProductImageRecord($product, $imageFile, (int) $sortOrder, $isPrimary);
+        }
+    }
+
+    private function applyVariantImageSelection(
+        Request $request,
+        Product $parentProduct,
+        Product $variantProduct,
+        array $variantData,
+        int $variantIndex
+    ): void {
+        $referenceUrl = trim((string) ($variantData['image_reference_url'] ?? ''));
+
+        if ($request->hasFile("variants.{$variantIndex}.image")) {
+            $this->deleteProductImagesForProduct($variantProduct);
+            $imageFile = $request->file("variants.{$variantIndex}.image");
+            $this->createProductImageRecord($variantProduct, $imageFile, 0, true);
+            return;
+        }
+
+        if (!empty($variantData['library_image_id'])) {
+            $this->attachVariantLibraryImage(
+                $parentProduct,
+                $variantProduct,
+                $variantData['library_image_id'],
+                $variantIndex,
+                $referenceUrl !== '' ? $referenceUrl : null
+            );
+            return;
+        }
+
+        if ($referenceUrl !== '') {
+            $this->deleteProductImagesForProduct($variantProduct);
+            $this->createProductImageFromReference($variantProduct, $referenceUrl, 0, true);
+            return;
+        }
+
+        if (isset($variantData['remove_image']) && $variantData['remove_image'] == 'true') {
+            $this->deleteProductImagesForProduct($variantProduct);
+        }
+    }
+
+    private function attachVariantLibraryImage(
+        Product $parentProduct,
+        Product $variantProduct,
+        mixed $libraryImageId,
+        int $variantIndex,
+        ?string $fallbackReference = null
+    ): void
     {
         $normalizedImageId = is_numeric($libraryImageId) ? (int) $libraryImageId : null;
         if (!$normalizedImageId) {
@@ -2160,6 +2291,12 @@ class ProductController extends Controller
             ->find($normalizedImageId);
 
         if (!$libraryImage) {
+            if ($fallbackReference !== null && trim($fallbackReference) !== '') {
+                $this->deleteProductImagesForProduct($variantProduct);
+                $this->createProductImageFromReference($variantProduct, $fallbackReference, 0, true);
+                return;
+            }
+
             throw ValidationException::withMessages([
                 "variants.{$variantIndex}.library_image_id" => ['Ảnh thư viện đã chọn không còn thuộc sản phẩm này.'],
             ]);
@@ -2167,6 +2304,12 @@ class ProductController extends Controller
 
         $reference = trim((string) ($libraryImage->image_url ?? ''));
         if ($reference === '') {
+            if ($fallbackReference !== null && trim($fallbackReference) !== '') {
+                $this->deleteProductImagesForProduct($variantProduct);
+                $this->createProductImageFromReference($variantProduct, $fallbackReference, 0, true);
+                return;
+            }
+
             throw ValidationException::withMessages([
                 "variants.{$variantIndex}.library_image_id" => ['Ảnh thư viện đã chọn không có dữ liệu hợp lệ để sao chép.'],
             ]);
@@ -8758,12 +8901,7 @@ class ProductController extends Controller
                             auth()->id()
                         );
 
-                        if ($request->hasFile("variants.{$idx}.image")) {
-                            $imageFile = $request->file("variants.{$idx}.image");
-                            $this->createProductImageRecord($variantProduct, $imageFile, 0, true);
-                        } elseif (!empty($vData['library_image_id'])) {
-                            $this->attachVariantLibraryImage($product, $variantProduct, $vData['library_image_id'], $idx);
-                        }
+                        $this->applyVariantImageSelection($request, $product, $variantProduct, $vData, $idx);
 
                         $product->linkedProducts()->attach($variantProduct->id, [
                             'link_type' => 'super_link',
@@ -9226,6 +9364,12 @@ class ProductController extends Controller
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
             'super_attribute_ids' => 'nullable|array',
             'super_attribute_ids.*' => 'exists:attributes,id',
+            'sync_images' => 'nullable|boolean',
+            'image_order' => 'nullable|array',
+            'image_order.*' => 'nullable|string|max:80',
+            'primary_image_token' => 'nullable|string|max:80',
+            'images' => 'nullable|array',
+            'images.*' => 'image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             // EAV custom values
             'custom_attributes' => 'nullable|array',
             'variants' => 'nullable|array',
@@ -9239,6 +9383,7 @@ class ProductController extends Controller
             'variants.*.stock_quantity' => 'nullable|integer|min:0',
             'variants.*.status' => 'nullable|boolean',
             'variants.*.library_image_id' => 'nullable|integer',
+            'variants.*.image_reference_url' => 'nullable|string|max:2048',
             'variants.*.attributes' => 'nullable|array',
         ], [
             'name.required' => 'Tên sản phẩm không được để trống.',
@@ -9455,6 +9600,7 @@ class ProductController extends Controller
         }
 
         $this->syncCompositeAutoPrice($product);
+        $this->syncSubmittedProductImages($request, $product);
 
         if ($request->has('super_attribute_ids') && $product->type === 'configurable') {
             $attrs = [];
@@ -9526,18 +9672,7 @@ class ProductController extends Controller
                         $variant->refresh();
                     }
 
-                    // Handle variant image update/removal
-                    if ($request->hasFile("variants.{$idx}.image")) {
-                        $this->deleteProductImagesForProduct($variant);
-                        $imageFile = $request->file("variants.{$idx}.image");
-                        $this->createProductImageRecord($variant, $imageFile, 0, true);
-                    }
-                    elseif (!empty($vData['library_image_id'])) {
-                        $this->attachVariantLibraryImage($product, $variant, $vData['library_image_id'], $idx);
-                    }
-                    elseif (isset($vData['remove_image']) && $vData['remove_image'] == 'true') {
-                        $this->deleteProductImagesForProduct($variant);
-                    }
+                    $this->applyVariantImageSelection($request, $product, $variant, $vData, $idx);
 
                     // Save/Update variant attribute values
                     if (isset($vData['attributes'])) {
@@ -9607,12 +9742,7 @@ class ProductController extends Controller
                         auth()->id()
                     );
 
-                    if ($request->hasFile("variants.{$idx}.image")) {
-                        $imageFile = $request->file("variants.{$idx}.image");
-                        $this->createProductImageRecord($variant, $imageFile, 0, true);
-                    } elseif (!empty($vData['library_image_id'])) {
-                        $this->attachVariantLibraryImage($product, $variant, $vData['library_image_id'], $idx);
-                    }
+                    $this->applyVariantImageSelection($request, $product, $variant, $vData, $idx);
 
                     $product->linkedProducts()->attach($variant->id, [
                         'link_type' => 'super_link',

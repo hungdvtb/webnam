@@ -204,10 +204,13 @@ const ProductBulkReplaceModal = ({
                         // Most reliable: get all siblings from same parent
                         params.parent_id = parentId;
                     } else {
-                        // Fallback: search by SKU prefix
-                        const skuParts = (item.sku || '').split('-');
-                        // Use first 2 SKU segments as a search hint
-                        const skuHint = skuParts.slice(0, 2).join('-');
+                        // Fallback: search by SKU prefix (drop ONLY the last segment,
+                        // which typically encodes the attribute value being changed).
+                        // e.g. "MR70-MAMBONGRAN-28-RONG" → "MR70-MAMBONGRAN-28"
+                        const skuParts = (item.sku || '').split('-').filter(Boolean);
+                        const skuHint = skuParts.length > 2
+                            ? skuParts.slice(0, skuParts.length - 1).join('-')
+                            : skuParts.join('-');
                         if (skuHint) params.search = skuHint;
                         if (item.category_id) params.category_id = item.category_id;
                     }
@@ -231,12 +234,19 @@ const ProductBulkReplaceModal = ({
                         });
                     }
 
+                    // Hard-filter: never propose a configurable parent as a replacement
+                    const isVariationProduct = (c) =>
+                        c.type !== 'configurable' &&
+                        !c.has_variations &&
+                        !(c.type === 'variable');
+
                     try {
                         const response = await productApi.getAll(params);
-                        const candidates = response.data?.data || [];
+                        const candidates = (response.data?.data || []).filter(isVariationProduct);
 
                         if (candidates.length === 0) {
-                            // If strict attribute filter returned nothing, try without other attrs
+                            // Strict search (with all attr filters) returned nothing.
+                            // Retry keeping only the TARGET attribute filter.
                             const relaxedParams = { ...params };
                             Object.keys(relaxedParams).forEach(k => {
                                 if (k.startsWith('attrs[') && k !== `attrs[${targetAttribute?.code}]`) {
@@ -245,7 +255,7 @@ const ProductBulkReplaceModal = ({
                             });
 
                             const relaxedResponse = await productApi.getAll(relaxedParams);
-                            const relaxedCandidates = relaxedResponse.data?.data || [];
+                            const relaxedCandidates = (relaxedResponse.data?.data || []).filter(isVariationProduct);
 
                             if (relaxedCandidates.length === 0) {
                                 nextMap[item.line_id] = null;
@@ -256,16 +266,15 @@ const ProductBulkReplaceModal = ({
                                 .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
                                 .sort((a, b) => b.score - a.score);
 
-                            nextMap[item.line_id] = scored[0].score > 100 ? scored[0].c : null;
+                            nextMap[item.line_id] = scored[0].score > 0 ? scored[0].c : null;
                             return;
                         }
 
-                        // Score and pick best
+                        // Score and pick best among strict results
                         const scored = candidates
                             .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
                             .sort((a, b) => b.score - a.score);
 
-                        // Accept any positive-score candidate
                         nextMap[item.line_id] = scored[0].score > 0 ? scored[0].c : null;
 
                     } catch (err) {

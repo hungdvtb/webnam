@@ -9,13 +9,14 @@ import { productApi } from '../../services/api';
 /** Extract the parent product id from an order line item.
  *  Order line items store it in multiple possible locations. */
 const resolveItemParentId = (item) => {
-    const direct = Number(item?.parent_product_id);
-    if (direct > 0) return direct;
-
-    // Also check inside options (set by buildOrderItemsFromSearchEntry for variations)
+    // Always prefer the explicitly stored variant_parent_id
     const fromOptions = Number(item?.options?.variant_parent_id);
     if (fromOptions > 0) return fromOptions;
 
+    // We DO NOT fallback to item.parent_product_id because in order items,
+    // if the item is part of a bundle, parent_product_id points to the BUNDLE,
+    // not the configurable parent. Using the bundle ID as parent_id breaks the sibling search.
+    // By returning null, we gracefully fallback to the highly-reliable SKU prefix search.
     return null;
 };
 
@@ -134,8 +135,14 @@ const ProductBulkReplaceModal = ({
     onApply,
     currencyFormatter,
 }) => {
-    const [targetAttributeId, setTargetAttributeId] = useState('');
-    const [targetValue, setTargetValue] = useState('');
+    const [targetAttributeId, setTargetAttributeId] = useState(() => {
+        if (typeof window !== 'undefined') return window.localStorage.getItem('productBulkReplace_attrId') || '';
+        return '';
+    });
+    const [targetValue, setTargetValue] = useState(() => {
+        if (typeof window !== 'undefined') return window.localStorage.getItem('productBulkReplace_attrVal') || '';
+        return '';
+    });
     const [replacementMap, setReplacementMap] = useState({}); // line_id → candidate | null
     const [loading, setLoading] = useState(false);
     const [previewing, setPreviewing] = useState(false);
@@ -149,6 +156,18 @@ const ProductBulkReplaceModal = ({
             setErrors({});
         }
     }, [show]);
+
+    useEffect(() => {
+        if (typeof window !== 'undefined' && targetAttributeId !== undefined) {
+            window.localStorage.setItem('productBulkReplace_attrId', targetAttributeId);
+        }
+    }, [targetAttributeId]);
+
+    useEffect(() => {
+        if (typeof window !== 'undefined' && targetValue !== undefined) {
+            window.localStorage.setItem('productBulkReplace_attrVal', targetValue);
+        }
+    }, [targetValue]);
 
     // Attributes eligible for bulk replacement
     const availableAttributes = useMemo(() => {
@@ -216,21 +235,18 @@ const ProductBulkReplaceModal = ({
                     }
 
                     // Filter by the TARGET attribute value (the one we want to change TO)
-                    // Backend uses attrs[code] = value
-                    if (targetAttribute?.code) {
-                        params[`attrs[${targetAttribute.code}]`] = targetValue;
+                    // Backend uses attributes[id] = value
+                    if (targetAttributeId) {
+                        params[`attributes[${targetAttributeId}]`] = targetValue;
                     }
 
                     // Also preserve other attribute values in the search
-                    // Map item.product_attributes {attrId → value} → attrs[code] = value
+                    // Map item.product_attributes {attrId → value} → attributes[id] = value
                     if (item.product_attributes && typeof item.product_attributes === 'object') {
                         Object.entries(item.product_attributes).forEach(([attrId, attrVal]) => {
                             if (String(attrId) === String(targetAttributeId)) return;
                             if (!attrVal) return;
-                            const attrDef = attributeById[String(attrId)];
-                            if (attrDef?.code) {
-                                params[`attrs[${attrDef.code}]`] = attrVal;
-                            }
+                            params[`attributes[${attrId}]`] = attrVal;
                         });
                     }
 
@@ -241,8 +257,47 @@ const ProductBulkReplaceModal = ({
                         !(c.type === 'variable');
 
                     try {
-                        const response = await productApi.getAll(params);
-                        const candidates = (response.data?.data || []).filter(isVariationProduct);
+                        let response = await productApi.getAll(params);
+                        let candidates = (response.data?.data || []).filter(isVariationProduct);
+                        let fallbackUsed = false;
+
+                        // If parent_id was used but yielded 0 variations, it might be a bad legacy ID (e.g. bundle ID).
+                        // Fallback to the reliable SKU prefix search.
+                        if (candidates.length === 0 && params.parent_id) {
+                            delete params.parent_id;
+                            const skuParts = (item.sku || '').split('-').filter(Boolean);
+                            const skuHint = skuParts.length > 2
+                                ? skuParts.slice(0, skuParts.length - 1).join('-')
+                                : skuParts.join('-');
+                            
+                            if (skuHint) {
+                                params.search = skuHint;
+                                if (item.category_id) params.category_id = item.category_id;
+                                
+                                response = await productApi.getAll(params);
+                                candidates = (response.data?.data || []).filter(isVariationProduct);
+                                fallbackUsed = true;
+                            }
+                        }
+
+                        // If we relied on SKU hint fallback, the API's 'search' param also matches 'description' 
+                        // and 'name' which can bring in completely unrelated products. We must enforce that 
+                        // the candidate's SKU actually starts with our hint.
+                        if (!params.parent_id && params.search) {
+                            const hintLower = params.search.toLowerCase();
+                            candidates = candidates.filter(c => {
+                                const cSku = (c.sku || c.display_sku || '').toLowerCase();
+                                return cSku.startsWith(hintLower);
+                            });
+                        }
+
+                        // Attach debug info to the item for rendering
+                        item._debug = {
+                            parentId,
+                            search: params.search,
+                            rawCandidates: response.data?.data?.length || 0,
+                            filteredCandidates: candidates.length,
+                        };
 
                         if (candidates.length === 0) {
                             // Strict search returned nothing.
@@ -411,6 +466,11 @@ const ProductBulkReplaceModal = ({
                                                                 <span className="material-symbols-outlined text-[13px]">barcode</span>
                                                                 {item.sku}
                                                             </p>
+                                                            {item._debug && (
+                                                                <p className="text-[10px] text-orange-500 font-mono mt-1">
+                                                                    DB: pId={item._debug.parentId || 'null'} | search={item._debug.search || 'none'} | raw={item._debug.rawCandidates} | f={item._debug.filteredCandidates}
+                                                                </p>
+                                                            )}
                                                         </div>
                                                     </td>
 

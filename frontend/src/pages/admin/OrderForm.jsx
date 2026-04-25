@@ -4522,6 +4522,7 @@ const OrderForm = () => {
                         line_id: originalItem.line_id,
                         quantity: originalItem.quantity,
                         notes: originalItem.notes,
+                        replaced_from_name: originalItem.name,
                         ai_meta: mergeOrderAiItemMeta(originalItem.ai_meta, addition.ai_meta),
                     };
                 }
@@ -8707,6 +8708,11 @@ const OrderForm = () => {
                                                                             >
                                                                                 {item.name}
                                                                             </p>
+                                                                            {item.replaced_from_name && (
+                                                                                <p className="text-[11px] font-medium text-slate-400 mt-0.5 italic line-through truncate" title={`Đổi từ: ${item.replaced_from_name}`}>
+                                                                                    {item.replaced_from_name}
+                                                                                </p>
+                                                                            )}
                                                                             {hasActualOrderProductOverride(item) ? (
                                                                                 <div className="order-form-cell-meta truncate font-semibold text-rose-700">
                                                                                     {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}

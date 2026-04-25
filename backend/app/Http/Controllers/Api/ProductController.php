@@ -5310,6 +5310,21 @@ class ProductController extends Controller
         $searchRankingSql = null;
         $searchRankingBindings = [];
 
+        // Apply parent variation filter if requested
+        if ($request->filled('parent_id')) {
+            $parentId = (int) $request->parent_id;
+            $childIds = \Illuminate\Support\Facades\DB::table('product_links')
+                ->where('product_id', $parentId)
+                ->where('link_type', 'super_link')
+                ->pluck('linked_product_id');
+
+            if ($childIds->isEmpty()) {
+                $query->whereRaw('1 = 0'); // Ensure no results if no siblings exist
+            } else {
+                $query->whereIn('products.id', $childIds);
+            }
+        }
+
         $this->applyProductAttributeFilters($query, $request->input('attributes'), [
             'include_variations' => true,
             'include_bundle_items' => true,
@@ -5322,7 +5337,7 @@ class ProductController extends Controller
             );
         }
 
-        if (!$request->filled('type')) {
+        if (!$request->filled('type') && !$request->boolean('allow_variants') && !$request->filled('parent_id')) {
             $query->whereDoesntHave('parentConfigurable');
         }
 

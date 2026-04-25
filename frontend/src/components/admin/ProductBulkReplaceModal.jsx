@@ -231,46 +231,31 @@ const ProductBulkReplaceModal = ({
                         });
                     }
 
-                    console.group(`[BulkReplace] Searching for: ${item.name} (${item.sku})`);
-                    console.log('Parent ID:', parentId);
-                    console.log('Item product_attributes:', item.product_attributes);
-                    console.log('API params:', params);
-
                     try {
                         const response = await productApi.getAll(params);
                         const candidates = response.data?.data || [];
 
-                        console.log(`Got ${candidates.length} candidates`);
-
                         if (candidates.length === 0) {
                             // If strict attribute filter returned nothing, try without other attrs
                             const relaxedParams = { ...params };
-                            // Remove non-target attribute filters
                             Object.keys(relaxedParams).forEach(k => {
                                 if (k.startsWith('attrs[') && k !== `attrs[${targetAttribute?.code}]`) {
                                     delete relaxedParams[k];
                                 }
                             });
 
-                            console.log('No results, retrying with relaxed params:', relaxedParams);
                             const relaxedResponse = await productApi.getAll(relaxedParams);
                             const relaxedCandidates = relaxedResponse.data?.data || [];
-                            console.log(`Relaxed search got ${relaxedCandidates.length} candidates`);
 
                             if (relaxedCandidates.length === 0) {
                                 nextMap[item.line_id] = null;
-                                console.warn('Still no results');
-                                console.groupEnd();
                                 return;
                             }
 
-                            // Score relaxed candidates
                             const scored = relaxedCandidates
                                 .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
                                 .sort((a, b) => b.score - a.score);
 
-                            console.log('Top relaxed match:', scored[0]);
-                            console.groupEnd();
                             nextMap[item.line_id] = scored[0].score > 100 ? scored[0].c : null;
                             return;
                         }
@@ -280,16 +265,11 @@ const ProductBulkReplaceModal = ({
                             .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
                             .sort((a, b) => b.score - a.score);
 
-                        console.log('Top match:', scored[0]);
-                        console.log('All scored:', scored.map(s => `${s.c.name} [${s.c.sku}] → ${s.score}`));
-                        console.groupEnd();
-
-                        // Accept any positive-score candidate (even 1 means at least name/sku overlap)
+                        // Accept any positive-score candidate
                         nextMap[item.line_id] = scored[0].score > 0 ? scored[0].c : null;
 
                     } catch (err) {
                         console.error('API error for item:', item.name, err);
-                        console.groupEnd();
                         nextErrors[item.line_id] = 'Lỗi tìm kiếm';
                         nextMap[item.line_id] = null;
                     }

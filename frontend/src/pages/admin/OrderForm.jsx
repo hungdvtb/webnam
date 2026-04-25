@@ -4494,7 +4494,27 @@ const OrderForm = () => {
                 if (index === -1) return;
 
                 const originalItem = nextItems[index];
-                const addition = buildOrderItemsFromSearchEntry(product)[0];
+
+                // Enrich the picker product before building the line item:
+                // 1. Build attributes_map from attribute_values array (returned by new picker API)
+                // 2. Mark as SEARCH_ENTRY_VARIATION if it has a parent_product_id
+                const enrichedProduct = { ...product };
+                if (!enrichedProduct.attributes_map && Array.isArray(enrichedProduct.attribute_values)) {
+                    const attrMap = {};
+                    enrichedProduct.attribute_values.forEach((av) => {
+                        if (av?.attribute_id != null && av?.value != null) {
+                            attrMap[String(av.attribute_id)] = av.value;
+                        }
+                    });
+                    enrichedProduct.attributes_map = attrMap;
+                }
+                const parentId = Number(enrichedProduct.parent_product_id) || 0;
+                if (parentId > 0 && !enrichedProduct.entry_kind) {
+                    enrichedProduct.entry_kind = 'variation';
+                    enrichedProduct.parent_product_id = parentId;
+                }
+
+                const addition = buildOrderItemsFromSearchEntry(enrichedProduct)[0];
                 
                 if (addition) {
                     nextItems[index] = {

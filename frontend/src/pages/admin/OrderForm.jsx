@@ -1631,6 +1631,9 @@ const createOrderLineItem = (payload = {}) => {
         ai_meta = undefined,
         category_id = undefined,
         product_attributes = undefined,
+        main_image = '',
+        notes = '',
+        replaced_from_name = '',
     } = payload || {};
     const normalizedOptions = normalizeOrderLineOptions(options);
     const inventorySnapshot = resolveInventorySnapshot({
@@ -1688,6 +1691,9 @@ const createOrderLineItem = (payload = {}) => {
         category_id: Number(category_id) || undefined,
         parent_product_id: Number(payload.parent_product_id ?? normalizedOptions?.variant_parent_id) || undefined,
         product_attributes: product_attributes ? { ...product_attributes } : undefined,
+        main_image: String(main_image || payload.primary_image?.url || payload.image_url || '').trim(),
+        notes: String(notes || '').trim(),
+        replaced_from_name: String(replaced_from_name || '').trim(),
     };
 };
 const hasActualOrderProductOverride = (item) => hasOrderItemActualProductOverride(item);
@@ -1812,6 +1818,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 available_to_sell: bundleItem?.available_to_sell,
                 category_id: bundleItem?.category_id,
                 product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
+                main_image: bundleItem?.main_image || bundleItem?.primary_image?.url || bundleItem?.image_url || '',
                 options: {
                     bundle_parent_id: bundleParentId || undefined,
                     bundle_parent_name: bundleParentName,
@@ -1856,6 +1863,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         available_to_sell: entry?.available_to_sell,
         category_id: entry?.category_id,
         product_attributes: entry?.attributes_map || entry?.product_attributes,
+        main_image: entry?.main_image || entry?.primary_image?.url || entry?.image_url || '',
         options: baseOptions,
     })];
 };
@@ -5504,6 +5512,9 @@ const OrderForm = () => {
                     category_id: item.product?.category_id,
                     parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
                     product_attributes: item.product?.attributes_map || item.product?.product_attributes,
+                    main_image: item.product?.main_image || item.main_image || '',
+                    notes: item.notes || '',
+                    replaced_from_name: item.replaced_from_name || '',
                 });
             }) || [];
             const mappedSupplementItems = (order.supplement_items || order.supplementItems || []).map((item) => ({
@@ -5629,6 +5640,9 @@ const OrderForm = () => {
                 price: Number(item.price) || 0,
                 cost_price: resolveProductCostPrice(item),
                 options: item.options || {},
+                main_image: item.main_image || item.product_image || '',
+                notes: item.notes || '',
+                replaced_from_name: item.replaced_from_name || '',
             }));
             void draftItems;
             const draftCostTotal = calculateItemsCostTotal(normalizedDraftItems);
@@ -8335,13 +8349,35 @@ const OrderForm = () => {
                                             } ${isSelectedLine ? 'ring-2 ring-primary/15' : ''}`}
                                         >
                                             <div className="flex items-start gap-2">
-                                                <div className="inline-flex h-8 min-w-[32px] items-center justify-center rounded-full bg-primary/[0.05] px-2 text-[12px] font-semibold text-primary/55">
-                                                    #{index + 1}
+                                                <div
+                                                    className="relative flex-none size-12 rounded bg-primary/[0.05] overflow-hidden group cursor-pointer border border-primary/10"
+                                                    onClick={(e) => { e.stopPropagation(); toggleLineItemSelection(item.line_id); }}
+                                                >
+                                                    {item.main_image ? (
+                                                        <img src={item.main_image} alt="" className="size-full object-cover" />
+                                                    ) : (
+                                                        <div className="size-full flex items-center justify-center text-[12px] font-semibold text-primary/40">
+                                                            #{index + 1}
+                                                        </div>
+                                                    )}
+                                                    <div className={`absolute inset-0 flex items-center justify-center bg-black/10 transition-opacity ${selectedLineItemIds.has(item.line_id) ? 'opacity-100' : 'opacity-0'}`}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={selectedLineItemIds.has(item.line_id)}
+                                                            onChange={() => {}}
+                                                            className="size-4 rounded border-white text-primary focus:ring-primary/30 cursor-pointer pointer-events-none"
+                                                        />
+                                                    </div>
                                                 </div>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex items-start gap-2">
                                                         <div className="min-w-0 flex-1">
                                                             <div className={`text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
+                                                            {item.replaced_from_name && (
+                                                                <p className="text-[11px] font-medium text-slate-400 mt-0.5 italic line-through truncate" title={`Đổi từ: ${item.replaced_from_name}`}>
+                                                                    {item.replaced_from_name}
+                                                                </p>
+                                                            )}
                                                             {hasActualOverride ? (
                                                                 <div className="mt-1 text-[12px] font-semibold leading-[1.4] text-rose-700">
                                                                     {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
@@ -9394,7 +9430,7 @@ const OrderForm = () => {
                     </div>
                 </div>
 
-                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-4' : 'grid-cols-3'}`}>
+                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-5' : 'grid-cols-4'}`}>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null)}
@@ -9419,6 +9455,21 @@ const OrderForm = () => {
                             <span className="material-symbols-outlined text-[18px]">{mobileFooterSecondaryAction.icon}</span>
                         </button>
                     )}
+                    <button
+                        type="button"
+                        onClick={() => setShowBulkReplaceModal(true)}
+                        disabled={selectedLineItemIds.size === 0 || saving}
+                        title="Đổi hàng loạt"
+                        aria-label="Đổi hàng loạt"
+                        className="relative inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-primary/10 bg-white px-2 text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
+                        {selectedLineItemIds.size > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brick px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-[#F8FAFC]">
+                                {selectedLineItemIds.size}
+                            </span>
+                        )}
+                    </button>
                     <button
                         type="button"
                         onClick={handleScreenshot}

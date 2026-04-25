@@ -386,7 +386,7 @@ const ProductBulkReplaceModal = ({
                 <div className="p-6">
                     {/* Config area */}
                     <div className="grid grid-cols-2 gap-4 rounded-xl border border-primary/10 bg-primary/[0.02] p-4">
-                        <div className="space-y-1.5">
+                        <div className="flex flex-col justify-end gap-1.5">
                             <label className="text-[13px] font-bold text-primary/70">Chọn thuộc tính muốn thay đổi</label>
                             <select
                                 value={targetAttributeId}
@@ -399,7 +399,7 @@ const ProductBulkReplaceModal = ({
                                 ))}
                             </select>
                         </div>
-                        <div className="space-y-1.5">
+                        <div className="flex flex-col justify-end gap-1.5">
                             <label className="text-[13px] font-bold text-primary/70">Chọn giá trị mới</label>
                             <select
                                 value={targetValue}
@@ -441,97 +441,94 @@ const ProductBulkReplaceModal = ({
                                 )}
                             </div>
 
-                            <div className="max-h-[380px] overflow-y-auto rounded-xl border border-slate-100">
-                                <table className="w-full text-left">
-                                    <thead className="sticky top-0 z-10 bg-slate-50/80 backdrop-blur-md border-b border-slate-100">
-                                        <tr>
-                                            <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm hiện tại</th>
-                                            <th className="w-10 px-0 py-3 text-center" />
-                                            <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm thay thế</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100 bg-white">
-                                        {selectedItems.map((item) => {
-                                            const replacement = replacementMap[item.line_id];
-                                            const hasReplacement = !!replacement;
-                                            const isLoading = loading;
+                            <div className="max-h-[380px] overflow-y-auto rounded-xl border border-slate-100 bg-white flex flex-col">
+                                {/* Header (Hidden on mobile) */}
+                                <div className="hidden sm:grid sm:grid-cols-[1fr_40px_1fr] gap-4 sticky top-0 z-10 bg-slate-50/90 backdrop-blur-md border-b border-slate-100 px-4 py-3">
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm hiện tại</div>
+                                    <div className="text-center" />
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm thay thế</div>
+                                </div>
 
-                                            return (
-                                                <tr key={item.line_id} className="hover:bg-slate-50/70 transition-colors">
-                                                    {/* Source item */}
-                                                    <td className="px-4 py-3.5">
-                                                        <div className="flex flex-col gap-1">
-                                                            <p className="text-[13px] font-bold text-slate-700 leading-snug">{item.name}</p>
-                                                            <p className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
-                                                                <span className="material-symbols-outlined text-[13px]">barcode</span>
-                                                                {item.sku}
-                                                            </p>
-                                                            {item._debug && (
-                                                                <p className="text-[10px] text-orange-500 font-mono mt-1">
-                                                                    DB: pId={item._debug.parentId || 'null'} | search={item._debug.search || 'none'} | raw={item._debug.rawCandidates} | f={item._debug.filteredCandidates}
+                                {/* Body */}
+                                <div className="flex flex-col gap-3 p-3 bg-slate-50/30">
+                                    {selectedItems.map((item) => {
+                                        const replacement = replacementMap[item.line_id];
+                                        const hasReplacement = !!replacement;
+                                        const isLoading = loading;
+
+                                        return (
+                                            <div key={item.line_id} className={`flex flex-col sm:grid sm:grid-cols-[1fr_40px_1fr] sm:items-center gap-3 sm:gap-4 p-3.5 sm:p-4 rounded-xl border transition-all ${hasReplacement ? 'border-green-200/60 bg-white shadow-sm' : 'border-slate-200 bg-white shadow-sm'}`}>
+                                                {/* Source item */}
+                                                <div className="flex flex-col gap-1 w-full relative">
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 sm:hidden">Đang có</span>
+                                                    <p className="text-[13px] font-bold text-slate-700 leading-snug">{item.name}</p>
+                                                    <p className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
+                                                        <span className="material-symbols-outlined text-[13px]">barcode</span>
+                                                        {item.sku}
+                                                    </p>
+                                                </div>
+
+                                                {/* Arrow */}
+                                                <div className="flex justify-center w-full sm:w-auto py-2 sm:py-0 relative">
+                                                    <div className="absolute inset-0 flex items-center sm:hidden px-4">
+                                                        <div className="w-full border-t border-slate-200 border-dashed"></div>
+                                                    </div>
+                                                    <div className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-full border-[3px] border-white transition-all ${
+                                                        hasReplacement
+                                                            ? 'bg-green-100 text-green-600'
+                                                            : isLoading
+                                                                ? 'bg-slate-100 text-slate-400 animate-pulse'
+                                                                : 'bg-slate-100 text-slate-300'
+                                                    }`}>
+                                                        <span className={`material-symbols-outlined text-[16px] ${!hasReplacement ? 'rotate-90 sm:rotate-0' : ''}`}>
+                                                            {hasReplacement ? 'check_circle' : 'chevron_right'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Replacement */}
+                                                <div className={`flex flex-col gap-1 w-full sm:p-0 rounded-lg sm:rounded-none sm:bg-transparent border sm:border-0 ${hasReplacement ? 'bg-green-50/50 border-green-200/50 p-3' : 'bg-slate-50 border-slate-200 p-3'}`}>
+                                                    <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 sm:hidden ${hasReplacement ? 'text-green-600' : 'text-slate-400'}`}>Thay bằng</span>
+                                                    {hasReplacement ? (
+                                                        <>
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <p className="text-[13px] font-bold text-primary leading-snug">
+                                                                    {replacement.display_name || replacement.name}
                                                                 </p>
-                                                            )}
+                                                                <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 whitespace-nowrap">Đã khớp</span>
+                                                            </div>
+                                                            <p className="flex items-center flex-wrap gap-1 text-[11px] font-medium text-slate-400">
+                                                                <span className="material-symbols-outlined text-[13px]">barcode</span>
+                                                                {replacement.display_sku || replacement.sku}
+                                                                {replacement.price != null && (
+                                                                    <>
+                                                                        <span className="text-slate-200">•</span>
+                                                                        <span className="material-symbols-outlined text-[13px]">sell</span>
+                                                                        {typeof currencyFormatter === 'function'
+                                                                            ? currencyFormatter(replacement.price)
+                                                                            : replacement.price}
+                                                                    </>
+                                                                )}
+                                                            </p>
+                                                        </>
+                                                    ) : isLoading ? (
+                                                        <div className="space-y-2">
+                                                            <div className="h-3 w-full max-w-[200px] animate-pulse rounded bg-slate-200" />
+                                                            <div className="h-2.5 w-24 animate-pulse rounded bg-slate-200" />
                                                         </div>
-                                                    </td>
-
-                                                    {/* Arrow */}
-                                                    <td className="px-0 py-3.5 text-center">
-                                                        <div className={`mx-auto flex h-7 w-7 items-center justify-center rounded-full transition-all ${
-                                                            hasReplacement
-                                                                ? 'bg-green-50 text-green-500'
-                                                                : isLoading
-                                                                    ? 'bg-slate-50 text-slate-300 animate-pulse'
-                                                                    : 'bg-slate-50 text-slate-200'
-                                                        }`}>
-                                                            <span className="material-symbols-outlined text-[16px]">
-                                                                {hasReplacement ? 'check_circle' : 'chevron_right'}
+                                                    ) : (
+                                                        <div className="flex items-center gap-1.5 text-rose-500 italic">
+                                                            <span className="material-symbols-outlined text-[15px]">error</span>
+                                                            <span className="text-[12px] font-medium">
+                                                                {errors[item.line_id] || 'Không tìm thấy mẫu tương ứng'}
                                                             </span>
                                                         </div>
-                                                    </td>
-
-                                                    {/* Replacement */}
-                                                    <td className="px-4 py-3.5">
-                                                        {hasReplacement ? (
-                                                            <div className="flex flex-col gap-1">
-                                                                <div className="flex items-center gap-2">
-                                                                    <p className="text-[13px] font-bold text-primary leading-snug">
-                                                                        {replacement.display_name || replacement.name}
-                                                                    </p>
-                                                                    <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-600">Đã khớp</span>
-                                                                </div>
-                                                                <p className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
-                                                                    <span className="material-symbols-outlined text-[13px]">barcode</span>
-                                                                    {replacement.display_sku || replacement.sku}
-                                                                    {replacement.price != null && (
-                                                                        <>
-                                                                            <span className="text-slate-200">•</span>
-                                                                            <span className="material-symbols-outlined text-[13px]">sell</span>
-                                                                            {typeof currencyFormatter === 'function'
-                                                                                ? currencyFormatter(replacement.price)
-                                                                                : replacement.price}
-                                                                        </>
-                                                                    )}
-                                                                </p>
-                                                            </div>
-                                                        ) : isLoading ? (
-                                                            <div className="space-y-2">
-                                                                <div className="h-3 w-36 animate-pulse rounded bg-slate-100" />
-                                                                <div className="h-2.5 w-24 animate-pulse rounded bg-slate-100" />
-                                                            </div>
-                                                        ) : (
-                                                            <div className="flex items-center gap-1.5 text-rose-400 italic">
-                                                                <span className="material-symbols-outlined text-[15px]">error</span>
-                                                                <span className="text-[12px] font-medium">
-                                                                    {errors[item.line_id] || 'Không tìm thấy mẫu tương ứng'}
-                                                                </span>
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             </div>
 
                             {/* Hint if nothing matched */}

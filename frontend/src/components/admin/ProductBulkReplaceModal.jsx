@@ -245,36 +245,22 @@ const ProductBulkReplaceModal = ({
                         const candidates = (response.data?.data || []).filter(isVariationProduct);
 
                         if (candidates.length === 0) {
-                            // Strict search (with all attr filters) returned nothing.
-                            // Retry keeping only the TARGET attribute filter.
-                            const relaxedParams = { ...params };
-                            Object.keys(relaxedParams).forEach(k => {
-                                if (k.startsWith('attrs[') && k !== `attrs[${targetAttribute?.code}]`) {
-                                    delete relaxedParams[k];
-                                }
-                            });
-
-                            const relaxedResponse = await productApi.getAll(relaxedParams);
-                            const relaxedCandidates = (relaxedResponse.data?.data || []).filter(isVariationProduct);
-
-                            if (relaxedCandidates.length === 0) {
-                                nextMap[item.line_id] = null;
-                                return;
-                            }
-
-                            const scored = relaxedCandidates
-                                .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
-                                .sort((a, b) => b.score - a.score);
-
-                            nextMap[item.line_id] = scored[0].score > 0 ? scored[0].c : null;
+                            // Strict search returned nothing.
+                            // We DO NOT fallback to dropping attribute filters because the user explicitly
+                            // wants to preserve non-target attributes (e.g., must keep Size=28cm).
+                            nextMap[item.line_id] = null;
                             return;
                         }
 
                         // Score and pick best among strict results
+                        // This helps if we didn't have parent_id and relied on SKU hint,
+                        // to pick the closest name/sku among those that matched all attributes.
                         const scored = candidates
                             .map(c => ({ c, score: scoreCandidate(item, c, targetAttributeId, attributeById) }))
                             .sort((a, b) => b.score - a.score);
 
+                        // Only accept if it has a decent score (e.g. sibling or good name/sku match)
+                        // A strict match from API already ensures attributes are correct.
                         nextMap[item.line_id] = scored[0].score > 0 ? scored[0].c : null;
 
                     } catch (err) {

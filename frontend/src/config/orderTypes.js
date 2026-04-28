@@ -6,7 +6,7 @@ export const SUPPLEMENT_RETURN_STATUS_RETURNED = 'returned';
 
 export const SUPPLEMENT_RETURN_STATUS_OPTIONS = [
     { value: SUPPLEMENT_RETURN_STATUS_NOT_RETURNED, label: 'Chưa trả' },
-    { value: SUPPLEMENT_RETURN_STATUS_RETURNED, label: 'Đã trả về' },
+    { value: SUPPLEMENT_RETURN_STATUS_RETURNED, label: 'Đã trả' },
 ];
 
 export const ORDER_TYPE_OPTIONS = [

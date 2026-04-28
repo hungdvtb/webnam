@@ -23,6 +23,7 @@ use App\Models\SiteSetting;
 use App\Support\ImportCostRounding;
 use App\Support\OrderBootstrapCache;
 use App\Support\OrderCodAdjustmentSystemNote;
+use App\Support\OrderExchangeRefundSystemNote;
 use App\Support\OrderShippingFeeCalculator;
 use App\Support\OrderStatusCatalog;
 use App\Services\Inventory\InventoryService;
@@ -796,9 +797,41 @@ class OrderController extends Controller
         return round(OrderCodAdjustmentSystemNote::extractAdjustmentAmount($notes), 2);
     }
 
+    private function resolveLegacyExchangeReturnDiscountAdjustment(Order $order, ?float $managedAdjustment = null): float
+    {
+        if ($this->normalizeOrderType((string) $order->order_type) !== self::ORDER_TYPE_EXCHANGE_RETURN) {
+            return 0.0;
+        }
+
+        $effectiveDiscount = round((float) ($order->discount ?? 0), 2);
+        if ($effectiveDiscount <= 0) {
+            return 0.0;
+        }
+
+        $resolvedManagedAdjustment = round((float) ($managedAdjustment ?? $this->resolveStoredManagedDiscountAdjustment($order->notes)), 2);
+        if (abs($resolvedManagedAdjustment) >= 0.01) {
+            return max(0, $resolvedManagedAdjustment);
+        }
+
+        $supplementTotal = round((float) ($order->supplement_items_total_price ?? 0), 2);
+        if ($supplementTotal > 0 && $effectiveDiscount >= $supplementTotal) {
+            return $supplementTotal;
+        }
+
+        if ($supplementTotal <= 0 && round((float) ($order->total_price ?? 0), 2) <= 0) {
+            return $effectiveDiscount;
+        }
+
+        return 0.0;
+    }
+
     private function resolveStoredManualDiscount(Order $order, ?float $managedAdjustment = null): float
     {
         $effectiveDiscount = round((float) ($order->discount ?? 0), 2);
+        if ($this->normalizeOrderType((string) $order->order_type) === self::ORDER_TYPE_EXCHANGE_RETURN) {
+            return round(max(0, $effectiveDiscount - $this->resolveLegacyExchangeReturnDiscountAdjustment($order, $managedAdjustment)), 2);
+        }
+
         if ($this->normalizeOrderType((string) $order->order_type) !== self::ORDER_TYPE_PARTIAL_DELIVERY) {
             return $effectiveDiscount;
         }
@@ -873,6 +906,7 @@ class OrderController extends Controller
             'manual_discount' => $this->resolveStoredManualDiscount($order, $managedAdjustment),
             'automatic_discount_adjustment' => $automaticAdjustment,
             'stored_discount_adjustment' => $managedAdjustment,
+            'legacy_exchange_discount_adjustment' => $this->resolveLegacyExchangeReturnDiscountAdjustment($order, $managedAdjustment),
         ];
     }
 
@@ -894,6 +928,7 @@ class OrderController extends Controller
             'notes' => $order->notes,
             'total_price' => (float) $order->total_price,
             'cost_total' => (float) ($order->cost_total ?? 0),
+            'profit_total' => (float) ($order->profit_total ?? 0),
             'shipping_fee' => (float) ($order->shipping_fee ?? 0),
             'internal_shipping_fee' => $this->resolveOrderInternalShippingFee($order),
             'discount' => (float) ($order->discount ?? 0),
@@ -907,6 +942,9 @@ class OrderController extends Controller
             'report_profit_total' => (float) ($order->report_profit_total ?? 0),
             'print_count' => (int) ($order->print_count ?? 0),
             'last_printed_at' => $order->last_printed_at?->toISOString(),
+            'shipping_tracking_code' => $order->shipping_tracking_code,
+            'shipping_carrier_name' => $order->shipping_carrier_name,
+            'shipping_dispatched_at' => $order->shipping_dispatched_at?->toISOString(),
             'shipping_status_source' => $order->shipping_status_source ?: self::SHIPPING_STATUS_SOURCE_MANUAL,
             'converted_from_order_id' => $order->converted_from_order_id,
             'converted_from_kind' => $order->converted_from_kind,
@@ -1079,6 +1117,46 @@ class OrderController extends Controller
         return $normalized !== ''
             ? $normalized
             : null;
+    }
+
+    private function defaultPartialReturnTrackingCode(?string $outgoingTrackingCode): ?string
+    {
+        $normalized = trim((string) ($outgoingTrackingCode ?? ''));
+        if ($normalized === '') {
+            return null;
+        }
+
+        return Str::endsWith(Str::upper($normalized), '1P1')
+            ? $normalized
+            : $normalized . '1P1';
+    }
+
+    private function defaultExchangeReturnTrackingCode(?string $outgoingTrackingCode): ?string
+    {
+        $normalized = trim((string) ($outgoingTrackingCode ?? ''));
+        if ($normalized === '') {
+            return null;
+        }
+
+        return Str::endsWith(Str::upper($normalized), 'DH')
+            ? $normalized
+            : $normalized . 'DH';
+    }
+
+    private function resolveOutgoingTrackingCode(Order $order): ?string
+    {
+        $trackingCode = $this->normalizeReturnTrackingCode($order->shipping_tracking_code);
+        if ($trackingCode !== null) {
+            return $trackingCode;
+        }
+
+        $activeShipment = $order->relationLoaded('activeShipment')
+            ? $order->activeShipment
+            : $order->activeShipment()->first();
+
+        return $this->normalizeReturnTrackingCode(
+            $activeShipment?->carrier_tracking_code ?: $activeShipment?->tracking_number
+        );
     }
 
     private function normalizeReturnStatus(?string $returnStatus): string
@@ -1392,7 +1470,8 @@ class OrderController extends Controller
     private function supplementReturnTrackingPayload(
         ?string $orderType,
         mixed $returnTrackingCode = null,
-        ?string $returnStatus = null
+        ?string $returnStatus = null,
+        ?string $outgoingTrackingCode = null
     ): array {
         $normalizedOrderType = $this->normalizeOrderType($orderType);
 
@@ -1403,8 +1482,17 @@ class OrderController extends Controller
             ];
         }
 
+        $normalizedReturnTrackingCode = $this->normalizeReturnTrackingCode($returnTrackingCode);
+        if ($normalizedReturnTrackingCode === null) {
+            $normalizedReturnTrackingCode = match ($normalizedOrderType) {
+                self::ORDER_TYPE_EXCHANGE_RETURN => $this->defaultExchangeReturnTrackingCode($outgoingTrackingCode),
+                self::ORDER_TYPE_PARTIAL_DELIVERY => $this->defaultPartialReturnTrackingCode($outgoingTrackingCode),
+                default => null,
+            };
+        }
+
         return [
-            'return_tracking_code' => $this->normalizeReturnTrackingCode($returnTrackingCode),
+            'return_tracking_code' => $normalizedReturnTrackingCode,
             'return_status' => $this->normalizeReturnStatus($returnStatus),
         ];
     }
@@ -1893,6 +1981,64 @@ class OrderController extends Controller
         }
     }
 
+    private function supplementLimitProductId(OrderItem $item): int
+    {
+        $orderedProductId = (int) ($item->product_id ?? 0);
+        $actualProductId = (int) ($item->actual_product_id ?? 0);
+
+        return $actualProductId > 0 && $actualProductId !== $orderedProductId
+            ? $actualProductId
+            : $orderedProductId;
+    }
+
+    private function validateSupplementQuantitiesWithinSentItems(Order $order, Collection $normalizedItems): void
+    {
+        if ($this->normalizeOrderType((string) $order->order_type) !== self::ORDER_TYPE_PARTIAL_DELIVERY) {
+            return;
+        }
+
+        if ($normalizedItems->isEmpty()) {
+            return;
+        }
+
+        $order->loadMissing('items');
+        $sentQuantities = $order->items
+            ->reduce(function (Collection $summary, OrderItem $item) {
+                $productId = $this->supplementLimitProductId($item);
+                $quantity = max(0, (int) ($item->quantity ?? 0));
+
+                if ($productId > 0 && $quantity > 0) {
+                    $summary->put($productId, ((int) $summary->get($productId, 0)) + $quantity);
+                }
+
+                return $summary;
+            }, collect());
+
+        if ($sentQuantities->isEmpty()) {
+            return;
+        }
+
+        $requestedQuantities = $normalizedItems
+            ->groupBy(fn ($item) => (int) ($item['product_id'] ?? 0))
+            ->map(fn (Collection $items) => (int) $items->sum(fn ($item) => max(0, (int) ($item['quantity'] ?? 0))));
+
+        $violations = [];
+        foreach ($requestedQuantities as $productId => $quantity) {
+            $sentQuantity = (int) $sentQuantities->get((int) $productId, 0);
+            if ($sentQuantity <= 0 || $quantity <= $sentQuantity) {
+                continue;
+            }
+
+            $violations[] = "SP #{$productId}: trả {$quantity}/đã gửi {$sentQuantity}";
+        }
+
+        if (!empty($violations)) {
+            throw ValidationException::withMessages([
+                'supplement_items' => 'Số lượng trả về không được vượt quá số lượng đã gửi trong đơn. ' . implode('; ', $violations),
+            ]);
+        }
+    }
+
     private function syncSupplementItems(Order $order, array $rawItems): array
     {
         $normalizedItems = collect($rawItems)
@@ -1914,6 +2060,8 @@ class OrderController extends Controller
             ];
         }
 
+        $this->validateSupplementQuantitiesWithinSentItems($order, $normalizedItems);
+
         $order->supplementItems()->delete();
 
         if ($normalizedItems->isEmpty()) {
@@ -1930,7 +2078,7 @@ class OrderController extends Controller
             ->values()
             ->all();
 
-        $products = Product::query()
+        $products = Product::withTrashed()
             ->whereIn('id', $productIds)
             ->get()
             ->keyBy('id');
@@ -2174,13 +2322,12 @@ class OrderController extends Controller
     ): void
     {
         $normalizedOrderType = $this->normalizeOrderType($orderType ?? (string) $order->order_type);
-        $finalTotal = round(
+        $basePaymentTotal = round(
             $itemRevenue - (float) ($order->discount ?? 0),
             2
         );
 
         $baseCostTotal = round($costTotal, 2);
-        $baseProfitTotal = round($finalTotal - $baseCostTotal, 2);
         $effectiveSettlementDelta = $normalizedOrderType === self::ORDER_TYPE_STANDARD
             ? 0
             : round((float) ($settlementDelta ?? $order->settlement_delta ?? 0), 2);
@@ -2190,27 +2337,53 @@ class OrderController extends Controller
         $effectiveSupplementCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
             ? 0
             : round((float) ($supplementCostTotal ?? $order->supplement_items_cost_total ?? 0), 2);
+        $exchangeNetRevenueTotal = round($basePaymentTotal - $effectiveSupplementTotalPrice + $effectiveSettlementDelta, 2);
+        $paymentTotal = $normalizedOrderType === self::ORDER_TYPE_EXCHANGE_RETURN
+            ? round(max(0, $exchangeNetRevenueTotal), 2)
+            : $basePaymentTotal;
+        $baseProfitTotal = round($paymentTotal - $baseCostTotal, 2);
         $reportRevenueTotal = match ($normalizedOrderType) {
-            self::ORDER_TYPE_PARTIAL_DELIVERY => round($finalTotal + $effectiveSettlementDelta, 2),
-            self::ORDER_TYPE_STANDARD => $finalTotal,
-            default => round($finalTotal - $effectiveSupplementTotalPrice + $effectiveSettlementDelta, 2),
+            self::ORDER_TYPE_EXCHANGE_RETURN => $exchangeNetRevenueTotal,
+            self::ORDER_TYPE_PARTIAL_DELIVERY => round($basePaymentTotal + $effectiveSettlementDelta, 2),
+            self::ORDER_TYPE_STANDARD => $paymentTotal,
+            default => $paymentTotal,
         };
         $reportCostTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
             ? $baseCostTotal
             : round($baseCostTotal - $effectiveSupplementCostTotal, 2);
         $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
+        $profitTotal = $normalizedOrderType === self::ORDER_TYPE_STANDARD
+            ? $baseProfitTotal
+            : $reportProfitTotal;
 
         $order->forceFill($this->filterPersistableOrderData([
             'order_type' => $normalizedOrderType,
-            'total_price' => $finalTotal,
+            'total_price' => $paymentTotal,
             'settlement_delta' => $effectiveSettlementDelta,
             'cost_total' => $baseCostTotal,
-            'profit_total' => $baseProfitTotal,
+            'profit_total' => $profitTotal,
             'supplement_items_total_price' => $effectiveSupplementTotalPrice,
             'supplement_items_cost_total' => $effectiveSupplementCostTotal,
             'report_revenue_total' => $reportRevenueTotal,
             'report_cost_total' => $reportCostTotal,
             'report_profit_total' => $reportProfitTotal,
+        ]))->save();
+    }
+
+    private function syncExchangeReturnRefundNote(Order $order): void
+    {
+        $normalizedOrderType = $this->normalizeOrderType((string) $order->order_type);
+        $refundAmount = $normalizedOrderType === self::ORDER_TYPE_EXCHANGE_RETURN
+            ? max(0, -round((float) ($order->report_revenue_total ?? 0), 2))
+            : 0.0;
+        $syncedNotes = OrderExchangeRefundSystemNote::sync($order->notes, $refundAmount);
+
+        if ((string) ($syncedNotes ?? '') === (string) ($order->notes ?? '')) {
+            return;
+        }
+
+        $order->forceFill($this->filterPersistableOrderData([
+            'notes' => $syncedNotes,
         ]))->save();
     }
 
@@ -2391,6 +2564,8 @@ class OrderController extends Controller
                     (float) ($supplementSummary['total_price'] ?? 0),
                     (float) ($supplementSummary['cost_total'] ?? 0)
                 );
+
+                $this->syncExchangeReturnRefundNote($newOrder);
 
                 foreach ($original->attributeValues as $attributeValue) {
                     $newValue = $attributeValue->replicate();
@@ -3662,6 +3837,7 @@ class OrderController extends Controller
                 'draft_created_at', 'officialized_at',
                 'print_count', 'last_printed_at',
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
+                'return_tracking_code', 'return_status',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
                 'external_delivery_meta',
@@ -4083,6 +4259,9 @@ class OrderController extends Controller
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.quantity' => 'nullable|integer|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
+            'items.*.product_name' => 'nullable|string|max:255',
+            'items.*.product_sku' => 'nullable|string|max:120',
+            'items.*.is_extra_product' => 'nullable|boolean',
         ]);
 
         return response()->json(
@@ -4119,6 +4298,9 @@ class OrderController extends Controller
             'items.*.product_id' => 'required|integer|exists:products,id',
             'items.*.quantity' => 'nullable|integer|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
+            'items.*.product_name' => 'nullable|string|max:255',
+            'items.*.product_sku' => 'nullable|string|max:120',
+            'items.*.is_extra_product' => 'nullable|boolean',
         ]);
 
         return response()->json(
@@ -4286,6 +4468,7 @@ class OrderController extends Controller
                 [],
                 (float) ($order->supplement_items_total_price ?? 0)
             );
+            $this->syncExchangeReturnRefundNote($order);
 
             return response()->json($this->mutationResponsePayload($order), 201);
             });
@@ -4334,6 +4517,10 @@ class OrderController extends Controller
                 'report_revenue_total',
                 'report_cost_total',
                 'report_profit_total',
+                'shipping_carrier_code',
+                'shipping_carrier_name',
+                'shipping_tracking_code',
+                'shipping_dispatched_at',
                 'external_delivery_meta',
                 'created_at',
                 'draft_created_at',
@@ -4454,7 +4641,8 @@ class OrderController extends Controller
             $this->supplementReturnTrackingPayload(
                 $requestedOrderType,
                 $request->input('return_tracking_code', $order->return_tracking_code),
-                $request->input('return_status', $order->return_status)
+                $request->input('return_status', $order->return_status),
+                $this->resolveOutgoingTrackingCode($order)
             )
         );
 
@@ -4542,6 +4730,7 @@ class OrderController extends Controller
             [],
             (float) ($order->supplement_items_total_price ?? 0)
         );
+        $this->syncExchangeReturnRefundNote($order);
 
         return $order;
     }

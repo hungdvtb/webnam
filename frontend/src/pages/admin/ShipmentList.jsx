@@ -39,7 +39,7 @@ const RECONCILIATION_STATUSES = [
 
 const RETURN_STATUSES = [
     { code: 'not_returned', label: 'Chưa hoàn', color: '#9ca3af' },
-    { code: 'exchanged', label: 'Đã đổi hàng', color: '#7c3aed' },
+    { code: 'exchanged', label: 'Đổi hàng thành công', color: '#15803d' },
     { code: 'partial_returned', label: 'Hoàn 1 phần', color: '#f59e0b' },
     { code: 'returned', label: 'Đã hoàn toàn', color: '#ef4444' },
 ];

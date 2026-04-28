@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { productApi } from '../../services/api';
 import {
+    ORDER_TYPE_EXCHANGE_RETURN,
+    ORDER_TYPE_PARTIAL_DELIVERY,
     getOrderTypeMeta,
     isSpecialOrderType,
     normalizeSupplementReturnStatus,
@@ -337,32 +339,205 @@ const buildItemFromProduct = (product) => ({
     notes: '',
 });
 
+const clampQuantity = (value, min = 0, max = Number.POSITIVE_INFINITY) => {
+    const numericValue = Math.trunc(toNumber(value, min));
+    const normalizedMin = Math.max(0, Math.trunc(toNumber(min, 0)));
+    const normalizedMax = Number.isFinite(Number(max))
+        ? Math.max(normalizedMin, Math.trunc(Number(max)))
+        : Number.POSITIVE_INFINITY;
+
+    return Math.min(Math.max(numericValue, normalizedMin), normalizedMax);
+};
+
+const resolveSentProductId = (item) => {
+    const orderedProductId = Number(item?.product_id) || 0;
+    const actualProductId = Number(item?.actual_product_id) || 0;
+
+    return actualProductId > 0 && actualProductId !== orderedProductId
+        ? actualProductId
+        : orderedProductId;
+};
+
+const resolveSentProductName = (item, productId) => {
+    const orderedProductId = Number(item?.product_id) || 0;
+    const actualProductId = Number(item?.actual_product_id) || 0;
+    const hasActualOverride = actualProductId > 0 && actualProductId !== orderedProductId;
+
+    if (hasActualOverride) {
+        return item?.actual_name
+            || item?.actual_snapshot_name
+            || item?.actual_product_name_snapshot
+            || `Sản phẩm #${productId}`;
+    }
+
+    return item?.name
+        || item?.snapshot_name
+        || item?.product_name_snapshot
+        || `Sản phẩm #${productId}`;
+};
+
+const resolveSentProductSku = (item) => {
+    const orderedProductId = Number(item?.product_id) || 0;
+    const actualProductId = Number(item?.actual_product_id) || 0;
+    const hasActualOverride = actualProductId > 0 && actualProductId !== orderedProductId;
+
+    if (hasActualOverride) {
+        return item?.actual_sku
+            || item?.actual_snapshot_sku
+            || item?.actual_product_sku_snapshot
+            || '';
+    }
+
+    return item?.sku
+        || item?.snapshot_sku
+        || item?.product_sku_snapshot
+        || '';
+};
+
+const buildSentProductRows = (sourceItems = []) => {
+    const rowsByProductId = new Map();
+
+    (Array.isArray(sourceItems) ? sourceItems : []).forEach((item, index) => {
+        const productId = resolveSentProductId(item);
+        const quantity = clampQuantity(item?.quantity, 0);
+
+        if (!productId || quantity <= 0) {
+            return;
+        }
+
+        const currentRow = rowsByProductId.get(productId);
+        const nextLineId = item?.line_id || item?.id || `line-${index + 1}`;
+        const nextRow = {
+            product_id: productId,
+            name: resolveSentProductName(item, productId),
+            sku: resolveSentProductSku(item),
+            unit_name: item?.unit_name || '',
+            sent_quantity: quantity,
+            price: Math.max(0, toNumber(item?.price, 0)),
+            cost_price: normalizeRoundedImportCostNumber(item?.cost_price) ?? 0,
+            source_line_ids: [nextLineId],
+        };
+
+        if (!currentRow) {
+            rowsByProductId.set(productId, nextRow);
+            return;
+        }
+
+        rowsByProductId.set(productId, {
+            ...currentRow,
+            sent_quantity: currentRow.sent_quantity + quantity,
+            source_line_ids: [...currentRow.source_line_ids, nextLineId],
+        });
+    });
+
+    return Array.from(rowsByProductId.values());
+};
+
+const buildItemFromSentProduct = (row, quantity = 1) => ({
+    product_id: Number(row?.product_id) || 0,
+    name: row?.name || '',
+    sku: row?.sku || '',
+    quantity: clampQuantity(quantity, 1, row?.sent_quantity || 1),
+    price: Math.max(0, toNumber(row?.price, 0)),
+    cost_price: normalizeRoundedImportCostNumber(row?.cost_price) ?? 0,
+    notes: '',
+});
+
+const buildDefaultReturnTrackingCode = (orderType, trackingCode) => {
+    const normalizedCode = String(trackingCode || '').trim();
+    if (!normalizedCode) {
+        return '';
+    }
+
+    if (orderType === ORDER_TYPE_EXCHANGE_RETURN) {
+        return /DH$/i.test(normalizedCode) ? normalizedCode : `${normalizedCode}DH`;
+    }
+
+    if (orderType === ORDER_TYPE_PARTIAL_DELIVERY) {
+        return /1P1$/i.test(normalizedCode) ? normalizedCode : `${normalizedCode}1P1`;
+    }
+
+    return '';
+};
+
+const cloneSupplementItems = (value = []) => (
+    (Array.isArray(value) ? value : []).map((item) => ({ ...item }))
+);
+
 const searchInputClassName = 'w-full h-11 rounded-sm border border-primary/10 bg-white pl-10 pr-10 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
 const tableInputClassName = 'w-full h-9 rounded-sm border border-primary/10 bg-white px-2 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary transition-all';
 const popupMetaInputClassName = 'w-full h-10 rounded-sm border border-primary/10 bg-white px-3 text-[13px] text-[#0F172A] focus:outline-none focus:border-primary/30 transition-all';
+const MotionDiv = motion.div;
 
 const OrderSupplementItemsSection = ({
     open = false,
     orderType,
     items = [],
+    sourceItems = [],
+    outgoingTrackingCode = '',
     returnTrackingCode = '',
     returnStatus,
+    onSave,
     onChange,
     onReturnTrackingCodeChange,
     onReturnStatusChange,
     onClose,
 }) => {
-    const normalizedItems = Array.isArray(items) ? items : [];
     const orderTypeMeta = getOrderTypeMeta(orderType);
-    const normalizedReturnStatus = normalizeSupplementReturnStatus(returnStatus);
+    const [draftItems, setDraftItems] = useState(() => cloneSupplementItems(items));
+    const [draftReturnTrackingCode, setDraftReturnTrackingCode] = useState(() => String(returnTrackingCode || '').trim());
+    const [draftReturnStatus, setDraftReturnStatus] = useState(() => normalizeSupplementReturnStatus(returnStatus));
     const [searchTerm, setSearchTerm] = useState('');
     const [searchResults, setSearchResults] = useState([]);
     const [hasSearchAttempt, setHasSearchAttempt] = useState(false);
     const [loading, setLoading] = useState(false);
     const abortRef = useRef(null);
+    const wasDraftSessionOpenRef = useRef(false);
+    const draftSessionOrderTypeRef = useRef('');
+    const normalizedItems = useMemo(() => (
+        Array.isArray(draftItems) ? draftItems : []
+    ), [draftItems]);
+    const normalizedReturnStatus = normalizeSupplementReturnStatus(draftReturnStatus);
+    const showSentProductPicker = orderTypeMeta.value === ORDER_TYPE_PARTIAL_DELIVERY;
+    const sentProductRows = useMemo(() => buildSentProductRows(sourceItems), [sourceItems]);
+    const sentProductById = useMemo(() => new Map(
+        sentProductRows.map((row) => [Number(row.product_id), row])
+    ), [sentProductRows]);
+    const sentProductLimitKey = useMemo(() => (
+        sentProductRows.map((row) => `${row.product_id}:${row.sent_quantity}`).join('|')
+    ), [sentProductRows]);
+    const selectedProductIds = useMemo(() => new Set(
+        normalizedItems.map((item) => Number(item?.product_id)).filter(Boolean)
+    ), [normalizedItems]);
+    const defaultReturnTrackingCode = useMemo(
+        () => buildDefaultReturnTrackingCode(orderTypeMeta.value, outgoingTrackingCode),
+        [orderTypeMeta.value, outgoingTrackingCode]
+    );
 
     useEffect(() => {
-        if (open && isSpecialOrderType(orderType)) return undefined;
+        if (open && isSpecialOrderType(orderType)) {
+            if (wasDraftSessionOpenRef.current && draftSessionOrderTypeRef.current === orderTypeMeta.value) {
+                return undefined;
+            }
+
+            wasDraftSessionOpenRef.current = true;
+            draftSessionOrderTypeRef.current = orderTypeMeta.value;
+            setDraftItems(cloneSupplementItems(items));
+            setDraftReturnTrackingCode(
+                String(returnTrackingCode || '').trim()
+                || defaultReturnTrackingCode
+            );
+            setDraftReturnStatus(normalizeSupplementReturnStatus(returnStatus));
+            setSearchTerm('');
+            setSearchResults([]);
+            setHasSearchAttempt(false);
+            setLoading(false);
+
+            return undefined;
+        }
+
+        wasDraftSessionOpenRef.current = false;
+        draftSessionOrderTypeRef.current = '';
 
         abortRef.current?.abort();
         abortRef.current = null;
@@ -372,7 +547,16 @@ const OrderSupplementItemsSection = ({
         setLoading(false);
 
         return undefined;
-    }, [open, orderType]);
+    }, [
+        open,
+        orderType,
+        orderTypeMeta.value,
+        items,
+        returnTrackingCode,
+        returnStatus,
+        showSentProductPicker,
+        defaultReturnTrackingCode,
+    ]);
 
     useEffect(() => {
         if (!open || !isSpecialOrderType(orderType) || typeof document === 'undefined') return undefined;
@@ -398,6 +582,19 @@ const OrderSupplementItemsSection = ({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [open, orderType, onClose]);
+
+    useEffect(() => {
+        if (!open || !defaultReturnTrackingCode) {
+            return;
+        }
+
+        setDraftReturnTrackingCode((currentValue) => (
+            String(currentValue || '').trim() ? currentValue : defaultReturnTrackingCode
+        ));
+    }, [
+        open,
+        defaultReturnTrackingCode,
+    ]);
 
     useEffect(() => {
         if (!open || !isSpecialOrderType(orderType)) return undefined;
@@ -445,6 +642,43 @@ const OrderSupplementItemsSection = ({
         };
     }, [open, orderType, searchTerm]);
 
+    useEffect(() => {
+        if (!open || !showSentProductPicker || sentProductRows.length === 0 || normalizedItems.length === 0) {
+            return;
+        }
+
+        let changed = false;
+        const nextItems = normalizedItems
+            .map((item) => {
+                const sourceRow = sentProductById.get(Number(item?.product_id));
+                if (!sourceRow) {
+                    return item;
+                }
+
+                const currentQuantity = clampQuantity(item?.quantity, 0);
+                const nextQuantity = clampQuantity(currentQuantity, 0, sourceRow.sent_quantity);
+                if (nextQuantity !== currentQuantity) {
+                    changed = true;
+                    return { ...item, quantity: nextQuantity };
+                }
+
+                return item;
+            })
+            .filter((item) => {
+                const sourceRow = sentProductById.get(Number(item?.product_id));
+                if (sourceRow && clampQuantity(item?.quantity, 0) <= 0) {
+                    changed = true;
+                    return false;
+                }
+
+                return true;
+            });
+
+        if (changed) {
+            updateItems(nextItems);
+        }
+    }, [open, showSentProductPicker, sentProductLimitKey, normalizedItems, sentProductById, sentProductRows.length]);
+
     const totals = useMemo(() => normalizedItems.reduce((summary, item) => {
         const quantity = Math.max(0, toNumber(item?.quantity, 0));
         const price = toNumber(item?.price, 0);
@@ -457,25 +691,85 @@ const OrderSupplementItemsSection = ({
     }, { totalPrice: 0, totalCost: 0 }), [normalizedItems]);
 
     const updateItems = (nextItems) => {
-        onChange?.(Array.isArray(nextItems) ? nextItems : []);
+        setDraftItems(cloneSupplementItems(nextItems));
     };
 
     const handleAddProduct = (product) => {
         if (!product?.id) return;
 
         const existingIndex = normalizedItems.findIndex((item) => Number(item?.product_id) === Number(product.id));
+        const sourceRow = sentProductById.get(Number(product.id));
+        const maxQuantity = sourceRow?.sent_quantity;
         if (existingIndex >= 0) {
             updateItems(normalizedItems.map((item, index) => (
                 index === existingIndex
-                    ? { ...item, quantity: Math.max(1, toNumber(item.quantity, 1)) + 1 }
+                    ? {
+                        ...item,
+                        quantity: clampQuantity(
+                            Math.max(1, toNumber(item.quantity, 1)) + 1,
+                            1,
+                            maxQuantity || Number.POSITIVE_INFINITY
+                        ),
+                    }
                     : item
             )));
         } else {
-            updateItems([...normalizedItems, buildItemFromProduct(product)]);
+            updateItems([
+                ...normalizedItems,
+                sourceRow ? buildItemFromSentProduct(sourceRow) : buildItemFromProduct(product),
+            ]);
         }
 
         setSearchTerm('');
         setSearchResults([]);
+    };
+
+    const handleSentProductToggle = (row, checked) => {
+        const productId = Number(row?.product_id) || 0;
+        if (!productId) return;
+
+        if (!checked) {
+            updateItems(normalizedItems.filter((item) => Number(item?.product_id) !== productId));
+            return;
+        }
+
+        const existingIndex = normalizedItems.findIndex((item) => Number(item?.product_id) === productId);
+        if (existingIndex >= 0) {
+            updateItems(normalizedItems.map((item, index) => (
+                index === existingIndex
+                    ? { ...item, quantity: clampQuantity(item?.quantity || 1, 1, row.sent_quantity) }
+                    : item
+            )));
+            return;
+        }
+
+        updateItems([...normalizedItems, buildItemFromSentProduct(row)]);
+    };
+
+    const handleSentReturnQuantityChange = (row, value) => {
+        const productId = Number(row?.product_id) || 0;
+        if (!productId) return;
+
+        const nextQuantity = clampQuantity(value, 0, row.sent_quantity);
+        const existingIndex = normalizedItems.findIndex((item) => Number(item?.product_id) === productId);
+
+        if (nextQuantity <= 0) {
+            if (existingIndex >= 0) {
+                updateItems(normalizedItems.filter((_, index) => index !== existingIndex));
+            }
+            return;
+        }
+
+        if (existingIndex >= 0) {
+            updateItems(normalizedItems.map((item, index) => (
+                index === existingIndex
+                    ? { ...item, quantity: nextQuantity }
+                    : item
+            )));
+            return;
+        }
+
+        updateItems([...normalizedItems, buildItemFromSentProduct(row, nextQuantity)]);
     };
 
     const handleItemChange = (index, field, value) => {
@@ -485,7 +779,15 @@ const OrderSupplementItemsSection = ({
                     ...item,
                     [field]: field === 'cost_price'
                         ? (normalizeRoundedImportCostNumber(value) ?? 0)
-                        : value,
+                        : (
+                            field === 'quantity'
+                                ? clampQuantity(
+                                    value,
+                                    0,
+                                    sentProductById.get(Number(item?.product_id))?.sent_quantity || Number.POSITIVE_INFINITY
+                                )
+                                : value
+                        ),
                 }
                 : item
         )));
@@ -495,13 +797,35 @@ const OrderSupplementItemsSection = ({
         updateItems(normalizedItems.filter((_, itemIndex) => itemIndex !== index));
     };
 
+    const handleSave = () => {
+        const savedItems = cloneSupplementItems(normalizedItems);
+        const savedReturnTrackingCode = String(draftReturnTrackingCode || '').trim();
+        const savedReturnStatus = normalizeSupplementReturnStatus(draftReturnStatus);
+
+        if (typeof onSave === 'function') {
+            onSave({
+                items: savedItems,
+                returnTrackingCode: savedReturnTrackingCode,
+                returnStatus: savedReturnStatus,
+            });
+        } else {
+            onChange?.(savedItems);
+            onReturnTrackingCodeChange?.(savedReturnTrackingCode);
+            onReturnStatusChange?.(savedReturnStatus);
+        }
+
+        onClose?.();
+    };
+
     if (!isSpecialOrderType(orderType)) return null;
+
+    const declarationTableColumnCount = showSentProductPicker ? 9 : 7;
 
     return (
         <AnimatePresence>
             {open && (
                 <>
-                    <motion.div
+                    <MotionDiv
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
@@ -509,7 +833,7 @@ const OrderSupplementItemsSection = ({
                         onClick={() => onClose?.()}
                     />
 
-                    <motion.div
+                    <MotionDiv
                         initial={{ opacity: 0, y: 18, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 18, scale: 0.98 }}
@@ -517,10 +841,10 @@ const OrderSupplementItemsSection = ({
                         className="fixed inset-0 z-[250] flex items-center justify-center p-4 sm:p-6 lg:p-8"
                     >
                         <div
-                            className="flex h-full max-h-[88vh] w-full max-w-[1240px] flex-col overflow-hidden rounded-sm border border-primary/10 bg-[#F8FAFC] shadow-[0_32px_80px_rgba(15,23,42,0.22)]"
+                            className="flex h-full max-h-[94vh] w-full max-w-[1320px] flex-col overflow-hidden rounded-sm border border-primary/10 bg-[#F8FAFC] shadow-[0_32px_80px_rgba(15,23,42,0.22)]"
                             onClick={(event) => event.stopPropagation()}
                         >
-                            <div className="flex items-start justify-between gap-4 border-b border-primary/10 bg-white px-5 py-4 sm:px-6">
+                            <div className="flex items-start justify-between gap-4 border-b border-primary/10 bg-white px-5 py-3 sm:px-6">
                                 <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="inline-flex size-9 items-center justify-center rounded-sm bg-primary/5 text-primary">
@@ -548,85 +872,200 @@ const OrderSupplementItemsSection = ({
                                 </button>
                             </div>
 
-                            <div className="border-b border-primary/10 bg-primary/[0.02] px-5 py-4 sm:px-6">
-                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(420px,0.95fr)] xl:items-start">
+                            <div className="border-b border-primary/10 bg-primary/[0.02] px-5 py-3 sm:px-6">
+                                <div className={`grid grid-cols-1 gap-4 xl:items-start ${showSentProductPicker ? 'xl:grid-cols-[minmax(0,1.25fr)_minmax(430px,0.95fr)]' : 'xl:grid-cols-1'}`}>
                                     <div className="flex min-w-0 flex-col gap-3">
-                                        <div className="relative w-full">
-                                        <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">
-                                            search
-                                        </span>
-                                        <input
-                                            type="text"
-                                            value={searchTerm}
-                                            onChange={(event) => setSearchTerm(event.target.value)}
-                                            placeholder="Tìm sản phẩm để thêm vào phần khai báo..."
-                                            className={searchInputClassName}
-                                        />
-                                        {searchTerm.trim() && (
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    setSearchTerm('');
-                                                    setSearchResults([]);
-                                                    setHasSearchAttempt(false);
-                                                }}
-                                                className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-sm text-primary/35 transition-all hover:bg-primary/5 hover:text-brick"
-                                                title="Xóa từ khóa tìm kiếm"
-                                            >
-                                                <span className="material-symbols-outlined text-[16px]">close</span>
-                                            </button>
-                                        )}
+                                        {showSentProductPicker && (
+                                            <div className="overflow-hidden rounded-sm border border-sky-200/70 bg-white shadow-sm">
+                                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sky-100 bg-sky-50/70 px-3 py-2">
+                                                    <div>
+                                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-sky-800/65">
+                                                            Sản phẩm đã gửi trong đơn
+                                                        </div>
+                                                        <div className="mt-0.5 text-[11px] font-semibold text-sky-900/50">
+                                                            Nguồn: các dòng sản phẩm của đơn hiện tại.
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-[11px] font-black text-sky-800/70">
+                                                        {sentProductRows.length} dòng
+                                                    </div>
+                                                </div>
+                                                {sentProductRows.length > 0 ? (
+                                                    <div className="max-h-64 overflow-auto custom-scrollbar">
+                                                        <table className="min-w-full border-collapse text-left">
+                                                            <thead className="sticky top-0 z-10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                                                <tr>
+                                                                    <th className="w-[52px] border-b border-r border-primary/10 px-3 py-2 text-center">Chọn</th>
+                                                                    <th className="border-b border-r border-primary/10 px-3 py-2">Sản phẩm</th>
+                                                                    <th className="w-[86px] border-b border-r border-primary/10 px-3 py-2 text-center">Đã gửi</th>
+                                                                    <th className="w-[94px] border-b border-r border-primary/10 px-3 py-2 text-center">Khách lấy</th>
+                                                                    <th className="w-[110px] border-b border-primary/10 px-3 py-2 text-center">Trả về</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {sentProductRows.map((row) => {
+                                                                    const productId = Number(row.product_id);
+                                                                    const existingItem = normalizedItems.find((item) => Number(item?.product_id) === productId);
+                                                                    const returnQuantity = clampQuantity(existingItem?.quantity, 0, row.sent_quantity);
+                                                                    const customerKeepQuantity = Math.max(0, row.sent_quantity - returnQuantity);
+                                                                    const checked = selectedProductIds.has(productId);
 
-                                        {(loading || hasSearchAttempt) && searchTerm.trim() && (
-                                            <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
-                                                {loading ? (
-                                                    <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
-                                                        Đang tìm sản phẩm...
+                                                                    return (
+                                                                        <tr key={productId} className="align-middle hover:bg-sky-50/40">
+                                                                            <td className="border-b border-r border-primary/10 px-3 py-2 text-center">
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={checked}
+                                                                                    onChange={(event) => handleSentProductToggle(row, event.target.checked)}
+                                                                                    className="size-4 rounded border-primary/20 text-primary focus:ring-primary/20"
+                                                                                />
+                                                                            </td>
+                                                                            <td className="border-b border-r border-primary/10 px-3 py-2">
+                                                                                <div className="font-bold text-primary">
+                                                                                    {row.name || `Sản phẩm #${productId}`}
+                                                                                </div>
+                                                                                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
+                                                                                    <span className="font-black text-orange-600/70">{row.sku || 'Không có SKU'}</span>
+                                                                                    {row.unit_name ? (
+                                                                                        <span className="text-primary/35">{row.unit_name}</span>
+                                                                                    ) : null}
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="border-b border-r border-primary/10 px-3 py-2 text-center text-[13px] font-black text-primary">
+                                                                                {row.sent_quantity}
+                                                                            </td>
+                                                                            <td className="border-b border-r border-primary/10 px-3 py-2 text-center text-[13px] font-black text-emerald-700">
+                                                                                {customerKeepQuantity}
+                                                                            </td>
+                                                                            <td className="border-b border-primary/10 px-3 py-2">
+                                                                                <input
+                                                                                    type="number"
+                                                                                    min="0"
+                                                                                    max={row.sent_quantity}
+                                                                                    value={returnQuantity}
+                                                                                    onChange={(event) => handleSentReturnQuantityChange(row, event.target.value)}
+                                                                                    className={`${tableInputClassName} text-center font-bold`}
+                                                                                />
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
                                                     </div>
                                                 ) : (
-                                                    <div className="max-h-64 overflow-y-auto custom-scrollbar">
-                                                        {searchResults.length > 0 ? searchResults.map((product) => (
-                                                            <button
-                                                                key={product.id}
-                                                                type="button"
-                                                                onClick={() => handleAddProduct(product)}
-                                                                className="w-full border-b border-primary/5 px-4 py-3 text-left transition-all last:border-b-0 hover:bg-primary/5"
-                                                            >
-                                                                <div className="flex items-center justify-between gap-3">
-                                                                    <div className="min-w-0">
-                                                                        <div className="truncate text-[13px] font-bold text-primary">
-                                                                            {product.display_name || product.name}
-                                                                        </div>
-                                                                        <div className="mt-0.5 text-[11px] text-primary/60">
-                                                                            {product.parent_name ? (
-                                                                                <div className="truncate italic">
-                                                                                    Thuộc: {product.parent_name}
-                                                                                </div>
-                                                                            ) : null}
-                                                                            {product.attribute_summary ? (
-                                                                                <div className="truncate italic">
-                                                                                    {product.attribute_summary}
-                                                                                </div>
-                                                                            ) : null}
-                                                                        </div>
-                                                                        <div className="mt-0.5 text-[11px] font-black text-orange-600/70">
-                                                                            {product.sku || 'Không có SKU'}
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="shrink-0 text-[12px] font-black text-brick">
-                                                                        {moneyFormatter.format(toNumber(product.price, 0))}đ
-                                                                    </div>
-                                                                </div>
-                                                            </button>
-                                                        )) : (
-                                                            <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
-                                                                Không tìm thấy sản phẩm phù hợp.
-                                                            </div>
-                                                        )}
+                                                    <div className="px-4 py-5 text-[12px] font-semibold text-primary/45">
+                                                        Chưa có dòng sản phẩm nào trong đơn để chọn nhanh.
                                                     </div>
                                                 )}
                                             </div>
                                         )}
+                                    </div>
+
+                                    <div className="flex min-w-0 flex-col gap-3 xl:min-w-[430px]">
+                                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Số dòng khai báo
+                                                </div>
+                                                <div className="mt-2 text-[22px] font-black text-primary">
+                                                    {normalizedItems.length}
+                                                </div>
+                                            </div>
+                                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Tổng giá trị
+                                                </div>
+                                                <div className="mt-2 text-[22px] font-black text-brick">
+                                                    {moneyFormatter.format(totals.totalPrice)}đ
+                                                </div>
+                                            </div>
+                                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
+                                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
+                                                    Tổng giá vốn
+                                                </div>
+                                                <div className="mt-2 text-[22px] font-black text-primary">
+                                                    {formatRoundedImportCost(totals.totalCost)}đ
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="relative w-full">
+                                            <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">
+                                                search
+                                            </span>
+                                            <input
+                                                type="text"
+                                                value={searchTerm}
+                                                onChange={(event) => setSearchTerm(event.target.value)}
+                                                placeholder="Tìm sản phẩm để thêm vào phần khai báo..."
+                                                className={searchInputClassName}
+                                            />
+                                            {searchTerm.trim() && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        setSearchTerm('');
+                                                        setSearchResults([]);
+                                                        setHasSearchAttempt(false);
+                                                    }}
+                                                    className="absolute right-2 top-1/2 inline-flex size-7 -translate-y-1/2 items-center justify-center rounded-sm text-primary/35 transition-all hover:bg-primary/5 hover:text-brick"
+                                                    title="Xóa từ khóa tìm kiếm"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">close</span>
+                                                </button>
+                                            )}
+
+                                            {(loading || hasSearchAttempt) && searchTerm.trim() && (
+                                                <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-30 overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
+                                                    {loading ? (
+                                                        <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
+                                                            Đang tìm sản phẩm...
+                                                        </div>
+                                                    ) : (
+                                                        <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                                                            {searchResults.length > 0 ? searchResults.map((product) => (
+                                                                <button
+                                                                    key={product.id}
+                                                                    type="button"
+                                                                    onClick={() => handleAddProduct(product)}
+                                                                    className="w-full border-b border-primary/5 px-4 py-3 text-left transition-all last:border-b-0 hover:bg-primary/5"
+                                                                >
+                                                                    <div className="flex items-center justify-between gap-3">
+                                                                        <div className="min-w-0">
+                                                                            <div className="truncate text-[13px] font-bold text-primary">
+                                                                                {product.display_name || product.name}
+                                                                            </div>
+                                                                            <div className="mt-0.5 text-[11px] text-primary/60">
+                                                                                {product.parent_name ? (
+                                                                                    <div className="truncate italic">
+                                                                                        Thuộc: {product.parent_name}
+                                                                                    </div>
+                                                                                ) : null}
+                                                                                {product.attribute_summary ? (
+                                                                                    <div className="truncate italic">
+                                                                                        {product.attribute_summary}
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </div>
+                                                                            <div className="mt-0.5 text-[11px] font-black text-orange-600/70">
+                                                                                {product.sku || 'Không có SKU'}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="shrink-0 text-[12px] font-black text-brick">
+                                                                            {moneyFormatter.format(toNumber(product.price, 0))}đ
+                                                                        </div>
+                                                                    </div>
+                                                                </button>
+                                                            )) : (
+                                                                <div className="px-4 py-3 text-[12px] font-semibold text-primary/45">
+                                                                    Không tìm thấy sản phẩm phù hợp.
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -636,8 +1075,8 @@ const OrderSupplementItemsSection = ({
                                                 </span>
                                                 <input
                                                     type="text"
-                                                    value={returnTrackingCode}
-                                                    onChange={(event) => onReturnTrackingCodeChange?.(event.target.value)}
+                                                    value={draftReturnTrackingCode}
+                                                    onChange={(event) => setDraftReturnTrackingCode(event.target.value)}
                                                     placeholder="Nhập mã vận đơn theo dõi"
                                                     className={`${popupMetaInputClassName} mt-2`}
                                                 />
@@ -649,7 +1088,7 @@ const OrderSupplementItemsSection = ({
                                                 </span>
                                                 <select
                                                     value={normalizedReturnStatus}
-                                                    onChange={(event) => onReturnStatusChange?.(event.target.value)}
+                                                    onChange={(event) => setDraftReturnStatus(event.target.value)}
                                                     className={`${popupMetaInputClassName} mt-2`}
                                                 >
                                                     {SUPPLEMENT_RETURN_STATUS_OPTIONS.map((option) => (
@@ -659,43 +1098,22 @@ const OrderSupplementItemsSection = ({
                                             </label>
                                         </div>
                                     </div>
-
-                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:min-w-[450px]">
-                                        <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
-                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                Số dòng khai báo
-                                            </div>
-                                            <div className="mt-2 text-[22px] font-black text-primary">
-                                                {normalizedItems.length}
-                                            </div>
-                                        </div>
-                                        <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
-                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                Tổng giá trị
-                                            </div>
-                                            <div className="mt-2 text-[22px] font-black text-brick">
-                                                {moneyFormatter.format(totals.totalPrice)}đ
-                                            </div>
-                                        </div>
-                                        <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 shadow-sm">
-                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">
-                                                Tổng giá vốn
-                                            </div>
-                                            <div className="mt-2 text-[22px] font-black text-primary">
-                                                {formatRoundedImportCost(totals.totalCost)}đ
-                                            </div>
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
 
-                            <div className="min-h-0 flex-1 px-5 py-4 sm:px-6">
-                                <div className="h-full overflow-auto rounded-sm border border-primary/10 bg-white shadow-sm">
+                            <div className="min-h-0 flex-1 px-5 py-3 sm:px-6">
+                                <div className="h-full min-h-[420px] overflow-auto rounded-sm border border-primary/10 bg-white shadow-sm">
                                     <table className="min-w-full border-collapse text-left">
                                         <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">
                                             <tr>
                                                 <th className="border-b border-r border-primary/10 px-4 py-3">Sản phẩm</th>
-                                                <th className="w-[92px] border-b border-r border-primary/10 px-3 py-3 text-center">SL</th>
+                                                {showSentProductPicker && (
+                                                    <>
+                                                        <th className="w-[86px] border-b border-r border-primary/10 px-3 py-3 text-center">Đã gửi</th>
+                                                        <th className="w-[94px] border-b border-r border-primary/10 px-3 py-3 text-center">Khách lấy</th>
+                                                    </>
+                                                )}
+                                                <th className="w-[92px] border-b border-r border-primary/10 px-3 py-3 text-center">SL trả</th>
                                                 <th className="w-[150px] border-b border-r border-primary/10 px-3 py-3 text-right">Đơn giá</th>
                                                 <th className="w-[150px] border-b border-r border-primary/10 px-3 py-3 text-right">Giá vốn</th>
                                                 <th className="w-[280px] border-b border-r border-primary/10 px-3 py-3">Ghi chú</th>
@@ -705,7 +1123,12 @@ const OrderSupplementItemsSection = ({
                                         </thead>
                                         <tbody>
                                             {normalizedItems.length > 0 ? normalizedItems.map((item, index) => {
-                                                const quantity = Math.max(0, toNumber(item?.quantity, 0));
+                                                const sourceRow = sentProductById.get(Number(item?.product_id));
+                                                const maxReturnQuantity = sourceRow?.sent_quantity || Number.POSITIVE_INFINITY;
+                                                const quantity = clampQuantity(item?.quantity, 0, maxReturnQuantity);
+                                                const customerKeepQuantity = sourceRow
+                                                    ? Math.max(0, sourceRow.sent_quantity - quantity)
+                                                    : null;
                                                 const lineTotal = quantity * toNumber(item?.price, 0);
 
                                                 return (
@@ -718,12 +1141,23 @@ const OrderSupplementItemsSection = ({
                                                                 {item?.sku || 'Không có SKU'}
                                                             </div>
                                                         </td>
+                                                        {showSentProductPicker && (
+                                                            <>
+                                                                <td className="border-b border-r border-primary/10 px-3 py-3 text-center text-[13px] font-black text-primary">
+                                                                    {sourceRow ? sourceRow.sent_quantity : '-'}
+                                                                </td>
+                                                                <td className="border-b border-r border-primary/10 px-3 py-3 text-center text-[13px] font-black text-emerald-700">
+                                                                    {sourceRow ? customerKeepQuantity : '-'}
+                                                                </td>
+                                                            </>
+                                                        )}
                                                         <td className="border-b border-r border-primary/10 px-3 py-3">
                                                             <input
                                                                 type="number"
                                                                 min="0"
+                                                                max={sourceRow ? sourceRow.sent_quantity : undefined}
                                                                 value={quantity}
-                                                                onChange={(event) => handleItemChange(index, 'quantity', Math.max(0, Number(event.target.value) || 0))}
+                                                                onChange={(event) => handleItemChange(index, 'quantity', event.target.value)}
                                                                 className={`${tableInputClassName} text-center font-bold`}
                                                             />
                                                         </td>
@@ -771,7 +1205,7 @@ const OrderSupplementItemsSection = ({
                                                 );
                                             }) : (
                                                 <tr>
-                                                    <td colSpan={7} className="px-6 py-16 text-center">
+                                                    <td colSpan={declarationTableColumnCount} className="px-6 py-16 text-center">
                                                         <div className="mx-auto max-w-md">
                                                             <div className="text-[13px] font-bold text-primary">
                                                                 Chưa có sản phẩm nào được khai báo trong phần này.
@@ -798,6 +1232,14 @@ const OrderSupplementItemsSection = ({
                                     </div>
                                     <button
                                         type="button"
+                                        onClick={handleSave}
+                                        className="inline-flex h-10 items-center justify-center gap-2 rounded-sm border border-primary bg-primary px-4 text-[12px] font-semibold text-white transition-all hover:bg-primary/90"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">save</span>
+                                        Lưu
+                                    </button>
+                                    <button
+                                        type="button"
                                         onClick={() => onClose?.()}
                                         className="inline-flex h-10 items-center justify-center rounded-sm border border-primary/10 bg-white px-4 text-[12px] font-semibold text-primary/70 transition-all hover:border-primary/25 hover:text-primary"
                                     >
@@ -806,7 +1248,7 @@ const OrderSupplementItemsSection = ({
                                 </div>
                             </div>
                         </div>
-                    </motion.div>
+                    </MotionDiv>
                 </>
             )}
         </AnimatePresence>

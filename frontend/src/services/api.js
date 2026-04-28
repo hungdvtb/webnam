@@ -349,6 +349,21 @@ const orderBootstrapCacheKey = (params = {}) => {
 };
 
 const orderDetailCacheKey = (id) => `${resolveActiveApiCacheNamespace()}::${id}`;
+const invalidateOrderDetailIds = (ids) => {
+    const normalizedIds = Array.isArray(ids) ? ids : [ids];
+    normalizedIds.forEach((id) => {
+        if (!id) return;
+        invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+    });
+};
+const collectBatchReturnOrderIds = (payload, fallbackIds = []) => {
+    const sourceRows = Array.isArray(payload?.source_orders)
+        ? payload.source_orders
+        : (Array.isArray(payload?.orders) ? payload.orders : []);
+    const responseIds = sourceRows.map((order) => order?.id).filter(Boolean);
+
+    return responseIds.length ? responseIds : fallbackIds;
+};
 const receiptBootstrapCacheKey = (params = {}) => (
     `${resolveActiveApiCacheNamespace()}::${params?.include_references ? 'with-references' : 'base'}`
 );
@@ -514,17 +529,29 @@ export const orderApi = {
         requestCache.orderDetail.clear();
     },
     getInventorySlips: (id) => api.get(`/orders/${id}/inventory-slips`),
-    createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data),
-    deleteInventorySlip: (id, documentId) => api.delete(`/orders/${id}/inventory-slips/${documentId}`),
+    createInventorySlip: (id, data) => api.post(`/orders/${id}/inventory-slips`, data).then((response) => {
+        invalidateOrderDetailIds(id);
+        return response;
+    }),
+    deleteInventorySlip: (id, documentId) => api.delete(`/orders/${id}/inventory-slips/${documentId}`).then((response) => {
+        invalidateOrderDetailIds(id);
+        return response;
+    }),
     quickSelect: (data) => api.post('/orders/quick-select', data),
     aiPreview: (data) => api.post('/orders/ai/preview', data, multipartConfig(data)),
     aiRuleTrainPreview: (data) => api.post('/orders/ai/rules/train-preview', data, multipartConfig(data)),
     getAiRules: () => api.get('/orders/ai/rules'),
     updateAiRules: (data) => api.put('/orders/ai/rules', data),
     previewBatchReturn: (data) => api.post('/orders/inventory-returns/batch-preview', data),
-    createBatchReturn: (data) => api.post('/orders/inventory-returns/batch', data),
+    createBatchReturn: (data) => api.post('/orders/inventory-returns/batch', data).then((response) => {
+        invalidateOrderDetailIds(collectBatchReturnOrderIds(response.data, data?.order_ids || []));
+        return response;
+    }),
     getBatchReturn: (documentId) => api.get(`/orders/inventory-returns/${documentId}`),
-    updateBatchReturn: (documentId, data) => api.put(`/orders/inventory-returns/${documentId}`, data),
+    updateBatchReturn: (documentId, data) => api.put(`/orders/inventory-returns/${documentId}`, data).then((response) => {
+        invalidateOrderDetailIds(collectBatchReturnOrderIds(response.data));
+        return response;
+    }),
     getPrintData: (ids) => api.post('/orders/print-data', { ids }),
     markPrinted: (ids) => api.post('/orders/mark-printed', { ids }).then((response) => {
         const normalizedIds = Array.isArray(ids) ? ids : [ids];

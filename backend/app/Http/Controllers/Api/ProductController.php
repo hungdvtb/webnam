@@ -5488,6 +5488,9 @@ class ProductController extends Controller
             'unit:id,name',
             'images:id,product_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
+            'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id')
+                ->with(['unit:id,name']),
             'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
             'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
@@ -5516,13 +5519,26 @@ class ProductController extends Controller
         $paginated = $query->paginate($perPage);
         $pickerPayload = $paginated->getCollection()->map(function (Product $product) {
             $product = $this->appendBundleOptionPostMeta($product);
+            $parentProduct = $product->parentConfigurable->first();
+            $attributeSummary = $this->pickerAttributeSummary($product);
+            $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
+            $displayName = trim($displayName) !== '' ? $displayName : $product->name;
 
             return [
                 'id' => (int) $product->id,
                 'sku' => $product->sku,
+                'display_sku' => $product->sku,
                 'name' => $product->name,
-                'inventory_unit_id' => $product->inventory_unit_id !== null ? (int) $product->inventory_unit_id : null,
-                'unit_name' => $product->unit?->name,
+                'display_name' => $displayName,
+                'entry_kind' => $parentProduct ? 'variation' : 'product',
+                'parent_product_id' => $parentProduct?->id ? (int) $parentProduct->id : null,
+                'parent_product_name' => $parentProduct?->name,
+                'parent_product_sku' => $parentProduct?->sku,
+                'option_label' => $parentProduct ? $attributeSummary : '',
+                'inventory_unit_id' => $product->inventory_unit_id !== null
+                    ? (int) $product->inventory_unit_id
+                    : ($parentProduct?->inventory_unit_id !== null ? (int) $parentProduct->inventory_unit_id : null),
+                'unit_name' => $product->unit?->name ?? $parentProduct?->unit?->name,
                 'price' => (float) ($product->price ?? 0),
                 'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
@@ -5530,24 +5546,42 @@ class ProductController extends Controller
                 'type' => $product->type,
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),
-                'attribute_summary' => $this->pickerAttributeSummary($product),
+                'attribute_summary' => $attributeSummary,
+                'has_variations' => $product->variations->isNotEmpty(),
+                'variation_count' => $product->variations->count(),
                 'variations' => $product->variations
-                    ->map(fn (Product $variation) => [
-                        'id' => (int) $variation->id,
-                        'sku' => $variation->sku,
-                        'name' => $variation->name,
-                        'inventory_unit_id' => $variation->inventory_unit_id !== null
-                            ? (int) $variation->inventory_unit_id
-                            : ($product->inventory_unit_id !== null ? (int) $product->inventory_unit_id : null),
-                        'unit_name' => $variation->unit?->name ?? $product->unit?->name,
-                        'price' => (float) ($variation->price ?? 0),
-                        'expected_cost' => $variation->expected_cost !== null ? (float) $variation->expected_cost : null,
-                        'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
-                        'type' => $variation->type,
-                        'main_image' => $this->pickerPrimaryImage($variation),
-                        'attribute_values' => $this->pickerAttributePayload($variation),
-                        'attribute_summary' => $this->pickerAttributeSummary($variation),
-                    ])
+                    ->map(function (Product $variation) use ($product) {
+                        $variationAttributeSummary = $this->pickerAttributeSummary($variation);
+                        $variationDisplayName = $this->buildOrderItemDisplayName($variation, $product);
+                        $variationDisplayName = trim((string) $variationDisplayName) !== ''
+                            ? $variationDisplayName
+                            : trim((string) $product->name . ' - ' . ($variationAttributeSummary ?: $variation->name));
+
+                        return [
+                            'id' => (int) $variation->id,
+                            'sku' => $variation->sku,
+                            'display_sku' => $variation->sku,
+                            'name' => $variation->name,
+                            'display_name' => $variationDisplayName,
+                            'entry_kind' => 'variation',
+                            'parent_product_id' => (int) $product->id,
+                            'parent_product_name' => $product->name,
+                            'parent_product_sku' => $product->sku,
+                            'option_label' => $variationAttributeSummary,
+                            'inventory_unit_id' => $variation->inventory_unit_id !== null
+                                ? (int) $variation->inventory_unit_id
+                                : ($product->inventory_unit_id !== null ? (int) $product->inventory_unit_id : null),
+                            'unit_name' => $variation->unit?->name ?? $product->unit?->name,
+                            'price' => (float) ($variation->price ?? 0),
+                            'expected_cost' => $variation->expected_cost !== null ? (float) $variation->expected_cost : null,
+                            'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
+                            'stock_quantity' => (float) ($variation->stock_quantity ?? 0),
+                            'type' => $variation->type,
+                            'main_image' => $this->pickerPrimaryImage($variation),
+                            'attribute_values' => $this->pickerAttributePayload($variation),
+                            'attribute_summary' => $variationAttributeSummary,
+                        ];
+                    })
                     ->values()
                     ->all(),
                 'bundle_options' => $this->pickerBundleOptions($product),

@@ -125,6 +125,7 @@ class OrderPricingAdjustmentTest extends TestCase
             ->assertJsonPath('discount', 300000)
             ->assertJsonPath('total_price', 6300000)
             ->assertJsonPath('supplement_items_total_price', 300000)
+            ->assertJsonPath('profit_total', 3420000)
             ->assertJsonPath('report_revenue_total', 6300000)
             ->assertJsonPath('report_cost_total', 2880000)
             ->assertJsonPath('report_profit_total', 3420000);
@@ -138,6 +139,7 @@ class OrderPricingAdjustmentTest extends TestCase
 
         $this->assertSame(300000.0, (float) $order->discount);
         $this->assertSame(6300000.0, (float) $order->total_price);
+        $this->assertSame(3420000.0, (float) ($order->profit_total ?? 0));
         $this->assertSame(6300000.0, (float) ($order->report_revenue_total ?? 0));
         $this->assertSame(2880000.0, (float) ($order->report_cost_total ?? 0));
         $this->assertSame(3420000.0, (float) ($order->report_profit_total ?? 0));
@@ -157,6 +159,12 @@ class OrderPricingAdjustmentTest extends TestCase
             'sku' => 'PD-UPD-RETURN-001',
             'price' => 100000,
             'cost_price' => 40000,
+        ]);
+        $replacementReturnProduct = $this->createProduct($account, [
+            'name' => 'Lo hoa',
+            'sku' => 'PD-UPD-RETURN-002',
+            'price' => 180000,
+            'cost_price' => 70000,
         ]);
 
         $this->createBatch($account, $mainProduct, 5, 1000000, 'partial-delivery-update-main');
@@ -206,28 +214,31 @@ class OrderPricingAdjustmentTest extends TestCase
                 'notes' => $initialNotes,
                 'discount' => 350000,
                 'supplement_items' => [[
-                    'product_id' => $returnProduct->id,
-                    'quantity' => 1,
-                    'price' => 100000,
-                    'cost_price' => 40000,
-                    'name' => 'Bo that bao',
-                    'sku' => 'PD-UPD-RETURN-001',
+                    'product_id' => $replacementReturnProduct->id,
+                    'quantity' => 2,
+                    'price' => 180000,
+                    'cost_price' => 70000,
+                    'name' => 'Lo hoa',
+                    'sku' => 'PD-UPD-RETURN-002',
                 ]],
             ]);
 
         $updated
             ->assertOk()
-            ->assertJsonPath('discount', 150000)
+            ->assertJsonPath('discount', 410000)
             ->assertJsonPath('manual_discount', 50000)
-            ->assertJsonPath('automatic_discount_adjustment', 100000)
-            ->assertJsonPath('total_price', 6450000)
-            ->assertJsonPath('report_revenue_total', 6450000)
-            ->assertJsonPath('report_cost_total', 2960000)
-            ->assertJsonPath('report_profit_total', 3490000);
+            ->assertJsonPath('automatic_discount_adjustment', 360000)
+            ->assertJsonPath('total_price', 6190000)
+            ->assertJsonPath('profit_total', 3330000)
+            ->assertJsonPath('report_revenue_total', 6190000)
+            ->assertJsonPath('report_cost_total', 2860000)
+            ->assertJsonPath('report_profit_total', 3330000);
 
         $updatedNotes = (string) $updated->json('notes');
         $this->assertStringContainsString('Ghi chu tay giu lai', $updatedNotes);
-        $this->assertStringContainsString('Ghi chú hệ thống: khách trả về 1 Bo that bao, phần điều chỉnh +100.000đ', $updatedNotes);
+        $this->assertStringContainsString('2 Lo hoa', $updatedNotes);
+        $this->assertStringContainsString('+360.000', $updatedNotes);
+        $this->assertStringNotContainsString('Bo that bao', $updatedNotes);
         $this->assertSame(1, substr_count($updatedNotes, 'Ghi chú hệ thống:'));
 
         $removed = $this
@@ -235,7 +246,7 @@ class OrderPricingAdjustmentTest extends TestCase
             ->putJson("/api/orders/{$orderId}", [
                 'order_type' => Order::TYPE_PARTIAL_DELIVERY,
                 'notes' => $updatedNotes,
-                'discount' => 150000,
+                'discount' => 410000,
                 'supplement_items' => [],
             ]);
 
@@ -245,6 +256,7 @@ class OrderPricingAdjustmentTest extends TestCase
             ->assertJsonPath('manual_discount', 50000)
             ->assertJsonPath('automatic_discount_adjustment', 0)
             ->assertJsonPath('total_price', 6550000)
+            ->assertJsonPath('profit_total', 3550000)
             ->assertJsonPath('report_revenue_total', 6550000)
             ->assertJsonPath('report_cost_total', 3000000)
             ->assertJsonPath('report_profit_total', 3550000);
@@ -256,10 +268,249 @@ class OrderPricingAdjustmentTest extends TestCase
 
         $this->assertSame(50000.0, (float) $order->discount);
         $this->assertSame(6550000.0, (float) $order->total_price);
+        $this->assertSame(3550000.0, (float) ($order->profit_total ?? 0));
         $this->assertSame(6550000.0, (float) ($order->report_revenue_total ?? 0));
         $this->assertSame(3000000.0, (float) ($order->report_cost_total ?? 0));
         $this->assertSame(3550000.0, (float) ($order->report_profit_total ?? 0));
         $this->assertSame('Ghi chu tay giu lai', (string) $order->notes);
+    }
+
+    public function test_exchange_return_order_uses_customer_extra_payment_without_adding_return_value_to_discount(): void
+    {
+        [$account] = $this->authenticate();
+        $sentProduct = $this->createProduct($account, [
+            'name' => 'Hang gui doi',
+            'sku' => 'EX-SENT-001',
+            'price' => 300000,
+        ]);
+        $returnedProduct = $this->createProduct($account, [
+            'name' => 'Hang khach tra',
+            'sku' => 'EX-RETURN-001',
+            'price' => 200000,
+            'cost_price' => 80000,
+        ]);
+
+        $this->createBatch($account, $sentProduct, 5, 120000, 'exchange-return-sent');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_OFFICIAL,
+                'order_type' => Order::TYPE_EXCHANGE_RETURN,
+                'customer_name' => 'Khach doi tra',
+                'customer_phone' => '0933333333',
+                'customer_email' => 'exchange-return@example.com',
+                'shipping_address' => '100 Tran Phu',
+                'province' => 'Tinh test',
+                'district' => 'Huyen test',
+                'ward' => 'Xa test',
+                'notes' => 'Ghi chu doi tra',
+                'source' => 'Website',
+                'type' => 'Le',
+                'shipment_status' => 'Chua giao',
+                'manual_discount' => 0,
+                'discount' => 0,
+                'items' => [[
+                    'product_id' => $sentProduct->id,
+                    'quantity' => 1,
+                    'price' => 300000,
+                ]],
+                'supplement_items' => [[
+                    'product_id' => $returnedProduct->id,
+                    'quantity' => 1,
+                    'price' => 200000,
+                    'cost_price' => 80000,
+                    'name' => 'Hang khach tra',
+                    'sku' => 'EX-RETURN-001',
+                ]],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('manual_discount', 0)
+            ->assertJsonPath('automatic_discount_adjustment', 0)
+            ->assertJsonPath('discount', 0)
+            ->assertJsonPath('total_price', 100000)
+            ->assertJsonPath('supplement_items_total_price', 200000)
+            ->assertJsonPath('profit_total', 60000)
+            ->assertJsonPath('report_revenue_total', 100000)
+            ->assertJsonPath('report_cost_total', 40000)
+            ->assertJsonPath('report_profit_total', 60000)
+            ->assertJsonPath('return_status', 'not_returned');
+
+        $storedNotes = (string) $response->json('notes');
+        $this->assertSame('Ghi chu doi tra', $storedNotes);
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+        $this->assertSame(0.0, (float) $order->discount);
+        $this->assertSame(100000.0, (float) $order->total_price);
+        $this->assertSame(100000.0, (float) ($order->report_revenue_total ?? 0));
+        $this->assertSame(60000.0, (float) ($order->report_profit_total ?? 0));
+
+        $order->forceFill(['shipping_tracking_code' => '139850986571'])->save();
+
+        $updated = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}", [
+                'order_type' => Order::TYPE_EXCHANGE_RETURN,
+                'notes' => $storedNotes,
+            ]);
+
+        $updated
+            ->assertOk()
+            ->assertJsonPath('return_tracking_code', '139850986571DH')
+            ->assertJsonPath('return_status', 'not_returned');
+    }
+
+    public function test_special_order_return_status_is_updated_manually_via_order_api(): void
+    {
+        [$account] = $this->authenticate();
+
+        foreach ([Order::TYPE_EXCHANGE_RETURN, Order::TYPE_PARTIAL_DELIVERY] as $index => $orderType) {
+            $sentProduct = $this->createProduct($account, [
+                'name' => 'Hang gui manual ' . $index,
+                'sku' => 'MANUAL-SENT-' . $index,
+                'price' => 300000,
+            ]);
+            $returnedProduct = $this->createProduct($account, [
+                'name' => 'Hang tra manual ' . $index,
+                'sku' => 'MANUAL-RETURN-' . $index,
+                'price' => 100000,
+                'cost_price' => 50000,
+            ]);
+
+            $this->createBatch($account, $sentProduct, 5, 100000, 'manual-return-status-' . $index);
+
+            $created = $this
+                ->withHeaders($this->headers($account))
+                ->postJson('/api/orders', [
+                    'order_kind' => Order::KIND_OFFICIAL,
+                    'order_type' => $orderType,
+                    'customer_name' => 'Khach sua trang thai ' . $index,
+                    'customer_phone' => '09555555' . $index . $index,
+                    'customer_email' => 'manual-return-' . $index . '@example.com',
+                    'shipping_address' => '102 Tran Phu',
+                    'province' => 'Tinh test',
+                    'district' => 'Huyen test',
+                    'ward' => 'Xa test',
+                    'notes' => 'Ghi chu sua tay trang thai',
+                    'source' => 'Website',
+                    'type' => 'Le',
+                    'shipment_status' => 'Chua giao',
+                    'return_status' => 'not_returned',
+                    'items' => [[
+                        'product_id' => $sentProduct->id,
+                        'quantity' => 1,
+                        'price' => 300000,
+                    ]],
+                    'supplement_items' => [[
+                        'product_id' => $returnedProduct->id,
+                        'quantity' => 1,
+                        'price' => 100000,
+                        'cost_price' => 50000,
+                        'name' => 'Hang tra manual ' . $index,
+                        'sku' => 'MANUAL-RETURN-' . $index,
+                    ]],
+                ]);
+
+            $created
+                ->assertCreated()
+                ->assertJsonPath('return_status', 'not_returned');
+
+            $orderId = (int) $created->json('id');
+
+            $this
+                ->withHeaders($this->headers($account))
+                ->putJson("/api/orders/{$orderId}", [
+                    'order_type' => $orderType,
+                    'return_status' => 'returned',
+                ])
+                ->assertOk()
+                ->assertJsonPath('return_status', 'returned');
+
+            $this->assertSame('returned', (string) Order::query()->findOrFail($orderId)->return_status);
+
+            $this
+                ->withHeaders($this->headers($account))
+                ->putJson("/api/orders/{$orderId}", [
+                    'order_type' => $orderType,
+                    'return_status' => 'not_returned',
+                ])
+                ->assertOk()
+                ->assertJsonPath('return_status', 'not_returned');
+
+            $this->assertSame('not_returned', (string) Order::query()->findOrFail($orderId)->return_status);
+        }
+    }
+
+    public function test_exchange_return_order_caps_customer_payment_at_zero_and_adds_refund_note(): void
+    {
+        [$account] = $this->authenticate();
+        $sentProduct = $this->createProduct($account, [
+            'name' => 'Hang gui thap hon',
+            'sku' => 'EX-REFUND-SENT-001',
+            'price' => 200000,
+        ]);
+        $returnedProduct = $this->createProduct($account, [
+            'name' => 'Hang tra cao hon',
+            'sku' => 'EX-REFUND-RETURN-001',
+            'price' => 300000,
+            'cost_price' => 150000,
+        ]);
+
+        $this->createBatch($account, $sentProduct, 5, 100000, 'exchange-return-refund-sent');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_OFFICIAL,
+                'order_type' => Order::TYPE_EXCHANGE_RETURN,
+                'customer_name' => 'Khach doi tra am',
+                'customer_phone' => '0944444444',
+                'customer_email' => 'exchange-return-refund@example.com',
+                'shipping_address' => '101 Tran Phu',
+                'province' => 'Tinh test',
+                'district' => 'Huyen test',
+                'ward' => 'Xa test',
+                'notes' => 'Ghi chu hoan tien',
+                'source' => 'Website',
+                'type' => 'Le',
+                'shipment_status' => 'Chua giao',
+                'manual_discount' => 0,
+                'discount' => 0,
+                'items' => [[
+                    'product_id' => $sentProduct->id,
+                    'quantity' => 1,
+                    'price' => 200000,
+                ]],
+                'supplement_items' => [[
+                    'product_id' => $returnedProduct->id,
+                    'quantity' => 1,
+                    'price' => 300000,
+                    'cost_price' => 150000,
+                    'name' => 'Hang tra cao hon',
+                    'sku' => 'EX-REFUND-RETURN-001',
+                ]],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('discount', 0)
+            ->assertJsonPath('total_price', 0)
+            ->assertJsonPath('supplement_items_total_price', 300000)
+            ->assertJsonPath('profit_total', -50000)
+            ->assertJsonPath('report_revenue_total', -100000)
+            ->assertJsonPath('report_cost_total', -50000)
+            ->assertJsonPath('report_profit_total', -50000);
+
+        $storedNotes = (string) $response->json('notes');
+        $this->assertStringContainsString('Ghi chu hoan tien', $storedNotes);
+        $this->assertStringContainsString('Nhận hàng trả thì trả lại khách 100k', $storedNotes);
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+        $this->assertSame(0.0, (float) $order->total_price);
+        $this->assertSame(-100000.0, (float) ($order->report_revenue_total ?? 0));
+        $this->assertSame(-50000.0, (float) ($order->report_profit_total ?? 0));
     }
 
     private function authenticate(): array

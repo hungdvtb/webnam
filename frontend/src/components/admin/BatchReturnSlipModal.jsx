@@ -4,10 +4,225 @@ import { useNavigate } from 'react-router-dom';
 import { orderApi, productApi } from '../../services/api';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+const formatMoney = (value) => new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)));
 const todayValue = () => new Date().toISOString().slice(0, 10);
 const sanitizeWholeNumber = (value) => String(value ?? '').replace(/[^0-9]/g, '');
 const EMPTY_ORDER_IDS = [];
 const MAX_HEADER_ORDER_CHIPS = 4;
+const SEARCH_ENTRY_VARIATION = 'variation';
+
+const toNumber = (value, fallback = 0) => {
+    const numericValue = Number(value);
+
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+
+const normalizeSearchText = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const compactSearchText = (value) => normalizeSearchText(value).replace(/[^a-z0-9]+/g, '');
+
+const normalizeAttributeValues = (value) => {
+    if (Array.isArray(value)) {
+        return value.flatMap((entry) => normalizeAttributeValues(entry));
+    }
+
+    if (value && typeof value === 'object') {
+        return Object.values(value).flatMap((entry) => normalizeAttributeValues(entry));
+    }
+
+    const rawValue = String(value ?? '').trim();
+    if (!rawValue) {
+        return [];
+    }
+
+    if ((rawValue.startsWith('[') && rawValue.endsWith(']')) || (rawValue.startsWith('{') && rawValue.endsWith('}'))) {
+        try {
+            return normalizeAttributeValues(JSON.parse(rawValue));
+        } catch {
+            return [rawValue];
+        }
+    }
+
+    return [rawValue];
+};
+
+const buildAttributeSummary = (product) => Array.from(new Set(
+    (Array.isArray(product?.attribute_values) ? product.attribute_values : [])
+        .flatMap((attributeValue) => normalizeAttributeValues(attributeValue?.value))
+        .filter(Boolean)
+)).join(' / ');
+
+const getPickerParent = (product) => {
+    const parentId = Number(product?.parent_product_id || product?.variant_parent_id || 0);
+    if (parentId > 0) {
+        return {
+            id: parentId,
+            name: String(product?.parent_product_name || product?.variant_parent_name || '').trim(),
+            sku: String(product?.parent_product_sku || product?.variant_parent_sku || '').trim(),
+        };
+    }
+
+    const relationParent = Array.isArray(product?.parent_configurable)
+        ? product.parent_configurable[0]
+        : (Array.isArray(product?.parentConfigurable) ? product.parentConfigurable[0] : null);
+
+    return relationParent || null;
+};
+
+const resolveDisplayName = (product, parentProduct = null) => {
+    const productId = Number(product?.id || product?.product_id || 0);
+    const parentName = String(parentProduct?.name || '').trim();
+    const rawName = String(product?.display_name || product?.name || '').trim();
+    const attributeSummary = String(product?.option_label || product?.attribute_summary || buildAttributeSummary(product) || '').trim();
+
+    if (!parentName) {
+        return rawName || `Sản phẩm #${productId}`;
+    }
+
+    if (rawName && rawName !== parentName && normalizeSearchText(rawName).includes(normalizeSearchText(parentName))) {
+        return rawName;
+    }
+
+    const optionText = attributeSummary || (rawName && rawName !== parentName ? rawName : '');
+
+    return optionText ? `${parentName} - ${optionText}` : (rawName || parentName || `Sản phẩm #${productId}`);
+};
+
+const resolveProductStock = (product) => {
+    if (product?.computed_stock !== null && product?.computed_stock !== undefined) {
+        return toNumber(product.computed_stock, 0);
+    }
+
+    if (product?.stock_quantity !== null && product?.stock_quantity !== undefined) {
+        return toNumber(product.stock_quantity, 0);
+    }
+
+    if (product?.available_to_sell !== null && product?.available_to_sell !== undefined) {
+        return toNumber(product.available_to_sell, 0);
+    }
+
+    return null;
+};
+
+const buildPickerEntry = (product, parentProduct = null, sourceRank = 0) => {
+    const productId = Number(product?.id || product?.product_id || 0);
+    if (productId <= 0) {
+        return null;
+    }
+
+    const resolvedParent = parentProduct || getPickerParent(product);
+    const parentId = Number(resolvedParent?.id || 0);
+    const parentName = String(resolvedParent?.name || '').trim();
+    const parentSku = String(resolvedParent?.sku || '').trim();
+    const attributeSummary = String(product?.option_label || product?.attribute_summary || buildAttributeSummary(product) || '').trim();
+    const displayName = resolveDisplayName(product, resolvedParent);
+    const sku = String(product?.display_sku || product?.sku || '').trim();
+    const stockQuantity = resolveProductStock(product);
+    const variations = Array.isArray(product?.variations) ? product.variations : [];
+    const entryKind = parentId > 0 ? SEARCH_ENTRY_VARIATION : 'product';
+
+    return {
+        id: productId,
+        product_id: productId,
+        name: String(product?.name || '').trim() || displayName,
+        display_name: displayName,
+        sku,
+        product_sku: sku,
+        entry_kind: entryKind,
+        is_variant_product: entryKind === SEARCH_ENTRY_VARIATION,
+        parent_product_id: parentId > 0 ? parentId : null,
+        parent_product_name: parentName,
+        parent_product_sku: parentSku,
+        option_label: attributeSummary,
+        type: String(product?.type || '').trim(),
+        price: toNumber(product?.price, 0),
+        cost_price: toNumber(product?.cost_price ?? product?.expected_cost, 0),
+        expected_cost: product?.expected_cost == null ? null : toNumber(product.expected_cost, 0),
+        stock_quantity: stockQuantity,
+        computed_stock: product?.computed_stock == null ? null : toNumber(product.computed_stock, 0),
+        available_to_sell: product?.available_to_sell == null ? null : toNumber(product.available_to_sell, 0),
+        has_variations: variations.length > 0 || Number(product?.variation_count || 0) > 0,
+        source_rank: sourceRank,
+        search_text: [
+            displayName,
+            product?.name,
+            sku,
+            parentName,
+            parentSku,
+            attributeSummary,
+        ].filter(Boolean).join(' '),
+    };
+};
+
+const matchesPickerQuery = (entry, rawQuery) => {
+    const normalizedQuery = normalizeSearchText(rawQuery);
+    if (!normalizedQuery) {
+        return true;
+    }
+
+    const normalizedText = normalizeSearchText(entry?.search_text || '');
+    const compactText = compactSearchText(entry?.search_text || '');
+
+    return normalizedQuery.split(/\s+/).filter(Boolean).every((token) => {
+        const compactToken = compactSearchText(token);
+
+        return normalizedText.includes(token) || (compactToken && compactText.includes(compactToken));
+    });
+};
+
+const buildPickerResults = (products, rawQuery) => {
+    const entries = [];
+    const seenIds = new Set();
+
+    const pushEntry = (entry, force = false) => {
+        if (!entry?.id || seenIds.has(entry.id) || (!force && !matchesPickerQuery(entry, rawQuery))) {
+            return;
+        }
+
+        seenIds.add(entry.id);
+        entries.push(entry);
+    };
+
+    (Array.isArray(products) ? products : []).forEach((product, sourceRank) => {
+        const baseEntry = buildPickerEntry(product, null, sourceRank);
+        const variationEntries = (Array.isArray(product?.variations) ? product.variations : [])
+            .map((variation) => buildPickerEntry(variation, product, sourceRank))
+            .filter(Boolean);
+        const hasMatchingVariation = variationEntries.some((entry) => matchesPickerQuery(entry, rawQuery));
+
+        pushEntry(baseEntry, hasMatchingVariation);
+        variationEntries.forEach((entry) => pushEntry(entry));
+    });
+
+    return entries
+        .sort((left, right) => (
+            left.source_rank - right.source_rank
+            || Number(left.is_variant_product) - Number(right.is_variant_product)
+            || String(left.display_name || left.name || '').localeCompare(String(right.display_name || right.name || ''), 'vi')
+        ))
+        .slice(0, 16);
+};
+
+const resolveRowStock = (row) => {
+    if (row?.computed_stock !== null && row?.computed_stock !== undefined) {
+        return row.computed_stock;
+    }
+
+    if (row?.stock_quantity !== null && row?.stock_quantity !== undefined) {
+        return row.stock_quantity;
+    }
+
+    if (row?.available_to_sell !== null && row?.available_to_sell !== undefined) {
+        return row.available_to_sell;
+    }
+
+    return null;
+};
 
 const normalizeRow = (item, index = 0) => ({
     key: item?.item_id ? `item-${item.item_id}` : `row-${item?.product_id || 'new'}-${index}`,
@@ -15,6 +230,16 @@ const normalizeRow = (item, index = 0) => ({
     product_id: Number(item?.product_id || 0),
     product_name: item?.product_name || '',
     product_sku: item?.product_sku || '',
+    entry_kind: String(item?.entry_kind || (Number(item?.parent_product_id || 0) > 0 ? SEARCH_ENTRY_VARIATION : 'product')),
+    parent_product_id: Number(item?.parent_product_id || 0) || null,
+    parent_product_name: item?.parent_product_name || '',
+    option_label: item?.option_label || '',
+    is_variant_product: Boolean(item?.is_variant_product || String(item?.entry_kind || '') === SEARCH_ENTRY_VARIATION || Number(item?.parent_product_id || 0) > 0),
+    cost_price: toNumber(item?.cost_price ?? item?.unit_cost, 0),
+    price: toNumber(item?.price ?? item?.unit_price, 0),
+    stock_quantity: item?.stock_quantity == null ? null : toNumber(item.stock_quantity, 0),
+    computed_stock: item?.computed_stock == null ? null : toNumber(item.computed_stock, 0),
+    available_to_sell: item?.available_to_sell == null ? null : toNumber(item.available_to_sell, 0),
     exported_quantity: Number(item?.exported_quantity || 0),
     actual_quantity: item?.actual_quantity != null ? String(item.actual_quantity) : '',
     notes: item?.notes || '',
@@ -177,12 +402,13 @@ const BatchReturnSlipModal = ({
             try {
                 const response = await productApi.getAll({
                     picker: 1,
+                    allow_variants: 1,
                     search: keyword,
-                    per_page: 8,
+                    per_page: 20,
                 }, controller.signal);
 
                 const results = Array.isArray(response.data?.data) ? response.data.data : [];
-                setPickerResults(results);
+                setPickerResults(buildPickerResults(results, keyword));
             } catch (error) {
                 if (error.name !== 'CanceledError' && error.code !== 'ERR_CANCELED') {
                     setPickerResults([]);
@@ -281,8 +507,18 @@ const BatchReturnSlipModal = ({
                 ...current.rows,
                 normalizeRow({
                     product_id: productId,
-                    product_name: product.name,
+                    product_name: product.display_name || product.name,
                     product_sku: product.sku,
+                    entry_kind: product.entry_kind || 'product',
+                    parent_product_id: product.parent_product_id || null,
+                    parent_product_name: product.parent_product_name || '',
+                    option_label: product.option_label || '',
+                    is_variant_product: Boolean(product.is_variant_product),
+                    cost_price: product.cost_price,
+                    price: product.price,
+                    stock_quantity: product.stock_quantity,
+                    computed_stock: product.computed_stock,
+                    available_to_sell: product.available_to_sell,
                     exported_quantity: 0,
                     actual_quantity: '',
                     notes: '',
@@ -328,6 +564,7 @@ const BatchReturnSlipModal = ({
                     notes: row.notes || null,
                     product_name: row.product_name || null,
                     product_sku: row.product_sku || null,
+                    is_extra_product: Boolean(row.is_extra_product),
                 })),
         };
 
@@ -542,7 +779,10 @@ const BatchReturnSlipModal = ({
                                                     ) : pickerResults.length === 0 ? (
                                                         <div className="px-3 py-4 text-[12px] font-semibold text-primary/55">Không có sản phẩm phù hợp.</div>
                                                     ) : (
-                                                        pickerResults.map((product) => (
+                                                        pickerResults.map((product) => {
+                                                            const displayStock = resolveRowStock(product);
+
+                                                            return (
                                                             <button
                                                                 key={product.id}
                                                                 type="button"
@@ -550,12 +790,39 @@ const BatchReturnSlipModal = ({
                                                                 className="flex w-full items-center justify-between gap-3 border-b border-primary/10 px-3 py-3 text-left transition last:border-b-0 hover:bg-primary/[0.04]"
                                                             >
                                                                 <div className="min-w-0">
-                                                                    <div className="truncate text-[13px] font-black text-primary">{product.name}</div>
+                                                                    <div className="flex min-w-0 items-center gap-2">
+                                                                        <div className="truncate text-[13px] font-black text-primary">{product.display_name || product.name}</div>
+                                                                        {product.is_variant_product ? (
+                                                                            <span className="shrink-0 rounded-sm border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-violet-700">
+                                                                                Biến thể
+                                                                            </span>
+                                                                        ) : product.has_variations ? (
+                                                                            <span className="shrink-0 rounded-sm border border-primary/15 bg-primary/[0.04] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-primary/60">
+                                                                                Sản phẩm cha
+                                                                            </span>
+                                                                        ) : null}
+                                                                    </div>
+                                                                    {product.parent_product_name ? (
+                                                                        <div className="mt-1 truncate text-[11px] font-semibold text-primary/50">
+                                                                            Thuộc: {product.parent_product_name}
+                                                                        </div>
+                                                                    ) : null}
+                                                                    {product.option_label ? (
+                                                                        <div className="mt-1 truncate text-[11px] font-semibold text-primary/50">{product.option_label}</div>
+                                                                    ) : null}
                                                                     <div className="mt-1 truncate text-[11px] font-bold text-orange-600/70">{product.sku || 'Không có SKU'}</div>
                                                                 </div>
-                                                                <div className="text-[11px] font-black text-primary/45">{formatNumber(product.stock_quantity || 0)}</div>
+                                                                <div className="shrink-0 text-right">
+                                                                    <div className="text-[11px] font-black text-primary/45">
+                                                                        Tồn {displayStock == null ? '-' : formatNumber(displayStock)}
+                                                                    </div>
+                                                                    <div className="mt-1 text-[10px] font-black text-primary/35">
+                                                                        GV {formatMoney(product.cost_price)}đ
+                                                                    </div>
+                                                                </div>
                                                             </button>
-                                                        ))
+                                                            );
+                                                        })
                                                     )}
                                                 </div>
                                             ) : null}
@@ -591,10 +858,29 @@ const BatchReturnSlipModal = ({
                                                                 <td className="border-b border-r border-primary/10 px-4 py-3 align-top">
                                                                     <div className="text-[13px] font-black text-primary">{row.product_name || `Sản phẩm #${row.product_id}`}</div>
                                                                     <div className="mt-1 text-[11px] font-bold text-orange-600/70">{row.product_sku || 'Không có SKU'}</div>
+                                                                    {row.is_variant_product && row.parent_product_name ? (
+                                                                        <div className="mt-1 text-[11px] font-semibold text-primary/50">
+                                                                            Biến thể của {row.parent_product_name}{row.option_label ? ` · ${row.option_label}` : ''}
+                                                                        </div>
+                                                                    ) : null}
+                                                                    {(resolveRowStock(row) != null || Number(row.cost_price || 0) > 0) ? (
+                                                                        <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                            {resolveRowStock(row) != null ? (
+                                                                                <span className="inline-flex rounded-sm border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/45">
+                                                                                    Tồn {formatNumber(resolveRowStock(row))}
+                                                                                </span>
+                                                                            ) : null}
+                                                                            {Number(row.cost_price || 0) > 0 ? (
+                                                                                <span className="inline-flex rounded-sm border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/45">
+                                                                                    GV {formatMoney(row.cost_price)}đ
+                                                                                </span>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    ) : null}
                                                                     {row.is_extra_product ? (
                                                                         <div className="mt-2 inline-flex items-center gap-1 rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-black text-sky-700">
                                                                             <span className="material-symbols-outlined text-[13px]">add_box</span>
-                                                                            Sản phẩm thêm mới
+                                                                            Sản phẩm thêm ngoài danh sách xuất
                                                                         </div>
                                                                     ) : null}
                                                                 </td>

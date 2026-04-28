@@ -838,6 +838,98 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $this->assertSame('carrier', (string) $order->shipping_status_source);
     }
 
+    public function test_viettel_post_return_reconciliation_preserves_manual_return_status_for_special_orders(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $exchangeBaseCode = '139850986571';
+        $partialBaseCode = '139850986572';
+
+        $exchangeOrder = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'out_for_delivery',
+            'return_tracking_code' => $exchangeBaseCode . 'DH',
+            'return_status' => 'not_returned',
+        ]);
+        $exchangeShipment = $this->createShipment($exchangeOrder, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'tracking_number' => $exchangeBaseCode,
+            'carrier_tracking_code' => $exchangeBaseCode,
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+        ]);
+
+        $partialOrder = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'out_for_delivery',
+            'return_tracking_code' => $partialBaseCode . '1P1',
+            'return_status' => 'not_returned',
+        ]);
+        $partialShipment = $this->createShipment($partialOrder, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'tracking_number' => $partialBaseCode,
+            'carrier_tracking_code' => $partialBaseCode,
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'Mã Vận Đơn',
+                'Cước vận chuyển (3)= (1+2)',
+                'Tiền thu hộ (4)',
+                'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)',
+                'Trạng Thái',
+                'Trạng thái đối soát COD',
+            ],
+            [
+                $exchangeBaseCode . 'DH',
+                '10000',
+                '0',
+                '10000',
+                'Giao thành công',
+                'Không có COD',
+            ],
+            [
+                $partialBaseCode . '1P1',
+                '12000',
+                '0',
+                '12000',
+                'Giao thành công',
+                'Không có COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, $result['summary']['return_exchange']);
+        $this->assertSame(1, $result['summary']['return_partial']);
+        $this->assertFalse((bool) data_get($result, 'summary.results.0.return_status_updated'));
+        $this->assertFalse((bool) data_get($result, 'summary.results.1.return_status_updated'));
+
+        $exchangeOrder->refresh();
+        $exchangeShipment->refresh();
+        $partialOrder->refresh();
+        $partialShipment->refresh();
+
+        $this->assertSame('not_returned', (string) $exchangeOrder->return_status);
+        $this->assertSame('not_returned', (string) $partialOrder->return_status);
+        $this->assertSame('exchange_completed', (string) $exchangeOrder->status);
+        $this->assertSame('partial_delivery', (string) $partialOrder->status);
+        $this->assertSame('delivered', (string) $exchangeShipment->shipment_status);
+        $this->assertSame('returned', (string) $partialShipment->shipment_status);
+    }
+
     public function test_viettel_post_reconciliation_discovers_unmapped_raw_statuses_for_account_without_duplicates(): void
     {
         [$account, $user] = $this->authenticate();
@@ -1052,6 +1144,80 @@ class ShipmentStatusMappingToggleTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.order.status', 'exchange_completed')
             ->assertJsonPath('data.0.carrier_status_raw', 'Giao thành công');
+    }
+
+    public function test_viettel_post_reconciliation_delivered_dh_marks_exchange_order_completed_not_pending_return(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $baseTrackingCode = '139850986571';
+        $returnTrackingCode = $baseTrackingCode . 'DH';
+
+        $order = $this->createOrder($account, $user, [
+            'order_type' => Order::TYPE_EXCHANGE_RETURN,
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'shipped',
+            'return_tracking_code' => $returnTrackingCode,
+            'return_status' => 'not_returned',
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'tracking_number' => $baseTrackingCode,
+            'carrier_tracking_code' => $baseTrackingCode,
+            'shipment_status' => 'shipped',
+            'status' => 'shipped',
+            'shipping_cost' => 30000,
+            'reconciliation_status' => 'pending',
+            'return_status' => 'not_returned',
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'Mã Vận Đơn',
+                'Cước vận chuyển',
+                'Tiền thu hộ',
+                'Tổng phí',
+                'Trạng Thái',
+                'Trạng thái đối soát COD',
+            ],
+            [
+                $returnTrackingCode,
+                '20000',
+                '0',
+                '20000',
+                'Giao thành công',
+                'Không có COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, $result['summary']['return_exchange']);
+
+        $order->refresh();
+        $shipment->refresh();
+
+        $this->assertSame('exchange_completed', (string) $order->status);
+        $this->assertNotSame('pending_return', (string) $order->status);
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+        $this->assertSame('return_exchange', (string) $shipment->reconciliation_status);
+        $this->assertSame('exchanged', (string) $shipment->return_status);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/shipments?' . http_build_query([
+                'shipment_number' => $shipment->shipment_number,
+            ]))
+            ->assertOk()
+            ->assertJsonPath('data.0.order.status', 'exchange_completed')
+            ->assertJsonPath('data.0.shipment_status', 'delivered')
+            ->assertJsonPath('data.0.reconciliation_status', 'return_exchange');
     }
 
     public function test_sync_endpoint_reapplies_legacy_da_tra_chua_ve_mapping_without_internal_status_and_updates_shipment_list(): void
@@ -1315,9 +1481,18 @@ class ShipmentStatusMappingToggleTest extends TestCase
             $table->string('type')->nullable();
             $table->string('shipment_status')->nullable();
             $table->decimal('shipping_fee', 15, 2)->default(0);
+            $table->decimal('internal_shipping_fee', 15, 2)->nullable();
             $table->decimal('discount', 15, 2)->default(0);
+            $table->decimal('settlement_delta', 15, 2)->default(0);
+            $table->string('return_tracking_code', 120)->nullable();
+            $table->string('return_status', 30)->default('not_returned');
             $table->decimal('cost_total', 15, 2)->default(0);
             $table->decimal('profit_total', 15, 2)->default(0);
+            $table->decimal('supplement_items_total_price', 15, 2)->default(0);
+            $table->decimal('supplement_items_cost_total', 15, 2)->default(0);
+            $table->decimal('report_revenue_total', 15, 2)->default(0);
+            $table->decimal('report_cost_total', 15, 2)->default(0);
+            $table->decimal('report_profit_total', 15, 2)->default(0);
             $table->unsignedBigInteger('customer_id')->nullable();
             $table->string('shipping_status')->nullable();
             $table->timestamp('shipping_synced_at')->nullable();
@@ -1374,6 +1549,7 @@ class ShipmentStatusMappingToggleTest extends TestCase
             $table->decimal('actual_received_amount', 15, 2)->default(0);
             $table->decimal('reconciliation_diff_amount', 15, 2)->default(0);
             $table->string('reconciliation_status')->nullable();
+            $table->string('return_status', 30)->nullable();
             $table->string('cod_status')->nullable();
             $table->integer('attempt_delivery_count')->default(0);
             $table->text('failed_reason')->nullable();

@@ -1155,6 +1155,33 @@ const resolveDisplayedShippingFee = (source = {}) => {
 
     return candidates.length > 0 ? Math.max(...candidates) : 0;
 };
+
+const resolveOutgoingTrackingCode = (source = {}) => String(
+    source?.shipping_tracking_code
+    || source?.active_shipment?.carrier_tracking_code
+    || source?.active_shipment?.tracking_number
+    || source?.activeShipment?.carrier_tracking_code
+    || source?.activeShipment?.tracking_number
+    || ''
+).trim();
+
+const buildDefaultReturnTrackingCode = (orderType, trackingCode) => {
+    const normalizedCode = String(trackingCode || '').trim();
+    if (!normalizedCode) {
+        return '';
+    }
+
+    if (normalizeOrderType(orderType) === ORDER_TYPE_EXCHANGE_RETURN) {
+        return /DH$/i.test(normalizedCode) ? normalizedCode : `${normalizedCode}DH`;
+    }
+
+    if (normalizeOrderType(orderType) === ORDER_TYPE_PARTIAL_DELIVERY) {
+        return /1P1$/i.test(normalizedCode) ? normalizedCode : `${normalizedCode}1P1`;
+    }
+
+    return '';
+};
+
 const calculateQuoteItemsSubtotal = (items = []) => (
     (Array.isArray(items) ? items : []).reduce((sum, item) => (
         sum
@@ -1191,19 +1218,54 @@ const buildOrderPricingSummary = (formData = {}) => {
     const subtotal = calculateQuoteItemsSubtotal(formData?.items);
     const shippingFee = resolveDisplayedShippingFee(formData);
     const discountAmount = parseMoneyNumber(formData?.discount, 0) || 0;
-    const totalPayment = subtotal - discountAmount;
-    const hasAdjustment = discountAmount !== 0;
+    const normalizedOrderType = normalizeOrderType(formData?.order_type);
+    const specialOrderType = isSpecialOrderType(normalizedOrderType);
+    const basePaymentTotal = subtotal - discountAmount;
+    const supplementItemsTotal = specialOrderType
+        ? calculateSupplementItemsTotal(formData?.supplement_items)
+        : 0;
+    const settlementDelta = specialOrderType
+        ? (parseMoneyNumber(formData?.settlement_delta, 0) || 0)
+        : 0;
+    const exchangeRevenueTotal = basePaymentTotal - supplementItemsTotal + settlementDelta;
+    const exchangeRefundAmount = normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN
+        ? Math.max(0, -exchangeRevenueTotal)
+        : 0;
+    const totalPayment = normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN
+        ? Math.max(0, exchangeRevenueTotal)
+        : basePaymentTotal;
+    const hasDiscountAdjustment = discountAmount !== 0;
+    const hasAdjustment = hasDiscountAdjustment
+        || (normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN && (supplementItemsTotal > 0 || settlementDelta !== 0));
     const extraRows = [
         ...(shippingFee > 0
             ? [{ key: 'shipping_fee', label: 'Phí vận chuyển', value: shippingFee }]
             : []),
-        ...(hasAdjustment
+        ...(hasDiscountAdjustment
             ? [{
                 key: 'discount',
                 label: 'Chiết khấu/Giảm',
                 value: Math.abs(discountAmount),
                 prefix: discountAmount > 0 ? '-' : '+',
                 isDeduction: discountAmount > 0,
+            }]
+            : []),
+        ...(normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN && supplementItemsTotal > 0
+            ? [{
+                key: 'exchange_return_items',
+                label: 'Hàng trả về',
+                value: supplementItemsTotal,
+                prefix: '-',
+                isDeduction: true,
+            }]
+            : []),
+        ...(normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN && settlementDelta !== 0
+            ? [{
+                key: 'exchange_settlement_delta',
+                label: 'Chênh lệch đổi trả',
+                value: Math.abs(settlementDelta),
+                prefix: settlementDelta > 0 ? '+' : '-',
+                isDeduction: settlementDelta < 0,
             }]
             : []),
         ...((shippingFee > 0 || hasAdjustment)
@@ -1216,6 +1278,8 @@ const buildOrderPricingSummary = (formData = {}) => {
         shippingFee,
         discountAmount,
         totalPayment,
+        reportRevenueTotal: normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN ? exchangeRevenueTotal : totalPayment,
+        exchangeRefundAmount,
         hasDiscount: hasAdjustment,
         extraRows,
     };
@@ -1397,6 +1461,44 @@ const calculateManualDiscountValue = (effectiveDiscount, orderType, items = []) 
         ? ((parseMoneyNumber(effectiveDiscount, 0) || 0) - calculateAutomaticDiscountAdjustment(orderType, items))
         : (parseMoneyNumber(effectiveDiscount, 0) || 0)
 );
+const resolveLoadedDiscountState = (order = {}, orderType, items = [], supplementItems = []) => {
+    const rawDiscount = parseMoneyNumber(order?.discount, 0) || 0;
+    const rawManualDiscount = parseMoneyNumber(order?.manual_discount, rawDiscount) || 0;
+
+    if (normalizeOrderType(orderType) !== ORDER_TYPE_EXCHANGE_RETURN) {
+        return {
+            manualDiscount: rawManualDiscount,
+            discount: rawDiscount,
+        };
+    }
+
+    const apiLegacyAdjustment = parseMoneyNumber(order?.legacy_exchange_discount_adjustment, 0) || 0;
+    const supplementTotal = calculateSupplementItemsTotal(supplementItems);
+    const itemSubtotal = calculateQuoteItemsSubtotal(items);
+    const storedTotal = parseMoneyNumber(order?.total_price);
+    const legacyAdjustment = apiLegacyAdjustment > 0
+        ? apiLegacyAdjustment
+        : (
+            supplementTotal > 0 && rawDiscount >= supplementTotal
+                ? supplementTotal
+                : (
+                    supplementTotal <= 0
+                    && rawDiscount > 0
+                    && storedTotal !== null
+                    && storedTotal <= 0
+                    && itemSubtotal > 0
+                    && rawDiscount >= itemSubtotal
+                        ? rawDiscount
+                        : 0
+                )
+        );
+    const manualDiscount = Math.max(0, rawManualDiscount - legacyAdjustment);
+
+    return {
+        manualDiscount,
+        discount: manualDiscount,
+    };
+};
 const collectSupplementDeclarationCodes = (items = []) => Array.from(new Set(
     (Array.isArray(items) ? items : [])
         .map((item) => String(item?.sku || '').trim() || (item?.product_id ? `SP#${item.product_id}` : ''))
@@ -3284,6 +3386,8 @@ const OrderForm = () => {
         custom_attributes: {},
         shipping_fee: 0,
         display_shipping_fee: 0,
+        shipping_tracking_code: '',
+        active_shipment: null,
         manual_discount: 0,
         discount: 0,
         cost_total: 0,
@@ -5536,6 +5640,12 @@ const OrderForm = () => {
                 };
             });
             const mappedCostTotal = calculateItemsCostTotal(resolvedLoadedItems);
+            const loadedDiscountState = resolveLoadedDiscountState(
+                order,
+                nextOrderType,
+                resolvedLoadedItems,
+                resolvedSupplementItems
+            );
             closeActualProductPicker();
             closeOrderAiReplacePicker();
             setShowActualProductSection(false);
@@ -5571,8 +5681,10 @@ const OrderForm = () => {
                 custom_attributes: customAttrValues,
                 shipping_fee: isDuplicating ? 0 : (order.shipping_fee || 0),
                 display_shipping_fee: isDuplicating ? 0 : resolveDisplayedShippingFee(order),
-                manual_discount: parseMoneyNumber(order.manual_discount, parseMoneyNumber(order.discount, 0) || 0) || 0,
-                discount: parseMoneyNumber(order.discount, 0) || 0,
+                shipping_tracking_code: isDuplicating ? '' : resolveOutgoingTrackingCode(order),
+                active_shipment: isDuplicating ? null : (order.active_shipment || order.activeShipment || null),
+                manual_discount: loadedDiscountState.manualDiscount,
+                discount: loadedDiscountState.discount,
                 cost_total: order.cost_total || 0,
                 status: isDuplicating ? 'new' : (order.status || 'new'),
                 source: order.source || 'Website',
@@ -5680,6 +5792,8 @@ const OrderForm = () => {
                 custom_attributes: draft.custom_attributes || {},
                 shipping_fee: Number(draft.shipping_fee) || 0,
                 display_shipping_fee: resolveDisplayedShippingFee(draft),
+                shipping_tracking_code: resolveOutgoingTrackingCode(draft),
+                active_shipment: draft.active_shipment || draft.activeShipment || null,
                 manual_discount: parseMoneyNumber(draft.manual_discount, parseMoneyNumber(draft.discount, 0) || 0) || 0,
                 discount: parseMoneyNumber(draft.discount, 0) || 0,
                 cost_total: draftCostTotal,
@@ -6124,23 +6238,28 @@ const OrderForm = () => {
     const normalizedOrderType = normalizeOrderType(formData.order_type);
     const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
     const specialOrderType = isSpecialOrderType(normalizedOrderType);
+    const outgoingTrackingCode = resolveOutgoingTrackingCode(formData);
+    const defaultReturnTrackingCode = buildDefaultReturnTrackingCode(normalizedOrderType, outgoingTrackingCode);
     const quotePricingSummary = buildOrderPricingSummary(formData);
     const subtotalAmount = quotePricingSummary.subtotal;
     const totalPaymentAmount = quotePricingSummary.totalPayment;
     const costTotalAmount = parseMoneyNumber(formData.cost_total, 0) || 0;
-    const grossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
+    const baseGrossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
     const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
     const supplementItemsCostTotal = calculateSupplementItemsCostTotal(formData.supplement_items);
     const settlementDeltaAmount = parseMoneyNumber(formData.settlement_delta, 0) || 0;
-    const reportRevenueTotal = normalizedOrderType === ORDER_TYPE_PARTIAL_DELIVERY
-        ? (totalPaymentAmount + settlementDeltaAmount)
-        : (specialOrderType
-            ? (totalPaymentAmount - supplementItemsTotal + settlementDeltaAmount)
+    const reportRevenueTotal = normalizedOrderType === ORDER_TYPE_EXCHANGE_RETURN
+        ? (quotePricingSummary.reportRevenueTotal ?? totalPaymentAmount)
+        : (normalizedOrderType === ORDER_TYPE_PARTIAL_DELIVERY
+            ? (totalPaymentAmount + settlementDeltaAmount)
             : totalPaymentAmount);
     const reportCostTotal = specialOrderType
         ? (costTotalAmount - supplementItemsCostTotal)
         : costTotalAmount;
     const reportProfitTotal = reportRevenueTotal - reportCostTotal;
+    const grossProfitAmount = specialOrderType
+        ? reportProfitTotal
+        : baseGrossProfitAmount;
     const supplementDeclarationCount = Array.isArray(formData.supplement_items)
         ? formData.supplement_items.length
         : 0;
@@ -6151,6 +6270,27 @@ const OrderForm = () => {
     const supplementReturnStatusLabel = getSupplementReturnStatusLabel(normalizedSupplementReturnStatus);
     const supplementReturnTrackingCode = String(formData.return_tracking_code || '').trim();
     const supplementReturnTrackingSummary = supplementReturnTrackingCode || 'Chưa có';
+
+    useEffect(() => {
+        if (!specialOrderType || !defaultReturnTrackingCode) {
+            return;
+        }
+
+        setFormData((prev) => {
+            if (
+                !isSpecialOrderType(prev.order_type)
+                || String(prev.return_tracking_code || '').trim()
+            ) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                return_tracking_code: defaultReturnTrackingCode,
+                return_status: normalizeSupplementReturnStatus(prev.return_status),
+            };
+        });
+    }, [specialOrderType, defaultReturnTrackingCode]);
 
     useEffect(() => {
         if (!specialOrderType) {
@@ -9530,20 +9670,25 @@ const OrderForm = () => {
                 open={showSupplementItemsModal}
                 orderType={normalizedOrderType}
                 items={formData.supplement_items}
+                sourceItems={formData.items}
+                outgoingTrackingCode={outgoingTrackingCode}
                 returnTrackingCode={formData.return_tracking_code}
                 returnStatus={formData.return_status}
-                onChange={(supplementItems) => setFormData((prev) => ({
-                    ...prev,
-                    supplement_items: supplementItems,
-                }))}
-                onReturnTrackingCodeChange={(returnTrackingCode) => setFormData((prev) => ({
-                    ...prev,
-                    return_tracking_code: returnTrackingCode,
-                }))}
-                onReturnStatusChange={(returnStatus) => setFormData((prev) => ({
-                    ...prev,
-                    return_status: returnStatus,
-                }))}
+                onSave={({ items: supplementItems, returnTrackingCode, returnStatus }) => setFormData((prev) => {
+                    const nextSupplementItems = Array.isArray(supplementItems) ? supplementItems : [];
+
+                    return {
+                        ...prev,
+                        supplement_items: nextSupplementItems,
+                        discount: calculateEffectiveDiscountValue(
+                            prev.manual_discount,
+                            prev.order_type,
+                            nextSupplementItems
+                        ),
+                        return_tracking_code: String(returnTrackingCode || '').trim(),
+                        return_status: returnStatus,
+                    };
+                })}
                 onClose={() => setShowSupplementItemsModal(false)}
             />
 

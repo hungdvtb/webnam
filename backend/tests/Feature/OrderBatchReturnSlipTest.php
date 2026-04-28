@@ -10,6 +10,7 @@ use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -39,8 +40,12 @@ class OrderBatchReturnSlipTest extends TestCase
             'expected_cost' => 55000,
         ]);
 
-        $firstOrder = $this->createOfficialOrder($account, $user, $mainProduct, 4, 'OR-BATCH-0001');
-        $secondOrder = $this->createOfficialOrder($account, $user, $mainProduct, 6, 'OR-BATCH-0002');
+        $firstOrder = $this->createOfficialOrder($account, $user, $mainProduct, 4, 'OR-BATCH-0001', [
+            'status' => 'pending_return',
+        ]);
+        $secondOrder = $this->createOfficialOrder($account, $user, $mainProduct, 6, 'OR-BATCH-0002', [
+            'status' => 'pending_return',
+        ]);
 
         $this->createExportDocument($account, $firstOrder, $mainProduct, 4, 'PXK-BATCH-0001');
         $this->createExportDocument($account, $secondOrder, $mainProduct, 6, 'PXK-BATCH-0002');
@@ -123,13 +128,13 @@ class OrderBatchReturnSlipTest extends TestCase
         $this->assertSame('returned', (string) $secondOrder->status);
         $this->assertDatabaseHas('order_status_logs', [
             'order_id' => $firstOrder->id,
-            'from_status' => 'new',
+            'from_status' => 'pending_return',
             'to_status' => 'returned',
             'source' => 'system',
         ]);
         $this->assertDatabaseHas('order_status_logs', [
             'order_id' => $secondOrder->id,
-            'from_status' => 'new',
+            'from_status' => 'pending_return',
             'to_status' => 'returned',
             'source' => 'system',
         ]);
@@ -192,6 +197,127 @@ class OrderBatchReturnSlipTest extends TestCase
             'quantity' => 2,
             'direction' => 'in',
         ]);
+    }
+
+    public function test_managed_batch_return_extra_variant_uses_child_sku_name_and_cost(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $mainProduct = $this->createProduct($account, [
+            'name' => 'San pham nguon cho bien the',
+            'sku' => 'BATCH-VARIANT-SOURCE',
+            'price' => 180000,
+            'cost_price' => 100000,
+            'expected_cost' => 100000,
+            'status' => true,
+        ]);
+
+        $variantParent = $this->createProduct($account, [
+            'name' => 'Ao hoan bien the',
+            'sku' => 'BATCH-VARIANT-PARENT',
+            'type' => 'configurable',
+            'price' => 250000,
+            'cost_price' => 150000,
+            'expected_cost' => 150000,
+            'stock_quantity' => 1,
+            'status' => true,
+        ]);
+
+        $variantChild = $this->createProduct($account, [
+            'name' => 'Ao hoan bien the - Do M',
+            'sku' => 'BATCH-VARIANT-RED-M',
+            'type' => 'simple',
+            'price' => 260000,
+            'cost_price' => 175000,
+            'expected_cost' => 175000,
+            'stock_quantity' => 8,
+            'status' => true,
+        ]);
+
+        DB::table('product_links')->insert([
+            'account_id' => $account->id,
+            'product_id' => $variantParent->id,
+            'linked_product_id' => $variantChild->id,
+            'link_type' => 'super_link',
+            'position' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $pickerResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'allow_variants' => 1,
+                'search' => 'BATCH-VARIANT-RED-M',
+                'per_page' => 20,
+            ]));
+
+        $pickerResponse->assertOk();
+        $pickerRows = collect($pickerResponse->json('data'));
+        $topLevelVariant = $pickerRows->firstWhere('id', $variantChild->id);
+        $parentRow = $pickerRows->firstWhere('id', $variantParent->id);
+        $nestedVariant = collect($parentRow['variations'] ?? [])->firstWhere('id', $variantChild->id);
+
+        $this->assertNotNull($topLevelVariant);
+        $this->assertSame('variation', $topLevelVariant['entry_kind']);
+        $this->assertSame($variantParent->id, $topLevelVariant['parent_product_id']);
+        $this->assertSame('BATCH-VARIANT-RED-M', $topLevelVariant['sku']);
+        $this->assertSame(175000.0, (float) $topLevelVariant['cost_price']);
+        $this->assertSame(8.0, (float) $topLevelVariant['stock_quantity']);
+        $this->assertNotNull($nestedVariant);
+        $this->assertSame('variation', $nestedVariant['entry_kind']);
+        $this->assertSame($variantParent->id, $nestedVariant['parent_product_id']);
+
+        $order = $this->createOfficialOrder($account, $user, $mainProduct, 1, 'OR-BATCH-VARIANT-0001');
+        $this->createExportDocument($account, $order, $mainProduct, 1, 'PXK-BATCH-VARIANT-0001');
+
+        $createResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/inventory-returns/batch', [
+                'order_ids' => [$order->id],
+                'document_date' => now()->toDateString(),
+                'notes' => 'Batch return extra variant',
+                'items' => [
+                    [
+                        'product_id' => $mainProduct->id,
+                        'quantity' => 1,
+                    ],
+                    [
+                        'product_id' => $variantChild->id,
+                        'quantity' => 2,
+                        'product_name' => 'Ao hoan bien the - Do M',
+                        'product_sku' => 'BATCH-VARIANT-RED-M',
+                        'is_extra_product' => true,
+                    ],
+                ],
+            ]);
+
+        $createResponse
+            ->assertCreated()
+            ->assertJsonPath('summary.exported_quantity', 1)
+            ->assertJsonPath('summary.actual_quantity', 3)
+            ->assertJsonPath('summary.discrepancy_quantity', 2);
+
+        $returnDocumentId = (int) $createResponse->json('document.id');
+        $extraItem = InventoryDocumentItem::query()
+            ->where('inventory_document_id', $returnDocumentId)
+            ->where('product_id', $variantChild->id)
+            ->firstOrFail();
+
+        $this->assertSame('BATCH-VARIANT-RED-M', $extraItem->product_sku_snapshot);
+        $this->assertSame('Ao hoan bien the - Do M', $extraItem->product_name_snapshot);
+        $this->assertSame(2, (int) $extraItem->quantity);
+        $this->assertSame(175000.0, (float) $extraItem->unit_cost);
+        $this->assertSame(350000.0, (float) $extraItem->total_cost);
+        $this->assertTrue((bool) (($extraItem->meta ?? [])['is_extra_product'] ?? false));
+
+        $responseVariantRow = collect($createResponse->json('products'))->firstWhere('product_id', $variantChild->id);
+        $this->assertSame('BATCH-VARIANT-RED-M', $responseVariantRow['product_sku'] ?? null);
+        $this->assertSame(175000.0, (float) ($responseVariantRow['cost_price'] ?? 0));
+        $this->assertTrue((bool) ($responseVariantRow['is_extra_product'] ?? false));
+        $this->assertSame('variation', $responseVariantRow['entry_kind'] ?? null);
+        $this->assertSame($variantParent->id, $responseVariantRow['parent_product_id'] ?? null);
     }
 
     public function test_managed_batch_return_delete_restore_and_force_delete_keep_parent_and_adjustment_in_sync(): void
@@ -306,7 +432,7 @@ class OrderBatchReturnSlipTest extends TestCase
         $this->assertDatabaseMissing('inventory_documents', ['id' => $adjustmentDocument->id]);
     }
 
-    public function test_managed_batch_return_applies_special_system_statuses_for_exchange_and_partial_orders(): void
+    public function test_managed_batch_return_marks_special_orders_returned_without_changing_order_statuses(): void
     {
         [$account, $user] = $this->authenticate();
 
@@ -345,33 +471,28 @@ class OrderBatchReturnSlipTest extends TestCase
             ])
             ->assertCreated();
 
-        $this->assertSame('exchange_completed', (string) $exchangeOrder->fresh()->status);
-        $this->assertSame('partial_delivery', (string) $partialOrder->fresh()->status);
-        $this->assertDatabaseHas('order_status_logs', [
+        $exchangeOrder->refresh();
+        $partialOrder->refresh();
+
+        $this->assertSame('pending_return', (string) $exchangeOrder->status);
+        $this->assertSame('pending_return', (string) $partialOrder->status);
+        $this->assertSame('returned', (string) $exchangeOrder->return_status);
+        $this->assertSame('returned', (string) $partialOrder->return_status);
+        $this->assertDatabaseMissing('order_status_logs', [
             'order_id' => $exchangeOrder->id,
             'from_status' => 'pending_return',
             'to_status' => 'exchange_completed',
             'source' => 'system',
         ]);
-        $this->assertDatabaseHas('order_status_logs', [
+        $this->assertDatabaseMissing('order_status_logs', [
             'order_id' => $partialOrder->id,
             'from_status' => 'pending_return',
             'to_status' => 'partial_delivery',
             'source' => 'system',
         ]);
-        $this->assertDatabaseHas('order_statuses', [
-            'account_id' => $account->id,
-            'code' => 'exchange_completed',
-            'is_system' => true,
-        ]);
-        $this->assertDatabaseHas('order_statuses', [
-            'account_id' => $account->id,
-            'code' => 'partial_delivery',
-            'is_system' => true,
-        ]);
     }
 
-    public function test_single_return_slip_applies_exchange_completed_status_and_restores_previous_status_when_deleted(): void
+    public function test_single_return_slip_marks_special_order_returned_without_changing_order_status(): void
     {
         [$account, $user] = $this->authenticate();
 
@@ -383,50 +504,70 @@ class OrderBatchReturnSlipTest extends TestCase
             'expected_cost' => 88000,
         ]);
 
-        $order = $this->createOfficialOrder($account, $user, $product, 2, 'OR-SINGLE-RETURN-0001', [
+        $exchangeOrder = $this->createOfficialOrder($account, $user, $product, 2, 'OR-SINGLE-RETURN-0001', [
             'order_type' => Order::TYPE_EXCHANGE_RETURN,
             'status' => 'pending_return',
         ]);
+        $partialOrder = $this->createOfficialOrder($account, $user, $product, 1, 'OR-SINGLE-RETURN-0002', [
+            'order_type' => Order::TYPE_PARTIAL_DELIVERY,
+            'status' => 'pending_return',
+        ]);
 
-        $this->createExportDocument($account, $order, $product, 2, 'PXK-SINGLE-RETURN-0001');
+        $this->createExportDocument($account, $exchangeOrder, $product, 2, 'PXK-SINGLE-RETURN-0001');
+        $this->createExportDocument($account, $partialOrder, $product, 1, 'PXK-SINGLE-RETURN-0002');
 
-        $createResponse = $this
-            ->withHeaders($this->headers($account))
-            ->postJson("/api/orders/{$order->id}/inventory-slips", [
-                'type' => 'return',
-                'document_date' => now()->toDateString(),
-                'notes' => 'Single return workflow',
-                'items' => [
-                    [
-                        'product_id' => $product->id,
-                        'quantity' => 2,
+        $documentIds = [];
+
+        foreach ([[$exchangeOrder, 2], [$partialOrder, 1]] as [$order, $quantity]) {
+            $createResponse = $this
+                ->withHeaders($this->headers($account))
+                ->postJson("/api/orders/{$order->id}/inventory-slips", [
+                    'type' => 'return',
+                    'document_date' => now()->toDateString(),
+                    'notes' => 'Single return workflow',
+                    'items' => [
+                        [
+                            'product_id' => $product->id,
+                            'quantity' => $quantity,
+                        ],
                     ],
-                ],
-            ])
-            ->assertCreated();
+                ])
+                ->assertCreated();
 
-        $documentId = (int) $createResponse->json('id');
+            $documentIds[(int) $order->id] = (int) $createResponse->json('id');
+        }
 
-        $this->assertSame('exchange_completed', (string) $order->fresh()->status);
-        $this->assertDatabaseHas('order_status_logs', [
-            'order_id' => $order->id,
+        $exchangeOrder->refresh();
+        $partialOrder->refresh();
+
+        $this->assertSame('pending_return', (string) $exchangeOrder->status);
+        $this->assertSame('pending_return', (string) $partialOrder->status);
+        $this->assertSame('returned', (string) $exchangeOrder->return_status);
+        $this->assertSame('returned', (string) $partialOrder->return_status);
+        $this->assertDatabaseMissing('order_status_logs', [
+            'order_id' => $exchangeOrder->id,
             'from_status' => 'pending_return',
             'to_status' => 'exchange_completed',
             'source' => 'system',
         ]);
-
-        $this
-            ->withHeaders($this->headers($account))
-            ->deleteJson("/api/orders/{$order->id}/inventory-slips/{$documentId}")
-            ->assertOk();
-
-        $this->assertSame('pending_return', (string) $order->fresh()->status);
-        $this->assertDatabaseHas('order_status_logs', [
-            'order_id' => $order->id,
-            'from_status' => 'exchange_completed',
-            'to_status' => 'pending_return',
+        $this->assertDatabaseMissing('order_status_logs', [
+            'order_id' => $partialOrder->id,
+            'from_status' => 'pending_return',
+            'to_status' => 'partial_delivery',
             'source' => 'system',
         ]);
+
+        foreach ([$exchangeOrder, $partialOrder] as $order) {
+            $this
+                ->withHeaders($this->headers($account))
+                ->deleteJson("/api/orders/{$order->id}/inventory-slips/{$documentIds[(int) $order->id]}")
+                ->assertOk();
+        }
+
+        $this->assertSame('pending_return', (string) $exchangeOrder->fresh()->status);
+        $this->assertSame('pending_return', (string) $partialOrder->fresh()->status);
+        $this->assertSame('not_returned', (string) $exchangeOrder->fresh()->return_status);
+        $this->assertSame('not_returned', (string) $partialOrder->fresh()->return_status);
     }
 
     private function authenticate(): array

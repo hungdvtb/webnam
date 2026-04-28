@@ -6,8 +6,11 @@ use App\Models\Order;
 use App\Models\Shipment;
 use App\Models\ShipmentReconciliation;
 use App\Services\SimpleXlsxService;
+use App\Support\OrderShippingFeeCalculator;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class ViettelPostReconciliationService
 {
@@ -24,6 +27,46 @@ class ViettelPostReconciliationService
         $clean = preg_replace('/[^\p{L}\p{N}]/u', '', trim($value));
 
         return mb_strtolower($clean ?? '', 'UTF-8');
+    }
+
+    private function parseMoneyValue(mixed $value): float
+    {
+        $raw = mb_strtolower(trim((string) $value), 'UTF-8');
+        if ($raw === '') {
+            return 0.0;
+        }
+
+        $negative = str_starts_with($raw, '-') || preg_match('/^\(.*\)$/u', $raw) === 1;
+        $multiplier = str_contains($raw, 'k') ? 1000 : 1;
+        $normalized = preg_replace('/[^\d,.\-]/u', '', $raw) ?? '';
+        $normalized = trim($normalized, '-');
+        if ($normalized === '') {
+            return 0.0;
+        }
+
+        $lastComma = strrpos($normalized, ',');
+        $lastDot = strrpos($normalized, '.');
+
+        if ($lastComma !== false && $lastDot !== false) {
+            $decimalSeparator = $lastComma > $lastDot ? ',' : '.';
+            $thousandSeparator = $decimalSeparator === ',' ? '.' : ',';
+            $normalized = str_replace($thousandSeparator, '', $normalized);
+            $normalized = str_replace($decimalSeparator, '.', $normalized);
+        } elseif ($lastComma !== false) {
+            $digitsAfter = strlen($normalized) - $lastComma - 1;
+            $normalized = $digitsAfter === 3
+                ? str_replace(',', '', $normalized)
+                : str_replace(',', '.', $normalized);
+        } elseif ($lastDot !== false) {
+            $digitsAfter = strlen($normalized) - $lastDot - 1;
+            if ($digitsAfter === 3) {
+                $normalized = str_replace('.', '', $normalized);
+            }
+        }
+
+        $amount = (float) $normalized * $multiplier;
+
+        return round($negative ? -$amount : $amount, 2);
     }
 
     private function mapVtpStatus(string $vtpStatus): ?string
@@ -104,15 +147,245 @@ class ViettelPostReconciliationService
     {
         $code = trim($trackingCode);
 
-        if (preg_match('/^(\d+)\s*DH$/i', $code, $m)) {
-            return ['base_code' => $m[1], 'type' => 'exchange'];
+        if (preg_match('/^(.+?)[\s_\-\/]*DH$/i', $code, $m)) {
+            $baseCode = rtrim(trim($m[1]), " \t\n\r\0\x0B_-/");
+            if ($baseCode !== '') {
+                return ['base_code' => $baseCode, 'type' => 'exchange'];
+            }
         }
 
-        if (preg_match('/^(\d+)\s*\d+P\d+$/i', $code, $m)) {
+        if (preg_match('/^(\d+)[\s_\-\/]*\d+P\d+$/i', $code, $m)) {
             return ['base_code' => $m[1], 'type' => 'partial'];
         }
 
+        if (preg_match('/^(.+?)[\s_\-\/]+\d+P\d+$/i', $code, $m)) {
+            $baseCode = rtrim(trim($m[1]), " \t\n\r\0\x0B_-/");
+            if ($baseCode !== '') {
+                return ['base_code' => $baseCode, 'type' => 'partial'];
+            }
+        }
+
         return null;
+    }
+
+    private function orderColumnExists(string $column): bool
+    {
+        static $cache = [];
+
+        if (!array_key_exists($column, $cache)) {
+            $cache[$column] = Schema::hasColumn('orders', $column);
+        }
+
+        return $cache[$column];
+    }
+
+    private function filterOrderPayload(array $payload): array
+    {
+        return collect($payload)
+            ->filter(fn ($value, $column) => $this->orderColumnExists((string) $column))
+            ->all();
+    }
+
+    private function formatCompactVnd(float $amount): string
+    {
+        $rounded = (int) round($amount);
+
+        if ($rounded >= 1000 && $rounded % 1000 === 0) {
+            return number_format($rounded / 1000, 0, ',', '.') . 'k';
+        }
+
+        if ($rounded >= 1000) {
+            return rtrim(rtrim(number_format($rounded / 1000, 1, ',', '.'), '0'), ',') . 'k';
+        }
+
+        return number_format($rounded, 0, ',', '.') . 'đ';
+    }
+
+    private function returnShippingNote(string $returnType, float $amount): string
+    {
+        $typeLabel = $returnType === 'exchange'
+            ? 'đơn đổi trả'
+            : 'đơn giao 1 phần';
+
+        return 'Đã cộng thêm ' . $this->formatCompactVnd($amount) . " phí ship {$typeLabel} vào đơn gốc";
+    }
+
+    private function syncReturnShippingNote(string $returnType, ?string $notes, float $amount, float $previousAmount = 0.0): ?string
+    {
+        $lines = collect(preg_split('/\R/u', trim((string) ($notes ?? ''))) ?: [])
+            ->map(fn ($line) => trim((string) $line))
+            ->filter(fn ($line) => $line !== '')
+            ->values();
+
+        if ($previousAmount > 0) {
+            $previousNote = $this->returnShippingNote($returnType, $previousAmount);
+            $lines = $lines
+                ->reject(fn ($line) => $line === $previousNote)
+                ->values();
+        }
+
+        $nextNote = $this->returnShippingNote($returnType, $amount);
+        if (!$lines->contains($nextNote)) {
+            $lines->push($nextNote);
+        }
+
+        return $lines->isEmpty() ? null : $lines->implode("\n");
+    }
+
+    private function returnShippingAdjustmentKeys(string $returnType): array
+    {
+        if ($returnType === 'exchange') {
+            return [
+                'base_fee' => 'exchange_return_shipping_base_fee',
+                'adjustment_total' => 'exchange_return_shipping_adjustment_total',
+                'adjustments' => 'exchange_return_shipping_adjustments',
+            ];
+        }
+
+        return [
+            'base_fee' => 'partial_delivery_shipping_base_fee',
+            'adjustment_total' => 'partial_delivery_shipping_adjustment_total',
+            'adjustments' => 'partial_delivery_shipping_adjustments',
+        ];
+    }
+
+    private function normalizeReturnAdjustmentCode(string $trackingCode): string
+    {
+        $normalized = preg_replace('/[\s_\-\/]+/u', '', trim($trackingCode)) ?? trim($trackingCode);
+
+        return mb_strtoupper($normalized, 'UTF-8');
+    }
+
+    private function sumReturnShippingAdjustmentSets(array $meta): float
+    {
+        return round(collect([
+            data_get($meta, 'partial_delivery_shipping_adjustments', []),
+            data_get($meta, 'exchange_return_shipping_adjustments', []),
+        ])->sum(function ($adjustments) {
+            if (!is_array($adjustments)) {
+                return 0.0;
+            }
+
+            return collect($adjustments)->sum(fn ($entry) => max(0, (float) data_get($entry, 'amount', 0)));
+        }), 2);
+    }
+
+    private function resolveOriginalOrderForPartialReturn(?Order $partialOrder, Shipment $shipment): ?Order
+    {
+        if ($partialOrder && (int) ($partialOrder->converted_from_order_id ?? 0) > 0) {
+            return Order::query()
+                ->with(['activeShipment:id,order_id,shipping_cost'])
+                ->whereKey((int) $partialOrder->converted_from_order_id)
+                ->first();
+        }
+
+        $shipment->loadMissing(['order.activeShipment:id,order_id,shipping_cost']);
+        if ($shipment->order && (!$partialOrder || (int) $shipment->order->id !== (int) $partialOrder->id)) {
+            return $shipment->order;
+        }
+
+        if (!$partialOrder) {
+            return null;
+        }
+
+        $partialOrder->loadMissing(['activeShipment:id,order_id,shipping_cost']);
+
+        return $partialOrder;
+    }
+
+    private function applyPartialDeliveryShippingFeeToOriginalOrder(
+        ?Order $partialOrder,
+        Shipment $shipment,
+        string $fullReturnCode,
+        float $partialShippingFee,
+        string $returnType = 'partial'
+    ): ?array {
+        $partialShippingFee = max(0, round($partialShippingFee, 2));
+        if ($partialShippingFee <= 0) {
+            return null;
+        }
+
+        $originalOrder = $this->resolveOriginalOrderForPartialReturn($partialOrder, $shipment);
+        if (!$originalOrder) {
+            return null;
+        }
+
+        $originalOrder->loadMissing(['activeShipment:id,order_id,shipping_cost']);
+        $meta = is_array($originalOrder->external_delivery_meta ?? null)
+            ? $originalOrder->external_delivery_meta
+            : [];
+        $keys = $this->returnShippingAdjustmentKeys($returnType);
+        $adjustments = data_get($meta, $keys['adjustments'], []);
+        if (!is_array($adjustments)) {
+            $adjustments = [];
+        }
+
+        $adjustmentCode = $this->normalizeReturnAdjustmentCode($fullReturnCode);
+        $hasLegacyAdjustment = array_key_exists($fullReturnCode, $adjustments);
+        $hasCanonicalAdjustment = array_key_exists($adjustmentCode, $adjustments);
+        $legacyAdjustment = $hasLegacyAdjustment ? $adjustments[$fullReturnCode] : null;
+        $currentAdjustment = $hasCanonicalAdjustment ? $adjustments[$adjustmentCode] : $legacyAdjustment;
+        $previousAmount = max(0, round((float) data_get($currentAdjustment, 'amount', 0), 2));
+        $existingTotal = round(collect($adjustments)->sum(fn ($entry) => max(0, (float) data_get($entry, 'amount', 0))), 2);
+        $existingAllAdjustmentTotal = $this->sumReturnShippingAdjustmentSets($meta);
+        if ($adjustmentCode !== $fullReturnCode && $hasLegacyAdjustment) {
+            if ($hasCanonicalAdjustment) {
+                $legacyAmount = max(0, round((float) data_get($legacyAdjustment, 'amount', 0), 2));
+                $existingTotal = max(0, round($existingTotal - $legacyAmount, 2));
+                $existingAllAdjustmentTotal = max(0, round($existingAllAdjustmentTotal - $legacyAmount, 2));
+            }
+            unset($adjustments[$fullReturnCode]);
+        }
+        $baseFee = data_get($meta, 'return_shipping_base_fee', data_get($meta, $keys['base_fee']));
+
+        if (!is_numeric($baseFee)) {
+            $recordedFee = OrderShippingFeeCalculator::resolveRecordedShippingFee($originalOrder);
+            $baseFee = max(0, round($recordedFee - $existingAllAdjustmentTotal, 2));
+        } else {
+            $baseFee = max(0, round((float) $baseFee, 2));
+        }
+
+        $adjustments[$adjustmentCode] = [
+            'amount' => $partialShippingFee,
+            'partial_order_id' => $partialOrder?->id,
+            'return_order_id' => $partialOrder?->id,
+            'return_type' => $returnType,
+            'tracking_code' => $fullReturnCode,
+            'shipment_id' => $shipment->id,
+            'updated_at' => now()->toISOString(),
+        ];
+
+        $nextAdjustmentTotal = round($existingTotal - $previousAmount + $partialShippingFee, 2);
+        $nextAllAdjustmentTotal = round($existingAllAdjustmentTotal - $previousAmount + $partialShippingFee, 2);
+        $nextShippingFee = round($baseFee + $nextAllAdjustmentTotal, 2);
+        $meta['return_shipping_base_fee'] = $baseFee;
+        $meta['return_shipping_adjustment_total'] = $nextAllAdjustmentTotal;
+        $meta[$keys['base_fee']] = $baseFee;
+        $meta[$keys['adjustment_total']] = $nextAdjustmentTotal;
+        $meta[$keys['adjustments']] = $adjustments;
+
+        $payload = $this->filterOrderPayload([
+            'internal_shipping_fee' => $nextShippingFee,
+            'shipping_fee' => $nextShippingFee,
+            'notes' => $this->syncReturnShippingNote(
+                $returnType,
+                $originalOrder->notes,
+                $partialShippingFee,
+                $previousAmount
+            ),
+            'external_delivery_meta' => $meta,
+        ]);
+
+        $originalOrder->forceFill($payload)->save();
+
+        return [
+            'original_order_id' => (int) $originalOrder->id,
+            'base_shipping_fee' => $baseFee,
+            'return_shipping_fee' => $partialShippingFee,
+            'partial_shipping_fee' => $returnType === 'partial' ? $partialShippingFee : null,
+            'exchange_shipping_fee' => $returnType === 'exchange' ? $partialShippingFee : null,
+            'total_shipping_fee' => $nextShippingFee,
+        ];
     }
 
     public function processFile(string $filePath, int $userId, ?int $accountId = null): array
@@ -237,24 +510,29 @@ class ViettelPostReconciliationService
         };
 
         $trackingCode = $get(['Mã Vận Đơn', 'Mã vận đơn', 'mãvậnđơn', 'Số phiếu gửi']);
-        $shippingFee = (float) str_replace(',', '', $get([
+        $shippingFee = $this->parseMoneyValue($get([
             'Cước vận chuyển (3)= (1+2)',
             'Cước vận chuyển (3)=(1+2)',
             'Cước vận chuyển',
+            'Cước phí',
+            'Phí vận chuyển',
             'cuocvanChuyển',
             'cuocvanchuyển3',
         ], '0'));
-        $codAmount = (float) str_replace(',', '', $get([
+        $codAmount = $this->parseMoneyValue($get([
             'Tiền thu hộ (4)',
             'Tiền thu hộ(4)',
             'Tiền thu hộ',
             'tiềnthuhộ4',
             'tiềnthuhộ',
         ], '0'));
-        $totalFee = (float) str_replace(',', '', $get([
+        $totalFee = $this->parseMoneyValue($get([
             'Tổng phí (9)= (3)+(5)+(6)+(7)-(8)',
             'Tổng phí (9)=(3)+(5)+(6)+(7)-(8)',
             'Tổng phí',
+            'Tổng cước',
+            'Tổng cước vận chuyển',
+            'Tổng tiền phí',
             'tổngphí9',
             'tongphi',
         ], '0'));
@@ -412,8 +690,22 @@ class ViettelPostReconciliationService
         int $userId
     ): array {
         $returnCost = $totalFee + (0.5 * $shippingFee);
+        $systemStatus = $this->mapVtpStatus($vtpStatus);
+        $isCarrierDelivered = $systemStatus === 'delivered';
+        $isSuccessfulExchangeReturn = $returnType === 'exchange' && $isCarrierDelivered;
+        $isSuccessfulPartialReturn = $returnType === 'partial' && $isCarrierDelivered;
+        $partialShippingFee = max(0, round($totalFee > 0 ? $totalFee : $shippingFee, 2));
 
-        $order = Order::query()->where('return_tracking_code', $fullReturnCode)->first();
+        $returnTrackingCandidates = array_values(array_unique(array_filter([
+            trim($fullReturnCode),
+            $this->normalizeReturnAdjustmentCode($fullReturnCode),
+        ])));
+        $baseTrackingCandidates = array_values(array_unique(array_filter([
+            trim($baseCode),
+            $this->normalizeReturnAdjustmentCode($baseCode),
+        ])));
+
+        $order = Order::query()->whereIn('return_tracking_code', $returnTrackingCandidates)->first();
         $shipment = null;
 
         if ($order) {
@@ -422,9 +714,16 @@ class ViettelPostReconciliationService
 
         if (!$shipment) {
             $shipment = Shipment::query()
-                ->where('tracking_number', $baseCode)
-                ->orWhere('carrier_tracking_code', $baseCode)
+                ->whereIn('tracking_number', $baseTrackingCandidates)
+                ->orWhereIn('carrier_tracking_code', $baseTrackingCandidates)
                 ->first();
+        }
+
+        if (!$order && $shipment) {
+            $shipment->loadMissing('order');
+            if ($shipment->order?->getNormalizedOrderType() === Order::TYPE_EXCHANGE_RETURN) {
+                $order = $shipment->order;
+            }
         }
 
         if (!$shipment) {
@@ -446,12 +745,16 @@ class ViettelPostReconciliationService
             $shippingFee,
             $totalFee,
             $returnCost,
+            $partialShippingFee,
+            $isSuccessfulExchangeReturn,
+            $isSuccessfulPartialReturn,
             $userId,
             $vtpStatus
         ) {
             $typeLabel = $returnType === 'exchange' ? 'đổi hàng (DH)' : 'hoàn 1 phần (1P1)';
             $recStatus = $returnType === 'exchange' ? 'return_exchange' : 'return_partial';
             $newReturnStatus = $returnType === 'exchange' ? 'exchanged' : 'partial_returned';
+            $nextShipmentStatus = $isSuccessfulExchangeReturn ? 'delivered' : 'returned';
 
             ShipmentReconciliation::create([
                 'shipment_id' => $shipment->id,
@@ -475,26 +778,43 @@ class ViettelPostReconciliationService
                 'carrier_code' => self::CARRIER_CODE,
                 'carrier_name' => $shipment->carrier_name ?: 'Viettel Post',
                 'carrier_status_raw' => $vtpStatus,
-                'carrier_status_mapped' => 'returned',
+                'carrier_status_mapped' => $nextShipmentStatus,
                 'carrier_status_code' => $vtpStatus,
                 'carrier_status_text' => $vtpStatus,
-                'status' => 'returned',
-                'shipment_status' => 'returned',
+                'status' => $nextShipmentStatus,
+                'shipment_status' => $nextShipmentStatus,
                 'return_status' => $newReturnStatus,
                 'reconciliation_status' => $recStatus,
                 'reconciled_amount' => -$returnCost,
                 'reconciliation_diff_amount' => -$returnCost,
                 'reconciled_at' => now(),
                 'last_reconciled_at' => now(),
-                'returned_at' => $shipment->returned_at ?: now(),
+                'delivered_at' => $isSuccessfulExchangeReturn ? ($shipment->delivered_at ?: now()) : $shipment->delivered_at,
+                'returned_at' => $isSuccessfulExchangeReturn ? $shipment->returned_at : ($shipment->returned_at ?: now()),
                 'last_synced_at' => now(),
             ]);
 
-            if ($order && !in_array($order->return_status, ['exchanged', 'partial_returned', 'returned'], true)) {
-                $order->update(['return_status' => $newReturnStatus]);
-            }
-
             $this->syncService->syncOrderFromShipment($shipment->fresh(), 'viettelpost_reconcile', $userId);
+            $freshOrder = $order?->fresh();
+            $returnStatusUpdated = false;
+            if ($freshOrder && $isSuccessfulPartialReturn && (string) $freshOrder->return_status !== 'returned') {
+                $freshOrder->forceFill(['return_status' => 'returned'])->save();
+                $returnStatusUpdated = true;
+                $freshOrder = $freshOrder->fresh();
+            }
+            if ($freshOrder && $isSuccessfulExchangeReturn && (string) $freshOrder->status !== OrderStatusCatalog::EXCHANGE_COMPLETED_CODE) {
+                OrderStatusCatalog::ensureExchangeCompletedStatus((int) $freshOrder->account_id);
+                $freshOrder->forceFill(['status' => OrderStatusCatalog::EXCHANGE_COMPLETED_CODE])->save();
+            }
+            $returnShippingAdjustment = in_array($returnType, ['exchange', 'partial'], true)
+                ? $this->applyPartialDeliveryShippingFeeToOriginalOrder(
+                    $order,
+                    $shipment->fresh(),
+                    $fullReturnCode,
+                    $partialShippingFee,
+                    $returnType
+                )
+                : null;
 
             return [
                 'status' => $returnType === 'exchange' ? 'return_exchange' : 'return_partial',
@@ -504,6 +824,10 @@ class ViettelPostReconciliationService
                 'shipment_id' => $shipment->id,
                 'shipment_number' => $shipment->shipment_number,
                 'return_cost' => $returnCost,
+                'return_status_updated' => $returnStatusUpdated,
+                'return_shipping_adjustment' => $returnShippingAdjustment,
+                'partial_shipping_adjustment' => $returnType === 'partial' ? $returnShippingAdjustment : null,
+                'exchange_shipping_adjustment' => $returnType === 'exchange' ? $returnShippingAdjustment : null,
                 'message' => "Chi phí {$typeLabel} vào VĐ gốc {$baseCode}: " . number_format($returnCost) . 'đ.',
             ];
         });

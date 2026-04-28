@@ -9,6 +9,7 @@ use App\Models\OrderStatusLog;
 use App\Models\Shipment;
 use App\Models\ShipmentStatusLog;
 use App\Support\OrderCodAdjustmentSystemNote;
+use App\Support\OrderExchangeRefundSystemNote;
 use App\Support\OrderStatusCatalog;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -234,6 +235,29 @@ class ShipmentStatusSyncService
         ];
     }
 
+    private function resolveReturnShippingAdjustmentTotal(Order $order): float
+    {
+        $meta = is_array($order->external_delivery_meta ?? null)
+            ? $order->external_delivery_meta
+            : [];
+
+        $storedTotal = data_get($meta, 'return_shipping_adjustment_total');
+        if (is_numeric($storedTotal)) {
+            return max(0, round((float) $storedTotal, 2));
+        }
+
+        return round(collect([
+            data_get($meta, 'partial_delivery_shipping_adjustments', []),
+            data_get($meta, 'exchange_return_shipping_adjustments', []),
+        ])->sum(function ($adjustments) {
+            if (!is_array($adjustments)) {
+                return 0.0;
+            }
+
+            return collect($adjustments)->sum(fn ($entry) => max(0, (float) data_get($entry, 'amount', 0)));
+        }), 2);
+    }
+
     public function syncOrderFromShipment(
         Shipment $shipment,
         string $source = 'shipment_sync',
@@ -262,6 +286,7 @@ class ShipmentStatusSyncService
         $newOrderStatus = $shouldSyncOrderStatus
             ? $this->resolveOrderStatusForSpecialOrderType(
                 $order,
+                $shipment,
                 (string) $shipment->shipment_status,
                 (string) ($orderSync['order_status'] ?? $oldOrderStatus)
             )
@@ -286,9 +311,13 @@ class ShipmentStatusSyncService
         [$problemCode, $problemMessage] = $this->resolveProblemSummary($shipment);
         $trackingCode = $shipment->carrier_tracking_code ?: $shipment->tracking_number;
         $expectedDispatchedAt = $shipment->shipped_at ?: $order->shipping_dispatched_at;
-        $expectedInternalShippingFee = (string) $shipment->shipment_status === 'canceled'
+        $baseInternalShippingFee = (string) $shipment->shipment_status === 'canceled'
             ? 0.0
             : max(0, round((float) ($shipment->shipping_cost ?? 0), 2));
+        $returnShippingAdjustmentTotal = (string) $shipment->shipment_status === 'canceled'
+            ? 0.0
+            : $this->resolveReturnShippingAdjustmentTotal($order);
+        $expectedInternalShippingFee = round($baseInternalShippingFee + $returnShippingAdjustmentTotal, 2);
         $dispatchedMatches = (!$expectedDispatchedAt && !$order->shipping_dispatched_at)
             || (
                 $expectedDispatchedAt
@@ -345,6 +374,10 @@ class ShipmentStatusSyncService
         }
 
         if ($statusChanged) {
+            if ($newOrderStatus === OrderStatusCatalog::EXCHANGE_COMPLETED_CODE && (int) ($order->account_id ?? 0) > 0) {
+                OrderStatusCatalog::ensureExchangeCompletedStatus((int) $order->account_id);
+            }
+
             $updateData['status'] = $newOrderStatus;
         }
 
@@ -401,6 +434,7 @@ class ShipmentStatusSyncService
 
     private function resolveOrderStatusForSpecialOrderType(
         Order $order,
+        Shipment $shipment,
         string $shipmentStatus,
         string $mappedOrderStatus
     ): string {
@@ -408,6 +442,16 @@ class ShipmentStatusSyncService
         $normalizedOrderType = $order->getNormalizedOrderType();
 
         if ($normalizedOrderType === Order::TYPE_EXCHANGE_RETURN) {
+            $trackingCode = trim((string) ($shipment->carrier_tracking_code ?: $shipment->tracking_number));
+            $isExchangeReturnShipment = (string) $shipment->reconciliation_status === 'return_exchange'
+                || (string) $shipment->return_status === 'exchanged'
+                || preg_match('/DH$/i', $trackingCode) === 1
+                || preg_match('/DH$/i', trim((string) $order->return_tracking_code)) === 1;
+
+            if ($isExchangeReturnShipment && in_array($shipmentStatus, ['delivered', 'returned'], true)) {
+                return OrderStatusCatalog::EXCHANGE_COMPLETED_CODE;
+            }
+
             if (in_array($shipmentStatus, ['returning', 'returned'], true)) {
                 return $currentStatus === OrderStatusCatalog::EXCHANGE_COMPLETED_CODE
                     ? $currentStatus
@@ -441,13 +485,9 @@ class ShipmentStatusSyncService
         }
 
         $itemRevenue = $this->resolveOrderItemRevenue($order);
-        $targetTotalPrice = round((float) ($shipment->cod_amount ?? 0), 2);
-        $targetDiscount = round($itemRevenue - $targetTotalPrice, 2);
         $currentSystemAdjustment = $this->resolveCurrentSystemAdjustmentAmount($order);
         $baseManualDiscount = $this->resolveManualDiscountBase($order, $currentSystemAdjustment);
-        $systemAdjustment = round($targetDiscount - $baseManualDiscount, 2);
         $baseCostTotal = round((float) ($order->cost_total ?? 0), 2);
-        $baseProfitTotal = round($targetTotalPrice - $baseCostTotal, 2);
         $normalizedOrderType = $order->getNormalizedOrderType();
         $settlementDelta = $normalizedOrderType === Order::TYPE_STANDARD
             ? 0.0
@@ -458,27 +498,51 @@ class ShipmentStatusSyncService
         $supplementCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
             ? 0.0
             : round((float) ($order->supplement_items_cost_total ?? 0), 2);
-        $reportRevenueTotal = $normalizedOrderType === Order::TYPE_STANDARD
-            ? $targetTotalPrice
-            : round($targetTotalPrice - $supplementTotalPrice + $settlementDelta, 2);
+        $exchangeNetRevenueTotal = round($itemRevenue - $baseManualDiscount - $supplementTotalPrice + $settlementDelta, 2);
+        $targetTotalPrice = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
+            ? round(max(0, $exchangeNetRevenueTotal), 2)
+            : round((float) ($shipment->cod_amount ?? 0), 2);
+        $targetDiscount = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
+            ? $baseManualDiscount
+            : round($itemRevenue - $targetTotalPrice, 2);
+        $systemAdjustment = $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
+            ? 0.0
+            : round($targetDiscount - $baseManualDiscount, 2);
+        $baseProfitTotal = round($targetTotalPrice - $baseCostTotal, 2);
+        $reportRevenueTotal = match ($normalizedOrderType) {
+            Order::TYPE_EXCHANGE_RETURN => $exchangeNetRevenueTotal,
+            Order::TYPE_PARTIAL_DELIVERY => round($targetTotalPrice + $settlementDelta, 2),
+            Order::TYPE_STANDARD => $targetTotalPrice,
+            default => $targetTotalPrice,
+        };
         $reportCostTotal = $normalizedOrderType === Order::TYPE_STANDARD
             ? $baseCostTotal
             : round($baseCostTotal - $supplementCostTotal, 2);
         $reportProfitTotal = round($reportRevenueTotal - $reportCostTotal, 2);
+        $profitTotal = $normalizedOrderType === Order::TYPE_STANDARD
+            ? $baseProfitTotal
+            : $reportProfitTotal;
+        $notes = $this->resolveOrderCodAdjustmentNotes(
+            $order,
+            $shipment,
+            $systemAdjustment,
+            abs($baseManualDiscount) >= 0.01
+        );
+        $notes = OrderExchangeRefundSystemNote::sync(
+            $notes,
+            $normalizedOrderType === Order::TYPE_EXCHANGE_RETURN
+                ? max(0, -$exchangeNetRevenueTotal)
+                : 0.0
+        );
 
         return $this->filterPersistableOrderData([
             'total_price' => $targetTotalPrice,
             'discount' => $targetDiscount,
-            'profit_total' => $baseProfitTotal,
+            'profit_total' => $profitTotal,
             'report_revenue_total' => $reportRevenueTotal,
             'report_cost_total' => $reportCostTotal,
             'report_profit_total' => $reportProfitTotal,
-            'notes' => $this->resolveOrderCodAdjustmentNotes(
-                $order,
-                $shipment,
-                $systemAdjustment,
-                abs($baseManualDiscount) >= 0.01
-            ),
+            'notes' => $notes,
         ]);
     }
 

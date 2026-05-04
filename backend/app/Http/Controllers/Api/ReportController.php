@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
-    private const DASHBOARD_REVENUE_INCLUDED_STATUS = 'completed';
+    private const DASHBOARD_REVENUE_STATUS_SCOPE = 'all';
 
     public function salesProductMatrix(Request $request, SalesProductReportService $salesProductReportService)
     {
@@ -97,25 +97,25 @@ class ReportController extends Controller
         $selectedYearStart = Carbon::create($selectedYear, 1, 1, 0, 0, 0, $now->getTimezone())->startOfYear();
         $selectedYearEnd = $selectedYearStart->copy()->endOfYear();
 
-        $validRevenueOrders = $this->validRevenueOrdersQuery($accountId);
+        $dashboardRevenueOrders = $this->dashboardRevenueOrdersQuery($accountId);
 
         $todaySummary = $this->aggregateRevenueStats(
-            (clone $validRevenueOrders)->whereBetween('officialized_at', [$todayStart, $todayEnd])
+            (clone $dashboardRevenueOrders)->whereBetween('officialized_at', [$todayStart, $todayEnd])
         );
 
         $currentMonthSummary = $this->aggregateRevenueStats(
-            (clone $validRevenueOrders)->whereBetween('officialized_at', [$currentMonthStart, $currentMonthEnd])
+            (clone $dashboardRevenueOrders)->whereBetween('officialized_at', [$currentMonthStart, $currentMonthEnd])
         );
 
         $dailySeries = $this->buildDailyRevenueSeries(
-            (clone $validRevenueOrders),
+            (clone $dashboardRevenueOrders),
             $selectedMonthStart,
             $selectedMonthEnd,
             $now
         );
 
         $monthlySeries = $this->buildMonthlyRevenueSeries(
-            (clone $validRevenueOrders),
+            (clone $dashboardRevenueOrders),
             $selectedYearStart,
             $selectedYearEnd,
             $now
@@ -128,7 +128,7 @@ class ReportController extends Controller
             ->count();
 
         $availableYears = $this->resolveAvailableYears(
-            (clone $validRevenueOrders),
+            (clone $dashboardRevenueOrders),
             $now->year,
             $selectedYear
         );
@@ -173,7 +173,7 @@ class ReportController extends Controller
             'meta' => [
                 'generated_at' => $now->toIso8601String(),
                 'revenue_logic' => [
-                    'status' => self::DASHBOARD_REVENUE_INCLUDED_STATUS,
+                    'status' => self::DASHBOARD_REVENUE_STATUS_SCOPE,
                     'order_kind' => Order::KIND_OFFICIAL,
                     'order_type' => Order::TYPE_STANDARD,
                     'date_field' => 'officialized_at',
@@ -231,11 +231,10 @@ class ReportController extends Controller
         return response()->json($sales);
     }
 
-    private function validRevenueOrdersQuery(int $accountId): Builder
+    private function dashboardRevenueOrdersQuery(int $accountId): Builder
     {
         return Order::query()
             ->where('account_id', $accountId)
-            ->where('status', self::DASHBOARD_REVENUE_INCLUDED_STATUS)
             ->where(function ($query) {
                 $query->where('order_kind', Order::KIND_OFFICIAL)
                     ->orWhereNull('order_kind')

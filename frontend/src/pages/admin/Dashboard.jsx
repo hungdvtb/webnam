@@ -166,7 +166,7 @@ function RevenueChartCard({
                     </div>
                     <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[420px]">
                         <SummaryChip label="Tổng doanh thu" value={formatCompactCurrency(totalRevenue)} />
-                        <SummaryChip label="Đơn hợp lệ" value={formatNumber(totalOrders)} />
+                        <SummaryChip label="Tổng đơn" value={formatNumber(totalOrders)} />
                         <SummaryChip label="TB / đơn" value={formatCompactCurrency(calculateAverage(totalRevenue, totalOrders))} />
                     </div>
                 </div>
@@ -299,7 +299,7 @@ export default function AdminDashboard() {
             icon: 'today',
             label: 'Doanh thu hôm nay',
             value: formatCurrency(todaySummary.revenue || 0),
-            subtext: `${todaySummary.label || 'Hôm nay'} | ${formatNumber(todaySummary.orders_count || 0)} đơn hợp lệ`,
+            subtext: `${todaySummary.label || 'Hôm nay'} | ${formatNumber(todaySummary.orders_count || 0)} đơn`,
             accent: 'from-primary via-primary/90 to-primary/70',
             glow: 'shadow-[0_20px_34px_-20px_rgba(15,23,42,0.85)]',
         },
@@ -307,7 +307,7 @@ export default function AdminDashboard() {
             icon: 'calendar_month',
             label: 'Doanh thu tháng hiện tại',
             value: formatCurrency(currentMonthSummary.revenue || 0),
-            subtext: `${currentMonthSummary.label || buildMonthLabel(fallbackMonth, fallbackYear)} | ${formatNumber(currentMonthSummary.orders_count || 0)} đơn hợp lệ`,
+            subtext: `${currentMonthSummary.label || buildMonthLabel(fallbackMonth, fallbackYear)} | ${formatNumber(currentMonthSummary.orders_count || 0)} đơn`,
             accent: 'from-gold via-[#d6a84f] to-[#e2bc74]',
             glow: 'shadow-[0_20px_34px_-20px_rgba(198,154,57,0.65)]',
         },
@@ -351,7 +351,7 @@ export default function AdminDashboard() {
                                 Tổng quan doanh thu từ đơn hàng thật
                             </h1>
                             <p className="mt-3 max-w-2xl text-[14px] leading-7 text-primary/65">
-                                Tổng hợp KPI và doanh số theo đúng logic doanh thu hiện tại của hệ thống. Chỉ tính đơn hoàn tất hợp lệ,
+                                Tổng hợp KPI và doanh số theo đúng logic doanh thu hiện tại của hệ thống. Tính tất cả trạng thái đơn,
                                 không dùng dữ liệu mẫu.
                             </p>
                         </div>
@@ -460,7 +460,7 @@ export default function AdminDashboard() {
                             </div>
 
                             <div className="mt-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)]">
-                                <SummaryChip label="Trạng thái tính" value="Hoàn tất" />
+                                <SummaryChip label="Trạng thái tính" value="Tất cả trạng thái" />
                                 <SummaryChip label="Phạm vi đơn" value="Đơn chính thức + đơn thường" />
                                 <SummaryChip label="Cơ sở tính" value="Ngày chốt đơn + doanh thu báo cáo" />
                             </div>
@@ -475,7 +475,7 @@ export default function AdminDashboard() {
                                 totalRevenue={dailyChart.total_revenue || 0}
                                 totalOrders={dailyChart.total_orders || 0}
                                 loading={loading || isPending}
-                                emptyLabel="Không có đơn hợp lệ trong tháng đang chọn."
+                                emptyLabel="Không có đơn trong tháng đang chọn."
                                 minChartWidth={Math.max((dailyChart.series || []).length * 30, 760)}
                             />
 
@@ -487,7 +487,7 @@ export default function AdminDashboard() {
                                 totalRevenue={monthlyChart.total_revenue || 0}
                                 totalOrders={monthlyChart.total_orders || 0}
                                 loading={loading || isPending}
-                                emptyLabel="Không có đơn hợp lệ trong năm đang chọn."
+                                emptyLabel="Không có đơn trong năm đang chọn."
                                 minChartWidth={Math.max((monthlyChart.series || []).length * 56, 720)}
                             />
                         </div>

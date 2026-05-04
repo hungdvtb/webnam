@@ -12,7 +12,7 @@ use RuntimeException;
 class MediaService
 {
     private const DEFAULT_COLLECTION = 'general';
-    private const MANAGED_ROUTE_PATTERN = '#/(?:api/)?media/assets/([0-9a-z]{26})/#i';
+    private const MANAGED_ROUTE_PATTERN = '#/(?:api/)?media/assets/([0-9a-z]{26})(?:/|$|\?)#i';
     private const MANAGED_OBJECT_PATTERN = '#/media-assets/([0-9a-z]{26})/#i';
 
     public function uploadImage(UploadedFile $file, array $options = []): MediaAsset

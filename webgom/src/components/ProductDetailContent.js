@@ -22,6 +22,44 @@ import BundleProductView from './product/BundleProductView';
 
 const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
 
+const sortProductImagesForDisplay = (sourceImages = []) => {
+  const images = Array.isArray(sourceImages) ? sourceImages : [];
+
+  return [...images].sort((left, right) => {
+    const primaryDelta = Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
+
+    if (primaryDelta !== 0) {
+      return primaryDelta;
+    }
+
+    const leftSort = Number.isFinite(Number(left?.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER;
+    const rightSort = Number.isFinite(Number(right?.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER;
+
+    if (leftSort !== rightSort) {
+      return leftSort - rightSort;
+    }
+
+    return Number(left?.id || 0) - Number(right?.id || 0);
+  });
+};
+
+const filterUniqueRenderableImages = (sourceImages = []) => {
+  const orderedImages = sortProductImagesForDisplay(sourceImages);
+  const validImages = orderedImages.filter((image, index, collection) => {
+    const resolvedUrl = resolveImageObjectUrl(image, '');
+
+    if (!resolvedUrl) {
+      return false;
+    }
+
+    return collection.findIndex((candidate) => (
+      resolveImageObjectUrl(candidate, '') === resolvedUrl
+    )) === index;
+  });
+
+  return validImages.length > 0 ? validImages : orderedImages;
+};
+
 const createBundleItemUid = (item, fallbackIndex = 0) => {
   const optionTitle = getBundleOptionTitle(item);
   const baseProductId = Number(item?.base_product_id ?? item?.id ?? 0);
@@ -442,42 +480,16 @@ export default function ProductDetailContent({
   }, [product, currentProduct, selectedGroupItems, bundleItems, selectedBundlePricing]);
 
   const images = useMemo(() => {
-    const sourceImages = (currentProduct.images && currentProduct.images.length > 0)
-      ? currentProduct.images
-      : (product.images || []);
+    return filterUniqueRenderableImages(product.images || []);
+  }, [product.images]);
+  const primaryDisplayImage = useMemo(() => {
+    if (!hasVariants || !currentProduct?.id || currentProduct.id === product?.id) {
+      return null;
+    }
 
-    const orderedImages = [...sourceImages].sort((left, right) => {
-      const primaryDelta = Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
-
-      if (primaryDelta !== 0) {
-        return primaryDelta;
-      }
-
-      const leftSort = Number.isFinite(Number(left?.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER;
-      const rightSort = Number.isFinite(Number(right?.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER;
-
-      if (leftSort !== rightSort) {
-        return leftSort - rightSort;
-      }
-
-      return Number(left?.id || 0) - Number(right?.id || 0);
-    });
-
-    const validImages = orderedImages.filter((image, index, collection) => {
-      const resolvedUrl = resolveImageObjectUrl(image, '');
-
-      if (!resolvedUrl) {
-        return false;
-      }
-
-      return collection.findIndex((candidate) => (
-        resolveImageObjectUrl(candidate, '') === resolvedUrl
-      )) === index;
-    });
-
-    return validImages.length > 0 ? validImages : orderedImages;
-  }, [currentProduct, product.images]);
-  const galleryVideoUrl = currentProduct?.video_url || product.video_url || '';
+    return filterUniqueRenderableImages(currentProduct.images || [])[0] || null;
+  }, [currentProduct?.id, currentProduct?.images, hasVariants, product?.id]);
+  const galleryVideoUrl = product.video_url || '';
   const hasGalleryVideo = Boolean(resolveVideoEmbedUrl(galleryVideoUrl));
 
   const getImageUrl = (img) => resolveImageObjectUrl(img, FALLBACK_PRODUCT_IMAGE);
@@ -738,7 +750,8 @@ export default function ProductDetailContent({
     if (e) e.preventDefault();
     if (checkAndScrollToOptions()) return;
     addCurrentSelectionToCart();
-    flyToCart(e, images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png');
+    const flyImage = primaryDisplayImage || images?.[0];
+    flyToCart(e, flyImage ? getImageUrl(flyImage) : '/logo-dai-thanh.png');
   };
 
   const handleAddBundleConfig = (configName, e) => {
@@ -747,9 +760,10 @@ export default function ProductDetailContent({
     if (itemsToCart.length === 0) return;
 
     addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta);
+    const flyImage = primaryDisplayImage || images?.[0];
     flyToCart(
       e,
-      images?.[0] ? getImageUrl(images[0]) : '/logo-dai-thanh.png'
+      flyImage ? getImageUrl(flyImage) : '/logo-dai-thanh.png'
     );
   };
 
@@ -822,6 +836,7 @@ export default function ProductDetailContent({
     formatPrice,
     getImageUrl,
     images,
+    primaryDisplayImage,
     videoUrl: galleryVideoUrl,
     activeIndex,
     setActiveIndex,

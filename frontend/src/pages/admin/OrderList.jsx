@@ -323,7 +323,6 @@ const getOrderCostTotalValue = (order) => {
     const parsedValue = Number(order?.cost_total ?? 0);
     return Number.isFinite(parsedValue) ? parsedValue : 0;
 };
-const getOrderCostTotalSummaryValue = (order) => Math.round(getOrderCostTotalValue(order));
 
 const normalizeImportCostRefreshAttributeValues = (value) => {
     if (Array.isArray(value)) {
@@ -2576,10 +2575,6 @@ const OrderList = () => {
         () => activeSearchTerms.map((term) => term.toLowerCase()),
         [activeSearchTerms]
     );
-    const visibleGoodsTotal = useMemo(
-        () => orders.reduce((total, order) => total + getOrderCostTotalSummaryValue(order), 0),
-        [orders]
-    );
     const matchesAnySearchKeyword = useCallback((...values) => (
         normalizedActiveSearchTerms.some((term) => (
             values.some((value) => String(value || '').toLowerCase().includes(term))
@@ -2619,16 +2614,16 @@ const OrderList = () => {
         {
             key: 'goods_total',
             label: 'Tổng tiền hàng',
-            value: formatMoney(visibleGoodsTotal),
+            value: formatMoney(orderSummary.goods_total),
             className: 'text-sky-700',
         },
     ]), [
+        orderSummary.goods_total,
         orderSummary.order_count,
         orderSummary.shipping_fee_estimated,
         orderSummary.shipping_fee_recorded,
         orderSummary.shipping_fee_total,
         orderSummary.total_price,
-        visibleGoodsTotal,
     ]);
     const reportScopeSummaryItem = useMemo(() => {
         const summaryField = String(routeReportScope?.summary_field || '').trim();

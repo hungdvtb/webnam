@@ -55,8 +55,17 @@ class BlogController extends Controller
 
         $query = clone $baseQuery;
 
+        $relations = [];
         if ($this->hasBlogCategorySupport()) {
-            $query->with(['category:id,account_id,name,slug,sort_order', 'featuredMediaAsset']);
+            $relations[] = 'category:id,account_id,name,slug,sort_order';
+        }
+
+        if ($this->hasFeaturedMediaAssetSupport()) {
+            $relations[] = 'featuredMediaAsset';
+        }
+
+        if (!empty($relations)) {
+            $query->with($relations);
         }
 
         if ($isCompactView) {
@@ -677,7 +686,19 @@ class BlogController extends Controller
     public function show(Request $request, $id)
     {
         $authenticatedUser = $this->resolveAuthenticatedBlogUser($request);
-        $query = Post::query()->with(['category:id,account_id,name,slug,sort_order', 'featuredMediaAsset']);
+        $query = Post::query();
+        $relations = [];
+        if ($this->hasBlogCategorySupport()) {
+            $relations[] = 'category:id,account_id,name,slug,sort_order';
+        }
+
+        if ($this->hasFeaturedMediaAssetSupport()) {
+            $relations[] = 'featuredMediaAsset';
+        }
+
+        if (!empty($relations)) {
+            $query->with($relations);
+        }
         $this->applyAccountScope($query, $request);
 
         if (!$authenticatedUser) {
@@ -726,7 +747,9 @@ class BlogController extends Controller
             'published_at' => 'nullable|date',
         ]);
 
-        $previousFeaturedAssetId = $post->featured_media_asset_id;
+        $previousFeaturedAssetId = $this->hasFeaturedMediaAssetSupport()
+            ? $post->featured_media_asset_id
+            : null;
         $previousContent = (string) $post->content;
 
         if (array_key_exists('seo_keyword', $validated)) {
@@ -759,7 +782,7 @@ class BlogController extends Controller
 
         $post->update($validated);
 
-        if (array_key_exists('featured_image', $validated)) {
+        if (array_key_exists('featured_image', $validated) && $this->hasFeaturedMediaAssetSupport()) {
             $nextFeaturedAssetId = $post->featured_media_asset_id;
             if ($previousFeaturedAssetId && $previousFeaturedAssetId !== $nextFeaturedAssetId) {
                 $this->mediaService->deleteAsset($previousFeaturedAssetId);
@@ -1303,25 +1326,44 @@ class BlogController extends Controller
             return;
         }
 
+        $supportsFeaturedMediaAsset = $this->hasFeaturedMediaAssetSupport();
         $rawValue = trim((string) ($payload['featured_image'] ?? ''));
+
         if ($rawValue === '') {
             $payload['featured_image'] = null;
-            $payload['featured_media_asset_id'] = null;
+            if ($supportsFeaturedMediaAsset) {
+                $payload['featured_media_asset_id'] = null;
+            } else {
+                unset($payload['featured_media_asset_id']);
+            }
             return;
         }
 
-        $asset = $this->mediaService->importFromReference($rawValue, [
-            'collection' => 'blog-featured',
-            'source' => 'blog-featured-image',
-        ]);
+        try {
+            $asset = $this->mediaService->importFromReference($rawValue, [
+                'collection' => 'blog-featured',
+                'source' => 'blog-featured-image',
+            ]);
+        } catch (RuntimeException) {
+            $asset = null;
+        }
 
         if ($asset) {
             $payload['featured_image'] = $this->mediaService->buildAssetUrl($asset, 'large');
-            $payload['featured_media_asset_id'] = $asset->id;
+            if ($supportsFeaturedMediaAsset) {
+                $payload['featured_media_asset_id'] = $asset->id;
+            } else {
+                unset($payload['featured_media_asset_id']);
+            }
             return;
         }
 
         $payload['featured_image'] = $this->mediaService->normalizeLegacyUrl($rawValue);
+        if ($supportsFeaturedMediaAsset) {
+            $payload['featured_media_asset_id'] = null;
+        } else {
+            unset($payload['featured_media_asset_id']);
+        }
     }
 
     private function cleanupRemovedManagedContentAssets(?string $previousContent, ?string $nextContent): void
@@ -2062,6 +2104,17 @@ class BlogController extends Controller
 
         if ($cache === null) {
             $cache = Schema::hasTable('blog_categories') && Schema::hasColumn('posts', 'blog_category_id');
+        }
+
+        return $cache;
+    }
+
+    private function hasFeaturedMediaAssetSupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('media_assets') && Schema::hasColumn('posts', 'featured_media_asset_id');
         }
 
         return $cache;

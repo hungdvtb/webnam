@@ -26,6 +26,7 @@ class OrderListSummaryTest extends TestCase
             'status' => 'delivered',
             'total_price' => 120000,
             'discount' => 20000,
+            'cost_total' => 70000,
             'internal_shipping_fee' => 15000,
         ]);
 
@@ -35,6 +36,7 @@ class OrderListSummaryTest extends TestCase
             'status' => 'delivered',
             'total_price' => 230000,
             'discount' => 30000,
+            'cost_total' => 140000,
             'internal_shipping_fee' => 0,
             'external_delivery_meta' => [
                 'shipping_cost' => 25000,
@@ -47,6 +49,7 @@ class OrderListSummaryTest extends TestCase
             'status' => 'delivered',
             'total_price' => 340000,
             'discount' => 40000,
+            'cost_total' => 210000,
             'internal_shipping_fee' => 0,
         ]);
 
@@ -77,7 +80,7 @@ class OrderListSummaryTest extends TestCase
         $expectedOrderCount = 3;
         $expectedTotalPrice = 690000.0;
         $expectedShippingFee = 75000.0;
-        $expectedGoodsTotal = 780000.0;
+        $expectedGoodsTotal = 420000.0;
 
         $firstPageResponse = $this
             ->withHeaders($this->headers($account))
@@ -162,6 +165,78 @@ class OrderListSummaryTest extends TestCase
         $this->assertSame(105000.0, (float) $response->json('summary.report_revenue_total'));
         $this->assertSame(68000.0, (float) $response->json('summary.report_cost_total'));
         $this->assertSame(32000.0, (float) $response->json('summary.report_profit_total'));
+    }
+
+    public function test_order_list_summary_honors_selected_order_ids_and_shipping_breakdown_across_pagination(): void
+    {
+        [$account, $user] = $this->authenticate();
+
+        $directShippingOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-SELECTED-0001',
+            'status' => 'delivered',
+            'total_price' => 100000,
+            'discount' => 10000,
+            'cost_total' => 50000,
+            'internal_shipping_fee' => 12000,
+        ]);
+
+        $estimatedShippingOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-SELECTED-0002',
+            'status' => 'delivered',
+            'total_price' => 200000,
+            'discount' => 0,
+            'cost_total' => 90000,
+            'internal_shipping_fee' => 0,
+        ]);
+
+        $outsideDeliveryOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-SELECTED-0003',
+            'status' => 'delivered',
+            'total_price' => 300000,
+            'discount' => 30000,
+            'cost_total' => 150000,
+            'internal_shipping_fee' => 0,
+            'external_delivery_meta' => [
+                'shipping_cost' => 18000,
+            ],
+        ]);
+
+        $excludedOrder = $this->createOrder($account, $user, [
+            'order_number' => 'OR-SUM-SELECTED-EXCLUDED',
+            'status' => 'delivered',
+            'total_price' => 400000,
+            'discount' => 40000,
+            'cost_total' => 999999,
+            'internal_shipping_fee' => 40000,
+        ]);
+
+        $selectedIds = implode(',', [
+            $directShippingOrder->id,
+            $estimatedShippingOrder->id,
+            $outsideDeliveryOrder->id,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders?status=delivered&order_ids={$selectedIds}&sort_by=order_number&sort_order=asc&per_page=1&page=2");
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertCount(1, $returnedIds);
+        $this->assertNotContains($excludedOrder->id, $returnedIds);
+        $this->assertSame(3, (int) $response->json('total'));
+        $this->assertSame(3, (int) $response->json('summary.order_count'));
+        $this->assertSame(600000.0, (float) $response->json('summary.total_price'));
+        $this->assertSame(30000.0, (float) $response->json('summary.shipping_fee_recorded'));
+        $this->assertSame(10000.0, (float) $response->json('summary.shipping_fee_estimated'));
+        $this->assertSame(40000.0, (float) $response->json('summary.shipping_fee_total'));
+        $this->assertSame(40000.0, (float) $response->json('summary.shipping_fee'));
+        $this->assertSame(290000.0, (float) $response->json('summary.goods_total'));
     }
 
     private function authenticate(): array

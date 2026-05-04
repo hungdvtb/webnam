@@ -262,7 +262,7 @@ class OrderListOrderTypeFilterTest extends TestCase
         $this->assertSame(500000.0, (float) $response->json('summary.total_price'));
         $this->assertSame(30000.0, (float) $response->json('summary.shipping_fee_recorded'));
         $this->assertSame(30000.0, (float) $response->json('summary.shipping_fee_total'));
-        $this->assertSame(500000.0, (float) $response->json('summary.goods_total'));
+        $this->assertSame(160000.0, (float) $response->json('summary.goods_total'));
     }
 
     private function authenticate(): array

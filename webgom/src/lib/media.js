@@ -104,6 +104,16 @@ export const resolveMediaUrl = (value) => {
   const apiOrigin = getApiOrigin();
   const storageBase = String(config.storageUrl || '').replace(/\/+$/, '');
 
+  if (normalized.startsWith('/api/')) {
+    return apiOrigin ? `${apiOrigin}${normalized}` : normalized;
+  }
+
+  if (/^\/?media\/assets\//i.test(normalized)) {
+    const apiBase = String(config.apiUrl || '').replace(/\/+$/, '');
+    const cleanPath = normalized.replace(/^[/\\]+/, '');
+    return apiBase ? `${apiBase}/${cleanPath}` : `/${cleanPath}`;
+  }
+
   if (normalized.startsWith('/storage/')) {
     return apiOrigin ? `${apiOrigin}${normalized}` : normalized;
   }

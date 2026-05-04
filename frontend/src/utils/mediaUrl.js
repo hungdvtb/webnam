@@ -1,9 +1,17 @@
-import { STORAGE_BASE_URL } from '../services/api';
+import { API_BASE_URL, STORAGE_BASE_URL } from '../services/api';
 
 const ABSOLUTE_URL_PATTERN = /^(?:[a-z][a-z\d+\-.]*:)?\/\//i;
 const SPECIAL_URL_PATTERN = /^(?:data|blob|mailto|tel):/i;
 
 const normalizeUrlValue = (value) => String(value || '').trim();
+
+const getApiOrigin = () => {
+    try {
+        return new URL(API_BASE_URL, window.location.origin).origin;
+    } catch {
+        return '';
+    }
+};
 
 export const resolveMediaUrl = (value) => {
     const rawValue = normalizeUrlValue(value);
@@ -14,6 +22,17 @@ export const resolveMediaUrl = (value) => {
 
     if (ABSOLUTE_URL_PATTERN.test(rawValue) || SPECIAL_URL_PATTERN.test(rawValue)) {
         return rawValue;
+    }
+
+    if (rawValue.startsWith('/api/')) {
+        const apiOrigin = getApiOrigin();
+        return apiOrigin ? `${apiOrigin}${rawValue}` : rawValue;
+    }
+
+    if (/^\/?media\/assets\//i.test(rawValue)) {
+        const normalizedApiBaseUrl = String(API_BASE_URL || '').replace(/\/$/, '');
+        const normalizedPath = rawValue.replace(/^\/+/, '');
+        return normalizedApiBaseUrl ? `${normalizedApiBaseUrl}/${normalizedPath}` : `/${normalizedPath}`;
     }
 
     const normalizedBaseUrl = String(STORAGE_BASE_URL || '').replace(/\/$/, '');

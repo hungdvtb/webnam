@@ -64,17 +64,19 @@ class Product extends Model
 
     public function getMainImageAttribute()
     {
-        $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
+        $image = $this->resolveDisplayPrimaryImage();
 
         return $image?->large_url ?: $image?->image_url;
     }
 
     public function getPrimaryImageAttribute()
     {
-        $image = $this->images->where('is_primary', true)->first() ?: $this->images->sortBy('sort_order')->first();
+        $image = $this->resolveDisplayPrimaryImage();
         if (!$image) {
             return null;
         }
+
+        $sourceProductId = (int) ($image->product_id ?? $this->id);
 
         return [
             'id' => $image->id,
@@ -88,7 +90,42 @@ class Product extends Model
             'height' => $image->height,
             'srcset' => $image->srcset,
             'is_primary' => $image->is_primary,
+            'source_product_id' => $sourceProductId,
+            'is_inherited' => $sourceProductId !== (int) $this->id,
         ];
+    }
+
+    protected function resolveDisplayPrimaryImage(): ?ProductImage
+    {
+        $image = $this->resolveOwnPrimaryImage();
+        if ($image) {
+            return $image;
+        }
+
+        return $this->resolveParentPrimaryImage();
+    }
+
+    protected function resolveOwnPrimaryImage(): ?ProductImage
+    {
+        $images = $this->relationLoaded('images')
+            ? $this->getRelation('images')
+            : $this->images()->get();
+
+        return $images->where('is_primary', true)->first() ?: $images->sortBy('sort_order')->first();
+    }
+
+    protected function resolveParentPrimaryImage(): ?ProductImage
+    {
+        $parents = $this->relationLoaded('parentConfigurable')
+            ? $this->getRelation('parentConfigurable')
+            : $this->parentConfigurable()->with('images')->limit(1)->get();
+
+        $parent = $parents->first();
+        if (!$parent instanceof self) {
+            return null;
+        }
+
+        return $parent->resolveOwnPrimaryImage();
     }
 
     public function category()

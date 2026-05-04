@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -141,6 +142,43 @@ class ProductVariantIsolationTest extends TestCase
             ->all();
 
         $this->assertSame([$activeVariant->id, $inactiveVariant->id], $variationIds);
+    }
+
+    public function test_variant_without_own_image_exposes_parent_primary_image_without_copying_gallery(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Configurable',
+            'slug' => 'parent-configurable-image',
+            'sku' => 'PARENT-CONFIG-IMAGE',
+            'type' => 'configurable',
+        ]);
+        ProductImage::query()->create([
+            'product_id' => $parent->id,
+            'image_url' => 'https://cdn.example.com/parent-primary.jpg',
+            'is_primary' => true,
+            'sort_order' => 0,
+        ]);
+
+        $variant = $this->createProduct([
+            'name' => 'Variant No Image',
+            'slug' => 'variant-no-image',
+            'sku' => 'PARENT-CONFIG-IMAGE-V1',
+        ]);
+        $parent->linkedProducts()->attach($variant->id, ['link_type' => 'super_link', 'position' => 0]);
+
+        $response = $this->getJson("/api/products/{$parent->id}")
+            ->assertOk();
+
+        $linkedVariant = collect($response->json('linked_products'))->firstWhere('id', $variant->id);
+
+        $this->assertSame('https://cdn.example.com/parent-primary.jpg', $linkedVariant['main_image']);
+        $this->assertSame('https://cdn.example.com/parent-primary.jpg', $linkedVariant['primary_image']['image_url']);
+        $this->assertTrue($linkedVariant['primary_image']['is_inherited']);
+        $this->assertSame($parent->id, $linkedVariant['primary_image']['source_product_id']);
+        $this->assertSame([], $linkedVariant['images']);
+        $this->assertSame(0, $variant->images()->count());
     }
 
     public function test_updating_a_variant_directly_changes_only_that_variant(): void

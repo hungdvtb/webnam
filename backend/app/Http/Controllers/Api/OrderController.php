@@ -3348,11 +3348,7 @@ class OrderController extends Controller
 
     private function resolveOrderListGoodsTotal(Order $order): float
     {
-        $discount = $this->orderTableHasColumn('discount')
-            ? (float) ($order->discount ?? 0)
-            : 0.0;
-
-        return round((float) ($order->total_price ?? 0) + $discount, 2);
+        return round((float) ($order->cost_total ?? 0), 2);
     }
 
     private function resolveOrderListShippingSummary(Order $order): array

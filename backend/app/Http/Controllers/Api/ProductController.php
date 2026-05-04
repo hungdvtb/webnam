@@ -8763,7 +8763,10 @@ class ProductController extends Controller
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|integer|min:0',
             'variants.*.status' => 'nullable|boolean',
+            'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
+            'variants.*.image_reference_url' => 'nullable|string|max:2048',
+            'variants.*.remove_image' => 'nullable|boolean',
             'variants.*.attributes' => 'nullable|array',
         ], [
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
@@ -9416,8 +9419,10 @@ class ProductController extends Controller
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|integer|min:0',
             'variants.*.status' => 'nullable|boolean',
+            'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
             'variants.*.image_reference_url' => 'nullable|string|max:2048',
+            'variants.*.remove_image' => 'nullable|boolean',
             'variants.*.attributes' => 'nullable|array',
         ], [
             'name.required' => 'Tên sản phẩm không được để trống.',

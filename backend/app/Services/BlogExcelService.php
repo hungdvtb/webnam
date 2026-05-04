@@ -43,8 +43,11 @@ class BlogExcelService
         'content_link_urls',
     ];
 
+    private array $uploadedLocalUrls = [];
+
     public function __construct(
-        private readonly SimpleXlsxService $xlsx
+        private readonly SimpleXlsxService $xlsx,
+        private readonly MediaService $mediaService
     ) {
     }
 
@@ -686,39 +689,80 @@ class BlogExcelService
             return '';
         }
 
+        if (Str::startsWith($normalizedValue, ['data:image', 'blob:'])) {
+            $hash = md5($normalizedValue);
+            if (isset($this->uploadedLocalUrls[$hash])) {
+                return $this->uploadedLocalUrls[$hash];
+            }
+
+            try {
+                if (Str::startsWith($normalizedValue, 'data:image')) {
+                    $asset = $this->mediaService->storeGeneratedAsset(
+                        file_get_contents($normalizedValue) ?: '',
+                        'excel-export-' . Str::random(10) . '.jpg',
+                        null,
+                        ['collection' => 'blog-import']
+                    );
+                    $newUrl = $this->mediaService->buildAssetUrl($asset, 'large');
+                    $this->uploadedLocalUrls[$hash] = $newUrl;
+                    return $newUrl;
+                }
+            } catch (Throwable) {
+                // Ignore and fall through
+            }
+        }
+
         if (Str::startsWith($normalizedValue, ['data:', 'mailto:', 'tel:', 'javascript:', '#'])) {
             return $normalizedValue;
         }
 
+        if (preg_match('#/storage/uploads/blog-import/#i', $normalizedValue) || preg_match('#/storage/#i', $normalizedValue) && !preg_match('#^https?://(?!localhost|127\.0\.0\.1)#i', $normalizedValue)) {
+            if (isset($this->uploadedLocalUrls[$normalizedValue])) {
+                return $this->uploadedLocalUrls[$normalizedValue];
+            }
+
+            try {
+                $path = parse_url($normalizedValue, PHP_URL_PATH) ?: $normalizedValue;
+                $relativePath = ltrim((string) preg_replace('#^/?storage/#i', '', $path), '/');
+                $fullPath = storage_path('app/public/' . ltrim($relativePath, '/'));
+
+                if (is_file($fullPath)) {
+                    $asset = $this->mediaService->importFromAbsolutePath($fullPath, ['collection' => 'blog-import']);
+                    $newUrl = $this->mediaService->buildAssetUrl($asset, 'large');
+                    $this->uploadedLocalUrls[$normalizedValue] = $newUrl;
+                    return $newUrl;
+                }
+            } catch (Throwable) {
+                // Ignore and fall back to standard normalization
+            }
+        }
+
+        $appUrl = rtrim((string) config('app.url'), '/');
+
         if (Str::startsWith($normalizedValue, '//')) {
-            $scheme = request()?->getScheme() ?: (parse_url((string) config('app.url'), PHP_URL_SCHEME) ?: 'https');
+            $scheme = request()?->getScheme() ?: (parse_url($appUrl, PHP_URL_SCHEME) ?: 'https');
             return $scheme . ':' . $normalizedValue;
         }
 
         if (preg_match('/^[a-z][a-z0-9+.-]*:/i', $normalizedValue) === 1) {
-            return $this->collapseInternalAbsoluteUrlToRelative($normalizedValue);
-        }
+            $parts = parse_url($normalizedValue);
 
-        if (Str::startsWith($normalizedValue, '/')) {
+            if ($parts !== false && $this->shouldCollapseToRelative($parts)) {
+                $path = (string) ($parts['path'] ?? '/');
+                $query = isset($parts['query']) && $parts['query'] !== '' ? '?' . $parts['query'] : '';
+                $fragment = isset($parts['fragment']) && $parts['fragment'] !== '' ? '#' . $parts['fragment'] : '';
+
+                return $appUrl . ($path !== '' && !Str::startsWith($path, '/') ? '/' . $path : $path) . $query . $fragment;
+            }
+
             return $normalizedValue;
         }
 
-        return '/' . ltrim($normalizedValue, '/');
-    }
-
-    private function collapseInternalAbsoluteUrlToRelative(string $value): string
-    {
-        $parts = parse_url($value);
-
-        if ($parts === false || !$this->shouldCollapseToRelative($parts)) {
-            return $value;
+        if (Str::startsWith($normalizedValue, '/')) {
+            return $appUrl . $normalizedValue;
         }
 
-        $path = (string) ($parts['path'] ?? '/');
-        $query = isset($parts['query']) && $parts['query'] !== '' ? '?' . $parts['query'] : '';
-        $fragment = isset($parts['fragment']) && $parts['fragment'] !== '' ? '#' . $parts['fragment'] : '';
-
-        return ($path !== '' ? $path : '/') . $query . $fragment;
+        return $appUrl . '/' . ltrim($normalizedValue, '/');
     }
 
     /**

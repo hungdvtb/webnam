@@ -52,6 +52,7 @@ export default function ProductGallery({
   getImageUrl,
   productName,
   videoUrl,
+  primaryDisplayImage = null,
   showSingleThumbnail = false,
 }) {
   const normalizedImages = Array.isArray(images) ? images.filter(Boolean) : [];
@@ -60,10 +61,16 @@ export default function ProductGallery({
   const hasVideo = Boolean(embedUrl);
   const galleryImages = normalizedImages.length > 0 ? normalizedImages : [{ id: '__fallback-media__', __fallback: true }];
   const requestedDisplayIndex = resolveDisplayIndex(activeIndex, normalizedImages.length, hasVideo);
+  const primaryDisplayImageSignature = primaryDisplayImage
+    ? String(primaryDisplayImage.id || getImageUrl(primaryDisplayImage))
+    : '';
 
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isDraggingMedia, setIsDraggingMedia] = useState(false);
   const [displayIndex, setDisplayIndex] = useState(requestedDisplayIndex);
+  const [isPrimaryDisplayOverrideActive, setIsPrimaryDisplayOverrideActive] = useState(
+    Boolean(primaryDisplayImage) && requestedDisplayIndex === 0,
+  );
 
   const stageRef = useRef(null);
   const trackRef = useRef(null);
@@ -91,9 +98,13 @@ export default function ProductGallery({
   const canDesktopDragImages = canDragMedia && !isMobileViewport;
   const currentImageIndex = clampImageIndex(displayIndex >= 0 ? displayIndex : 0, galleryImages.length);
   const currentImage = galleryImages[currentImageIndex] || galleryImages[0];
+  const isPrimaryDisplayOverrideVisible = Boolean(primaryDisplayImage)
+    && isPrimaryDisplayOverrideActive
+    && currentImageIndex === 0;
+  const currentDisplayImage = isPrimaryDisplayOverrideVisible ? primaryDisplayImage : currentImage;
   const previousImage = currentImageIndex > 0 ? galleryImages[currentImageIndex - 1] : null;
   const nextImage = currentImageIndex < galleryImages.length - 1 ? galleryImages[currentImageIndex + 1] : null;
-  const activeThumbIndex = isShowingVideo ? -1 : currentImageIndex;
+  const activeThumbIndex = isShowingVideo || isPrimaryDisplayOverrideVisible ? -1 : currentImageIndex;
 
   const resolveGalleryImageSrc = (image) => (
     image?.__fallback ? getImageUrl(null) : getImageUrl(image)
@@ -291,6 +302,15 @@ export default function ProductGallery({
   }, [canDragMedia]);
 
   useEffect(() => {
+    if (!primaryDisplayImage || requestedDisplayIndex !== 0) {
+      setIsPrimaryDisplayOverrideActive(false);
+      return;
+    }
+
+    setIsPrimaryDisplayOverrideActive(true);
+  }, [primaryDisplayImage, primaryDisplayImageSignature, requestedDisplayIndex]);
+
+  useEffect(() => {
     if (requestedDisplayIndex === displayIndexRef.current) {
       return;
     }
@@ -486,6 +506,7 @@ export default function ProductGallery({
 
   const handleMediaSelect = (nextIndex) => {
     clearGestureMotion();
+    setIsPrimaryDisplayOverrideActive(false);
 
     if (nextIndex === -1 && hasVideo) {
       displayIndexRef.current = -1;
@@ -560,7 +581,7 @@ export default function ProductGallery({
               referrerPolicy="strict-origin-when-cross-origin"
             />
           </div>
-        ) : currentImage ? (
+        ) : currentDisplayImage ? (
           <div className={styles.productMediaViewport}>
             <div
               ref={trackRef}
@@ -569,7 +590,7 @@ export default function ProductGallery({
               onTransitionEnd={handleTrackTransitionEnd}
             >
               {renderImageSlide(previousImage, `prev-${currentImageIndex - 1}`, true)}
-              {renderImageSlide(currentImage, `current-${currentImageIndex}`)}
+              {renderImageSlide(currentDisplayImage, `current-${currentImageIndex}`)}
               {renderImageSlide(nextImage, `next-${currentImageIndex + 1}`, true)}
             </div>
           </div>

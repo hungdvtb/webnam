@@ -50,6 +50,7 @@ export default function ConfigurableProductView({
   handleVariantSelect,
   getImageUrl,
   images,
+  primaryDisplayImage,
   videoUrl,
   activeIndex,
   setActiveIndex,
@@ -259,6 +260,7 @@ export default function ConfigurableProductView({
               setActiveIndex={setActiveIndex}
               getImageUrl={getImageUrl}
               productName={currentProduct.name}
+              primaryDisplayImage={primaryDisplayImage}
               showSingleThumbnail
             />
           </div>

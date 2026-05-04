@@ -23,7 +23,7 @@ class ReportDashboardSummaryTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_dashboard_summary_returns_real_kpis_and_chart_series_using_current_revenue_logic(): void
+    public function test_dashboard_summary_returns_real_kpis_and_chart_series_across_all_order_statuses(): void
     {
         Carbon::setTestNow('2026-04-25 10:30:00');
 
@@ -87,7 +87,7 @@ class ReportDashboardSummaryTest extends TestCase
         ]);
 
         $this->createOrder($account, $user, [
-            'order_number' => 'DB-INVALID-PROCESSING',
+            'order_number' => 'DB-APR-PROCESSING',
             'officialized_at' => '2026-04-12 09:00:00',
             'status' => 'processing',
             'order_kind' => Order::KIND_OFFICIAL,
@@ -117,7 +117,7 @@ class ReportDashboardSummaryTest extends TestCase
         ]);
 
         $this->createOrder($account, $user, [
-            'order_number' => 'DB-INVALID-CANCELLED',
+            'order_number' => 'DB-MAR-CANCELLED',
             'officialized_at' => '2026-03-21 09:00:00',
             'status' => 'cancelled',
             'order_kind' => Order::KIND_OFFICIAL,
@@ -143,8 +143,8 @@ class ReportDashboardSummaryTest extends TestCase
 
         $this->assertSame(900.0, (float) $response->json('summary.today.revenue'));
         $this->assertSame(1, (int) $response->json('summary.today.orders_count'));
-        $this->assertSame(1400.0, (float) $response->json('summary.current_month.revenue'));
-        $this->assertSame(2, (int) $response->json('summary.current_month.orders_count'));
+        $this->assertSame(11399.0, (float) $response->json('summary.current_month.revenue'));
+        $this->assertSame(3, (int) $response->json('summary.current_month.orders_count'));
         $this->assertSame(900.0, (float) $response->json('sales_today'));
         $this->assertSame(1, (int) $response->json('orders_today'));
         $this->assertSame(0, (int) $response->json('low_stock_alerts'));
@@ -157,25 +157,25 @@ class ReportDashboardSummaryTest extends TestCase
         $marchTwentieth = $dailySeries->firstWhere('date', '2026-03-20');
         $marchTwentyFirst = $dailySeries->firstWhere('date', '2026-03-21');
         $this->assertCount(31, $dailySeries);
-        $this->assertSame(2000.0, (float) $response->json('charts.daily_in_month.total_revenue'));
-        $this->assertSame(2, (int) $response->json('charts.daily_in_month.total_orders'));
+        $this->assertSame(14345.0, (float) $response->json('charts.daily_in_month.total_revenue'));
+        $this->assertSame(3, (int) $response->json('charts.daily_in_month.total_orders'));
         $this->assertNotNull($marchSecond);
         $this->assertNotNull($marchTwentieth);
         $this->assertNotNull($marchTwentyFirst);
         $this->assertSame(1200.0, (float) ($marchSecond['revenue'] ?? 0));
         $this->assertSame(1, (int) ($marchSecond['orders_count'] ?? 0));
         $this->assertSame(800.0, (float) ($marchTwentieth['revenue'] ?? 0));
-        $this->assertSame(0.0, (float) ($marchTwentyFirst['revenue'] ?? 0));
+        $this->assertSame(12345.0, (float) ($marchTwentyFirst['revenue'] ?? 0));
 
         $monthlySeries = collect($response->json('charts.monthly_in_year.series'))->keyBy('month');
         $this->assertCount(12, $monthlySeries);
-        $this->assertSame(3550.0, (float) $response->json('charts.monthly_in_year.total_revenue'));
-        $this->assertSame(5, (int) $response->json('charts.monthly_in_year.total_orders'));
+        $this->assertSame(25894.0, (float) $response->json('charts.monthly_in_year.total_revenue'));
+        $this->assertSame(7, (int) $response->json('charts.monthly_in_year.total_orders'));
         $this->assertSame(150.0, (float) ($monthlySeries->get(1)['revenue'] ?? 0));
-        $this->assertSame(2000.0, (float) ($monthlySeries->get(3)['revenue'] ?? 0));
-        $this->assertSame(1400.0, (float) ($monthlySeries->get(4)['revenue'] ?? 0));
+        $this->assertSame(14345.0, (float) ($monthlySeries->get(3)['revenue'] ?? 0));
+        $this->assertSame(11399.0, (float) ($monthlySeries->get(4)['revenue'] ?? 0));
         $this->assertTrue((bool) ($monthlySeries->get(4)['is_current'] ?? false));
-        $this->assertSame('completed', $response->json('meta.revenue_logic.status'));
+        $this->assertSame('all', $response->json('meta.revenue_logic.status'));
         $this->assertSame('official', $response->json('meta.revenue_logic.order_kind'));
         $this->assertSame('standard', $response->json('meta.revenue_logic.order_type'));
         $this->assertSame('officialized_at', $response->json('meta.revenue_logic.date_field'));

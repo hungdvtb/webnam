@@ -320,18 +320,31 @@ class Category extends Model
             $nextSortOrder++;
         }
 
-        $missingProductIds = Product::query()
-            ->select('products.id')
-            ->leftJoin('category_product', function ($join) use ($categoryId) {
-                $join->on('products.id', '=', 'category_product.product_id')
-                    ->where('category_product.category_id', '=', $categoryId)
-                    ->where('category_product.item_type', '=', 'product');
+        $existingProductIds = DB::table('category_product')
+            ->where('category_id', $categoryId)
+            ->where('item_type', 'product')
+            ->pluck('product_id')
+            ->map(fn ($productId) => (int) $productId)
+            ->flip();
+
+        $candidateProductRows = Product::query()
+            ->leftJoin('product_links as parent_links', function ($join) {
+                $join->on('products.id', '=', 'parent_links.linked_product_id')
+                    ->where('parent_links.link_type', '=', 'super_link');
             })
             ->where('products.category_id', $categoryId)
-            ->whereNull('category_product.id')
             ->orderBy('products.created_at')
             ->orderBy('products.id')
-            ->pluck('products.id');
+            ->get([
+                'products.id',
+                'parent_links.product_id as parent_product_id',
+            ]);
+
+        $missingProductIds = $candidateProductRows
+            ->map(fn ($row) => (int) ($row->parent_product_id ?: $row->id))
+            ->filter(fn ($productId) => $productId > 0 && !$existingProductIds->has($productId))
+            ->unique()
+            ->values();
 
         if ($missingProductIds->isEmpty()) {
             return;

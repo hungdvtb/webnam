@@ -72,26 +72,28 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame([$second->id, $first->id, $third->id], $webApiIds);
     }
 
-    public function test_category_update_persists_variant_and_bundle_option_assignments_as_distinct_items(): void
+    public function test_category_update_normalizes_variant_assignments_to_parent_and_keeps_bundle_options_distinct(): void
     {
         [$category, $variantParent, $variant, $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();
 
         $this->assertSame([], $bundle->fresh()->categories()->pluck('categories.id')->all());
-        $this->assertSame([$category->id], $variant->fresh()->categories()->pluck('categories.id')->all());
+        $this->assertSame([], $variant->fresh()->categories()->pluck('categories.id')->all());
+        $this->assertSame([$category->id], $variantParent->fresh()->categories()->pluck('categories.id')->all());
 
         $productsResponse = $this->getJson("/api/categories/{$category->id}/products")
             ->assertOk();
 
         $payload = $productsResponse->json();
         $items = collect($payload['products'] ?? [])->keyBy('assignment_key');
-        $variantKey = "product:{$variant->id}";
+        $variantParentKey = "product:{$variantParent->id}";
         $bundleOptionKey = "bundle_option:{$bundle->id}:post:{$optionPost->id}";
 
         $this->assertSame(2, data_get($payload, 'category.items_count'));
-        $this->assertSame([$variantKey, $bundleOptionKey], collect($payload['products'])->pluck('assignment_key')->all());
-        $this->assertSame('product', data_get($items->get($variantKey), 'item_type'));
-        $this->assertSame('Bien the', data_get($items->get($variantKey), 'display_label'));
-        $this->assertSame($variantParent->name, data_get($items->get($variantKey), 'variant_parent_name'));
+        $this->assertSame([$variantParentKey, $bundleOptionKey], collect($payload['products'])->pluck('assignment_key')->all());
+        $this->assertSame('product', data_get($items->get($variantParentKey), 'item_type'));
+        $this->assertSame('San pham co bien the', data_get($items->get($variantParentKey), 'display_label'));
+        $this->assertSame($variantParent->name, data_get($items->get($variantParentKey), 'name'));
+        $this->assertNull(data_get($items->get($variantParentKey), 'variant_parent_name'));
         $this->assertSame('bundle_option', data_get($items->get($bundleOptionKey), 'item_type'));
         $this->assertSame('Tuy chon bundle', data_get($items->get($bundleOptionKey), 'display_label'));
         $this->assertSame($bundle->name, data_get($items->get($bundleOptionKey), 'bundle_parent_name'));
@@ -100,10 +102,16 @@ class CategoryProductOrderingTest extends TestCase
 
         $this->assertDatabaseHas('category_product', [
             'category_id' => $category->id,
-            'product_id' => $variant->id,
+            'product_id' => $variantParent->id,
             'item_type' => 'product',
             'bundle_option_key' => '',
             'sort_order' => 0,
+        ]);
+        $this->assertDatabaseMissing('category_product', [
+            'category_id' => $category->id,
+            'product_id' => $variant->id,
+            'item_type' => 'product',
+            'bundle_option_key' => '',
         ]);
         $this->assertDatabaseHas('category_product', [
             'category_id' => $category->id,
@@ -122,9 +130,95 @@ class CategoryProductOrderingTest extends TestCase
         ]);
     }
 
+    public function test_admin_category_products_payload_collapses_existing_variant_rows_to_parent(): void
+    {
+        $this->authenticateAdmin();
+
+        $category = Category::query()->create([
+            'name' => 'Do tho co bien the',
+            'slug' => 'do-tho-co-bien-the',
+            'status' => true,
+        ]);
+        $variantParent = $this->createProduct(
+            null,
+            'Bo tho cha',
+            'bo-tho-cha-existing',
+            Carbon::parse('2026-03-10 08:00:00'),
+            null,
+            'configurable'
+        );
+        $variant = $this->createProduct(
+            $category,
+            'Bo tho cha - Men lam',
+            'bo-tho-cha-men-lam-existing',
+            Carbon::parse('2026-03-10 09:00:00'),
+            0
+        );
+        $this->attachVariation($variantParent, $variant, Carbon::parse('2026-03-10 09:00:00'));
+
+        $response = $this->getJson("/api/categories/{$category->id}/products")
+            ->assertOk();
+
+        $items = collect($response->json('products'));
+
+        $this->assertSame(["product:{$variantParent->id}"], $items->pluck('assignment_key')->all());
+        $this->assertSame('San pham co bien the', data_get($items->first(), 'display_label'));
+        $this->assertSame($variantParent->id, data_get($items->first(), 'product_id'));
+        $this->assertDatabaseHas('category_product', [
+            'category_id' => $category->id,
+            'product_id' => $variant->id,
+            'item_type' => 'product',
+            'bundle_option_key' => '',
+        ]);
+    }
+
+    public function test_admin_category_products_backfills_variant_primary_category_as_parent_assignment(): void
+    {
+        $this->authenticateAdmin();
+
+        $category = Category::query()->create([
+            'name' => 'Do tho legacy category id',
+            'slug' => 'do-tho-legacy-category-id',
+            'status' => true,
+        ]);
+        $variantParent = $this->createProduct(
+            null,
+            'Bo tho cha legacy',
+            'bo-tho-cha-legacy',
+            Carbon::parse('2026-03-10 08:00:00'),
+            null,
+            'configurable'
+        );
+        $variant = $this->createProduct(
+            null,
+            'Bo tho cha legacy - Men lam',
+            'bo-tho-cha-legacy-men-lam',
+            Carbon::parse('2026-03-10 09:00:00')
+        );
+        $variant->update(['category_id' => $category->id]);
+        $this->attachVariation($variantParent, $variant, Carbon::parse('2026-03-10 09:00:00'));
+
+        $response = $this->getJson("/api/categories/{$category->id}/products")
+            ->assertOk();
+
+        $this->assertSame(["product:{$variantParent->id}"], collect($response->json('products'))->pluck('assignment_key')->all());
+        $this->assertDatabaseHas('category_product', [
+            'category_id' => $category->id,
+            'product_id' => $variantParent->id,
+            'item_type' => 'product',
+            'bundle_option_key' => '',
+        ]);
+        $this->assertDatabaseMissing('category_product', [
+            'category_id' => $category->id,
+            'product_id' => $variant->id,
+            'item_type' => 'product',
+            'bundle_option_key' => '',
+        ]);
+    }
+
     public function test_category_product_reorder_accepts_mixed_bundle_option_items_payload(): void
     {
-        [$category, , $variant, $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();
+        [$category, $variantParent, $variant, $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();
 
         $response = $this->postJson("/api/categories/{$category->id}/products/reorder", [
             'items' => [
@@ -142,7 +236,7 @@ class CategoryProductOrderingTest extends TestCase
 
         $this->assertSame([
             "bundle_option:{$bundle->id}:post:{$optionPost->id}",
-            "product:{$variant->id}",
+            "product:{$variantParent->id}",
         ], collect($response->json('products'))->pluck('assignment_key')->all());
 
         $this->assertDatabaseHas('category_product', [
@@ -154,10 +248,16 @@ class CategoryProductOrderingTest extends TestCase
         ]);
         $this->assertDatabaseHas('category_product', [
             'category_id' => $category->id,
-            'product_id' => $variant->id,
+            'product_id' => $variantParent->id,
             'item_type' => 'product',
             'bundle_option_key' => '',
             'sort_order' => 1,
+        ]);
+        $this->assertDatabaseMissing('category_product', [
+            'category_id' => $category->id,
+            'product_id' => $variant->id,
+            'item_type' => 'product',
+            'bundle_option_key' => '',
         ]);
     }
 
@@ -270,7 +370,7 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame(196000.0, (float) data_get($bundleOption, 'bundle_option_discount_amount'));
     }
 
-    public function test_web_api_products_expands_bundle_product_category_assignment_into_option_items(): void
+    public function test_web_api_products_keeps_bundle_parent_assignment_as_parent_item(): void
     {
         $category = Category::query()->create([
             'name' => 'Bo combo',
@@ -304,12 +404,11 @@ class CategoryProductOrderingTest extends TestCase
 
         $items = collect($response->json('data'));
 
-        $this->assertSame([
-            'Ban than tai - Men lam',
-            'Ban tho 1m - Men lam',
-        ], $items->pluck('name')->all());
-        $this->assertSame(['bundle_option', 'bundle_option'], $items->pluck('item_type')->all());
-        $this->assertSame([900000.0, 1800000.0], $items->pluck('current_price')->map(fn ($price) => (float) $price)->all());
+        $this->assertCount(1, $items);
+        $this->assertSame($bundle->id, data_get($items->first(), 'id'));
+        $this->assertSame('Tron bo do tho', data_get($items->first(), 'name'));
+        $this->assertSame('product', data_get($items->first(), 'item_type'));
+        $this->assertNull(data_get($items->first(), 'bundle_option_key'));
     }
 
     private function seedCategoryWithVariantAndBundleOptionAssignments(): array

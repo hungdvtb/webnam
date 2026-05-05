@@ -197,10 +197,18 @@ class ProductController extends Controller
             ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
             ->implode(' ');
 
-        $directAssignments = DB::table('category_product')
+        $bundleOptionAssignmentSql = "category_product.item_type = 'bundle_option' OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> ''";
+        $resolvedProductIdSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN category_product.product_id ELSE COALESCE(super_links.product_id, category_product.product_id) END";
+        $itemTypeSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN 'bundle_option' ELSE 'product' END";
+
+        $subquery = DB::table('category_product')
             ->join('products as assigned_products', 'assigned_products.id', '=', 'category_product.product_id')
-            ->selectRaw('category_product.product_id')
-            ->selectRaw("CASE WHEN category_product.item_type = 'bundle_option' OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> '' THEN 'bundle_option' ELSE 'product' END as item_type")
+            ->leftJoin('product_links as super_links', function ($join) {
+                $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
+                    ->where('super_links.link_type', '=', 'super_link');
+            })
+            ->selectRaw("{$resolvedProductIdSql} as product_id")
+            ->selectRaw("{$itemTypeSql} as item_type")
             ->selectRaw("COALESCE(category_product.bundle_option_key, '') as bundle_option_key")
             ->selectRaw('category_product.bundle_option_post_id')
             ->selectRaw('category_product.bundle_option_title')
@@ -211,69 +219,7 @@ class ProductController extends Controller
                     ->whereIn('category_product.item_type', ['product', 'bundle_option'])
                     ->orWhereNull('category_product.item_type');
             })
-            ->where(function ($assignmentQuery) {
-                $assignmentQuery
-                    ->where('category_product.item_type', 'bundle_option')
-                    ->orWhereRaw("COALESCE(category_product.bundle_option_key, '') <> ''")
-                    ->orWhereNotNull('category_product.bundle_option_post_id')
-                    ->orWhereRaw("COALESCE(category_product.bundle_option_title, '') <> ''")
-                    ->orWhere(function ($productTypeQuery) {
-                        $productTypeQuery
-                            ->where('assigned_products.type', '<>', 'bundle')
-                            ->orWhereNull('assigned_products.type');
-                    });
-            })
-            ->groupBy(
-                'category_product.product_id',
-                'assigned_products.type',
-                'category_product.item_type',
-                'category_product.bundle_option_key',
-                'category_product.bundle_option_post_id',
-                'category_product.bundle_option_title'
-            );
-
-        $expandedBundleAssignments = DB::table('category_product')
-            ->join('products as assigned_products', 'assigned_products.id', '=', 'category_product.product_id')
-            ->join('product_links as bundle_links', function ($join) {
-                $join->on('bundle_links.product_id', '=', 'category_product.product_id')
-                    ->where('bundle_links.link_type', '=', 'bundle');
-            })
-            ->selectRaw('category_product.product_id')
-            ->selectRaw("'bundle_option' as item_type")
-            ->selectRaw("'' as bundle_option_key")
-            ->selectRaw('bundle_links.option_post_id as bundle_option_post_id')
-            ->selectRaw("COALESCE(NULLIF(bundle_links.option_title, ''), 'Mac dinh') as bundle_option_title")
-            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000000 + COALESCE(category_product.sort_order, 999999) * 1000 + COALESCE(bundle_links.position, 999)) as category_order_key")
-            ->whereIn('category_product.category_id', $normalizedCategoryIds)
-            ->where(function ($categoryQuery) {
-                $categoryQuery
-                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
-                    ->orWhereNull('category_product.item_type');
-            })
-            ->where('assigned_products.type', 'bundle')
-            ->where(function ($assignmentQuery) {
-                $assignmentQuery
-                    ->whereNull('category_product.item_type')
-                    ->orWhere('category_product.item_type', 'product');
-            })
-            ->whereRaw("COALESCE(category_product.bundle_option_key, '') = ''")
-            ->whereNull('category_product.bundle_option_post_id')
-            ->whereRaw("COALESCE(category_product.bundle_option_title, '') = ''")
-            ->groupBy(
-                'category_product.product_id',
-                'bundle_links.option_post_id',
-                'bundle_links.option_title'
-            );
-
-        $subquery = DB::query()
-            ->fromSub($directAssignments->unionAll($expandedBundleAssignments), 'category_assignment_rows')
-            ->selectRaw('product_id')
-            ->selectRaw('item_type')
-            ->selectRaw('bundle_option_key')
-            ->selectRaw('bundle_option_post_id')
-            ->selectRaw('bundle_option_title')
-            ->selectRaw('MIN(category_order_key) as category_order_key')
-            ->groupBy('product_id', 'item_type', 'bundle_option_key', 'bundle_option_post_id', 'bundle_option_title');
+            ->groupByRaw("{$resolvedProductIdSql}, {$itemTypeSql}, category_product.bundle_option_key, category_product.bundle_option_post_id, category_product.bundle_option_title");
 
         $query
             ->joinSub($subquery, $alias, function ($join) use ($alias) {
@@ -749,7 +695,7 @@ class ProductController extends Controller
         });
 
         $bundleOptionProductIds = $products->getCollection()
-            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option' || ($product->type ?? '') === 'bundle')
+            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option')
             ->pluck('id')
             ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
             ->filter()
@@ -949,20 +895,6 @@ class ProductController extends Controller
                 $pid = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $enrichedParentId = $parentIdMap[$pid] ?? null;
                 $enrichedAttrValues = $attrValuesMap[$pid] ?? [];
-
-                if ($itemType === 'product' && ($product['type'] ?? '') === 'bundle' && !empty($bundleOptionCatalog[$productId])) {
-                    return collect($this->uniqueBundleOptionCatalogValues($bundleOptionCatalog[$productId]))
-                        ->map(fn (array $meta) => $this->mapBundleOptionListProduct(
-                            $product,
-                            $meta,
-                            $meta['key'] ?? null,
-                            $meta['bundle_option_title'] ?? null,
-                            $meta['bundle_option_post_id'] ?? null,
-                            $enrichedParentId,
-                            $enrichedAttrValues
-                        ))
-                        ->all();
-                }
 
                 if (!is_array($optionMeta)) {
                     return [[

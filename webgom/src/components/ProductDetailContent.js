@@ -21,6 +21,67 @@ import GroupedProductView from './product/GroupedProductView';
 import BundleProductView from './product/BundleProductView';
 
 const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
+const MOBILE_BOTTOM_ORDER_OFFSET = 96;
+
+const getMobileScrollOffset = () => {
+  if (typeof document === 'undefined') {
+    return 80;
+  }
+
+  const stickyHeader = document.querySelector('.mobile-sticky-header-shell');
+  const stickyHeaderHeight = Math.round(
+    stickyHeader?.getBoundingClientRect?.().height || stickyHeader?.offsetHeight || 0
+  );
+
+  if (stickyHeaderHeight > 0) {
+    return stickyHeaderHeight + 8;
+  }
+
+  const promoBar = document.querySelector('.top-promotion-bar');
+  const promoBarHeight = Math.round(promoBar?.getBoundingClientRect?.().height || 32);
+
+  return promoBarHeight + 8;
+};
+
+const getBundleSelectionAreaNode = () => {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  return document.querySelector('#bundle-list');
+};
+
+const isBundleSelectionAreaActive = (targetNode) => {
+  if (typeof window === 'undefined' || !targetNode) {
+    return false;
+  }
+
+  const rect = targetNode.getBoundingClientRect();
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  const topBoundary = getMobileScrollOffset();
+  const activationBoundary = Math.min(
+    viewportHeight * 0.45,
+    viewportHeight - MOBILE_BOTTOM_ORDER_OFFSET
+  );
+  const lowerBoundary = Math.max(topBoundary + 120, activationBoundary);
+
+  return rect.top <= lowerBoundary && rect.bottom > topBoundary + 80;
+};
+
+const scrollToBundleSelectionArea = (targetNode) => {
+  if (typeof window === 'undefined' || !targetNode) {
+    return false;
+  }
+
+  const targetTop = Math.max(
+    0,
+    Math.round(window.scrollY + targetNode.getBoundingClientRect().top - getMobileScrollOffset())
+  );
+
+  window.scrollTo({ top: targetTop, behavior: 'smooth' });
+
+  return true;
+};
 
 const sortProductImagesForDisplay = (sourceImages = []) => {
   const images = Array.isArray(sourceImages) ? sourceImages : [];
@@ -746,6 +807,20 @@ export default function ProductDetailContent({
     return false;
   };
 
+  const scrollToBundleSelectionBeforeMobileOrder = () => {
+    if (product?.type !== 'bundle') {
+      return false;
+    }
+
+    const targetNode = getBundleSelectionAreaNode();
+
+    if (!targetNode || isBundleSelectionAreaActive(targetNode)) {
+      return false;
+    }
+
+    return scrollToBundleSelectionArea(targetNode);
+  };
+
   const handleAddToCart = (e) => {
     if (e) e.preventDefault();
     if (checkAndScrollToOptions()) return;
@@ -787,6 +862,11 @@ export default function ProductDetailContent({
         return;
       }
 
+      if (scrollToBundleSelectionBeforeMobileOrder()) {
+        respond({ success: true });
+        return;
+      }
+
       const validationMessage = getMobileQuickOrderValidationMessage();
       if (validationMessage) {
         respond({ success: false, message: validationMessage });
@@ -805,8 +885,10 @@ export default function ProductDetailContent({
     };
   }, [
     addCurrentSelectionToCart,
+    checkAndScrollToOptions,
     getMobileQuickOrderValidationMessage,
-    router
+    router,
+    scrollToBundleSelectionBeforeMobileOrder
   ]);
 
   const handleBuyBundleConfig = (configName) => {

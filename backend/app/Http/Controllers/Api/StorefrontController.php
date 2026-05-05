@@ -100,16 +100,24 @@ class StorefrontController extends Controller
             ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
             ->implode(' ');
 
+        $bundleOptionAssignmentSql = "category_product.item_type = 'bundle_option' OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> ''";
+        $resolvedProductIdSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN category_product.product_id ELSE COALESCE(super_links.product_id, category_product.product_id) END";
+        $itemTypeSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN 'bundle_option' ELSE 'product' END";
+
         $subquery = DB::table('category_product')
-            ->selectRaw('product_id')
-            ->selectRaw("CASE WHEN item_type = 'bundle_option' THEN 'bundle_option' ELSE 'product' END as item_type")
-            ->selectRaw("COALESCE(bundle_option_key, '') as bundle_option_key")
-            ->selectRaw('bundle_option_post_id')
-            ->selectRaw('bundle_option_title')
-            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
-            ->whereIn('category_id', $normalizedCategoryIds)
-            ->whereIn('item_type', ['product', 'bundle_option'])
-            ->groupBy('product_id', 'item_type', 'bundle_option_key', 'bundle_option_post_id', 'bundle_option_title');
+            ->leftJoin('product_links as super_links', function ($join) {
+                $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
+                    ->where('super_links.link_type', '=', 'super_link');
+            })
+            ->selectRaw("{$resolvedProductIdSql} as product_id")
+            ->selectRaw("{$itemTypeSql} as item_type")
+            ->selectRaw("COALESCE(category_product.bundle_option_key, '') as bundle_option_key")
+            ->selectRaw('category_product.bundle_option_post_id')
+            ->selectRaw('category_product.bundle_option_title')
+            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(category_product.sort_order, 999999)) as category_order_key")
+            ->whereIn('category_product.category_id', $normalizedCategoryIds)
+            ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+            ->groupByRaw("{$resolvedProductIdSql}, {$itemTypeSql}, category_product.bundle_option_key, category_product.bundle_option_post_id, category_product.bundle_option_title");
 
         $query
             ->joinSub($subquery, $alias, function ($join) use ($alias) {
@@ -139,17 +147,58 @@ class StorefrontController extends Controller
             return;
         }
 
-        $countMap = DB::table('category_product')
+        $assignmentRows = DB::table('category_product')
             ->join('products', 'products.id', '=', 'category_product.product_id')
+            ->leftJoin('product_links as super_links', function ($join) {
+                $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
+                    ->where('super_links.link_type', '=', 'super_link');
+            })
             ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
             ->whereIn('category_product.category_id', $categoryIds->all())
-            ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+            ->where(function ($query) {
+                $query
+                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+                    ->orWhereNull('category_product.item_type');
+            })
             ->where('products.status', true)
             ->whereNull('products.deleted_at')
-            ->selectRaw('category_product.category_id, COUNT(*) as storefront_items_count')
-            ->groupBy('category_product.category_id')
-            ->get()
-            ->mapWithKeys(fn ($row) => [(int) $row->category_id => (int) $row->storefront_items_count]);
+            ->get([
+                'category_product.category_id',
+                'category_product.product_id',
+                'category_product.item_type',
+                'category_product.bundle_option_key',
+                'category_product.bundle_option_post_id',
+                'category_product.bundle_option_title',
+                'super_links.product_id as parent_product_id',
+            ]);
+
+        $countMap = $assignmentRows
+            ->groupBy(fn ($row) => (int) $row->category_id)
+            ->map(function ($rows) {
+                return $rows
+                    ->map(function ($row) {
+                        $bundleOptionKey = trim((string) ($row->bundle_option_key ?? ''));
+                        $bundleOptionTitle = trim((string) ($row->bundle_option_title ?? ''));
+                        $isBundleOption = (string) ($row->item_type ?? '') === 'bundle_option'
+                            || $bundleOptionKey !== ''
+                            || filled($row->bundle_option_post_id ?? null)
+                            || $bundleOptionTitle !== '';
+                        $productId = $isBundleOption
+                            ? (int) $row->product_id
+                            : (int) ($row->parent_product_id ?: $row->product_id);
+                        $optionKey = $bundleOptionKey !== ''
+                            ? $bundleOptionKey
+                            : (filled($row->bundle_option_post_id ?? null)
+                                ? 'post:' . (int) $row->bundle_option_post_id
+                                : 'title:' . strtolower($bundleOptionTitle));
+
+                        return $isBundleOption
+                            ? "bundle_option:{$productId}:{$optionKey}"
+                            : "product:{$productId}";
+                    })
+                    ->unique()
+                    ->count();
+            });
 
         $normalizedCategories->each(function ($category) use ($countMap) {
             $category->setAttribute('products_count', (int) ($countMap->get((int) $category->id) ?? 0));
@@ -431,9 +480,14 @@ class StorefrontController extends Controller
 
         // Slim response: only essential fields
         $products->getCollection()->transform(function ($p) {
-            $itemType = ($p->item_type ?? '') === 'bundle_option' ? 'bundle_option' : 'product';
             $bundleOptionKey = trim((string) ($p->bundle_option_key ?? ''));
             $bundleOptionTitle = Str::squish((string) ($p->bundle_option_title ?? ''));
+            $itemType = (
+                ($p->item_type ?? '') === 'bundle_option'
+                || $bundleOptionKey !== ''
+                || filled($p->bundle_option_post_id ?? null)
+                || $bundleOptionTitle !== ''
+            ) ? 'bundle_option' : 'product';
 
             return [
                 'id' => $p->id,

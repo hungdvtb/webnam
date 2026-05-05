@@ -226,15 +226,15 @@ export const buildCategoryPickerGroups = (products, query = '') => {
     return (Array.isArray(products) ? products : [])
         .map((product) => {
             const baseProduct = createProductPickerItem(product);
-            const baseMatches = normalizedQuery === ''
-                || normalizeCategoryAssignmentSearchValue(baseProduct.search_text).includes(normalizedQuery);
-            const variations = (Array.isArray(product?.variations) ? product.variations : [])
+            const variationSearchText = (Array.isArray(product?.variations) ? product.variations : [])
                 .map((variation) => createVariantPickerItem(product, variation))
-                .filter((item) => (
-                    normalizedQuery === ''
-                    || baseMatches
-                    || normalizeCategoryAssignmentSearchValue(item.search_text).includes(normalizedQuery)
-                ));
+                .map((item) => item.search_text)
+                .join(' ');
+            const baseMatches = normalizedQuery === ''
+                || normalizeCategoryAssignmentSearchValue([
+                    baseProduct.search_text,
+                    variationSearchText,
+                ].filter(Boolean).join(' ')).includes(normalizedQuery);
             const bundleOptions = (Array.isArray(product?.bundle_options) ? product.bundle_options : [])
                 .map((option) => createBundleOptionPickerItem(product, option))
                 .filter((item) => (
@@ -242,7 +242,7 @@ export const buildCategoryPickerGroups = (products, query = '') => {
                     || baseMatches
                     || normalizeCategoryAssignmentSearchValue(item.search_text).includes(normalizedQuery)
                 ));
-            const hasChildren = variations.length > 0 || bundleOptions.length > 0;
+            const hasChildren = bundleOptions.length > 0;
 
             if (!baseMatches && !hasChildren) {
                 return null;
@@ -251,7 +251,7 @@ export const buildCategoryPickerGroups = (products, query = '') => {
             return {
                 product: baseProduct,
                 showProductSelection: baseMatches || normalizedQuery === '',
-                variations,
+                variations: [],
                 bundleOptions,
             };
         })

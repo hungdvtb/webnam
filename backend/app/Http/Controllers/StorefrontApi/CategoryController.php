@@ -33,17 +33,58 @@ class CategoryController extends Controller
             return;
         }
 
-        $countMap = DB::table('category_product')
+        $assignmentRows = DB::table('category_product')
             ->join('products', 'products.id', '=', 'category_product.product_id')
+            ->leftJoin('product_links as super_links', function ($join) {
+                $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
+                    ->where('super_links.link_type', '=', 'super_link');
+            })
             ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
             ->whereIn('category_product.category_id', $categoryIds->all())
-            ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+            ->where(function ($query) {
+                $query
+                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+                    ->orWhereNull('category_product.item_type');
+            })
             ->where('products.status', true)
             ->whereNull('products.deleted_at')
-            ->selectRaw('category_product.category_id, COUNT(*) as storefront_items_count')
-            ->groupBy('category_product.category_id')
-            ->get()
-            ->mapWithKeys(fn ($row) => [(int) $row->category_id => (int) $row->storefront_items_count]);
+            ->get([
+                'category_product.category_id',
+                'category_product.product_id',
+                'category_product.item_type',
+                'category_product.bundle_option_key',
+                'category_product.bundle_option_post_id',
+                'category_product.bundle_option_title',
+                'super_links.product_id as parent_product_id',
+            ]);
+
+        $countMap = $assignmentRows
+            ->groupBy(fn ($row) => (int) $row->category_id)
+            ->map(function ($rows) {
+                return $rows
+                    ->map(function ($row) {
+                        $bundleOptionKey = trim((string) ($row->bundle_option_key ?? ''));
+                        $bundleOptionTitle = trim((string) ($row->bundle_option_title ?? ''));
+                        $isBundleOption = (string) ($row->item_type ?? '') === 'bundle_option'
+                            || $bundleOptionKey !== ''
+                            || filled($row->bundle_option_post_id ?? null)
+                            || $bundleOptionTitle !== '';
+                        $productId = $isBundleOption
+                            ? (int) $row->product_id
+                            : (int) ($row->parent_product_id ?: $row->product_id);
+                        $optionKey = $bundleOptionKey !== ''
+                            ? $bundleOptionKey
+                            : (filled($row->bundle_option_post_id ?? null)
+                                ? 'post:' . (int) $row->bundle_option_post_id
+                                : 'title:' . strtolower($bundleOptionTitle));
+
+                        return $isBundleOption
+                            ? "bundle_option:{$productId}:{$optionKey}"
+                            : "product:{$productId}";
+                    })
+                    ->unique()
+                    ->count();
+            });
 
         $normalizedCategories->each(function ($category) use ($countMap) {
             $category->setAttribute('products_count', (int) ($countMap->get((int) $category->id) ?? 0));

@@ -57,6 +57,7 @@ const CategoryItemPickerRow = ({
     const checked = selectedMap.has(item.assignment_key);
     const disabled = selectedItem?.is_removable === false;
     const leftPaddingClass = depth > 0 ? 'pl-12' : 'pl-4';
+    const optionKeyText = item.option_key_display || item.bundle_option_key || '';
 
     return (
         <label
@@ -96,6 +97,9 @@ const CategoryItemPickerRow = ({
                             <span>Cha: {item.variant_parent_name}</span>
                         ) : null}
                         {item.sku ? <span>SKU: {item.sku}</span> : null}
+                        {item.item_type === 'bundle_option' && optionKeyText ? (
+                            <span>Option: {optionKeyText}</span>
+                        ) : null}
                         {item.item_type === 'bundle_option' && item.bundle_items_count > 0 ? (
                             <span>{item.bundle_items_count} thanh phan</span>
                         ) : null}

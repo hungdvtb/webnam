@@ -25,6 +25,15 @@ export default function InfiniteProductList({ initialData }) {
           const productHref = buildProductDetailHref(product);
           const productCardKey = buildProductCardKey(product);
           const displayPrice = product.current_price ?? product.price ?? 0;
+          const cartOptions = product.item_type === 'bundle_option'
+            ? {
+                bundle_option_key: product.bundle_option_key,
+                bundle_option_title: product.bundle_option_title,
+                bundle_parent_name: product.bundle_parent_name,
+                bundle_option_total_price: product.bundle_option_total_price,
+                bundle_option_discounted_price: product.bundle_option_discounted_price,
+              }
+            : {};
 
           return (
             <div key={productCardKey} className={styles.productCard}>
@@ -53,7 +62,7 @@ export default function InfiniteProductList({ initialData }) {
                     className={styles.cartBtn}
                     onClick={(event) => {
                       event.preventDefault();
-                      addToCart(product, 1);
+                      addToCart(product, 1, cartOptions, [], displayPrice);
                       const card = event.currentTarget.closest(`.${styles.productCard}`);
                       const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
                       flyToCart(event, imgSrc);

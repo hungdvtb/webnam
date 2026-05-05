@@ -53,6 +53,8 @@ export const buildCategoryAssignmentSearchText = (item = {}) => [
     item?.variant_parent_name,
     item?.bundle_parent_name,
     item?.bundle_option_title,
+    item?.option_key_display,
+    item?.bundle_option_key,
     item?.category_name,
     ...(Array.isArray(item?.bundle_items_summary)
         ? item.bundle_items_summary.flatMap((summary) => [summary?.name, summary?.sku])
@@ -84,6 +86,7 @@ export const normalizeCategoryAssignmentItem = (item = {}) => {
         name: sanitizeText(item?.name),
         slug: sanitizeText(item?.slug),
         sku: sanitizeText(item?.sku),
+        display_sku: sanitizeText(item?.display_sku || item?.sku),
         product_type: sanitizeText(item?.product_type || item?.type),
         display_type: sanitizeText(item?.display_type || item?.product_type || item?.type),
         display_label: getCategoryAssignmentDisplayLabel(item),
@@ -92,6 +95,9 @@ export const normalizeCategoryAssignmentItem = (item = {}) => {
         bundle_parent_name: sanitizeText(item?.bundle_parent_name),
         bundle_parent_product_id: toNumber(item?.bundle_parent_product_id ?? item?.product_id),
         bundle_option_key: bundleOptionKey,
+        option_key_display: itemType === 'bundle_option'
+            ? sanitizeText(item?.option_key_display || bundleOptionKey)
+            : '',
         bundle_option_post_id: toNumber(item?.bundle_option_post_id),
         bundle_option_title: sanitizeText(item?.bundle_option_title || item?.name),
         bundle_items_count: Number(item?.bundle_items_count || 0) || 0,
@@ -133,6 +139,15 @@ const createBundleOptionKey = (option = {}) => {
     return `title:${optionTitle || 'mac dinh'}`;
 };
 
+const calculateBundleOptionDiscountedPrice = (subtotal) => {
+    const numericSubtotal = Number(subtotal || 0) || 0;
+    if (numericSubtotal <= 0) {
+        return 0;
+    }
+
+    return Math.max(numericSubtotal - Math.round(numericSubtotal * 0.1), 0);
+};
+
 const createProductPickerItem = (product = {}) => normalizeCategoryAssignmentItem({
     item_type: 'product',
     product_id: product?.id,
@@ -140,6 +155,7 @@ const createProductPickerItem = (product = {}) => normalizeCategoryAssignmentIte
     name: product?.name,
     slug: product?.slug,
     sku: product?.sku,
+    display_sku: product?.sku,
     product_type: product?.type,
     display_type: product?.type,
     display_label: PRODUCT_TYPE_LABELS[sanitizeText(product?.type)] || 'San pham',
@@ -154,6 +170,7 @@ const createVariantPickerItem = (product = {}, variation = {}) => normalizeCateg
     name: variation?.name || product?.name,
     slug: variation?.slug || product?.slug,
     sku: variation?.sku,
+    display_sku: variation?.sku,
     product_type: variation?.type || 'simple',
     display_type: 'variant',
     display_label: 'Bien the',
@@ -164,21 +181,33 @@ const createVariantPickerItem = (product = {}, variation = {}) => normalizeCateg
     is_variant_child: true,
 });
 
-const createBundleOptionPickerItem = (product = {}, option = {}) => normalizeCategoryAssignmentItem({
+const createBundleOptionPickerItem = (product = {}, option = {}) => {
+    const optionKey = option?.key || createBundleOptionKey(option);
+    const subtotal = Number(option?.subtotal || 0) || 0;
+    const discountedPrice = calculateBundleOptionDiscountedPrice(subtotal);
+
+    return normalizeCategoryAssignmentItem({
     item_type: 'bundle_option',
     product_id: product?.id,
     admin_product_id: product?.id,
     name: option?.option_title || 'Mac dinh',
     slug: product?.slug,
-    sku: product?.sku,
+    sku: product?.sku || optionKey,
+    display_sku: product?.sku || optionKey,
     product_type: 'bundle_option',
     display_type: 'bundle_option',
     display_label: 'Tuy chon bundle',
     bundle_parent_name: product?.name,
     bundle_parent_product_id: product?.id,
-    bundle_option_key: option?.key || createBundleOptionKey(option),
+    bundle_option_key: optionKey,
+    option_key_display: optionKey,
     bundle_option_post_id: option?.option_post_id,
     bundle_option_title: option?.option_title || 'Mac dinh',
+    price: subtotal,
+    current_price: discountedPrice,
+    special_price: discountedPrice < subtotal ? discountedPrice : null,
+    bundle_option_total_price: subtotal,
+    bundle_option_discounted_price: discountedPrice,
     bundle_items_count: Array.isArray(option?.items) ? option.items.length : 0,
     bundle_items_summary: Array.isArray(option?.items)
         ? option.items.map((bundleItem) => ({
@@ -188,7 +217,8 @@ const createBundleOptionPickerItem = (product = {}, option = {}) => normalizeCat
         : [],
     main_image: product?.main_image || option?.items?.[0]?.main_image || '',
     status: true,
-});
+    });
+};
 
 export const buildCategoryPickerGroups = (products, query = '') => {
     const normalizedQuery = normalizeCategoryAssignmentSearchValue(query);

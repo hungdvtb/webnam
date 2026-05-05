@@ -17,6 +17,8 @@ use Illuminate\Support\Str;
 
 class ProductController extends Controller
 {
+    private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
+
     private function normalizeBundleOptionKey($optionPostId, ?string $optionTitle): string
     {
         if (filled($optionPostId) && is_numeric($optionPostId)) {
@@ -31,6 +33,39 @@ class ProductController extends Controller
             ->value();
 
         return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
+    private function normalizeLocalizedBundleOptionKey($optionPostId, ?string $optionTitle): string
+    {
+        if (filled($optionPostId) && is_numeric($optionPostId)) {
+            return 'post:' . (int) $optionPostId;
+        }
+
+        $normalizedTitle = Str::lower(Str::squish((string) $optionTitle));
+
+        return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
+    private function getBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): array
+    {
+        $candidates = [];
+        $explicitKey = trim((string) $bundleOptionKey);
+
+        if ($explicitKey !== '') {
+            $candidates[] = $explicitKey;
+        }
+
+        if ($this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle)) {
+            $title = Str::squish((string) $bundleOptionTitle) ?: null;
+            $candidates[] = $this->normalizeBundleOptionKey($bundleOptionPostId, $title);
+            $candidates[] = $this->normalizeLocalizedBundleOptionKey($bundleOptionPostId, $title);
+        }
+
+        return collect($candidates)
+            ->filter(fn ($key) => trim((string) $key) !== '')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function hasBundleOptionAssignmentMeta($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): bool
@@ -61,6 +96,21 @@ class ProductController extends Controller
         }
 
         return $this->normalizeBundleOptionKey($bundleOptionPostId, Str::squish((string) $bundleOptionTitle) ?: null);
+    }
+
+    private function resolveBundleOptionCatalogMeta(array $catalog, int $productId, ?string $bundleOptionKey, $bundleOptionPostId = null, $bundleOptionTitle = null): ?array
+    {
+        if ($productId <= 0 || empty($catalog[$productId]) || !is_array($catalog[$productId])) {
+            return null;
+        }
+
+        foreach ($this->getBundleOptionKeyCandidates($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle) as $candidateKey) {
+            if (isset($catalog[$productId][$candidateKey]) && is_array($catalog[$productId][$candidateKey])) {
+                return $catalog[$productId][$candidateKey];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -147,19 +197,82 @@ class ProductController extends Controller
             ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
             ->implode(' ');
 
-        $subquery = DB::table('category_product')
-            ->selectRaw('product_id')
-            ->selectRaw("CASE WHEN item_type = 'bundle_option' OR COALESCE(bundle_option_key, '') <> '' OR bundle_option_post_id IS NOT NULL OR COALESCE(bundle_option_title, '') <> '' THEN 'bundle_option' ELSE 'product' END as item_type")
-            ->selectRaw("COALESCE(bundle_option_key, '') as bundle_option_key")
-            ->selectRaw('bundle_option_post_id')
-            ->selectRaw('bundle_option_title')
-            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
-            ->whereIn('category_id', $normalizedCategoryIds)
+        $directAssignments = DB::table('category_product')
+            ->join('products as assigned_products', 'assigned_products.id', '=', 'category_product.product_id')
+            ->selectRaw('category_product.product_id')
+            ->selectRaw("CASE WHEN category_product.item_type = 'bundle_option' OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> '' THEN 'bundle_option' ELSE 'product' END as item_type")
+            ->selectRaw("COALESCE(category_product.bundle_option_key, '') as bundle_option_key")
+            ->selectRaw('category_product.bundle_option_post_id')
+            ->selectRaw('category_product.bundle_option_title')
+            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000000 + COALESCE(category_product.sort_order, 999999) * 1000) as category_order_key")
+            ->whereIn('category_product.category_id', $normalizedCategoryIds)
             ->where(function ($categoryQuery) {
                 $categoryQuery
-                    ->whereIn('item_type', ['product', 'bundle_option'])
-                    ->orWhereNull('item_type');
+                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+                    ->orWhereNull('category_product.item_type');
             })
+            ->where(function ($assignmentQuery) {
+                $assignmentQuery
+                    ->where('category_product.item_type', 'bundle_option')
+                    ->orWhereRaw("COALESCE(category_product.bundle_option_key, '') <> ''")
+                    ->orWhereNotNull('category_product.bundle_option_post_id')
+                    ->orWhereRaw("COALESCE(category_product.bundle_option_title, '') <> ''")
+                    ->orWhere(function ($productTypeQuery) {
+                        $productTypeQuery
+                            ->where('assigned_products.type', '<>', 'bundle')
+                            ->orWhereNull('assigned_products.type');
+                    });
+            })
+            ->groupBy(
+                'category_product.product_id',
+                'assigned_products.type',
+                'category_product.item_type',
+                'category_product.bundle_option_key',
+                'category_product.bundle_option_post_id',
+                'category_product.bundle_option_title'
+            );
+
+        $expandedBundleAssignments = DB::table('category_product')
+            ->join('products as assigned_products', 'assigned_products.id', '=', 'category_product.product_id')
+            ->join('product_links as bundle_links', function ($join) {
+                $join->on('bundle_links.product_id', '=', 'category_product.product_id')
+                    ->where('bundle_links.link_type', '=', 'bundle');
+            })
+            ->selectRaw('category_product.product_id')
+            ->selectRaw("'bundle_option' as item_type")
+            ->selectRaw("'' as bundle_option_key")
+            ->selectRaw('bundle_links.option_post_id as bundle_option_post_id')
+            ->selectRaw("COALESCE(NULLIF(bundle_links.option_title, ''), 'Mac dinh') as bundle_option_title")
+            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000000 + COALESCE(category_product.sort_order, 999999) * 1000 + COALESCE(bundle_links.position, 999)) as category_order_key")
+            ->whereIn('category_product.category_id', $normalizedCategoryIds)
+            ->where(function ($categoryQuery) {
+                $categoryQuery
+                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+                    ->orWhereNull('category_product.item_type');
+            })
+            ->where('assigned_products.type', 'bundle')
+            ->where(function ($assignmentQuery) {
+                $assignmentQuery
+                    ->whereNull('category_product.item_type')
+                    ->orWhere('category_product.item_type', 'product');
+            })
+            ->whereRaw("COALESCE(category_product.bundle_option_key, '') = ''")
+            ->whereNull('category_product.bundle_option_post_id')
+            ->whereRaw("COALESCE(category_product.bundle_option_title, '') = ''")
+            ->groupBy(
+                'category_product.product_id',
+                'bundle_links.option_post_id',
+                'bundle_links.option_title'
+            );
+
+        $subquery = DB::query()
+            ->fromSub($directAssignments->unionAll($expandedBundleAssignments), 'category_assignment_rows')
+            ->selectRaw('product_id')
+            ->selectRaw('item_type')
+            ->selectRaw('bundle_option_key')
+            ->selectRaw('bundle_option_post_id')
+            ->selectRaw('bundle_option_title')
+            ->selectRaw('MIN(category_order_key) as category_order_key')
             ->groupBy('product_id', 'item_type', 'bundle_option_key', 'bundle_option_post_id', 'bundle_option_title');
 
         $query
@@ -293,6 +406,7 @@ class ProductController extends Controller
     private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts): array
     {
         $catalog = [];
+        $catalogAliases = [];
 
         foreach ($bundleItems as $bundleItem) {
             if (!$bundleItem instanceof Product) {
@@ -304,6 +418,7 @@ class ProductController extends Controller
                 : null;
             $optionTitle = Str::squish((string) ($bundleItem->pivot?->option_title ?? '')) ?: 'Mặc định';
             $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+            $optionAliases = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle);
             $optionPost = $optionPostId ? $optionPosts->get($optionPostId) : null;
             $selectedVariant = $this->resolveBundleItemVariantFromMap($bundleItem, $variantMap);
             $quantity = max(1, (int) ($bundleItem->pivot?->quantity ?? 1));
@@ -329,9 +444,22 @@ class ProductController extends Controller
                     'price' => 0.0,
                     'current_price' => 0.0,
                     'special_price' => null,
+                    'bundle_option_total_price' => 0.0,
+                    'bundle_option_discounted_price' => 0.0,
+                    'bundle_option_discount_amount' => 0.0,
+                    'bundle_option_discount_rate' => self::BUNDLE_FULL_SET_DISCOUNT_RATE,
+                    'bundle_option_base_price' => 0.0,
                     'items_count' => 0,
                 ];
             }
+
+            $catalogAliases[$optionKey] = collect($catalogAliases[$optionKey] ?? [])
+                ->merge($optionAliases)
+                ->push($optionKey)
+                ->filter(fn ($key) => trim((string) $key) !== '')
+                ->unique()
+                ->values()
+                ->all();
 
             if (!$catalog[$optionKey]['primary_image']) {
                 $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost);
@@ -345,19 +473,92 @@ class ProductController extends Controller
         }
 
         foreach ($catalog as $optionKey => $optionMeta) {
-            $currentPrice = round((float) ($optionMeta['current_price'] ?? 0), 2);
+            $totalPrice = round((float) ($optionMeta['current_price'] ?? 0), 2);
             $basePrice = round((float) ($optionMeta['price'] ?? 0), 2);
 
-            if ($basePrice <= 0 || $basePrice < $currentPrice) {
-                $basePrice = $currentPrice;
+            if ($basePrice <= 0 || $basePrice < $totalPrice) {
+                $basePrice = $totalPrice;
             }
 
-            $catalog[$optionKey]['current_price'] = $currentPrice;
-            $catalog[$optionKey]['price'] = $basePrice;
-            $catalog[$optionKey]['special_price'] = $basePrice > $currentPrice ? $currentPrice : null;
+            $discountAmount = $totalPrice > 0
+                ? round($totalPrice * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
+                : 0.0;
+            $discountedPrice = max($totalPrice - $discountAmount, 0);
+
+            $catalog[$optionKey]['price'] = $totalPrice;
+            $catalog[$optionKey]['current_price'] = $discountedPrice;
+            $catalog[$optionKey]['special_price'] = $discountedPrice < $totalPrice ? $discountedPrice : null;
+            $catalog[$optionKey]['bundle_option_total_price'] = $totalPrice;
+            $catalog[$optionKey]['bundle_option_discounted_price'] = $discountedPrice;
+            $catalog[$optionKey]['bundle_option_discount_amount'] = $discountAmount;
+            $catalog[$optionKey]['bundle_option_base_price'] = $basePrice;
+            $catalog[$optionKey]['bundle_option_key_aliases'] = $catalogAliases[$optionKey] ?? [$optionKey];
+        }
+
+        foreach ($catalog as $optionKey => $optionMeta) {
+            foreach ((array) ($optionMeta['bundle_option_key_aliases'] ?? []) as $aliasKey) {
+                $aliasKey = trim((string) $aliasKey);
+
+                if ($aliasKey !== '' && !isset($catalog[$aliasKey])) {
+                    $catalog[$aliasKey] = $optionMeta;
+                }
+            }
         }
 
         return $catalog;
+    }
+
+    private function uniqueBundleOptionCatalogValues(array $catalog): array
+    {
+        return collect($catalog)
+            ->filter(fn ($meta) => is_array($meta))
+            ->unique(fn (array $meta) => (string) ($meta['key'] ?? $meta['bundle_option_title'] ?? ''))
+            ->values()
+            ->all();
+    }
+
+    private function mapBundleOptionListProduct(
+        array $product,
+        array $optionMeta,
+        ?string $bundleOptionKey,
+        ?string $bundleOptionTitle,
+        $bundleOptionPostId,
+        $parentProductId,
+        array $attributeValues
+    ): array {
+        $primaryImage = $optionMeta['primary_image'] ?? ($product['primary_image'] ?? null);
+        $mainImage = $optionMeta['main_image']
+            ?? $this->extractImageUrl($primaryImage)
+            ?? ($product['main_image'] ?? null);
+        $totalPrice = round((float) ($optionMeta['bundle_option_total_price'] ?? $optionMeta['price'] ?? 0), 2);
+        $finalPrice = round((float) ($optionMeta['bundle_option_discounted_price'] ?? $optionMeta['current_price'] ?? $totalPrice), 2);
+
+        if ($totalPrice <= 0 || $totalPrice < $finalPrice) {
+            $totalPrice = $finalPrice;
+        }
+
+        return [
+            ...$product,
+            'item_type' => 'bundle_option',
+            'name' => $optionMeta['name'] ?? ($bundleOptionTitle ?: ($product['name'] ?? '')),
+            'price' => $totalPrice,
+            'current_price' => $finalPrice,
+            'special_price' => $totalPrice > $finalPrice ? $finalPrice : null,
+            'primary_image' => $primaryImage,
+            'main_image' => $mainImage,
+            'bundle_option_key' => $optionMeta['key'] ?? $bundleOptionKey,
+            'bundle_option_title' => $optionMeta['bundle_option_title'] ?? $bundleOptionTitle,
+            'bundle_option_post_id' => $optionMeta['bundle_option_post_id'] ?? $bundleOptionPostId,
+            'bundle_option_post_title' => $optionMeta['bundle_option_post_title'] ?? null,
+            'bundle_option_post_slug' => $optionMeta['bundle_option_post_slug'] ?? null,
+            'bundle_option_total_price' => $totalPrice,
+            'bundle_option_discounted_price' => $finalPrice,
+            'bundle_option_discount_amount' => $optionMeta['bundle_option_discount_amount'] ?? max($totalPrice - $finalPrice, 0),
+            'bundle_option_discount_rate' => $optionMeta['bundle_option_discount_rate'] ?? self::BUNDLE_FULL_SET_DISCOUNT_RATE,
+            'bundle_parent_name' => $product['name'] ?? null,
+            'parent_product_id' => $parentProductId,
+            'attribute_values' => $attributeValues,
+        ];
     }
 
     public function index(Request $request)
@@ -368,10 +569,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select('products.*')
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
-            ->when(!$request->boolean('allow_variants'), function($q) {
-                $q->whereDoesntHave('parentConfigurable'); // Hide variants by default
-            });
+            ->where('status', true);
         $selectedCategoryIds = [];
 
         // Filter by category slug
@@ -396,6 +594,8 @@ class ProductController extends Controller
 
         if (!empty($selectedCategoryIds)) {
             $this->joinCategoryAssignments($query, $selectedCategoryIds);
+        } elseif (!$request->boolean('allow_variants') && !$request->filled('parent_id')) {
+            $query->whereDoesntHave('parentConfigurable');
         }
 
         // Search
@@ -549,7 +749,7 @@ class ProductController extends Controller
         });
 
         $bundleOptionProductIds = $products->getCollection()
-            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option')
+            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option' || ($product->type ?? '') === 'bundle')
             ->pluck('id')
             ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
             ->filter()
@@ -720,7 +920,7 @@ class ProductController extends Controller
 
         $responseData = $products->toArray();
         $responseData['data'] = collect($responseData['data'] ?? [])
-            ->map(function (array $product) use ($bundleOptionCatalog, $parentIdMap, $attrValuesMap) {
+            ->flatMap(function (array $product) use ($bundleOptionCatalog, $parentIdMap, $attrValuesMap) {
                 $productId = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $bundleOptionKey = $this->resolveAssignmentBundleOptionKey(
                     $product['bundle_option_key'] ?? null,
@@ -736,17 +936,36 @@ class ProductController extends Controller
                 $bundleOptionTitle = $itemType === 'bundle_option'
                     ? (Str::squish((string) ($product['bundle_option_title'] ?? '')) ?: null)
                     : null;
-                $baseProductName = $product['name'] ?? null;
-                $optionMeta = $itemType === 'bundle_option' && $productId > 0 && $bundleOptionKey
-                    ? ($bundleOptionCatalog[$productId][$bundleOptionKey] ?? null)
+                $optionMeta = $itemType === 'bundle_option'
+                    ? $this->resolveBundleOptionCatalogMeta(
+                        $bundleOptionCatalog,
+                        $productId,
+                        $bundleOptionKey,
+                        $product['bundle_option_post_id'] ?? null,
+                        $product['bundle_option_title'] ?? null
+                    )
                     : null;
 
                 $pid = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $enrichedParentId = $parentIdMap[$pid] ?? null;
                 $enrichedAttrValues = $attrValuesMap[$pid] ?? [];
 
+                if ($itemType === 'product' && ($product['type'] ?? '') === 'bundle' && !empty($bundleOptionCatalog[$productId])) {
+                    return collect($this->uniqueBundleOptionCatalogValues($bundleOptionCatalog[$productId]))
+                        ->map(fn (array $meta) => $this->mapBundleOptionListProduct(
+                            $product,
+                            $meta,
+                            $meta['key'] ?? null,
+                            $meta['bundle_option_title'] ?? null,
+                            $meta['bundle_option_post_id'] ?? null,
+                            $enrichedParentId,
+                            $enrichedAttrValues
+                        ))
+                        ->all();
+                }
+
                 if (!is_array($optionMeta)) {
-                    return [
+                    return [[
                         ...$product,
                         'item_type' => $itemType,
                         'bundle_option_key' => $bundleOptionKey,
@@ -754,38 +973,18 @@ class ProductController extends Controller
                         'bundle_option_title' => $bundleOptionTitle,
                         'parent_product_id' => $enrichedParentId,
                         'attribute_values' => $enrichedAttrValues,
-                    ];
+                    ]];
                 }
 
-                $primaryImage = $optionMeta['primary_image'] ?? ($product['primary_image'] ?? null);
-                $mainImage = $optionMeta['main_image']
-                    ?? $this->extractImageUrl($primaryImage)
-                    ?? ($product['main_image'] ?? null);
-                $currentPrice = round((float) ($optionMeta['current_price'] ?? $product['current_price'] ?? $product['price'] ?? 0), 2);
-                $basePrice = round((float) ($optionMeta['price'] ?? $currentPrice), 2);
-
-                if ($basePrice <= 0 || $basePrice < $currentPrice) {
-                    $basePrice = $currentPrice;
-                }
-
-                return [
-                    ...$product,
-                    'item_type' => $itemType,
-                    'name' => $optionMeta['name'] ?? ($bundleOptionTitle ?: ($product['name'] ?? '')),
-                    'price' => $basePrice,
-                    'current_price' => $currentPrice,
-                    'special_price' => $basePrice > $currentPrice ? $currentPrice : null,
-                    'primary_image' => $primaryImage,
-                    'main_image' => $mainImage,
-                    'bundle_option_key' => $bundleOptionKey,
-                    'bundle_option_title' => $optionMeta['bundle_option_title'] ?? $bundleOptionTitle,
-                    'bundle_option_post_id' => $optionMeta['bundle_option_post_id'] ?? ($product['bundle_option_post_id'] ?? null),
-                    'bundle_option_post_title' => $optionMeta['bundle_option_post_title'] ?? null,
-                    'bundle_option_post_slug' => $optionMeta['bundle_option_post_slug'] ?? null,
-                    'bundle_parent_name' => $baseProductName,
-                    'parent_product_id' => $enrichedParentId,
-                    'attribute_values' => $enrichedAttrValues,
-                ];
+                return [$this->mapBundleOptionListProduct(
+                    $product,
+                    $optionMeta,
+                    $bundleOptionKey,
+                    $bundleOptionTitle,
+                    $product['bundle_option_post_id'] ?? null,
+                    $enrichedParentId,
+                    $enrichedAttrValues
+                )];
             })
             ->values()
             ->all();
@@ -954,7 +1153,7 @@ class ProductController extends Controller
                     ->values()
                     ->all();
             }
-            $responseData['bundle_options'] = array_values($bundleOptionCatalog);
+            $responseData['bundle_options'] = $this->uniqueBundleOptionCatalogValues($bundleOptionCatalog);
             $responseData['all_attributes'] = $allProductAttributes;
 
             return response()->json(Utf8Sanitizer::normalize($responseData));

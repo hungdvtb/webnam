@@ -180,7 +180,9 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame('bundle_option', data_get($bundleOption, 'item_type'));
         $this->assertSame('Lua chon men lam', data_get($bundleOption, 'name'));
         $this->assertSame(222000.0, (float) data_get($bundleOption, 'price'));
-        $this->assertSame(222000.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame(199800.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame(222000.0, (float) data_get($bundleOption, 'bundle_option_total_price'));
+        $this->assertSame(199800.0, (float) data_get($bundleOption, 'bundle_option_discounted_price'));
         $this->assertSame('/bundle-parent.jpg', data_get($bundleOption, 'primary_image.url'));
     }
 
@@ -211,8 +213,103 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame('bundle_option', data_get($bundleOption, 'item_type'));
         $this->assertSame('Lua chon men lam', data_get($bundleOption, 'name'));
         $this->assertSame(222000.0, (float) data_get($bundleOption, 'price'));
-        $this->assertSame(222000.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame(199800.0, (float) data_get($bundleOption, 'current_price'));
         $this->assertSame('Lua chon men lam', data_get($bundleOption, 'bundle_option_title'));
+    }
+
+    public function test_web_api_products_bundle_option_listing_uses_option_title_and_discounted_price_for_localized_title_keys(): void
+    {
+        $category = Category::query()->create([
+            'name' => 'Ban than tai',
+            'slug' => 'ban-than-tai',
+            'status' => true,
+        ]);
+        $bundle = $this->createProduct(
+            null,
+            'Tron bo do tho men lam ve vang 24K',
+            'tron-bo-do-tho-men-lam-ve-vang-24k',
+            Carbon::parse('2026-03-12 08:00:00'),
+            null,
+            'bundle'
+        );
+        $bundleItem = $this->createProduct(
+            null,
+            'Bat huong men lam ve vang',
+            'bat-huong-men-lam-ve-vang',
+            Carbon::parse('2026-03-12 09:00:00')
+        );
+        $optionTitle = 'Ban thần tài - Men lam vẽ vàng 24K';
+
+        $this->attachBundleItem($bundle, $bundleItem, Carbon::parse('2026-03-12 09:30:00'), [
+            'option_title' => $optionTitle,
+            'price' => 1960000,
+        ]);
+
+        DB::table('category_product')->insert([
+            'category_id' => $category->id,
+            'product_id' => $bundle->id,
+            'item_type' => 'bundle_option',
+            'bundle_option_key' => 'title:' . Str::lower(Str::squish($optionTitle)),
+            'bundle_option_post_id' => null,
+            'bundle_option_title' => $optionTitle,
+            'sort_order' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $response = $this->getJson("/api/web-api/products?category={$category->slug}")
+            ->assertOk();
+
+        $this->assertSame(1, $response->json('total'));
+        $bundleOption = $response->json('data.0');
+
+        $this->assertSame('bundle_option', data_get($bundleOption, 'item_type'));
+        $this->assertSame($optionTitle, data_get($bundleOption, 'name'));
+        $this->assertSame(1960000.0, (float) data_get($bundleOption, 'price'));
+        $this->assertSame(1764000.0, (float) data_get($bundleOption, 'current_price'));
+        $this->assertSame(196000.0, (float) data_get($bundleOption, 'bundle_option_discount_amount'));
+    }
+
+    public function test_web_api_products_expands_bundle_product_category_assignment_into_option_items(): void
+    {
+        $category = Category::query()->create([
+            'name' => 'Bo combo',
+            'slug' => 'bo-combo',
+            'status' => true,
+        ]);
+        $bundle = $this->createProduct(
+            $category,
+            'Tron bo do tho',
+            'tron-bo-do-tho',
+            Carbon::parse('2026-03-13 08:00:00'),
+            0,
+            'bundle'
+        );
+        $firstItem = $this->createProduct(null, 'Bat huong', 'bat-huong', Carbon::parse('2026-03-13 09:00:00'));
+        $secondItem = $this->createProduct(null, 'Den tho', 'den-tho', Carbon::parse('2026-03-13 10:00:00'));
+
+        $this->attachBundleItem($bundle, $firstItem, Carbon::parse('2026-03-13 09:30:00'), [
+            'option_title' => 'Ban than tai - Men lam',
+            'position' => 0,
+            'price' => 1000000,
+        ]);
+        $this->attachBundleItem($bundle, $secondItem, Carbon::parse('2026-03-13 10:30:00'), [
+            'option_title' => 'Ban tho 1m - Men lam',
+            'position' => 1,
+            'price' => 2000000,
+        ]);
+
+        $response = $this->getJson("/api/web-api/products?category={$category->slug}")
+            ->assertOk();
+
+        $items = collect($response->json('data'));
+
+        $this->assertSame([
+            'Ban than tai - Men lam',
+            'Ban tho 1m - Men lam',
+        ], $items->pluck('name')->all());
+        $this->assertSame(['bundle_option', 'bundle_option'], $items->pluck('item_type')->all());
+        $this->assertSame([900000.0, 1800000.0], $items->pluck('current_price')->map(fn ($price) => (float) $price)->all());
     }
 
     private function seedCategoryWithVariantAndBundleOptionAssignments(): array

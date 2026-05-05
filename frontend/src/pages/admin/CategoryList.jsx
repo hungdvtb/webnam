@@ -9,6 +9,7 @@ import CategoryProductSortModal from '../../components/admin/CategoryProductSort
 import CategorySubSortModal from '../../components/admin/CategorySubSortModal';
 import CategoryItemPickerModal from '../../components/admin/CategoryItemPickerModal';
 import { resolveEntityImageUrl } from '../../utils/mediaUrl';
+import { formatWholeMoneyInput } from '../../utils/money';
 import {
     buildCategoryPickerGroups,
     normalizeCategoryAssignmentItems,
@@ -337,6 +338,13 @@ const downloadBlobResponse = (response, fallbackFilename) => {
 
 const normalizeSortableCategoryProducts = (products) => normalizeCategoryAssignmentItems(products);
 
+const formatCategoryItemPrice = (item) => {
+    const value = item?.current_price ?? item?.bundle_option_discounted_price ?? item?.price;
+    const formatted = formatWholeMoneyInput(value);
+
+    return formatted ? `${formatted} VND` : '';
+};
+
 const resolveCategoryItemBadgeClasses = (item) => {
     if (item?.item_type === 'bundle_option') {
         return 'bg-amber-100 text-amber-700';
@@ -619,7 +627,11 @@ const CategoryProductRow = ({
     onDragEnd,
     onMoveUp,
     onMoveDown,
-}) => (
+}) => {
+    const priceText = product.item_type === 'bundle_option' ? formatCategoryItemPrice(product) : '';
+    const optionKeyText = product.option_key_display || product.bundle_option_key || '';
+
+    return (
     <div
         draggable
         onDragStart={() => onDragStart(product.assignment_key)}
@@ -705,7 +717,11 @@ const CategoryProductRow = ({
                         </p>
                     ) : null}
                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-medium text-stone/55">
-                        <span>SKU: {product.sku || '--'}</span>
+                        <span>SKU: {product.display_sku || product.sku || '--'}</span>
+                        {product.item_type === 'bundle_option' ? (
+                            <span>Option: {optionKeyText || '--'}</span>
+                        ) : null}
+                        {priceText ? <span>Gia sau giam: {priceText}</span> : null}
                         <span>ID: {product.product_id || product.admin_product_id || '--'}</span>
                         {product.category_name ? <span>Chính: {product.category_name}</span> : null}
                         {product.item_type === 'bundle_option' && product.bundle_items_count > 0 ? (
@@ -757,7 +773,8 @@ const CategoryProductRow = ({
             </div>
         </div>
     </div>
-);
+    );
+};
 
 const CategoryList = () => {
     const { showModal, showToast } = useUI();

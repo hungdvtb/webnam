@@ -141,16 +141,11 @@ class StorefrontController extends Controller
 
         $countMap = DB::table('category_product')
             ->join('products', 'products.id', '=', 'category_product.product_id')
-            ->leftJoin('product_links as parent_links', function ($join) {
-                $join->on('parent_links.linked_product_id', '=', 'products.id')
-                    ->where('parent_links.link_type', '=', 'super_link');
-            })
             ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
             ->whereIn('category_product.category_id', $categoryIds->all())
             ->whereIn('category_product.item_type', ['product', 'bundle_option'])
             ->where('products.status', true)
             ->whereNull('products.deleted_at')
-            ->whereNull('parent_links.product_id')
             ->selectRaw('category_product.category_id, COUNT(*) as storefront_items_count')
             ->groupBy('category_product.category_id')
             ->get()
@@ -341,7 +336,6 @@ class StorefrontController extends Controller
             ->select('products.*')
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
-            ->whereDoesntHave('parentConfigurable')
             ->with(['images' => function ($q) {
                 $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
             }, 'category:id,name,slug']);
@@ -370,6 +364,8 @@ class StorefrontController extends Controller
 
         if (!empty($selectedCategoryIds)) {
             $this->joinCategoryAssignments($query, $selectedCategoryIds);
+        } else {
+            $query->whereDoesntHave('parentConfigurable');
         }
 
         // Search

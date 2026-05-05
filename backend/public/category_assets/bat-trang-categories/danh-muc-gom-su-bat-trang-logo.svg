@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" fill="none">
+  <defs>
+    <radialGradient id="logo-porcelain" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(304 246) rotate(82) scale(256 236)">
+      <stop offset="0" stop-color="#fffdf7"/>
+      <stop offset="0.56" stop-color="#f4eee1"/>
+      <stop offset="1" stop-color="#dfd0b7"/>
+    </radialGradient>
+    <radialGradient id="logo-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(410 170) rotate(92) scale(236)">
+      <stop offset="0" stop-color="#f3d08a" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#f3d08a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="logo-cobalt" x1="160" y1="170" x2="468" y2="454" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#183f82"/>
+      <stop offset="1" stop-color="#1b365d"/>
+    </linearGradient>
+    <linearGradient id="logo-gold" x1="186" y1="110" x2="464" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0ce86"/>
+      <stop offset="1" stop-color="#a77a36"/>
+    </linearGradient>
+    <filter id="logo-shadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="28" stdDeviation="24" flood-color="#0b1734" flood-opacity="0.24"/>
+    </filter>
+    <filter id="logo-soft-blur" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+  </defs>
+
+  <circle cx="320" cy="320" r="256" fill="#f7f0e2"/>
+  <circle cx="392" cy="190" r="196" fill="url(#logo-glow)" filter="url(#logo-soft-blur)"/>
+  <circle cx="320" cy="324" r="229" fill="#c5a065" fill-opacity="0.2"/>
+  <circle cx="320" cy="310" r="210" fill="url(#logo-porcelain)" stroke="#c5a065" stroke-width="5"/>
+  <circle cx="320" cy="310" r="184" stroke="#1b365d" stroke-opacity="0.24" stroke-width="3"/>
+  <circle cx="320" cy="310" r="160" stroke="#c5a065" stroke-opacity="0.5" stroke-width="2"/>
+
+  <g opacity="0.38" stroke="#1b365d" stroke-linecap="round">
+    <path d="M158 278C208 246 266 230 320 230C374 230 432 246 482 278" stroke-width="3"/>
+    <path d="M184 318C224 294 272 282 320 282C368 282 416 294 456 318" stroke-width="2.4"/>
+    <path d="M220 360C248 344 284 336 320 336C356 336 392 344 420 360" stroke-width="2"/>
+  </g>
+
+  <g filter="url(#logo-shadow)" transform="translate(320 414) scale(0.58)">
+    <ellipse cx="0" cy="52" rx="318" ry="50" fill="#101728" fill-opacity="0.22"/>
+    <rect x="-332" y="6" width="664" height="34" rx="17" fill="#775633" fill-opacity="0.28"/>
+    <line x1="-300" y1="12" x2="300" y2="12" stroke="url(#logo-gold)" stroke-width="5" stroke-linecap="round"/>
+
+    <path d="M-262 12C-284-58-268-186-232-256C-214-291-208-318-206-350H-170C-168-318-162-291-144-256C-108-186-92-58-114 12Z" fill="#f7f1e7" stroke="#6f4f35" stroke-width="5"/>
+    <ellipse cx="-188" cy="-350" rx="24" ry="8" fill="#f7f1e7" stroke="#6f4f35" stroke-width="5"/>
+    <path d="M-226-136C-202-122-174-122-150-136" stroke="url(#logo-cobalt)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M-234-96C-202-76-166-76-134-96" stroke="url(#logo-cobalt)" stroke-width="7" stroke-linecap="round"/>
+
+    <path d="M262 12C284-58 268-186 232-256C214-291 208-318 206-350H170C168-318 162-291 144-256C108-186 92-58 114 12Z" fill="#f7f1e7" stroke="#6f4f35" stroke-width="5"/>
+    <ellipse cx="188" cy="-350" rx="24" ry="8" fill="#f7f1e7" stroke="#6f4f35" stroke-width="5"/>
+    <path d="M150-136C174-122 202-122 226-136" stroke="url(#logo-cobalt)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M134-96C166-76 202-76 234-96" stroke="url(#logo-cobalt)" stroke-width="7" stroke-linecap="round"/>
+
+    <ellipse cx="0" cy="-105" rx="108" ry="70" fill="#f9f4eb" stroke="#6f4f35" stroke-width="5"/>
+    <rect x="-24" y="-70" width="48" height="64" rx="15" fill="#f9f4eb" stroke="#6f4f35" stroke-width="5"/>
+    <ellipse cx="0" cy="22" rx="45" ry="14" fill="#f9f4eb" stroke="#6f4f35" stroke-width="5"/>
+    <ellipse cx="0" cy="-154" rx="58" ry="14" fill="#f9f4eb" stroke="#6f4f35" stroke-width="5"/>
+    <path d="M-42-154Q0-205 42-154L28-136H-28Z" fill="#f9f4eb" stroke="#6f4f35" stroke-width="5"/>
+    <circle cx="0" cy="-210" r="9" fill="url(#logo-gold)"/>
+    <path d="M-66-118C-28-98 28-98 66-118" stroke="url(#logo-cobalt)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M-72-82C-34-60 34-60 72-82" stroke="url(#logo-cobalt)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M-36-152Q0-170 36-152" stroke="url(#logo-gold)" stroke-width="5" stroke-linecap="round"/>
+
+    <g stroke="#6f4f35" stroke-width="4.2">
+      <ellipse cx="-82" cy="-8" rx="23" ry="16" fill="#f9f4eb"/>
+      <rect x="-91" y="-8" width="18" height="28" rx="8" fill="#f9f4eb"/>
+      <ellipse cx="-82" cy="28" rx="13" ry="6" fill="#f9f4eb"/>
+      <ellipse cx="0" cy="-8" rx="23" ry="16" fill="#f9f4eb"/>
+      <rect x="-9" y="-8" width="18" height="28" rx="8" fill="#f9f4eb"/>
+      <ellipse cx="0" cy="28" rx="13" ry="6" fill="#f9f4eb"/>
+      <ellipse cx="82" cy="-8" rx="23" ry="16" fill="#f9f4eb"/>
+      <rect x="73" y="-8" width="18" height="28" rx="8" fill="#f9f4eb"/>
+      <ellipse cx="82" cy="28" rx="13" ry="6" fill="#f9f4eb"/>
+    </g>
+
+    <path d="M-168-216C-132-230-96-230-60-216" stroke="url(#logo-gold)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M60-216C96-230 132-230 168-216" stroke="url(#logo-gold)" stroke-width="6" stroke-linecap="round"/>
+  </g>
+
+  <g opacity="0.9">
+    <path d="M116 432C132 484 184 524 246 534" stroke="#c5a065" stroke-width="5" stroke-linecap="round"/>
+    <path d="M524 432C508 484 456 524 394 534" stroke="#c5a065" stroke-width="5" stroke-linecap="round"/>
+    <path d="M164 188C206 142 260 118 320 118C380 118 434 142 476 188" stroke="#1b365d" stroke-opacity="0.28" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>

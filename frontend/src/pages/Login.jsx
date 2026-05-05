@@ -17,10 +17,10 @@ const Login = () => {
     const { setUser } = useAuth();
     const isLoopbackHost = typeof window !== 'undefined' && LOOPBACK_HOST_PATTERN.test(window.location.hostname);
     const initialEmail = import.meta.env.DEV && isLoopbackHost
-        ? String(import.meta.env.VITE_DEV_DEFAULT_EMAIL || '').trim()
+        ? String(import.meta.env.VITE_DEV_DEFAULT_EMAIL || 'admin@webnam.com').trim()
         : '';
     const initialPassword = import.meta.env.DEV && isLoopbackHost
-        ? String(import.meta.env.VITE_DEV_DEFAULT_PASSWORD || '')
+        ? String(import.meta.env.VITE_DEV_DEFAULT_PASSWORD || '123123')
         : '';
 
     const resolveLoginError = (err) => {

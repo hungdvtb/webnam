@@ -1149,20 +1149,12 @@ class CategoryController extends Controller
 
     protected function buildCategoryProductPayload(Category $category): array
     {
+        $category->loadMissing(['bannerMediaAsset', 'logoMediaAsset']);
         $assignmentRows = $this->loadCategoryAssignmentRows((int) $category->id);
 
         if ($assignmentRows->isEmpty()) {
             return [
-                'category' => [
-                    'id' => (int) $category->id,
-                    'name' => $category->name,
-                    'slug' => $category->slug,
-                    'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
-                    'display_layout' => 'layout_1',
-                    'status' => (int) $category->status,
-                    'products_count' => 0,
-                    'items_count' => 0,
-                ],
+                'category' => $this->buildCategoryMetaPayload($category, 0),
                 'products' => [],
             ];
         }
@@ -1301,17 +1293,33 @@ class CategoryController extends Controller
             ->values();
 
         return [
-            'category' => [
-                'id' => (int) $category->id,
-                'name' => $category->name,
-                'slug' => $category->slug,
-                'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
-                'display_layout' => 'layout_1',
-                'status' => (int) $category->status,
-                'products_count' => (int) $products->count(),
-                'items_count' => (int) $products->count(),
-            ],
+            'category' => $this->buildCategoryMetaPayload($category, (int) $products->count()),
             'products' => $products,
+        ];
+    }
+
+    private function buildCategoryMetaPayload(Category $category, int $itemsCount): array
+    {
+        return [
+            'id' => (int) $category->id,
+            'name' => $category->name,
+            'slug' => $category->slug,
+            'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
+            'description' => $category->description,
+            'meta_title' => $category->meta_title,
+            'meta_description' => $category->meta_description,
+            'meta_keywords' => $category->meta_keywords,
+            'display_layout' => $category->display_layout ?: 'layout_1',
+            'status' => (int) $category->status,
+            'filterable_attribute_ids' => $category->filterable_attribute_ids ?: [],
+            'banner_path' => $category->banner_path,
+            'logo_path' => $category->logo_path,
+            'banner_media_asset_id' => $category->banner_media_asset_id ? (int) $category->banner_media_asset_id : null,
+            'logo_media_asset_id' => $category->logo_media_asset_id ? (int) $category->logo_media_asset_id : null,
+            'banner_image' => $category->banner_image,
+            'logo_image' => $category->logo_image,
+            'products_count' => $itemsCount,
+            'items_count' => $itemsCount,
         ];
     }
 

@@ -1538,6 +1538,17 @@ const getPickerAttributeValues = (product) => (
         ? product.attribute_values
         : (Array.isArray(product?.attributeValues) ? product.attributeValues : [])
 );
+const buildProductAttributesMap = (product) => {
+    const map = {};
+
+    getPickerAttributeValues(product).forEach((attributeValue) => {
+        const attributeId = String(attributeValue?.attribute_id ?? attributeValue?.attribute?.id ?? '').trim();
+        if (!attributeId || attributeValue?.value === null || attributeValue?.value === undefined) return;
+        map[attributeId] = attributeValue.value;
+    });
+
+    return Object.keys(map).length > 0 ? map : undefined;
+};
 const getPickerPrimaryImage = (product) => String(
     product?.main_image
     || product?.primary_image?.url
@@ -5566,7 +5577,7 @@ const OrderForm = () => {
                 options: item.options || {},
                 category_id: item.product?.category_id,
                 parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
-                product_attributes: item.product?.attributes_map || item.product?.product_attributes,
+                product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
             })) || [];
             const resolvedLoadedItems = order.items?.map((item, index) => {
                 const fallbackName = `San pham #${item.product_id}`;
@@ -5615,7 +5626,7 @@ const OrderForm = () => {
                     options: item.options || {},
                     category_id: item.product?.category_id,
                     parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
-                    product_attributes: item.product?.attributes_map || item.product?.product_attributes,
+                    product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
                     main_image: item.product?.main_image || item.main_image || '',
                     notes: item.notes || '',
                     replaced_from_name: item.replaced_from_name || '',

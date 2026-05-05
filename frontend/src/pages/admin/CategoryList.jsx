@@ -205,6 +205,30 @@ const createInitialFormData = () => ({
     category_items: [],
 });
 
+const buildCategoryFormData = (category = {}, categoryItems = []) => {
+    const bannerUrl = resolveCategoryAssetUrl(category.banner_image || category.banner_path, 'medium');
+    const logoUrl = resolveCategoryAssetUrl(category.logo_image || category.logo_path, 'thumbnail');
+
+    return {
+        ...createInitialFormData(),
+        id: category.id ?? null,
+        name: category.name || '',
+        slug: category.slug || '',
+        description: category.description || '',
+        meta_title: category.meta_title || '',
+        meta_description: category.meta_description || '',
+        meta_keywords: category.meta_keywords || '',
+        parent_id: category.parent_id ? String(category.parent_id) : '',
+        status: Number(category.status ?? 1),
+        logo: category.logo_path ?? '',
+        logo_url: logoUrl,
+        banner: category.banner_path ?? '',
+        banner_url: bannerUrl,
+        filterable_attribute_ids: (category.filterable_attribute_ids || []).map((id) => Number(id)),
+        category_items: normalizeCategoryAssignmentItems(categoryItems),
+    };
+};
+
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const CATEGORY_IMPORT_FIELD_OPTIONS = [
     {
@@ -787,7 +811,16 @@ const CategoryList = () => {
     const [pendingImportFile, setPendingImportFile] = useState(null);
     const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
     const [importUpdateFieldIds, setImportUpdateFieldIds] = useState([]);
+    const [isCategoryFormLoading, setIsCategoryFormLoading] = useState(false);
     const hasLoadedInitialDataRef = useRef(false);
+    const editCategoryRequestRef = useRef(0);
+    const categoryProductsRequestRef = useRef(0);
+    const logoInputRef = useRef(null);
+    const bannerInputRef = useRef(null);
+    const previewObjectUrlsRef = useRef({
+        logo: null,
+        banner: null,
+    });
     const isSelectiveImport = importMode === 'update_selected_fields';
     const canReorderTree = !isTrashView && !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
 
@@ -1024,21 +1057,50 @@ const CategoryList = () => {
         setCategoryItemPickerGroups([]);
     };
 
-    const closeCategoryItemPicker = () => {
+    const closeCategoryItemPicker = React.useCallback(() => {
         setIsCategoryItemPickerOpen(false);
         resetCategoryItemPickerState();
-    };
+    }, []);
 
-    const closeCategoryForm = () => {
+    const clearPreviewObjectUrl = React.useCallback((type) => {
+        const previewUrl = previewObjectUrlsRef.current[type];
+
+        if (previewUrl) {
+            window.URL.revokeObjectURL(previewUrl);
+            previewObjectUrlsRef.current[type] = null;
+        }
+    }, []);
+
+    const resetMediaInputValue = React.useCallback((inputRef) => {
+        if (inputRef.current) {
+            inputRef.current.value = '';
+        }
+    }, []);
+
+    const resetCategoryMediaDraftState = React.useCallback(() => {
+        clearPreviewObjectUrl('logo');
+        clearPreviewObjectUrl('banner');
+        resetMediaInputValue(logoInputRef);
+        resetMediaInputValue(bannerInputRef);
+    }, [clearPreviewObjectUrl, resetMediaInputValue]);
+
+    const closeCategoryForm = React.useCallback(() => {
+        editCategoryRequestRef.current += 1;
+        setIsCategoryFormLoading(false);
         setIsFormOpen(false);
+        setFormData(createInitialFormData());
+        resetCategoryMediaDraftState();
         closeCategoryItemPicker();
-    };
+    }, [closeCategoryItemPicker, resetCategoryMediaDraftState]);
 
     const openCategoryCreateForm = () => {
         if (isTrashView) {
             return;
         }
 
+        editCategoryRequestRef.current += 1;
+        setIsCategoryFormLoading(false);
+        resetCategoryMediaDraftState();
         setFormData(createInitialFormData());
         resetCategoryItemPickerState();
         setIsCategoryItemPickerOpen(false);
@@ -1057,22 +1119,30 @@ const CategoryList = () => {
         setCategoryProducts([]);
         setCategoryProductsDirty(false);
         setSelectedCategoryMeta(null);
+        setIsCategoryFormLoading(false);
+        editCategoryRequestRef.current += 1;
+        categoryProductsRequestRef.current += 1;
         closeCategoryItemPicker();
 
         if (isTrashView) {
             setIsFormOpen(false);
+            resetCategoryMediaDraftState();
             setFormData(createInitialFormData());
         }
-    }, [isTrashView]);
+    }, [closeCategoryItemPicker, isTrashView, resetCategoryMediaDraftState]);
 
-    const fetchCategoryProductsData = async (categoryId) => {
+    useEffect(() => () => {
+        resetCategoryMediaDraftState();
+    }, [resetCategoryMediaDraftState]);
+
+    const fetchCategoryProductsData = React.useCallback(async (categoryId) => {
         const response = await categoryApi.getProducts(categoryId);
 
         return {
             category: response.data?.category || null,
             products: normalizeSortableCategoryProducts(response.data?.products),
         };
-    };
+    }, []);
 
     useEffect(() => {
         if (!isTreeOrderMode) {
@@ -1110,21 +1180,36 @@ const CategoryList = () => {
         setSelectedChildOrderDrafts(selectedChildPositionMap);
     }, [selectedId, selectedChildPositionMap]);
 
-    const loadCategoryProducts = async (categoryId = selectedId) => {
-        if (isTrashView || !categoryId) {
+    const loadCategoryProducts = React.useCallback(async (categoryId = selectedId) => {
+        const normalizedCategoryId = Number(categoryId || 0) || null;
+
+        categoryProductsRequestRef.current += 1;
+        const requestId = categoryProductsRequestRef.current;
+
+        if (isTrashView || !normalizedCategoryId) {
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
             setCategoryProductsDirty(false);
+            setCategoryProductsLoading(false);
             return;
         }
 
         setCategoryProductsLoading(true);
         try {
-            const payload = await fetchCategoryProductsData(categoryId);
+            const payload = await fetchCategoryProductsData(normalizedCategoryId);
+
+            if (requestId !== categoryProductsRequestRef.current) {
+                return;
+            }
+
             setSelectedCategoryMeta(payload.category);
             setCategoryProducts(payload.products);
             setCategoryProductsDirty(false);
         } catch (error) {
+            if (requestId !== categoryProductsRequestRef.current) {
+                return;
+            }
+
             console.error('Error loading category products:', error);
             setSelectedCategoryMeta(null);
             setCategoryProducts([]);
@@ -1134,9 +1219,56 @@ const CategoryList = () => {
                 type: 'error',
             });
         } finally {
-            setCategoryProductsLoading(false);
+            if (requestId === categoryProductsRequestRef.current) {
+                setCategoryProductsLoading(false);
+            }
         }
-    };
+    }, [fetchCategoryProductsData, isTrashView, selectedId, showModal]);
+
+    const loadCategoryForEdit = React.useCallback(async (categoryId) => {
+        const normalizedCategoryId = Number(categoryId || 0) || null;
+
+        if (isTrashView || !normalizedCategoryId) {
+            return;
+        }
+
+        const requestId = editCategoryRequestRef.current + 1;
+        editCategoryRequestRef.current = requestId;
+
+        setIsFormOpen(true);
+        setIsCategoryFormLoading(true);
+        resetCategoryItemPickerState();
+        setIsCategoryItemPickerOpen(false);
+        resetCategoryMediaDraftState();
+        setFormData(createInitialFormData());
+
+        try {
+            const payload = await fetchCategoryProductsData(normalizedCategoryId);
+
+            if (requestId !== editCategoryRequestRef.current) {
+                return;
+            }
+
+            setFormData(buildCategoryFormData(payload.category || {}, payload.products));
+        } catch (error) {
+            if (requestId !== editCategoryRequestRef.current) {
+                return;
+            }
+
+            console.error('Error loading category edit payload:', error);
+            setIsFormOpen(false);
+            setFormData(createInitialFormData());
+            showModal({
+                title: 'Lỗi',
+                content: 'Không thể tải dữ liệu danh mục để chỉnh sửa.',
+                type: 'error',
+            });
+        } finally {
+            if (requestId === editCategoryRequestRef.current) {
+                setIsCategoryFormLoading(false);
+            }
+        }
+    }, [fetchCategoryProductsData, isTrashView, resetCategoryMediaDraftState, showModal]);
 
     useEffect(() => {
         if (!isCategoryItemPickerOpen) {
@@ -1224,6 +1356,8 @@ const CategoryList = () => {
 
         if (formData.id && !formattedData.some((node) => node.id === formData.id)) {
             setIsFormOpen(false);
+            setIsCategoryFormLoading(false);
+            resetCategoryMediaDraftState();
             setFormData(createInitialFormData());
         }
     };
@@ -1465,7 +1599,7 @@ const CategoryList = () => {
         }
 
         loadCategoryProducts(selectedId);
-    }, [isTrashView, selectedId]);
+    }, [isTrashView, loadCategoryProducts, selectedId]);
 
     useEffect(() => {
         if (!selectedId) {
@@ -1672,53 +1806,89 @@ const CategoryList = () => {
         }
     };
 
-    const handleEdit = async (node) => {
+    const handleEdit = (node) => {
         if (isTrashView) {
             return;
         }
 
-        const cat = node.data;
-        const bannerUrl = resolveCategoryAssetUrl(cat.banner_image || cat.banner_path, 'medium');
-        const logoUrl = resolveCategoryAssetUrl(cat.logo_image || cat.logo_path, 'thumbnail');
-        let categoryItems = [];
+        const categoryId = Number(node?.id || node?.data?.id || 0) || null;
 
-        if (Number(selectedId) === Number(cat.id) && !categoryProductsLoading) {
-            categoryItems = categoryProducts;
-        } else {
-            try {
-                const payload = await fetchCategoryProductsData(cat.id);
-                categoryItems = payload.products;
-            } catch (error) {
-                console.error('Error loading category items for edit form:', error);
-                showModal({
-                    title: 'Lỗi',
-                    content: 'Không thể tải danh sách item trong danh mục. Bạn vẫn có thể sửa thông tin khác.',
-                    type: 'error',
-                });
-            }
+        if (!categoryId) {
+            return;
         }
 
-        resetCategoryItemPickerState();
-        setIsCategoryItemPickerOpen(false);
+        setSelectedId(categoryId);
+        loadCategoryForEdit(categoryId);
+    };
 
-        setFormData({
-            id: cat.id,
-            name: cat.name,
-            slug: cat.slug || '',
-            description: cat.description || '',
-            meta_title: cat.meta_title || '',
-            meta_description: cat.meta_description || '',
-            meta_keywords: cat.meta_keywords || '',
-            parent_id: cat.parent_id || '',
-            status: cat.status,
-            logo: cat.logo_path,
-            logo_url: logoUrl,
-            banner: cat.banner_path,
-            banner_url: bannerUrl,
-            filterable_attribute_ids: (cat.filterable_attribute_ids || []).map(id => Number(id)),
-            category_items: normalizeCategoryAssignmentItems(categoryItems),
-        });
-        setIsFormOpen(true);
+    useEffect(() => {
+        if (isTrashView || !isFormOpen || !formData.id || !selectedId) {
+            return;
+        }
+
+        if (Number(formData.id) === Number(selectedId)) {
+            return;
+        }
+
+        loadCategoryForEdit(selectedId);
+    }, [formData.id, isFormOpen, isTrashView, loadCategoryForEdit, selectedId]);
+
+    const handleLogoFileChange = (event) => {
+        const file = event.target.files?.[0];
+
+        if (!file) {
+            return;
+        }
+
+        clearPreviewObjectUrl('logo');
+        const previewUrl = window.URL.createObjectURL(file);
+        previewObjectUrlsRef.current.logo = previewUrl;
+
+        setFormData((previous) => ({
+            ...previous,
+            logo: file,
+            logo_url: previewUrl,
+        }));
+    };
+
+    const handleBannerFileChange = (event) => {
+        const file = event.target.files?.[0];
+
+        if (!file) {
+            return;
+        }
+
+        clearPreviewObjectUrl('banner');
+        const previewUrl = window.URL.createObjectURL(file);
+        previewObjectUrlsRef.current.banner = previewUrl;
+
+        setFormData((previous) => ({
+            ...previous,
+            banner: file,
+            banner_url: previewUrl,
+        }));
+    };
+
+    const handleRemoveLogo = () => {
+        clearPreviewObjectUrl('logo');
+        resetMediaInputValue(logoInputRef);
+
+        setFormData((previous) => ({
+            ...previous,
+            logo: null,
+            logo_url: null,
+        }));
+    };
+
+    const handleRemoveBanner = () => {
+        clearPreviewObjectUrl('banner');
+        resetMediaInputValue(bannerInputRef);
+
+        setFormData((previous) => ({
+            ...previous,
+            banner: null,
+            banner_url: null,
+        }));
     };
 
     const handleDelete = async (node) => {
@@ -2714,10 +2884,13 @@ const CategoryList = () => {
                                         <button 
                                             type="submit" 
                                             form="category-form"
+                                            disabled={isCategoryFormLoading}
                                             className="bg-brick text-white font-ui text-[10px] font-bold uppercase tracking-widest px-4 py-2 hover:bg-umber transition-all shadow-md rounded-sm flex items-center gap-2 active:scale-95"
                                         >
-                                            <span className="material-symbols-outlined text-[16px]">save</span>
-                                            {formData.id ? 'Lưu lại' : 'Tạo mới'}
+                                            <span className={`material-symbols-outlined text-[16px] ${isCategoryFormLoading ? 'animate-spin' : ''}`}>
+                                                {isCategoryFormLoading ? 'sync' : 'save'}
+                                            </span>
+                                            {isCategoryFormLoading ? 'Dang tai' : (formData.id ? 'Lưu lại' : 'Tạo mới')}
                                         </button>
                                         <button
                                             type="button"
@@ -2730,6 +2903,14 @@ const CategoryList = () => {
                                 </div>
                                 </div>
                                 <div className="flex-1 overflow-auto custom-scrollbar">
+                                    {isCategoryFormLoading ? (
+                                        <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 text-stone/45">
+                                            <span className="material-symbols-outlined animate-spin text-[28px] text-primary">sync</span>
+                                            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/70">
+                                                Dang tai du lieu danh muc
+                                            </p>
+                                        </div>
+                                    ) : (
                                     <form id="category-form" onSubmit={handleFormSubmit} className="space-y-6">
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Tên danh mục</label>
@@ -2874,7 +3055,7 @@ const CategoryList = () => {
                                                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                                             <button
                                                                 type="button"
-                                                                onClick={() => document.getElementById('logo-upload').click()}
+                                                                onClick={() => logoInputRef.current?.click()}
                                                                 className="size-8 rounded-full bg-white text-primary hover:bg-gold transition-colors flex items-center justify-center"
                                                                 title="Thay anh"
                                                             >
@@ -2882,7 +3063,7 @@ const CategoryList = () => {
                                                             </button>
                                                             <button
                                                                 type="button"
-                                                                onClick={() => setFormData({ ...formData, logo: null, logo_url: null })}
+                                                                onClick={handleRemoveLogo}
                                                                 className="size-8 rounded-full bg-white text-brick hover:bg-brick hover:text-white transition-colors flex items-center justify-center"
                                                                 title="Go anh"
                                                             >
@@ -2892,21 +3073,16 @@ const CategoryList = () => {
                                                     </div>
                                                 )}
                                                 <input
-                                                    id="logo-upload"
+                                                    ref={logoInputRef}
                                                     type="file"
                                                     accept="image/*"
                                                     className="hidden"
-                                                    onChange={e => {
-                                                        const file = e.target.files[0];
-                                                        if (file) {
-                                                            setFormData({ ...formData, logo: file, logo_url: URL.createObjectURL(file) });
-                                                        }
-                                                    }}
+                                                    onChange={handleLogoFileChange}
                                                 />
                                                 {!formData.logo_url && (
                                                     <button
                                                         type="button"
-                                                        onClick={() => document.getElementById('logo-upload').click()}
+                                                        onClick={() => logoInputRef.current?.click()}
                                                         className="w-full h-20 border-2 border-dashed border-gold/20 hover:border-gold/40 hover:bg-gold/5 transition-all flex flex-col items-center justify-center gap-1 rounded-sm text-stone/40"
                                                     >
                                                         <span className="material-symbols-outlined text-xl">image</span>
@@ -2925,7 +3101,7 @@ const CategoryList = () => {
                                                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                                             <button 
                                                                 type="button"
-                                                                onClick={() => document.getElementById('banner-upload').click()}
+                                                                onClick={() => bannerInputRef.current?.click()}
                                                                 className="size-8 rounded-full bg-white text-primary hover:bg-gold transition-colors flex items-center justify-center"
                                                                 title="Thay ảnh"
                                                             >
@@ -2933,7 +3109,7 @@ const CategoryList = () => {
                                                             </button>
                                                             <button 
                                                                 type="button"
-                                                                onClick={() => setFormData({ ...formData, banner: null, banner_url: null })}
+                                                                onClick={handleRemoveBanner}
                                                                 className="size-8 rounded-full bg-white text-brick hover:bg-brick hover:text-white transition-colors flex items-center justify-center"
                                                                 title="Gỡ ảnh"
                                                             >
@@ -2943,21 +3119,16 @@ const CategoryList = () => {
                                                     </div>
                                                 )}
                                                 <input 
-                                                    id="banner-upload"
+                                                    ref={bannerInputRef}
                                                     type="file" 
                                                     accept="image/*"
                                                     className="hidden" 
-                                                    onChange={e => {
-                                                        const file = e.target.files[0];
-                                                        if (file) {
-                                                            setFormData({ ...formData, banner: file, banner_url: URL.createObjectURL(file) });
-                                                        }
-                                                    }}
+                                                    onChange={handleBannerFileChange}
                                                 />
                                                 {!formData.banner_url && (
                                                     <button 
                                                         type="button"
-                                                        onClick={() => document.getElementById('banner-upload').click()}
+                                                        onClick={() => bannerInputRef.current?.click()}
                                                         className="w-full h-20 border-2 border-dashed border-gold/20 hover:border-gold/40 hover:bg-gold/5 transition-all flex flex-col items-center justify-center gap-1 rounded-sm text-stone/40"
                                                     >
                                                         <span className="material-symbols-outlined text-xl">upload_file</span>
@@ -2968,6 +3139,7 @@ const CategoryList = () => {
                                         </div>
 
                                     </form>
+                                    )}
                                 </div>
                             </div>
                         ) : isTrashView ? (

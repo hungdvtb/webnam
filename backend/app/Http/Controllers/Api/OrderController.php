@@ -659,16 +659,18 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
-                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
+                            'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
                                 ->with(['unit:id,name']),
                         ]),
                     'actualProduct' => fn ($productQuery) => $productQuery
-                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
+                            'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
@@ -703,8 +705,9 @@ class OrderController extends Controller
                 ])
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
-                        ->select(['id', 'name', 'sku', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
+                            'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])

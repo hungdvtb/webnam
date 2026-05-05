@@ -4771,6 +4771,28 @@ class ProductController extends Controller
         return [$searchRankingSql, $searchRankingBindings];
     }
 
+    protected function normalizedAttributeFilterExpression(string $column): string
+    {
+        $expression = "TRIM(COALESCE({$column}, ''))";
+        $expression = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({$expression}, '[', ''), ']', ''), '{', ''), '}', ''), '\"', '')";
+
+        if ($this->usesPostgresSearchDriver()) {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$expression}), '\\s+', ' ', 'g'))";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    protected function normalizeAttributeFilterValue(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->ascii()
+            ->replace(['[', ']', '{', '}', '"'], ' ')
+            ->replaceMatches('/\s+/', ' ')
+            ->trim();
+    }
+
     protected function applyAttributeValueConstraint(Builder $query, int $attributeId, array $valueArray): void
     {
         $this->applyAttributeValueColumnsConstraint($query, 'attribute_id', 'value', $attributeId, $valueArray);
@@ -4790,11 +4812,28 @@ class ProductController extends Controller
             return;
         }
 
+        $normalizedValueCandidates = collect($valueArray)
+            ->map(fn ($value) => $this->normalizeAttributeFilterValue((string) $value))
+            ->filter(fn ($value) => $value !== '')
+            ->unique()
+            ->values()
+            ->all();
+        $normalizedValueExpression = $this->normalizedAttributeFilterExpression($valueColumn);
+
         $query
             ->where($attributeIdColumn, $attributeId)
-            ->where(function (Builder $valueQuery) use ($exactValueCandidates, $valueColumn) {
+            ->where(function (Builder $valueQuery) use (
+                $exactValueCandidates,
+                $normalizedValueCandidates,
+                $normalizedValueExpression,
+                $valueColumn
+            ) {
                 foreach ($exactValueCandidates as $candidate) {
                     $valueQuery->orWhere($valueColumn, $candidate);
+                }
+
+                foreach ($normalizedValueCandidates as $candidate) {
+                    $valueQuery->orWhereRaw("{$normalizedValueExpression} = ?", [$candidate]);
                 }
             });
     }
@@ -5400,6 +5439,7 @@ class ProductController extends Controller
                         'sku' => $resolvedProduct->sku,
                         'display_name' => $resolvedProduct->name,
                         'display_sku' => $resolvedProduct->sku,
+                        'category_id' => $resolvedProduct->category_id !== null ? (int) $resolvedProduct->category_id : null,
                         'inventory_unit_id' => $resolvedProduct->inventory_unit_id !== null
                             ? (int) $resolvedProduct->inventory_unit_id
                             : ($bundleItem->inventory_unit_id !== null ? (int) $bundleItem->inventory_unit_id : null),
@@ -5447,6 +5487,7 @@ class ProductController extends Controller
             'products.expected_cost',
             'products.stock_quantity',
             'products.type',
+            'products.category_id',
             'products.inventory_unit_id',
         ]);
 
@@ -5544,6 +5585,7 @@ class ProductController extends Controller
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                 'stock_quantity' => (float) ($product->stock_quantity ?? 0),
                 'type' => $product->type,
+                'category_id' => $product->category_id !== null ? (int) $product->category_id : null,
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),
                 'attribute_summary' => $attributeSummary,
@@ -5577,6 +5619,7 @@ class ProductController extends Controller
                             'cost_price' => (float) ($variation->cost_price ?? $variation->expected_cost ?? 0),
                             'stock_quantity' => (float) ($variation->stock_quantity ?? 0),
                             'type' => $variation->type,
+                            'category_id' => $variation->category_id !== null ? (int) $variation->category_id : null,
                             'main_image' => $this->pickerPrimaryImage($variation),
                             'attribute_values' => $this->pickerAttributePayload($variation),
                             'attribute_summary' => $variationAttributeSummary,

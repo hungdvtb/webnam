@@ -94,6 +94,73 @@ const INVENTORY_SLIP_FILTERS = [
     { key: 'return_slip_state', label: 'Phiếu hoàn', options: RETURN_SLIP_FILTER_OPTIONS },
 ];
 
+const ORDER_CUSTOMER_NAME_SEARCH_SCOPE = 'customer_name';
+const CUSTOMER_NAME_HONORIFIC_TOKENS = new Set(['anh', 'chi', 'co', 'chu', 'bac', 'em', 'ba']);
+const CUSTOMER_NAME_PREFIX_TOKENS = new Set([
+    'nguyen', 'tran', 'le', 'pham', 'hoang', 'huynh', 'phan', 'vu', 'vo', 'dang',
+    'bui', 'do', 'ho', 'ngo', 'duong', 'ly', 'truong', 'dinh', 'dao', 'mai',
+    'trinh', 'ta', 'luu', 'cao', 'chau', 'lam', 'ha', 'to', 'mac', 'doan',
+    'giang', 'luong', 'la', 'quach', 'tong', 'than', 'khuat', 'phung',
+]);
+const CUSTOMER_NAME_HINT_TOKENS = new Set([
+    'van', 'thi', 'huu', 'duc', 'minh', 'thanh', 'ngoc', 'quoc', 'thuy', 'tuyen',
+    'anh', 'lan', 'phuong', 'nhan', 'binh', 'hoa', 'hong', 'trang', 'linh',
+]);
+const PRODUCT_SEARCH_HINT_TOKENS = new Set([
+    'bat', 'dia', 'lo', 'bo', 'binh', 'am', 'chen', 'coc', 'ly', 'hu', 'den',
+    'tuong', 'men', 'gom', 'su', 'tho', 'nen', 'ong', 'huong', 'nam',
+    'lu', 'don', 'khay', 'bong', 'hoa', 'loc', 'tai', 'sen', 'rong', 'phu',
+    'quy', 'sku',
+]);
+
+const normalizeOrderSearchIntentText = (value = '') => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\u0111/g, 'd')
+    .replace(/\u0110/g, 'D')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const isLikelyCustomerNameSearchTerm = (value = '') => {
+    const rawValue = String(value || '').trim();
+    const normalizedValue = normalizeOrderSearchIntentText(rawValue);
+
+    if (!normalizedValue || /[0-9@#:_/\\.[\]{}-]/.test(rawValue)) {
+        return false;
+    }
+
+    const tokens = normalizedValue.split(' ').filter(Boolean);
+    if (tokens.length < 2 || tokens.join('').length < 5) {
+        return false;
+    }
+
+    const firstToken = tokens[0];
+    if (CUSTOMER_NAME_HONORIFIC_TOKENS.has(firstToken)) {
+        return true;
+    }
+
+    if (PRODUCT_SEARCH_HINT_TOKENS.has(firstToken)) {
+        return false;
+    }
+
+    if (CUSTOMER_NAME_PREFIX_TOKENS.has(firstToken)) {
+        return true;
+    }
+
+    const hasProductHint = tokens.some((token) => PRODUCT_SEARCH_HINT_TOKENS.has(token));
+    const hasCustomerNameHint = tokens.some((token) => CUSTOMER_NAME_HINT_TOKENS.has(token));
+
+    return tokens.length >= 3 && hasCustomerNameHint && !hasProductHint;
+};
+
+const shouldScopeOrderSearchToCustomerName = (searchTerms = []) => {
+    const normalizedTerms = parseKeywordTokens(searchTerms);
+
+    return normalizedTerms.length > 0
+        && normalizedTerms.every((term) => isLikelyCustomerNameSearchTerm(term));
+};
+
 const ORDER_TYPE_BADGE_CLASSNAMES = {
     standard: 'border-primary/15 bg-primary/[0.03] text-primary/60',
     exchange_return: 'border-amber-200 bg-amber-50 text-amber-800',
@@ -1135,6 +1202,7 @@ const buildOrderListRequestParams = ({
         )
         : baseScopedIds;
     const searchTerms = buildOrderSearchTerms(filters);
+    const shouldUseCustomerNameSearchScope = shouldScopeOrderSearchToCustomerName(searchTerms);
 
     const params = {
         page,
@@ -1153,6 +1221,9 @@ const buildOrderListRequestParams = ({
     if (searchTerms.length) {
         params.search = serializeKeywordTokens(searchTerms);
         params.search_terms = searchTerms;
+        if (shouldUseCustomerNameSearchScope) {
+            params.search_scope = ORDER_CUSTOMER_NAME_SEARCH_SCOPE;
+        }
     }
     if (effectiveScopedIds.length) params.order_ids = effectiveScopedIds.join(',');
     if (filters.status?.length) params.status = normalizeOrderListFilterValues(filters.status).join(',');

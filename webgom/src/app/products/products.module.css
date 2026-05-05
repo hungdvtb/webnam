@@ -202,6 +202,11 @@
   display: block;
 }
 
+.sortDialogBackdrop,
+.sortDialogViewport {
+  display: none;
+}
+
 .dropdownContent {
   position: absolute;
   top: calc(100% + 8px);
@@ -239,6 +244,17 @@
   font-weight: 600;
   text-decoration: none;
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.dropdownAction {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .dropdownItem:hover {
@@ -1145,6 +1161,44 @@
     pointer-events: none;
   }
 
+  .sortDialogBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 138;
+    display: block;
+    border: 0;
+    background: rgba(15, 23, 42, 0.12);
+    padding: 0;
+  }
+
+  .sortDialogViewport {
+    position: fixed;
+    inset: 0;
+    z-index: 139;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: none;
+  }
+
+  .sortDialogContent {
+    pointer-events: auto;
+    width: max-content;
+    min-width: min(320px, calc(100vw - 24px));
+    max-width: calc(100vw - 24px);
+    margin: 0 auto;
+    padding: 0.75rem;
+    border: 1px solid rgba(27, 54, 93, 0.08);
+    border-radius: 16px;
+    background: #fff;
+    box-shadow: 0 22px 42px rgba(27, 54, 93, 0.18);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
   .dropdownHeader {
     display: flex;
     align-items: center;
@@ -1197,7 +1251,38 @@
     font-size: 18px !important;
   }
 
+  .sortDialogContent .dropdownHeader {
+    margin-bottom: 0.55rem;
+    padding-bottom: 0.55rem;
+  }
+
+  .sortDialogContent .dropdownEyebrow {
+    margin-bottom: 0.2rem;
+    font-size: 0.68rem;
+  }
+
+  .sortDialogContent .dropdownTitle {
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+
+  .sortDialogContent .dropdownClose {
+    width: 32px;
+    height: 32px;
+    background: #f5f7fb;
+  }
+
+  .sortDialogContent .dropdownClose span {
+    font-size: 18px !important;
+  }
+
   .dropdownList {
+    width: max-content;
+    min-width: 100%;
+    gap: 0.35rem;
+  }
+
+  .sortDialogContent .dropdownList {
     width: max-content;
     min-width: 100%;
     gap: 0.35rem;
@@ -1213,6 +1298,29 @@
   .itemInfo {
     width: max-content;
     min-width: 100%;
+  }
+
+  .sortDialogContent .dropdownAction {
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+  }
+
+  .sortDialogContent .itemInfo {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .sortDialogContent .itemLabel {
+    white-space: nowrap;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: 1.45;
+  }
+
+  .sortDialogContent .activeItem {
+    background: rgba(197, 160, 101, 0.12);
+    color: var(--accent);
   }
 
   .itemLabel {
@@ -1330,6 +1438,32 @@
     min-width: min(320px, calc(100vw - 16px));
     max-width: calc(100vw - 16px);
     padding: 0.7rem;
+  }
+
+  .sortDialogContent {
+    width: max-content;
+    min-width: min(320px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    padding: 0.7rem;
+    border-radius: 16px;
+  }
+
+  .sortDialogContent .dropdownClose {
+    width: 32px;
+    height: 32px;
+  }
+
+  .sortDialogContent .dropdownClose span {
+    font-size: 18px !important;
+  }
+
+  .sortDialogContent .dropdownAction {
+    min-height: 44px;
+    padding: 0.72rem 0.85rem;
+  }
+
+  .sortDialogContent .itemLabel {
+    font-size: 0.82rem;
   }
 
   .mobileCategoryChildren {

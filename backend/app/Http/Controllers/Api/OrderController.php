@@ -121,6 +121,7 @@ class OrderController extends Controller
     private const OUTSIDE_DELIVERY_TRACKING_SEQUENCE_START = 100;
     private const QUICK_DISPATCH_EXPORT_NOTE_PREFIX = 'Tu tao tu van chuyen';
     private const QUICK_DISPATCH_EXPORT_META_SOURCE = 'quick_dispatch';
+    private const ORDER_SEARCH_SCOPE_CUSTOMER_NAME = 'customer_name';
 
     public function __construct(
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
@@ -365,7 +366,7 @@ class OrderController extends Controller
         return $cache[$accountId];
     }
 
-    private function applyOrderNameFieldConstraint($query, string $column, string $term): void
+    private function applyOrderNameFieldConstraint($query, string $column, string $term, bool $allowFuzzy = true): void
     {
         $normalizedTerm = $this->normalizeSearchText($term);
         if ($normalizedTerm === '') {
@@ -391,7 +392,8 @@ class OrderController extends Controller
             $compactTerm,
             $compactLike,
             $tokenLikes,
-            $similarityThreshold
+            $similarityThreshold,
+            $allowFuzzy
         ) {
             $fieldQuery->whereRaw("{$wordExpr} LIKE ? ESCAPE '\\'", [$phraseLike]);
 
@@ -407,7 +409,7 @@ class OrderController extends Controller
                 });
             }
 
-            if ($this->usesPostgresSearchDriver() && strlen($normalizedTerm) >= 4) {
+            if ($allowFuzzy && $this->usesPostgresSearchDriver() && strlen($normalizedTerm) >= 4) {
                 $fieldQuery->orWhereRaw(
                     "GREATEST(similarity({$wordExpr}, ?), word_similarity({$wordExpr}, ?)) >= ?",
                     [$normalizedTerm, $normalizedTerm, $similarityThreshold]
@@ -423,29 +425,136 @@ class OrderController extends Controller
         });
     }
 
-    private function applyOrderNameSearch($query, string $term, int $accountId, bool $or = false): void
+    private function normalizedOrderNameFieldMatches(string $value, string $term, bool $allowFuzzy = true): bool
+    {
+        $normalizedValue = $this->normalizeSearchText($value);
+        $normalizedTerm = $this->normalizeSearchText($term);
+
+        if ($normalizedValue === '' || $normalizedTerm === '') {
+            return false;
+        }
+
+        if (str_contains($normalizedValue, $normalizedTerm)) {
+            return true;
+        }
+
+        $compactValue = $this->compactSearchText($value);
+        $compactTerm = $this->compactSearchText($term);
+
+        if ($compactTerm !== '' && str_contains($compactValue, $compactTerm)) {
+            return true;
+        }
+
+        $tokens = $this->extractWordSearchTokens($term);
+        if (!empty($tokens) && collect($tokens)->every(fn (string $token) => str_contains($normalizedValue, $token))) {
+            return true;
+        }
+
+        if (!$allowFuzzy || $compactTerm === '' || strlen($compactTerm) < 4 || $compactValue === '') {
+            return false;
+        }
+
+        $distance = levenshtein($compactValue, $compactTerm);
+        $allowedDistance = max(1, (int) floor(strlen($compactTerm) / 8));
+
+        return $distance <= $allowedDistance;
+    }
+
+    private function matchingOrderNameIdsForSqlite(string $term, int $accountId, bool $allowFuzzy = true): array
+    {
+        if ($this->normalizeSearchText($term) === '' || $accountId <= 0) {
+            return [];
+        }
+
+        $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
+        $relations = [
+            'shipments:id,order_id,customer_name',
+        ];
+
+        if (!empty($nameAttributeIds)) {
+            $relations['attributeValues'] = fn ($attributeQuery) => $attributeQuery
+                ->select(['id', 'order_id', 'attribute_id', 'value'])
+                ->whereIn('attribute_id', $nameAttributeIds);
+        }
+
+        return Order::withTrashed()
+            ->where('account_id', $accountId)
+            ->select(['id', 'customer_name'])
+            ->with($relations)
+            ->get()
+            ->filter(function (Order $order) use ($term, $allowFuzzy, $nameAttributeIds) {
+                $candidates = [(string) ($order->customer_name ?? '')];
+
+                if ($order->relationLoaded('shipments')) {
+                    foreach ($order->shipments as $shipment) {
+                        $candidates[] = (string) ($shipment->customer_name ?? '');
+                    }
+                }
+
+                if (!empty($nameAttributeIds) && $order->relationLoaded('attributeValues')) {
+                    foreach ($order->attributeValues as $attributeValue) {
+                        $candidates[] = (string) ($attributeValue->value ?? '');
+                    }
+                }
+
+                foreach ($candidates as $candidate) {
+                    if ($this->normalizedOrderNameFieldMatches($candidate, $term, $allowFuzzy)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            })
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    private function applyOrderNameSearch($query, string $term, int $accountId, bool $or = false, bool $allowFuzzy = true): void
     {
         if ($this->normalizeSearchText($term) === '') {
+            return;
+        }
+
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            $matchingIds = $this->matchingOrderNameIdsForSqlite($term, $accountId, $allowFuzzy);
+
+            if (empty($matchingIds)) {
+                $query->{$or ? 'orWhereRaw' : 'whereRaw'}('1 = 0');
+                return;
+            }
+
+            $query->{$or ? 'orWhereIn' : 'whereIn'}('orders.id', $matchingIds);
             return;
         }
 
         $nameAttributeIds = $this->candidateOrderNameAttributeIds($accountId);
         $method = $or ? 'orWhere' : 'where';
 
-        $query->{$method}(function ($nameQuery) use ($term, $nameAttributeIds) {
-            $this->applyOrderNameFieldConstraint($nameQuery, 'customer_name', $term);
+        $query->{$method}(function ($nameQuery) use ($term, $nameAttributeIds, $allowFuzzy) {
+            $this->applyOrderNameFieldConstraint($nameQuery, 'customer_name', $term, $allowFuzzy);
 
-            $nameQuery->orWhereHas('shipments', function ($shipmentQuery) use ($term) {
-                $this->applyOrderNameFieldConstraint($shipmentQuery, 'customer_name', $term);
+            $nameQuery->orWhereHas('shipments', function ($shipmentQuery) use ($term, $allowFuzzy) {
+                $this->applyOrderNameFieldConstraint($shipmentQuery, 'customer_name', $term, $allowFuzzy);
             });
 
             if (!empty($nameAttributeIds)) {
-                $nameQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($term, $nameAttributeIds) {
+                $nameQuery->orWhereHas('attributeValues', function ($attributeValueQuery) use ($term, $nameAttributeIds, $allowFuzzy) {
                     $attributeValueQuery->whereIn('attribute_id', $nameAttributeIds);
-                    $this->applyOrderNameFieldConstraint($attributeValueQuery, 'value', $term);
+                    $this->applyOrderNameFieldConstraint($attributeValueQuery, 'value', $term, $allowFuzzy);
                 });
             }
         });
+    }
+
+    private function normalizeOrderSearchScope(mixed $value): ?string
+    {
+        $normalized = Str::lower(trim((string) $value));
+
+        return in_array($normalized, ['customer', 'customer_name', 'name'], true)
+            ? self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME
+            : null;
     }
 
     private function applyOrderPhoneSearch(
@@ -3196,6 +3305,7 @@ class OrderController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         $searchTerms = $this->extractSearchTerms($request);
+        $searchScope = $this->normalizeOrderSearchScope($request->input('search_scope'));
 
         if ($request->input('trashed') == '1') {
             $query->onlyTrashed();
@@ -3243,18 +3353,23 @@ class OrderController extends Controller
         }
 
         $query
-            ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId) {
-                $q->where(function ($searchQuery) use ($searchTerms, $accountId) {
+            ->when(!empty($searchTerms), function ($q) use ($searchTerms, $accountId, $searchScope) {
+                $q->where(function ($searchQuery) use ($searchTerms, $accountId, $searchScope) {
                     foreach ($searchTerms as $index => $term) {
                         $method = $index === 0 ? 'where' : 'orWhere';
-                        $searchQuery->{$method}(function ($termQuery) use ($term, $accountId) {
+                        $searchQuery->{$method}(function ($termQuery) use ($term, $accountId, $searchScope) {
+                            if ($searchScope === self::ORDER_SEARCH_SCOPE_CUSTOMER_NAME) {
+                                $this->applyOrderNameSearch($termQuery, $term, $accountId, false, false);
+                                return;
+                            }
+
                             $this->applyOrderSearchTerm($termQuery, $term, $accountId);
                         });
                     }
                 });
             })
             ->when($request->filled('customer_name'), function ($q) use ($request, $accountId) {
-                $this->applyOrderNameSearch($q, (string) $request->input('customer_name'), $accountId);
+                $this->applyOrderNameSearch($q, (string) $request->input('customer_name'), $accountId, false, false);
             })
             ->when($request->filled('order_number'), function ($q) use ($request) {
                 $this->applyInsensitiveLike($q, 'order_number', $this->containsLike((string) $request->input('order_number')));

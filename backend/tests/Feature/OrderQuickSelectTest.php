@@ -155,6 +155,94 @@ class OrderQuickSelectTest extends TestCase
         $this->assertCount(2, $orderNumbers);
     }
 
+    public function test_order_list_customer_name_search_scope_ignores_other_matching_fields(): void
+    {
+        [$account] = $this->authenticate();
+
+        $customerName = "Ch\u{1ECB} Gia D\u{1EE5}ng Th\u{1EE7}y Tuy\u{1EC1}n";
+
+        $targetOrder = $this->createOrder($account, [
+            'order_number' => 'OR-CUSTOMER-NAME-001',
+            'customer_name' => $customerName,
+        ]);
+
+        $nearNameOrder = $this->createOrder($account, [
+            'order_number' => 'OR-CUSTOMER-NAME-NEAR',
+            'customer_name' => "Ch\u{1ECB} Gia D\u{1EE5}ng Th\u{1EE7}y",
+        ]);
+
+        $product = $this->createProduct($account, [
+            'name' => $customerName,
+            'sku' => 'SKU-CUSTOMER-NAME-001',
+        ]);
+        $productOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-PRODUCT-NAME-001',
+            'customer_name' => 'Khach San Pham',
+        ]);
+        $this->createOrderItem($account, $productOnlyOrder, $product);
+
+        $orderNumberOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'CHI-GIA-DUNG-THUY-TUYEN',
+            'customer_name' => 'Khach Ma Don',
+        ]);
+
+        $addressOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-ADDRESS-NAME-001',
+            'customer_name' => 'Khach Dia Chi',
+            'shipping_address' => $customerName,
+        ]);
+
+        $trackingOnlyOrder = $this->createOrder($account, [
+            'order_number' => 'OR-TRACKING-NAME-001',
+            'customer_name' => 'Khach Van Don',
+            'shipping_tracking_code' => $customerName,
+        ]);
+
+        $resultIds = $this->orderSearchIds($account, [
+            'search' => '  chi   gia dung thuy tuyen  ',
+            'search_scope' => 'customer_name',
+        ]);
+
+        $this->assertSame([$targetOrder->id], $resultIds);
+        $this->assertNotContains($nearNameOrder->id, $resultIds);
+        $this->assertNotContains($productOnlyOrder->id, $resultIds);
+        $this->assertNotContains($orderNumberOnlyOrder->id, $resultIds);
+        $this->assertNotContains($addressOnlyOrder->id, $resultIds);
+        $this->assertNotContains($trackingOnlyOrder->id, $resultIds);
+
+        $this->assertSame(
+            [$targetOrder->id],
+            $this->orderSearchIds($account, [
+                'search' => $customerName,
+                'search_scope' => 'customer_name',
+            ])
+        );
+
+        $nguyenOrder = $this->createOrder($account, [
+            'order_number' => 'OR-NGUYEN-VAN-ANH',
+            'customer_name' => "Nguy\u{1EC5}n V\u{0103}n \u{00C1}nh",
+        ]);
+        $tranOrder = $this->createOrder($account, [
+            'order_number' => 'OR-TRAN-BINH-MINH',
+            'customer_name' => "Tr\u{1EA7}n B\u{00EC}nh Minh",
+        ]);
+
+        $this->assertSame(
+            [$nguyenOrder->id],
+            $this->orderSearchIds($account, [
+                'search' => ' nguyen   van anh ',
+                'search_scope' => 'customer_name',
+            ])
+        );
+        $this->assertSame(
+            [$tranOrder->id],
+            $this->orderSearchIds($account, [
+                'search' => 'TRAN BINH MINH',
+                'search_scope' => 'customer_name',
+            ])
+        );
+    }
+
     public function test_quick_select_reports_duplicates_and_missing_codes_without_auto_selecting_ambiguous_matches(): void
     {
         [$account] = $this->authenticate();
@@ -255,6 +343,24 @@ class OrderQuickSelectTest extends TestCase
             'X-Account-Id' => (string) $account->id,
             'Accept' => 'application/json',
         ];
+    }
+
+    private function orderSearchIds(Account $account, array $params = []): array
+    {
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?' . http_build_query(array_merge([
+                'per_page' => 100,
+                'sort_by' => 'order_number',
+                'sort_order' => 'asc',
+            ], $params)));
+
+        $response->assertOk();
+
+        return collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
     }
 
     private function createOrder(Account $account, array $overrides = []): Order

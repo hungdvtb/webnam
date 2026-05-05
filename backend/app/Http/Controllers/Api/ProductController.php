@@ -5198,6 +5198,8 @@ class ProductController extends Controller
                 'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
                 'variations.parentConfigurable:id,name,sku,type',
+                'variations.category:id,name,code,slug',
+                'variations.categories:id,name,code,slug',
                 'variations.supplier:id,name,code',
                 'variations.suppliers:id,name,code',
                 'variations.attributeValues:id,product_id,attribute_id,value',
@@ -5205,11 +5207,15 @@ class ProductController extends Controller
                 'variations.unit:id,name',
                 'variations.images:id,product_id,image_url,is_primary,sort_order',
                 'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'groupedItems.category:id,name,code,slug',
+                'groupedItems.categories:id,name,code,slug',
                 'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,image_url,is_primary,sort_order',
                 'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'bundleItems.category:id,name,code,slug',
+                'bundleItems.categories:id,name,code,slug',
                 'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
@@ -5237,6 +5243,45 @@ class ProductController extends Controller
         }
 
         return $query;
+    }
+
+    protected function resolveAdminProductCategoryCountFilter(?string $rawFilter): ?array
+    {
+        return match (trim(strtolower((string) $rawFilter))) {
+            'exact_2' => ['operator' => '=', 'value' => 2],
+            'exact_3' => ['operator' => '=', 'value' => 3],
+            'min_2' => ['operator' => '>=', 'value' => 2],
+            'min_3' => ['operator' => '>=', 'value' => 3],
+            default => null,
+        };
+    }
+
+    protected function adminProductCategoryCountSql(): string
+    {
+        return "(SELECT COUNT(*) FROM (
+            SELECT category_product.category_id AS category_id
+            FROM category_product
+            WHERE category_product.product_id = products.id
+              AND category_product.item_type = 'product'
+            UNION
+            SELECT category_primary.category_id AS category_id
+            FROM products AS category_primary
+            WHERE category_primary.id = products.id
+        ) AS product_category_ids
+        WHERE category_id IS NOT NULL)";
+    }
+
+    protected function applyAdminProductCategoryCountFilter(Builder $query, ?string $rawFilter): void
+    {
+        $resolvedFilter = $this->resolveAdminProductCategoryCountFilter($rawFilter);
+        if ($resolvedFilter === null) {
+            return;
+        }
+
+        $query->whereRaw(
+            $this->adminProductCategoryCountSql() . " {$resolvedFilter['operator']} ?",
+            [(int) $resolvedFilter['value']]
+        );
     }
 
     protected function nextProductSortOrder(?int $accountId = null): int
@@ -5714,6 +5759,8 @@ class ProductController extends Controller
                 );
             });
         }
+
+        $this->applyAdminProductCategoryCountFilter($query, $request->input('category_count_filter'));
 
         $rawSupplierIds = $request->input('supplier_ids', $request->input('supplier_id'));
         $includeUnassignedSuppliers = false;

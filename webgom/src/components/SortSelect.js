@@ -1,17 +1,23 @@
 "use client";
 
-import Link from "next/link";
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import stylesStandard from "../app/products/products.module.css";
 import styles2 from "../app/products/layout2.module.css";
 
 const SORT_OPTIONS = [
-  { value: "popular", label: "Phổ biến nhất" },
-  { value: "newest", label: "Mới nhất" },
-  { value: "price_asc", label: "Giá: Thấp đến cao" },
-  { value: "price_desc", label: "Giá: Cao đến thấp" },
+  { value: "popular", label: "Ph\u1ed5 bi\u1ebfn nh\u1ea5t" },
+  { value: "newest", label: "M\u1edbi nh\u1ea5t" },
+  { value: "price_asc", label: "Gi\u00e1: Th\u1ea5p \u0111\u1ebfn cao" },
+  { value: "price_desc", label: "Gi\u00e1: Cao \u0111\u1ebfn th\u1ea5p" },
 ];
+
+const SORT_DIALOG_CLOSE_LABEL = "\u0110\u00f3ng s\u1eafp x\u1ebfp s\u1ea3n ph\u1ea9m";
+const SORT_DIALOG_LABEL = "S\u1eafp x\u1ebfp s\u1ea3n ph\u1ea9m";
+const SORT_DIALOG_EYEBROW = "S\u1eafp x\u1ebfp";
+const SORT_DIALOG_TITLE = "Th\u1ee9 t\u1ef1 hi\u1ec3n th\u1ecb";
+const SORT_LABEL = "S\u1eafp x\u1ebfp:";
 
 export default function SortSelect({ currentSort, variant = "layout1" }) {
   const router = useRouter();
@@ -20,19 +26,34 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
   const triggerRef = useRef(null);
   const viewportRef = useRef(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileViewportStyle, setMobileViewportStyle] = useState({});
   const styles = variant === "layout2" ? styles2 : stylesStandard;
   const selectedSort = SORT_OPTIONS.find((option) => option.value === (currentSort || "popular")) || SORT_OPTIONS[0];
 
-  const handleSortChange = (event) => {
-    const newSort = event.target.value;
+  const pushSort = (newSort) => {
     const params = new URLSearchParams(searchParams.toString());
 
     params.set("sort", newSort);
     params.delete("page");
 
-    router.push(`/products?${params.toString()}`, { scroll: false });
+    const query = params.toString();
+    router.push(query ? `/products?${query}` : "/products", { scroll: false });
   };
+
+  const handleSortChange = (event) => {
+    pushSort(event.target.value);
+  };
+
+  const handleOptionSelect = (value) => {
+    setIsOpen(false);
+    pushSort(value);
+  };
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (variant === "layout2" || typeof window === "undefined") {
@@ -59,9 +80,11 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
     }
 
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setIsOpen(false);
+      if (dropdownRef.current?.contains(event.target) || viewportRef.current?.contains(event.target)) {
+        return;
       }
+
+      setIsOpen(false);
     };
 
     document.addEventListener("mousedown", handleClickOutside);
@@ -75,22 +98,23 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
 
   useEffect(() => {
     if (variant === "layout2" || !isOpen || !isMobileViewport || typeof window === "undefined") {
+      setMobileViewportStyle({});
       return undefined;
     }
-
-    const viewport = viewportRef.current;
 
     const syncPopupPosition = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
 
-      if (!rect || !viewport) {
+      if (!rect) {
         return;
       }
 
-      viewport.style.paddingTop = `${Math.max(12, Math.round(rect.bottom + 8))}px`;
-      viewport.style.paddingLeft = `${Math.max(12, Math.round(rect.left))}px`;
-      viewport.style.paddingRight = "12px";
-      viewport.style.paddingBottom = "calc(env(safe-area-inset-bottom, 0px) + 96px)";
+      setMobileViewportStyle({
+        paddingTop: `${Math.max(12, Math.round(rect.bottom + 12))}px`,
+        paddingRight: "12px",
+        paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 96px)",
+        paddingLeft: "12px",
+      });
     };
 
     const previousBodyOverflow = document.body.style.overflow;
@@ -102,26 +126,74 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-      if (viewport) {
-        viewport.style.paddingTop = "";
-        viewport.style.paddingLeft = "";
-        viewport.style.paddingRight = "";
-        viewport.style.paddingBottom = "";
-      }
+      setMobileViewportStyle({});
       window.removeEventListener("resize", syncPopupPosition);
       window.removeEventListener("scroll", syncPopupPosition, true);
     };
   }, [isMobileViewport, isOpen, variant]);
 
-  const buildSortHref = (value) => {
-    const params = new URLSearchParams(searchParams.toString());
+  const dropdownPanel = (
+    <>
+      <button
+        type="button"
+        className={isMobileViewport ? styles.sortDialogBackdrop : styles.dropdownBackdrop}
+        aria-label={SORT_DIALOG_CLOSE_LABEL}
+        onClick={() => setIsOpen(false)}
+      />
 
-    params.set("sort", value);
-    params.delete("page");
+      <div
+        ref={viewportRef}
+        className={isMobileViewport ? styles.sortDialogViewport : styles.dropdownViewport}
+        style={isMobileViewport ? mobileViewportStyle : undefined}
+      >
+        <div
+          id="products-sort-dropdown"
+          className={isMobileViewport ? styles.sortDialogContent : styles.dropdownContent}
+          role={isMobileViewport ? "dialog" : undefined}
+          aria-modal={isMobileViewport ? "true" : undefined}
+          aria-label={isMobileViewport ? SORT_DIALOG_LABEL : undefined}
+          aria-labelledby={isMobileViewport ? "products-sort-dialog-title" : undefined}
+        >
+          <div className={styles.dropdownHeader}>
+            <div>
+              <p className={styles.dropdownEyebrow}>{SORT_DIALOG_EYEBROW}</p>
+              <h3
+                id={isMobileViewport ? "products-sort-dialog-title" : undefined}
+                className={styles.dropdownTitle}
+              >
+                {SORT_DIALOG_TITLE}
+              </h3>
+            </div>
+            <button
+              type="button"
+              className={styles.dropdownClose}
+              aria-label={SORT_DIALOG_CLOSE_LABEL}
+              onClick={() => setIsOpen(false)}
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
 
-    const query = params.toString();
-    return query ? `/products?${query}` : "/products";
-  };
+          <div className={styles.dropdownList}>
+            {SORT_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`${styles.dropdownItem} ${styles.dropdownAction} ${
+                  option.value === selectedSort.value ? styles.activeItem : ""
+                }`}
+                onClick={() => handleOptionSelect(option.value)}
+              >
+                <div className={styles.itemInfo}>
+                  <span className={styles.itemLabel}>{option.label}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
 
   if (variant !== "layout2") {
     return (
@@ -150,50 +222,7 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
           </span>
         </button>
 
-        {isOpen && (
-          <>
-            <button
-              type="button"
-              className={styles.dropdownBackdrop}
-              aria-label="Đóng sắp xếp sản phẩm"
-              onClick={() => setIsOpen(false)}
-            />
-
-            <div ref={viewportRef} className={styles.dropdownViewport}>
-              <div id="products-sort-dropdown" className={styles.dropdownContent}>
-                <div className={styles.dropdownHeader}>
-                  <div>
-                    <p className={styles.dropdownEyebrow}>Sắp xếp</p>
-                    <h3 className={styles.dropdownTitle}>Thứ tự hiển thị</h3>
-                  </div>
-                  <button
-                    type="button"
-                    className={styles.dropdownClose}
-                    aria-label="Đóng sắp xếp sản phẩm"
-                    onClick={() => setIsOpen(false)}
-                  >
-                    <span className="material-symbols-outlined">close</span>
-                  </button>
-                </div>
-
-                <div className={styles.dropdownList}>
-                  {SORT_OPTIONS.map((option) => (
-                    <Link
-                      key={option.value}
-                      href={buildSortHref(option.value)}
-                      className={`${styles.dropdownItem} ${option.value === selectedSort.value ? styles.activeItem : ""}`}
-                      onClick={() => setIsOpen(false)}
-                    >
-                      <div className={styles.itemInfo}>
-                        <span className={styles.itemLabel}>{option.label}</span>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </>
-        )}
+        {isOpen && (isMobileViewport && mounted ? createPortal(dropdownPanel, document.body) : dropdownPanel)}
       </div>
     );
   }
@@ -201,10 +230,10 @@ export default function SortSelect({ currentSort, variant = "layout1" }) {
   return (
     <div className={variant === "layout2" ? styles.sortContainer : styles.sortSelect}>
       {variant !== "layout2" && (
-        <span className={styles.sortLabel}>Sắp xếp:</span>
+        <span className={styles.sortLabel}>{SORT_LABEL}</span>
       )}
       <select
-        defaultValue={currentSort || "popular"}
+        value={currentSort || "popular"}
         onChange={handleSortChange}
         className={variant === "layout2" ? styles.sortSelect : styles.selectInput}
       >

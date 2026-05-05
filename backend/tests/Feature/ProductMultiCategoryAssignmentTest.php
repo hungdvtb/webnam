@@ -113,6 +113,123 @@ class ProductMultiCategoryAssignmentTest extends TestCase
         $this->assertCount(0, $product->categories);
     }
 
+    public function test_product_list_returns_all_categories_and_category_count_for_multi_category_product(): void
+    {
+        $account = $this->authenticate();
+        $primaryCategory = $this->createCategory($account, 'Do tho', 'do-tho');
+        $secondaryCategory = $this->createCategory($account, 'Phong thuy', 'phong-thuy');
+        $tertiaryCategory = $this->createCategory($account, 'Qua tang', 'qua-tang');
+
+        $product = $this->createProduct($account, [
+            'name' => 'Bo tam cap men ran',
+            'slug' => 'bo-tam-cap-men-ran',
+            'sku' => 'BTC-MR-001',
+            'category_id' => $primaryCategory->id,
+        ]);
+        $this->syncProductCategories($product, [
+            $primaryCategory->id,
+            $secondaryCategory->id,
+            $tertiaryCategory->id,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20');
+
+        $response->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('id', $product->id);
+
+        $this->assertNotNull($row);
+        $this->assertSame(3, (int) ($row['category_count'] ?? 0));
+        $this->assertEqualsCanonicalizing(
+            [$primaryCategory->id, $secondaryCategory->id, $tertiaryCategory->id],
+            collect($row['category_ids'] ?? [])->map(fn ($id) => (int) $id)->all()
+        );
+        $this->assertEqualsCanonicalizing(
+            [$primaryCategory->id, $secondaryCategory->id, $tertiaryCategory->id],
+            collect($row['categories'] ?? [])->pluck('id')->map(fn ($id) => (int) $id)->all()
+        );
+    }
+
+    public function test_product_list_can_filter_by_actual_category_count(): void
+    {
+        $account = $this->authenticate();
+        $categoryA = $this->createCategory($account, 'Do tho', 'do-tho');
+        $categoryB = $this->createCategory($account, 'Phong thuy', 'phong-thuy');
+        $categoryC = $this->createCategory($account, 'Qua tang', 'qua-tang');
+        $categoryD = $this->createCategory($account, 'Trang tri', 'trang-tri');
+
+        $singleCategoryProduct = $this->createProduct($account, [
+            'name' => 'San pham 1 danh muc',
+            'slug' => 'san-pham-1-danh-muc',
+            'sku' => 'CAT-COUNT-1',
+            'category_id' => $categoryA->id,
+        ]);
+        $this->syncProductCategories($singleCategoryProduct, [$categoryA->id]);
+
+        $twoCategoryProduct = $this->createProduct($account, [
+            'name' => 'San pham 2 danh muc',
+            'slug' => 'san-pham-2-danh-muc',
+            'sku' => 'CAT-COUNT-2',
+            'category_id' => $categoryA->id,
+        ]);
+        $this->syncProductCategories($twoCategoryProduct, [$categoryA->id, $categoryB->id]);
+
+        $legacySplitProduct = $this->createProduct($account, [
+            'name' => 'San pham legacy 2 danh muc',
+            'slug' => 'san-pham-legacy-2-danh-muc',
+            'sku' => 'CAT-COUNT-LEGACY-2',
+            'category_id' => $categoryC->id,
+        ]);
+        $legacySplitProduct->categories()->sync([
+            $categoryD->id => ['sort_order' => 0, 'item_type' => 'product'],
+        ]);
+
+        $threeCategoryProduct = $this->createProduct($account, [
+            'name' => 'San pham 3 danh muc',
+            'slug' => 'san-pham-3-danh-muc',
+            'sku' => 'CAT-COUNT-3',
+            'category_id' => $categoryA->id,
+        ]);
+        $this->syncProductCategories($threeCategoryProduct, [$categoryA->id, $categoryB->id, $categoryC->id]);
+
+        $exactTwoResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&category_count_filter=exact_2');
+
+        $exactTwoResponse->assertOk();
+        $exactTwoIds = collect($exactTwoResponse->json('data'))->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $this->assertEqualsCanonicalizing([$twoCategoryProduct->id, $legacySplitProduct->id], $exactTwoIds);
+
+        $exactThreeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&category_count_filter=exact_3');
+
+        $exactThreeResponse->assertOk();
+        $exactThreeIds = collect($exactThreeResponse->json('data'))->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $this->assertSame([$threeCategoryProduct->id], $exactThreeIds);
+
+        $minTwoResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&category_count_filter=min_2');
+
+        $minTwoResponse->assertOk();
+        $minTwoIds = collect($minTwoResponse->json('data'))->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $this->assertEqualsCanonicalizing(
+            [$twoCategoryProduct->id, $legacySplitProduct->id, $threeCategoryProduct->id],
+            $minTwoIds
+        );
+
+        $minThreeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?per_page=20&category_count_filter=min_3');
+
+        $minThreeResponse->assertOk();
+        $minThreeIds = collect($minThreeResponse->json('data'))->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $this->assertSame([$threeCategoryProduct->id], $minThreeIds);
+    }
+
     private function authenticate(): Account
     {
         $account = Account::query()->create([
@@ -153,5 +270,40 @@ class ProductMultiCategoryAssignmentTest extends TestCase
             'status' => true,
             'order' => 0,
         ]);
+    }
+
+    private function createProduct(Account $account, array $overrides = []): Product
+    {
+        $name = $overrides['name'] ?? ('San pham ' . Str::lower(Str::random(5)));
+
+        return Product::query()->create(array_merge([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => $name,
+            'slug' => $overrides['slug'] ?? Str::slug($name),
+            'sku' => $overrides['sku'] ?? ('SKU-' . Str::upper(Str::random(6))),
+            'price' => 100000,
+            'status' => true,
+        ], $overrides));
+    }
+
+    private function syncProductCategories(Product $product, array $categoryIds): void
+    {
+        $normalizedCategoryIds = collect($categoryIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $product->forceFill([
+            'category_id' => $normalizedCategoryIds[0] ?? null,
+        ])->save();
+
+        $product->categories()->sync(
+            collect($normalizedCategoryIds)->mapWithKeys(
+                fn ($categoryId, $index) => [$categoryId => ['sort_order' => $index, 'item_type' => 'product']]
+            )->all()
+        );
     }
 }

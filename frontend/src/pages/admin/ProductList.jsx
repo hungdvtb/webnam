@@ -23,6 +23,7 @@ import {
     normalizeWholeMoneyDraft,
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
+import { formatCategorySummary, getProductCategoryNames } from '../../utils/productCategories';
 import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
@@ -211,6 +212,12 @@ const INVENTORY_UNIT_FILTER_ASSIGNED = 'assigned';
 const INVENTORY_UNIT_FILTER_UNASSIGNED = 'unassigned';
 const SHOW_BULK_COPY_ACTION = false;
 const SHOW_BULK_IMAGE_APPEND_ACTION = false;
+const CATEGORY_COUNT_FILTER_OPTIONS = [
+    { value: 'exact_2', label: 'Đúng 2 danh mục' },
+    { value: 'exact_3', label: 'Đúng 3 danh mục' },
+    { value: 'min_2', label: 'Từ 2 danh mục trở lên' },
+    { value: 'min_3', label: 'Từ 3 danh mục trở lên' },
+];
 const EXTRA_EXPORT_FIELDS = [
     { id: 'id', label: 'ID' },
     { id: 'slug', label: 'Slug' },
@@ -405,6 +412,20 @@ function normalizeInventoryUnitFilterValue(value) {
     return '';
 }
 
+function normalizeCategoryCountFilterValue(value) {
+    const normalizedValue = String(value ?? '').trim();
+
+    return CATEGORY_COUNT_FILTER_OPTIONS.some((option) => option.value === normalizedValue)
+        ? normalizedValue
+        : '';
+}
+
+function getCategoryCountFilterLabel(filterValue) {
+    const normalizedValue = normalizeCategoryCountFilterValue(filterValue);
+
+    return CATEGORY_COUNT_FILTER_OPTIONS.find((option) => option.value === normalizedValue)?.label || '';
+}
+
 function getInventoryUnitFilterLabel(units, filterValue) {
     const normalizedValue = normalizeInventoryUnitFilterValue(filterValue);
 
@@ -459,6 +480,7 @@ function getDefaultProductFilters() {
     return {
         search: '',
         category_id: [],
+        category_count_filter: '',
         type: [],
         supplier_ids: [],
         inventory_unit_filter: '',
@@ -553,6 +575,7 @@ function sanitizeProductFilters(rawFilters, attributeCatalog = []) {
         has_images: normalizedHasImages,
         has_seo: normalizedHasSeo,
         has_description: normalizedHasDescription,
+        category_count_filter: normalizeCategoryCountFilterValue(rawFilters?.category_count_filter),
         inventory_unit_filter: normalizeInventoryUnitFilterValue(rawFilters?.inventory_unit_filter),
         type: sanitizeActiveProductTypeValues(rawFilters?.type),
         attributes: sanitizeAttributeFilters(rawFilters?.attributes, attributeCatalog),
@@ -2705,6 +2728,10 @@ const ProductList = () => {
             params.category_ids = normalizedFilters.category_id.join(',');
         }
 
+        if (normalizedFilters.category_count_filter) {
+            params.category_count_filter = normalizedFilters.category_count_filter;
+        }
+
         if (Array.isArray(normalizedFilters.type) && normalizedFilters.type.length > 0) {
             params.type = normalizedFilters.type.join(',');
         }
@@ -3942,7 +3969,7 @@ const ProductList = () => {
         if (e) e.stopPropagation();
         
         const typeLabel = TYPE_LABELS[p.type]?.label || p.type;
-        const catName = p.category?.name || '-';
+        const catName = formatCategorySummary(getProductCategoryNames(p, categories), '-');
         const priceValue = normalizeWholeMoneyNumber(p.price) ?? 0;
         const expectedCostValue = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price) ?? 0;
         const price = `${new Intl.NumberFormat('vi-VN').format(priceValue)}₫`;
@@ -5462,6 +5489,22 @@ const ProductList = () => {
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Số lượng danh mục</label>
+                            <select
+                                name="category_count_filter"
+                                value={tempFilters.category_count_filter || ''}
+                                onChange={handleTempFilterChange}
+                                className="w-full h-10 bg-white border border-primary/10 rounded-sm px-3 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary"
+                            >
+                                <option value="">Tất cả</option>
+                                {CATEGORY_COUNT_FILTER_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Loại sản phẩm</label>
                             <div className="relative" data-attr-dropdown>
                                 <button 
@@ -5759,6 +5802,7 @@ const ProductList = () => {
             {/* Hiển thị các chip điều kiện đang lọc */}
             {(
                 (filters.category_id || []).length > 0
+                || Boolean(filters.category_count_filter)
                 || (filters.type || []).length > 0
                 || (filters.supplier_ids || []).length > 0
                 || Boolean(filters.inventory_unit_filter)
@@ -5787,6 +5831,14 @@ const ProductList = () => {
                         </div>
                     ))}
                     
+                    {filters.category_count_filter && (
+                        <div className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                            <span className="text-[11px] text-primary/40">SL danh mục:</span>
+                            <span className="text-[13px] font-bold text-[#0F172A]">{getCategoryCountFilterLabel(filters.category_count_filter)}</span>
+                            <button onClick={() => removeFilter('category_count_filter')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                        </div>
+                    )}
+
                     {filters.type && Array.isArray(filters.type) && filters.type.length > 0 && filters.type.map(t => (
                         <div key={t} className="bg-white border border-primary/30 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
                             <span className="text-[11px] text-primary/40">Loại:</span>
@@ -6214,18 +6266,34 @@ const ProductList = () => {
                                                     </td>
                                                 );
 
-                                                if (col.id === 'category') return (
-                                                    <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium truncate group/cell">
-                                                         <div className="flex items-center justify-between">
-                                                            <span className="truncate">{p.category?.name || '-'}</span>
-                                                            {p.category?.name && (
-                                                                <button onClick={(e) => handleCopy(p.category.name, 'danh mục', e, `${p.id}-cat`)} className={`${copiedText === `${p.id}-cat` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép danh mục">
-                                                                    <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-cat` ? 'check' : 'content_copy'}</span>
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </td>
-                                                );
+                                                if (col.id === 'category') {
+                                                    const categoryNames = getProductCategoryNames(p, categories);
+                                                    const categorySummary = formatCategorySummary(categoryNames, '-');
+
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium group/cell align-top">
+                                                            <div className="flex items-start justify-between gap-2">
+                                                                {categoryNames.length > 0 ? (
+                                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                                        {categoryNames.map((categoryName) => (
+                                                                            <span
+                                                                                key={`${p.id}-${categoryName}`}
+                                                                                className="inline-flex items-center rounded-sm border border-primary/15 bg-primary/[0.04] px-2 py-1 text-[11px] font-bold leading-tight text-primary/80"
+                                                                            >
+                                                                                {categoryName}
+                                                                            </span>
+                                                                        ))}
+                                                                        <button onClick={(e) => handleCopy(categorySummary, 'danh mục', e, `${p.id}-cat`)} className={`${copiedText === `${p.id}-cat` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép danh mục">
+                                                                            <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-cat` ? 'check' : 'content_copy'}</span>
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <span className="text-[12px] text-stone-400">-</span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
                                                 if (col.id === 'unit') {
                                                     const unitLabel = resolveProductUnitLabel(p, isSubRow ? product : null);
                                                     const copyId = `${p.id}-unit`;

@@ -5,7 +5,7 @@ import { productApi } from '../../services/api';
 const normalizeText = (value = '') => String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[Ä‘Ä]/g, 'd')
+    .replace(/[đĐ]/g, 'd')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
@@ -187,7 +187,7 @@ const resolveItemParentId = (item) => {
 /** Tokenise a product name for similarity scoring */
 const tokenise = (name = '') =>
     normalizeText(name)
-        .split(/[\s\-â€“]+/)
+        .split(/[\s\-–]+/)
         .map(t => t.trim())
         .filter(t => t.length > 1);
 
@@ -216,22 +216,22 @@ const scoreCandidate = (item, candidate, targetAttributeId, attributeById, itemA
         Number(candidate.options?.variant_parent_id) ||
         null;
 
-    // â”€â”€ 1. Sibling bonus (same parent â†’ definitely the right family)
+    // 1. Sibling bonus: same parent is the strongest product-family signal.
     if (itemParentId && candidateParentId && itemParentId === candidateParentId) {
         score += 10_000;
     }
 
-    // â”€â”€ 2. Configurable/parent penalty (never want to swap to the parent itself)
+    // 2. Configurable/parent penalty.
     if (candidate.type === 'configurable' || candidate.has_variations) {
         score -= 8_000;
     }
 
-    // â”€â”€ 3. Being a variation is a positive signal
+    // 3. Being a variation is a positive signal.
     if (candidate.type === 'variation' || candidateParentId) {
         score += 300;
     }
 
-    // â”€â”€ 4. Attribute consistency (preserve non-target attributes like Size)
+    // 4. Attribute consistency: preserve non-target attributes like Size.
     //       product_attributes on order line is  { [attrId]: value }
     //       candidate.attribute_values is an array of { attribute_id, value }  OR
     //       candidate.attributes_map is { [attrId]: value }
@@ -256,15 +256,15 @@ const scoreCandidate = (item, candidate, targetAttributeId, attributeById, itemA
             const candVal = candAttrById[String(attrId)];
             if (candVal !== undefined) {
                 if (String(candVal).toLowerCase() === String(attrVal).toLowerCase()) {
-                    score += 2_000; // same value â†’ big reward (e.g. same Size)
+                    score += 2_000; // same value, e.g. same Size
                 } else {
-                    score -= 1_000; // different value â†’ penalty
+                    score -= 1_000; // different value penalty
                 }
             }
         });
     }
 
-    // â”€â”€ 5. Name token similarity
+    // 5. Name token similarity.
     const candidateAttributeMap = buildAttributeMap(candidate);
     Object.entries(itemAttributeMap || {}).forEach(([attrId, attrVal]) => {
         if (String(attrId) === String(targetAttributeId)) return;
@@ -309,11 +309,11 @@ const scoreCandidate = (item, candidate, targetAttributeId, attributeById, itemA
         if (ratio >= 0.8) score += 200;
     }
 
-    // â”€â”€ 6. SKU prefix similarity
+    // 6. SKU prefix similarity.
     const prefixLen = skuPrefixMatchCount(item.sku, candidate.sku || candidate.display_sku);
     score += prefixLen * 250;
 
-    // â”€â”€ 7. Category match
+    // 7. Category match.
     if (item.category_id && Number(candidate.category_id) === Number(item.category_id)) {
         score += 150;
     }
@@ -341,10 +341,10 @@ const ProductBulkReplaceModal = ({
         if (typeof window !== 'undefined') return window.localStorage.getItem('productBulkReplace_attrVal') || '';
         return '';
     });
-    const [replacementMap, setReplacementMap] = useState({}); // line_id â†’ candidate | null
+    const [replacementMap, setReplacementMap] = useState({}); // line_id -> candidate | null
     const [loading, setLoading] = useState(false);
     const [previewing, setPreviewing] = useState(false);
-    const [errors, setErrors] = useState({}); // line_id â†’ error message
+    const [errors, setErrors] = useState({}); // line_id -> error message
 
     // Reset state when modal is closed / re-opened
     useEffect(() => {
@@ -376,7 +376,7 @@ const ProductBulkReplaceModal = ({
         });
     }, [attributes]);
 
-    // Build a lookup map: attrId â†’ attribute object (with .code)
+    // Build a lookup map: attrId -> attribute object (with .code)
     const attributeById = useMemo(() => {
         const map = {};
         availableAttributes.forEach(a => { map[String(a.id)] = a; });
@@ -519,7 +519,7 @@ const ProductBulkReplaceModal = ({
                     } else {
                         // Fallback: search by SKU prefix (drop ONLY the last segment,
                         // which typically encodes the attribute value being changed).
-                        // e.g. "MR70-MAMBONGRAN-28-RONG" â†’ "MR70-MAMBONGRAN-28"
+                        // e.g. "MR70-MAMBONGRAN-28-RONG" -> "MR70-MAMBONGRAN-28"
                         const skuParts = (item.sku || '').split('-').filter(Boolean);
                         const skuHint = skuParts.length > 2
                             ? skuParts.slice(0, skuParts.length - 1).join('-')
@@ -535,7 +535,7 @@ const ProductBulkReplaceModal = ({
                     }
 
                     // Also preserve other attribute values in the search
-                    // Map item.product_attributes {attrId â†’ value} â†’ attributes[id] = value
+                    // Map item.product_attributes {attrId -> value} -> attributes[id] = value
                     if (item.product_attributes && typeof item.product_attributes === 'object') {
                         Object.entries(item.product_attributes).forEach(([attrId, attrVal]) => {
                             if (String(attrId) === String(targetAttributeId)) return;
@@ -614,7 +614,7 @@ const ProductBulkReplaceModal = ({
 
                     } catch (err) {
                         console.error('API error for item:', item.name, err);
-                        nextErrors[item.line_id] = 'Lá»—i tÃ¬m kiáº¿m';
+                        nextErrors[item.line_id] = 'Lỗi tìm kiếm';
                         nextMap[item.line_id] = null;
                     }
                 }),
@@ -668,8 +668,8 @@ const ProductBulkReplaceModal = ({
                             <span className="material-symbols-outlined">swap_horiz</span>
                         </div>
                         <div>
-                            <h3 className="text-lg font-bold text-slate-800">Äá»•i sáº£n pháº©m hÃ ng loáº¡t</h3>
-                            <p className="text-xs font-medium text-slate-500">Äang chá»n {selectedItems.length} sáº£n pháº©m</p>
+                            <h3 className="text-lg font-bold text-slate-800">Đổi sản phẩm hàng loạt</h3>
+                            <p className="text-xs font-medium text-slate-500">Đang chọn {selectedItems.length} sản phẩm</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="rounded-full p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors">
@@ -681,27 +681,27 @@ const ProductBulkReplaceModal = ({
                     {/* Config area */}
                     <div className="grid grid-cols-2 gap-4 rounded-xl border border-primary/10 bg-primary/[0.02] p-4">
                         <div className="flex flex-col justify-end gap-1.5">
-                            <label className="text-[13px] font-bold text-primary/70">Chá»n thuá»™c tÃ­nh muá»‘n thay Ä‘á»•i</label>
+                            <label className="text-[13px] font-bold text-primary/70">Chọn thuộc tính muốn thay đổi</label>
                             <select
                                 value={targetAttributeId}
                                 onChange={(e) => { setTargetAttributeId(e.target.value); setTargetValue(''); setReplacementMap({}); setPreviewing(false); }}
                                 className="w-full rounded-lg border border-primary/10 bg-white px-3 py-2 text-sm font-semibold focus:border-primary/30 focus:outline-none shadow-sm"
                             >
-                                <option value="">-- Chá»n thuá»™c tÃ­nh --</option>
+                                <option value="">-- Chọn thuộc tính --</option>
                                 {availableAttributes.map(attr => (
                                     <option key={attr.id} value={attr.id}>{attr.name}</option>
                                 ))}
                             </select>
                         </div>
                         <div className="flex flex-col justify-end gap-1.5">
-                            <label className="text-[13px] font-bold text-primary/70">Chá»n giÃ¡ trá»‹ má»›i</label>
+                            <label className="text-[13px] font-bold text-primary/70">Chọn giá trị mới</label>
                             <select
                                 value={targetValue}
                                 onChange={(e) => { setTargetValue(e.target.value); setReplacementMap({}); setPreviewing(false); }}
                                 disabled={!targetAttributeId}
                                 className="w-full rounded-lg border border-primary/10 bg-white px-3 py-2 text-sm font-semibold focus:border-primary/30 focus:outline-none shadow-sm disabled:opacity-50"
                             >
-                                <option value="">-- Chá»n giÃ¡ trá»‹ --</option>
+                                <option value="">-- Chọn giá trị --</option>
                                 {targetAttributeValues.map((val, idx) => (
                                     <option key={`${val}-${idx}`} value={val}>{val}</option>
                                 ))}
@@ -718,7 +718,7 @@ const ProductBulkReplaceModal = ({
                                 ) : (
                                     <span className="material-symbols-outlined text-[18px]">find_replace</span>
                                 )}
-                                {loading ? 'Äang tÃ¬m kiáº¿m...' : previewing ? 'TÃ¬m láº¡i sáº£n pháº©m tÆ°Æ¡ng Ä‘Æ°Æ¡ng' : 'Báº¯t Ä‘áº§u tÃ¬m sáº£n pháº©m tÆ°Æ¡ng Ä‘Æ°Æ¡ng'}
+                                {loading ? 'Đang tìm kiếm...' : previewing ? 'Tìm lại sản phẩm tương đương' : 'Bắt đầu tìm sản phẩm tương đương'}
                             </button>
                         </div>
                     </div>
@@ -727,10 +727,10 @@ const ProductBulkReplaceModal = ({
                     {previewing && (
                         <div className="mt-6 space-y-3">
                             <div className="flex items-center justify-between">
-                                <h4 className="text-sm font-bold text-slate-700">Káº¿t quáº£ Ä‘á»‘i chiáº¿u</h4>
+                                <h4 className="text-sm font-bold text-slate-700">Kết quả đối chiếu</h4>
                                 {!loading && (
                                     <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-full ${hasAnyMatch ? 'bg-green-50 text-green-600' : 'bg-rose-50 text-rose-500'}`}>
-                                        {matchCount}/{selectedItems.length} khá»›p
+                                        {matchCount}/{selectedItems.length} khớp
                                     </span>
                                 )}
                             </div>
@@ -738,9 +738,9 @@ const ProductBulkReplaceModal = ({
                             <div className="max-h-[380px] overflow-y-auto rounded-xl border border-slate-100 bg-white flex flex-col">
                                 {/* Header (Hidden on mobile) */}
                                 <div className="hidden sm:grid sm:grid-cols-[1fr_40px_1fr] gap-4 sticky top-0 z-10 bg-slate-50/90 backdrop-blur-md border-b border-slate-100 px-4 py-3">
-                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sáº£n pháº©m hiá»‡n táº¡i</div>
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm hiện tại</div>
                                     <div className="text-center" />
-                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sáº£n pháº©m thay tháº¿</div>
+                                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sản phẩm thay thế</div>
                                 </div>
 
                                 {/* Body */}
@@ -754,7 +754,7 @@ const ProductBulkReplaceModal = ({
                                             <div key={item.line_id} className={`flex flex-col sm:grid sm:grid-cols-[1fr_40px_1fr] sm:items-center gap-3 sm:gap-4 p-3.5 sm:p-4 rounded-xl border transition-all ${hasReplacement ? 'border-green-200/60 bg-white shadow-sm' : 'border-slate-200 bg-white shadow-sm'}`}>
                                                 {/* Source item */}
                                                 <div className="flex flex-col gap-1 w-full relative">
-                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 sm:hidden">Äang cÃ³</span>
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 sm:hidden">Đang có</span>
                                                     <p className="text-[13px] font-bold text-slate-700 leading-snug">{item.name}</p>
                                                     <p className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
                                                         <span className="material-symbols-outlined text-[13px]">barcode</span>
@@ -782,21 +782,21 @@ const ProductBulkReplaceModal = ({
 
                                                 {/* Replacement */}
                                                 <div className={`flex flex-col gap-1 w-full sm:p-0 rounded-lg sm:rounded-none sm:bg-transparent border sm:border-0 ${hasReplacement ? 'bg-green-50/50 border-green-200/50 p-3' : 'bg-slate-50 border-slate-200 p-3'}`}>
-                                                    <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 sm:hidden ${hasReplacement ? 'text-green-600' : 'text-slate-400'}`}>Thay báº±ng</span>
+                                                    <span className={`text-[10px] font-bold uppercase tracking-wider mb-0.5 sm:hidden ${hasReplacement ? 'text-green-600' : 'text-slate-400'}`}>Thay bằng</span>
                                                     {hasReplacement ? (
                                                         <>
                                                             <div className="flex items-center gap-2 flex-wrap">
                                                                 <p className="text-[13px] font-bold text-primary leading-snug">
                                                                     {replacement.display_name || replacement.name}
                                                                 </p>
-                                                                <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 whitespace-nowrap">ÄÃ£ khá»›p</span>
+                                                                <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 whitespace-nowrap">Đã khớp</span>
                                                             </div>
                                                             <p className="flex items-center flex-wrap gap-1 text-[11px] font-medium text-slate-400">
                                                                 <span className="material-symbols-outlined text-[13px]">barcode</span>
                                                                 {replacement.display_sku || replacement.sku}
                                                                 {replacement.price != null && (
                                                                     <>
-                                                                        <span className="text-slate-200">â€¢</span>
+                                                                        <span className="text-slate-200">•</span>
                                                                         <span className="material-symbols-outlined text-[13px]">sell</span>
                                                                         {typeof currencyFormatter === 'function'
                                                                             ? currencyFormatter(replacement.price)
@@ -814,7 +814,7 @@ const ProductBulkReplaceModal = ({
                                                         <div className="flex items-center gap-1.5 text-rose-500 italic">
                                                             <span className="material-symbols-outlined text-[15px]">error</span>
                                                             <span className="text-[12px] font-medium">
-                                                                {errors[item.line_id] || 'KhÃ´ng tÃ¬m tháº¥y máº«u tÆ°Æ¡ng á»©ng'}
+                                                                {errors[item.line_id] || 'Không tìm thấy mẫu tương ứng'}
                                                             </span>
                                                         </div>
                                                     )}
@@ -828,7 +828,7 @@ const ProductBulkReplaceModal = ({
                             {/* Hint if nothing matched */}
                             {!loading && !hasAnyMatch && (
                                 <p className="text-center text-[12px] font-medium text-slate-400 italic">
-                                    KhÃ´ng tÃ¬m tháº¥y sáº£n pháº©m thay tháº¿ nÃ o. HÃ£y kiá»ƒm tra láº¡i cÃ¡c sáº£n pháº©m Ä‘Ã£ Ä‘Æ°á»£c liÃªn káº¿t biáº¿n thá»ƒ trong há»‡ thá»‘ng.
+                                    Không tìm thấy sản phẩm thay thế nào. Hãy kiểm tra lại các sản phẩm đã được liên kết biến thể trong hệ thống.
                                 </p>
                             )}
                         </div>
@@ -841,8 +841,8 @@ const ProductBulkReplaceModal = ({
                         {previewing && !loading && (
                             <span>
                                 {hasAnyMatch
-                                    ? `Sáºµn sÃ ng thay Ä‘á»•i ${matchCount} sáº£n pháº©m.`
-                                    : 'KhÃ´ng cÃ³ sáº£n pháº©m nÃ o khá»›p Ä‘á»ƒ Ã¡p dá»¥ng.'}
+                                    ? `Sẵn sàng thay đổi ${matchCount} sản phẩm.`
+                                    : 'Không có sản phẩm nào khớp để áp dụng.'}
                             </span>
                         )}
                     </div>
@@ -851,14 +851,14 @@ const ProductBulkReplaceModal = ({
                             onClick={onClose}
                             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-600 transition-all hover:bg-slate-50"
                         >
-                            Há»§y bá»
+                            Hủy bỏ
                         </button>
                         <button
                             onClick={handleConfirm}
                             disabled={loading || !hasAnyMatch}
                             className="rounded-lg bg-slate-900 px-5 py-2 text-sm font-bold text-white shadow-lg transition-all hover:bg-slate-700 disabled:opacity-40"
                         >
-                            XÃ¡c nháº­n thay Ä‘á»•i {hasAnyMatch ? `(${matchCount})` : ''}
+                            Xác nhận thay đổi {hasAnyMatch ? `(${matchCount})` : ''}
                         </button>
                     </div>
                 </div>

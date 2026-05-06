@@ -729,12 +729,6 @@ const DailyProfitReport = () => {
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            // Auto sync latest FB Ads data before loading the report
-            await financeApi.syncFbAdSpend({
-                start_date: filters.start_date,
-                end_date: filters.end_date
-            }).catch(e => console.error("Auto sync FB failed", e));
-
             const [reportRes, configRes] = await Promise.all([
                 financeApi.getDailyPnlReport({
                     start_date: filters.start_date,

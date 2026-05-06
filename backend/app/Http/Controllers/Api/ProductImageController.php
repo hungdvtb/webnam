@@ -66,6 +66,31 @@ class ProductImageController extends Controller
         return response()->json($uploadedImages, 201);
     }
 
+    public function syncProductImages(Request $request, $productId)
+    {
+        @set_time_limit(120);
+
+        $request->validate([
+            'sync_images' => 'nullable|boolean',
+            'image_order' => 'nullable|array',
+            'image_order.*' => 'nullable|string|max:80',
+            'primary_image_token' => 'nullable|string|max:80',
+            'images' => 'nullable|array',
+            'images.*' => 'image|mimes:jpeg,png,jpg,gif,webp|max:5120',
+        ]);
+
+        $product = Product::query()->findOrFail($productId);
+        $this->syncSubmittedProductImages($request, $product);
+
+        $images = $product->images()
+            ->get(['id', 'product_id', 'media_asset_id', 'image_url', 'is_primary', 'sort_order', 'file_name', 'file_size']);
+
+        return response()->json([
+            'message' => 'Images synced successfully.',
+            'images' => $images,
+        ]);
+    }
+
     public function bulkRefreshPreview(Request $request)
     {
         @set_time_limit(120);
@@ -249,6 +274,109 @@ class ProductImageController extends Controller
         }
 
         return response()->json(['message' => 'Images reordered successfully.']);
+    }
+
+    private function syncSubmittedProductImages(Request $request, Product $product): void
+    {
+        $orderedTokens = collect((array) $request->input('image_order', []))
+            ->map(fn ($token) => trim((string) $token))
+            ->filter()
+            ->values();
+
+        $uploadedFiles = array_values(array_filter(
+            (array) $request->file('images', []),
+            fn ($file) => $file instanceof UploadedFile
+        ));
+
+        $existingImages = $product->images()->get()->keyBy(fn (ProductImage $image) => (int) $image->id);
+        $orderedEntries = [];
+        $keptExistingIds = [];
+        $usedNewIndexes = [];
+
+        foreach ($orderedTokens as $token) {
+            if (str_starts_with($token, 'existing:')) {
+                $imageId = (int) substr($token, strlen('existing:'));
+                $existingImage = $existingImages->get($imageId);
+
+                if (!$existingImage || in_array($imageId, $keptExistingIds, true)) {
+                    continue;
+                }
+
+                $keptExistingIds[] = $imageId;
+                $orderedEntries[] = [
+                    'type' => 'existing',
+                    'token' => $token,
+                    'image' => $existingImage,
+                ];
+                continue;
+            }
+
+            if (str_starts_with($token, 'new:')) {
+                $newIndex = (int) substr($token, strlen('new:'));
+                if (isset($usedNewIndexes[$newIndex]) || !isset($uploadedFiles[$newIndex])) {
+                    continue;
+                }
+
+                $usedNewIndexes[$newIndex] = true;
+                $orderedEntries[] = [
+                    'type' => 'new',
+                    'token' => $token,
+                    'file' => $uploadedFiles[$newIndex],
+                ];
+            }
+        }
+
+        DB::transaction(function () use ($product, $existingImages, $orderedEntries, $keptExistingIds, $request): void {
+            $imagesToDelete = $existingImages->filter(
+                fn (ProductImage $image) => !in_array((int) $image->id, $keptExistingIds, true)
+            );
+
+            foreach ($imagesToDelete as $image) {
+                $image->delete();
+            }
+
+            if (empty($orderedEntries)) {
+                return;
+            }
+
+            $resolvedPrimaryToken = trim((string) $request->input('primary_image_token', ''));
+            if ($resolvedPrimaryToken === '' || !collect($orderedEntries)->contains(fn ($entry) => $entry['token'] === $resolvedPrimaryToken)) {
+                $resolvedPrimaryToken = $orderedEntries[0]['token'];
+            }
+
+            foreach ($orderedEntries as $sortOrder => $entry) {
+                $isPrimary = $entry['token'] === $resolvedPrimaryToken;
+
+                if ($entry['type'] === 'existing') {
+                    /** @var ProductImage $existingImage */
+                    $existingImage = $entry['image'];
+                    if ((int) $existingImage->sort_order !== (int) $sortOrder || (bool) $existingImage->is_primary !== $isPrimary) {
+                        $existingImage->forceFill([
+                            'sort_order' => (int) $sortOrder,
+                            'is_primary' => $isPrimary,
+                        ])->save();
+                    }
+                    continue;
+                }
+
+                /** @var UploadedFile $imageFile */
+                $imageFile = $entry['file'];
+                $asset = $this->mediaService->uploadImage($imageFile, [
+                    'collection' => 'products',
+                    'source' => 'product-form-upload',
+                ]);
+
+                ProductImage::query()->create([
+                    'product_id' => $product->id,
+                    'media_asset_id' => $asset->id,
+                    'image_url' => $this->mediaService->buildAssetUrl($asset, 'large'),
+                    'file_name' => $imageFile->getClientOriginalName(),
+                    'file_size' => $imageFile->getSize(),
+                    'is_primary' => $isPrimary,
+                    'sort_order' => (int) $sortOrder,
+                ]);
+            }
+        });
     }
 
     private function syncPrimaryImageForProduct(int $productId, ?int $preferredImageId = null): void

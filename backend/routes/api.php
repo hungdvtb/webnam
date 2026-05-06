@@ -91,6 +91,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/products/{id}/force', [ProductController::class , 'forceDelete']);
 
     // Admin Product Image routes
+    Route::post('/products/{id}/images/sync', [ProductImageController::class , 'syncProductImages'])->whereNumber('id');
     Route::post('/products/{id}/images', [ProductImageController::class , 'store']);
     Route::post('/product-images/bulk-append/preview', [ProductImageController::class , 'bulkAppendPreview']);
     Route::post('/product-images/bulk-append/apply', [ProductImageController::class , 'bulkAppendApply']);

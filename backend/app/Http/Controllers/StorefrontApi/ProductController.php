@@ -129,6 +129,133 @@ class ProductController extends Controller
         return $account ? $account->id : null;
     }
 
+    private function normalizeSearchKeyword(?string $value): string
+    {
+        return Str::of((string) $value)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9\s]+/', ' ')
+            ->squish()
+            ->toString();
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    private function accentInsensitiveExpression(string $expression): string
+    {
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            return "LOWER(immutable_unaccent({$expression}))";
+        }
+
+        return "LOWER({$expression})";
+    }
+
+    private function compactAccentInsensitiveExpression(string $expression): string
+    {
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            return "LOWER(REGEXP_REPLACE(immutable_unaccent({$expression}), '[^a-zA-Z0-9]', '', 'g'))";
+        }
+
+        return "LOWER(REPLACE(REPLACE(REPLACE(REPLACE({$expression}, '-', ''), ' ', ''), '.', ''), '_', ''))";
+    }
+
+    private function tokenizedAccentInsensitiveExpression(string $expression): string
+    {
+        if (DB::connection()->getDriverName() === 'pgsql') {
+            return "CONCAT(' ', LOWER(REGEXP_REPLACE(immutable_unaccent({$expression}), '[^a-zA-Z0-9]+', ' ', 'g')), ' ')";
+        }
+
+        return "' ' || LOWER(REPLACE(REPLACE(REPLACE(REPLACE({$expression}, '-', ' '), '.', ' '), '_', ' '), '/', ' ')) || ' '";
+    }
+
+    private function applyMobileQuickSearch(Builder $query, string $rawSearch): void
+    {
+        $normalizedSearch = $this->normalizeSearchKeyword($rawSearch);
+        $tokens = collect(preg_split('/\s+/', $normalizedSearch, -1, PREG_SPLIT_NO_EMPTY))
+            ->filter(fn ($token) => strlen($token) >= 2)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($normalizedSearch === '' || empty($tokens)) {
+            return;
+        }
+
+        $nameExpr = $this->tokenizedAccentInsensitiveExpression("COALESCE(products.name, '')");
+        $skuExpr = $this->accentInsensitiveExpression("COALESCE(products.sku, '')");
+        $keywordExpr = $this->tokenizedAccentInsensitiveExpression("COALESCE(products.meta_keywords, '')");
+        $metaTitleExpr = $this->tokenizedAccentInsensitiveExpression("COALESCE(products.meta_title, '')");
+        $compactSkuExpr = $this->compactAccentInsensitiveExpression("COALESCE(products.sku, '')");
+        $phraseLike = '% ' . $this->escapeLike($normalizedSearch) . ' %';
+        $prefixLike = $this->escapeLike($normalizedSearch) . '%';
+        $compactSearch = preg_replace('/[^a-z0-9]+/', '', $normalizedSearch);
+        $compactSkuLike = $compactSearch !== '' ? '%' . $this->escapeLike($compactSearch) . '%' : null;
+        $isCodeLikeSearch = preg_match('/\d/', $normalizedSearch) === 1 || count($tokens) === 1;
+
+        $tokenMatchParts = [];
+        $tokenMatchBindings = [];
+        foreach ($tokens as $token) {
+            $tokenLike = '% ' . $this->escapeLike($token) . ' %';
+            $tokenMatchParts[] = "CASE WHEN ({$nameExpr} LIKE ? OR {$keywordExpr} LIKE ? OR {$metaTitleExpr} LIKE ?) THEN 1 ELSE 0 END";
+            array_push($tokenMatchBindings, $tokenLike, $tokenLike, $tokenLike);
+        }
+
+        $tokenMatchSql = '(' . implode(' + ', $tokenMatchParts) . ')';
+        $minimumMatches = count($tokens);
+        $rankingParts = [
+            "CASE WHEN {$nameExpr} LIKE ? THEN 1000 ELSE 0 END",
+            "CASE WHEN {$keywordExpr} LIKE ? THEN 780 ELSE 0 END",
+            "CASE WHEN {$metaTitleExpr} LIKE ? THEN 720 ELSE 0 END",
+            "({$tokenMatchSql} * 160)",
+        ];
+        $rankingBindings = array_merge([$phraseLike, $phraseLike, $phraseLike], $tokenMatchBindings);
+
+        if ($isCodeLikeSearch) {
+            $rankingParts[] = "CASE WHEN {$skuExpr} LIKE ? THEN 520 ELSE 0 END";
+            $rankingBindings[] = $prefixLike;
+
+            if ($compactSkuLike !== null) {
+                $rankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? THEN 500 ELSE 0 END";
+                $rankingBindings[] = $compactSkuLike;
+            }
+        }
+
+        $searchRankingSql = '(' . implode(' + ', $rankingParts) . ')';
+        $query->selectRaw("{$searchRankingSql} AS search_score", $rankingBindings);
+
+        $query->where(function (Builder $searchQuery) use (
+            $nameExpr,
+            $keywordExpr,
+            $metaTitleExpr,
+            $skuExpr,
+            $compactSkuExpr,
+            $phraseLike,
+            $prefixLike,
+            $compactSkuLike,
+            $tokenMatchSql,
+            $tokenMatchBindings,
+            $minimumMatches,
+            $isCodeLikeSearch
+        ) {
+            $searchQuery
+                ->whereRaw("{$nameExpr} LIKE ?", [$phraseLike])
+                ->orWhereRaw("{$keywordExpr} LIKE ?", [$phraseLike])
+                ->orWhereRaw("{$metaTitleExpr} LIKE ?", [$phraseLike])
+                ->orWhereRaw("{$tokenMatchSql} >= ?", array_merge($tokenMatchBindings, [$minimumMatches]));
+
+            if ($isCodeLikeSearch) {
+                $searchQuery->orWhereRaw("{$skuExpr} LIKE ?", [$prefixLike]);
+
+                if ($compactSkuLike !== null) {
+                    $searchQuery->orWhereRaw("{$compactSkuExpr} LIKE ?", [$compactSkuLike]);
+                }
+            }
+        });
+    }
+
     private function getOrderedCategoryIds(Category $category, $accountId): array
     {
         $ids = [(int) $category->id];
@@ -546,13 +673,18 @@ class ProductController extends Controller
 
         // Search
         if ($request->filled('search')) {
-            $s = $request->search;
+            $s = trim((string) $request->search);
             \Illuminate\Support\Facades\Log::info("Product search keyword: '{$s}'");
-            $query->where(function ($q) use ($s) {
-                $q->where('name', 'ilike', "%{$s}%")
-                  ->orWhere('sku', 'ilike', "%{$s}%")
-                  ->orWhere('description', 'ilike', "%{$s}%");
-            });
+
+            if ($request->boolean('mobile_search')) {
+                $this->applyMobileQuickSearch($query, $s);
+            } else {
+                $query->where(function ($q) use ($s) {
+                    $q->where('name', 'ilike', "%{$s}%")
+                      ->orWhere('sku', 'ilike', "%{$s}%")
+                      ->orWhere('description', 'ilike', "%{$s}%");
+                });
+            }
         }
 
         // Parent Filter (for sibling variations)
@@ -602,6 +734,10 @@ class ProductController extends Controller
 
         if ($prioritizeCategoryOrder) {
             $finalQuery->orderBy('category_order_key');
+        }
+
+        if ($request->filled('search') && $request->boolean('mobile_search')) {
+            $finalQuery->orderByDesc('search_score');
         }
 
         if (in_array($sortKey, ['popular', 'newest'], true)) {

@@ -2222,10 +2222,12 @@ class ProductController extends Controller
             if ($entry['type'] === 'existing') {
                 /** @var ProductImage $existingImage */
                 $existingImage = $entry['image'];
-                $existingImage->forceFill([
-                    'sort_order' => (int) $sortOrder,
-                    'is_primary' => $isPrimary,
-                ])->save();
+                if ((int) $existingImage->sort_order !== (int) $sortOrder || (bool) $existingImage->is_primary !== $isPrimary) {
+                    $existingImage->forceFill([
+                        'sort_order' => (int) $sortOrder,
+                        'is_primary' => $isPrimary,
+                    ])->save();
+                }
                 continue;
             }
 
@@ -2937,7 +2939,88 @@ class ProductController extends Controller
         $product->setAttribute('category_count', count($categoryIds));
         $product->setAttribute('has_multiple_categories', count($categoryIds) > 1);
 
+        $this->appendAdditionalInfoPostMeta($product);
+
         return $this->appendBundleOptionPostMeta($product);
+    }
+
+    protected function appendAdditionalInfoPostMeta(Product $product): Product
+    {
+        if (blank($product->additional_info)) {
+            return $product;
+        }
+
+        try {
+            $items = $this->normalizeAdditionalInfoPayload($product->additional_info);
+        } catch (ValidationException) {
+            return $product;
+        }
+
+        if (empty($items)) {
+            return $product;
+        }
+
+        $postIds = collect($items)
+            ->pluck('post_id')
+            ->filter(fn ($postId) => filled($postId))
+            ->map(fn ($postId) => (int) $postId)
+            ->unique()
+            ->values();
+
+        if ($postIds->isEmpty()) {
+            $product->setAttribute('additional_info', json_encode($items, JSON_UNESCAPED_UNICODE));
+
+            return $product;
+        }
+
+        $query = Post::query()->whereIn('id', $postIds->all());
+        $accountId = (int) request()->header('X-Account-Id');
+
+        if ($accountId > 0) {
+            $query->where('account_id', $accountId);
+        } elseif (filled($product->account_id)) {
+            $query->where('account_id', (int) $product->account_id);
+        }
+
+        $posts = $query
+            ->get(['id', 'title', 'slug'])
+            ->keyBy(fn (Post $post) => (int) $post->id);
+
+        $hydrated = collect($items)
+            ->map(function (array $item) use ($posts) {
+                $postId = filled($item['post_id'] ?? null) ? (int) $item['post_id'] : null;
+
+                if (!$postId) {
+                    return $item;
+                }
+
+                $post = $posts->get($postId);
+
+                if (!$post) {
+                    $item['post_invalid'] = true;
+                    $item['post_error'] = 'Bai viet lien ket khong hop le hoac khong thuoc tai khoan hien tai.';
+
+                    return $item;
+                }
+
+                $item['post_id'] = (int) $post->id;
+                $item['post_title'] = trim((string) ($item['post_title'] ?? '')) !== ''
+                    ? $item['post_title']
+                    : trim((string) $post->title);
+                $item['post_slug'] = trim((string) ($item['post_slug'] ?? '')) !== ''
+                    ? $item['post_slug']
+                    : trim((string) $post->slug);
+                $item['post_invalid'] = false;
+                unset($item['post_error']);
+
+                return $item;
+            })
+            ->values()
+            ->all();
+
+        $product->setAttribute('additional_info', json_encode($hydrated, JSON_UNESCAPED_UNICODE));
+
+        return $product;
     }
 
     protected function appendBundleOptionPostMeta(Product $product): Product
@@ -8531,7 +8614,7 @@ class ProductController extends Controller
             ->all();
     }
 
-    protected function validateAdditionalInfoPostOwnership(array $items, Request $request, string $attribute = 'additional_info'): void
+    protected function stripInvalidAdditionalInfoPostLinks(array $items, Request $request): array
     {
         $postIds = collect($items)
             ->pluck('post_id')
@@ -8541,7 +8624,7 @@ class ProductController extends Controller
             ->values();
 
         if ($postIds->isEmpty()) {
-            return;
+            return $items;
         }
 
         $query = Post::query()->whereIn('id', $postIds->all());
@@ -8555,13 +8638,24 @@ class ProductController extends Controller
             ->pluck('id')
             ->map(fn ($postId) => (int) $postId)
             ->unique()
-            ->values();
+            ->flip();
 
-        if ($resolvedIds->count() !== $postIds->count()) {
-            throw ValidationException::withMessages([
-                $attribute => ['Bai viet lien ket khong hop le hoac khong thuoc tai khoan hien tai.'],
-            ]);
-        }
+        return collect($items)
+            ->map(function (array $item) use ($resolvedIds) {
+                $postId = filled($item['post_id'] ?? null) ? (int) $item['post_id'] : null;
+
+                if ($postId && !$resolvedIds->has($postId)) {
+                    $item['post_id'] = null;
+                    $item['post_slug'] = '';
+                }
+
+                unset($item['post_invalid'], $item['post_error']);
+
+                return $item;
+            })
+            ->filter(fn (array $item) => $this->hasMeaningfulAdditionalInfoItem($item))
+            ->values()
+            ->all();
     }
 
     protected function prepareAdditionalInfoForPersistence(Request $request, array &$payload, string $requestKey = 'additional_info', string $attribute = 'additional_info'): void
@@ -8575,7 +8669,7 @@ class ProductController extends Controller
             : $request->input($requestKey);
 
         $normalized = $this->normalizeAdditionalInfoPayload($rawValue, $attribute);
-        $this->validateAdditionalInfoPostOwnership($normalized, $request, $attribute);
+        $normalized = $this->stripInvalidAdditionalInfoPostLinks($normalized, $request);
 
         $payload[$requestKey] = !empty($normalized)
             ? json_encode($normalized, JSON_UNESCAPED_UNICODE)
@@ -10359,7 +10453,7 @@ class ProductController extends Controller
                 $basicInfo['additional_info'] ?? $request->input('basic_info.additional_info'),
                 'basic_info.additional_info'
             );
-            $this->validateAdditionalInfoPostOwnership($normalizedAdditionalInfo, $request, 'basic_info.additional_info');
+            $normalizedAdditionalInfo = $this->stripInvalidAdditionalInfoPostLinks($normalizedAdditionalInfo, $request);
             if (isset($mergeFieldLookup['additional_info'])) {
                 $structuredMergePayloads['additional_info'] = $normalizedAdditionalInfo;
             }

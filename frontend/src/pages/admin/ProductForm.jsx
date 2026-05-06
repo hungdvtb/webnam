@@ -200,6 +200,27 @@ const buildProductImageSubmissionPayload = (items = []) => {
     };
 };
 
+const buildProductImageSignature = (items = []) => (
+    (Array.isArray(items) ? items : [])
+        .map((image, index) => {
+            const idPart = image?.file
+                ? `new:${image.file.name || 'image'}:${image.file.size || 0}:${image.file.lastModified || 0}`
+                : `existing:${Number(image?.id) || ''}`;
+
+            return `${index}:${idPart}:${image?.is_primary ? 1 : 0}`;
+        })
+        .join('|')
+);
+
+const appendProductImageSubmissionPayload = (formData, imagePayload) => {
+    formData.append('sync_images', '1');
+    imagePayload.order.forEach((token) => formData.append('image_order[]', token));
+    if (imagePayload.primaryToken) {
+        formData.append('primary_image_token', imagePayload.primaryToken);
+    }
+    imagePayload.files.forEach((file) => formData.append('images[]', file));
+};
+
 const buildVariantImagePickerPosition = (anchorRect, panelWidth = 336, panelHeight = 356) => {
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -1766,11 +1787,11 @@ const normalizeAdditionalInfoRows = (rows = []) => (
             .map((item) => ({
                 title: String(item?.title ?? '').trim(),
                 display_text: String(item?.display_text ?? '').trim(),
-                post_id: item?.post_id ? String(item.post_id).trim() : '',
+                post_id: item?.post_invalid ? '' : (item?.post_id ? String(item.post_id).trim() : ''),
                 post_title: String(item?.post_title ?? '').trim(),
                 post_slug: String(item?.post_slug ?? '').trim(),
             }))
-            .filter((item) => item.post_id)
+            .filter((item) => item.title || item.display_text || item.post_id || item.post_title || item.post_slug)
         : []
 );
 
@@ -1789,6 +1810,8 @@ const createAdditionalInfoRow = (item = {}) => ({
     post_id: item?.post_id ? String(item.post_id) : '',
     post_title: String(item?.post_title ?? ''),
     post_slug: String(item?.post_slug ?? ''),
+    post_invalid: Boolean(item?.post_invalid),
+    post_error: String(item?.post_error ?? ''),
 });
 
 const hydrateAdditionalInfoRows = (rows = []) => (
@@ -1974,6 +1997,7 @@ const ProductForm = () => {
     const [selectedImages, setSelectedImages] = useState([]);
     const [lightboxImage, setLightboxImage] = useState(null);
     const [isDragSelecting, setIsDragSelecting] = useState(false);
+    const [saveStatusText, setSaveStatusText] = useState('');
     const [showSlugModal, setShowSlugModal] = useState(false);
     const [tempSlug, setTempSlug] = useState('');
     const [slugError, setSlugError] = useState('');
@@ -2028,6 +2052,9 @@ const ProductForm = () => {
         site_domain_id: ''
     });
     const initialStockQuantityRef = useRef('');
+    const initialImageSignatureRef = useRef('');
+    const initialFormDataSignatureRef = useRef('');
+    const hasNonImageFormChangesRef = useRef(false);
     const normalizeSelectedCategoryIds = useCallback((values) => normalizeCategoryIds(values), []);
     const applySelectedCategoryIds = useCallback((nextValuesOrUpdater) => {
         setFormData((prev) => {
@@ -4095,7 +4122,7 @@ const ProductForm = () => {
             const resolvedCategoryIds = getProductCategoryIds(data);
             const resolvedStockQuantity = isDuplicate ? 0 : (data.stock_quantity ?? '');
             initialStockQuantityRef.current = normalizeStockQuantityComparableValue(resolvedStockQuantity);
-            setFormData({
+            const loadedFormData = {
                 type: data.type || 'simple',
                 name: duplicateName,
                 category_id: resolvedCategoryIds[0] || '',
@@ -4186,8 +4213,12 @@ const ProductForm = () => {
                 })(),
                 bundle_title: data.bundle_title || '',
                 site_domain_id: data.site_domain_id || ''
-            });
-            setImages(normalizeAdminImages(data.images || []));
+            };
+            setFormData(loadedFormData);
+            const normalizedImages = normalizeAdminImages(data.images || []);
+            setImages(normalizedImages);
+            initialImageSignatureRef.current = buildProductImageSignature(normalizedImages);
+            hasNonImageFormChangesRef.current = false;
             duplicateDraftDefaultsRef.current = isDuplicate
                 ? { parentSku: duplicateParentSku, variantSkus: [] }
                 : null;
@@ -4268,6 +4299,10 @@ const ProductForm = () => {
             setSelectedProductsData(initialData);
             setStagedRelatedIds(initialIds);
             setStagedRelatedData(initialData);
+            initialFormDataSignatureRef.current = JSON.stringify({
+                ...loadedFormData,
+                linked_product_ids: initialIds,
+            });
 
             if (variantsData.length > 0) {
                 const baseLoadedVariants = variantsData.map(v => {
@@ -4456,6 +4491,15 @@ const ProductForm = () => {
         ));
 
     }, [selectedImages]);
+
+    const markNonImageFormChanged = useCallback((event) => {
+        const target = event?.target;
+        if (!target || target.type === 'file' || target.closest?.('[data-product-image-section="true"]')) {
+            return;
+        }
+
+        hasNonImageFormChangesRef.current = true;
+    }, []);
 
     const handleCustomAttributeChange = (attrId, value) => {
         setFormData(prev => ({
@@ -6196,9 +6240,46 @@ const ProductForm = () => {
             return;
         }
         setIsSaving(true);
+        setSaveStatusText('Đang chuẩn bị dữ liệu...');
         let duplicateCloneId = null;
         let duplicateCloneData = null;
         try {
+            const imageDraftPayload = buildProductImageSubmissionPayload(images);
+            const hasPendingImageOptimization = images.some((img) => img?.optimizing);
+
+            if (hasPendingImageOptimization) {
+                showToast({
+                    message: 'Ảnh vẫn đang tối ưu. Vui lòng chờ vài giây rồi lưu lại.',
+                    type: 'warning',
+                });
+                return;
+            }
+
+            const currentImageSignature = buildProductImageSignature(images);
+            const hasImageChanges = currentImageSignature !== initialImageSignatureRef.current;
+            const hasFormDataChanges = JSON.stringify(formData) !== initialFormDataSignatureRef.current;
+            const canUseImageOnlySave = isEdit
+                && !isDuplicate
+                && hasImageChanges
+                && !hasFormDataChanges
+                && !hasNonImageFormChangesRef.current;
+
+            if (canUseImageOnlySave) {
+                setSaveStatusText(imageDraftPayload.files.length > 0
+                    ? `Đang tải ${imageDraftPayload.files.length} ảnh mới...`
+                    : 'Đang lưu thứ tự ảnh...');
+
+                const imageOnlyData = new FormData();
+                appendProductImageSubmissionPayload(imageOnlyData, imageDraftPayload);
+                const imageResponse = await productImageApi.syncProductImages(id, imageOnlyData);
+                const normalizedImages = normalizeAdminImages(imageResponse.data?.images || []);
+                setImages(normalizedImages);
+                initialImageSignatureRef.current = buildProductImageSignature(normalizedImages);
+                showToast({ message: 'Đã lưu hình ảnh sản phẩm thành công!', type: 'success' });
+                navigateBackToOrigin();
+                return;
+            }
+
             if (isDuplicate) {
                 const duplicateResponse = await productApi.duplicate(id);
                 duplicateCloneData = duplicateResponse.data?.data || duplicateResponse.data || null;
@@ -6370,13 +6451,7 @@ const ProductForm = () => {
             }
 
             if (isEdit || isDuplicate) {
-                const imageDraftPayload = buildProductImageSubmissionPayload(images);
-                submitData.append('sync_images', '1');
-                imageDraftPayload.order.forEach((token) => submitData.append('image_order[]', token));
-                if (imageDraftPayload.primaryToken) {
-                    submitData.append('primary_image_token', imageDraftPayload.primaryToken);
-                }
-                imageDraftPayload.files.forEach((file) => submitData.append('images[]', file));
+                appendProductImageSubmissionPayload(submitData, imageDraftPayload);
             } else {
                 images.forEach((img) => {
                     if (img.file) submitData.append('images[]', img.file);
@@ -6385,12 +6460,17 @@ const ProductForm = () => {
 
             let response;
             if (isDuplicate) {
+                setSaveStatusText('Đang lưu bản nhân bản...');
                 response = await productApi.update(duplicateCloneId, submitData);
             } else if (isEdit) {
                 // For updates, we use POST but can add method override if needed
                 // productApi.update is already POST /api/products/:id
+                setSaveStatusText(imageDraftPayload.files.length > 0
+                    ? `Đang lưu sản phẩm và tải ${imageDraftPayload.files.length} ảnh mới...`
+                    : 'Đang lưu sản phẩm...');
                 response = await productApi.update(id, submitData);
             } else {
+                setSaveStatusText('Đang tạo sản phẩm...');
                 response = await productApi.store(submitData);
             }
 
@@ -6469,6 +6549,7 @@ const ProductForm = () => {
             showToast({ message, type: 'error' });
         } finally {
             setIsSaving(false);
+            setSaveStatusText('');
         }
     };
 
@@ -6685,7 +6766,7 @@ const ProductForm = () => {
                             className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-primary text-white px-10 py-2.5 rounded-sm font-bold text-[11px] uppercase tracking-widest hover:bg-umber transition-all disabled:opacity-50 shadow-premium-sm"
                         >
                             {isSaving && <span className="material-symbols-outlined text-sm animate-spin">refresh</span>}
-                            {isDuplicate ? 'Lưu nhân bản' : (isEdit ? 'Lưu cập nhật' : 'Tạo ngay')}
+                            {isSaving && saveStatusText ? saveStatusText : (isDuplicate ? 'Lưu nhân bản' : (isEdit ? 'Lưu cập nhật' : 'Tạo ngay'))}
                         </button>
                     </div>
                 </div>
@@ -6694,7 +6775,7 @@ const ProductForm = () => {
             {/* Scrollable Form Content */}
             <DndProvider backend={HTML5Backend}>
             <div className="flex-1 overflow-y-auto custom-scrollbar pt-4 pb-12">
-                <form id="product-form" onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1800px] mx-auto px-1">
+                <form id="product-form" onSubmit={handleSubmit} onChangeCapture={markNonImageFormChanged} onInputCapture={markNonImageFormChanged} className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1800px] mx-auto px-1">
                     <div className="lg:col-span-8 space-y-4">
                         {/* Basic Info */}
                         <div className="bg-white border border-gold/10 p-5 shadow-premium-sm rounded-sm">
@@ -7143,9 +7224,14 @@ const ProductForm = () => {
                                                                     {info.post_id ? (
                                                                         <div className="mt-1 flex items-start gap-2">
                                                                             <div className="min-w-0 flex-1">
-                                                                                <p className="truncate text-[12px] font-bold text-gold" title={info.post_title || `Bài viết #${info.post_id}`}>
+                                                                                <p className={`truncate text-[12px] font-bold ${info.post_invalid ? 'text-brick' : 'text-gold'}`} title={info.post_title || `Bài viết #${info.post_id}`}>
                                                                                     {info.post_title || `Bài viết #${info.post_id}`}
                                                                                 </p>
+                                                                                {info.post_invalid ? (
+                                                                                    <p className="mt-1 text-[10px] font-semibold text-brick">
+                                                                                        Bài viết này không hợp lệ hoặc không thuộc tài khoản hiện tại. Khi lưu, hệ thống sẽ bỏ liên kết này.
+                                                                                    </p>
+                                                                                ) : null}
                                                                                 {previewText ? (
                                                                                     <p className="mt-1 truncate text-[10px] text-stone/45" title={previewText}>
                                                                                         Hiển thị: {previewText}
@@ -7154,7 +7240,7 @@ const ProductForm = () => {
                                                                             </div>
                                                                             <button
                                                                                 type="button"
-                                                                                onClick={() => updateAdditionalInfoRow(rowId, 'post_id', '', { post_title: '', post_slug: '' })}
+                                                                                onClick={() => updateAdditionalInfoRow(rowId, 'post_id', '', { post_title: '', post_slug: '', post_invalid: false, post_error: '' })}
                                                                                 className="mt-0.5 shrink-0 text-stone/40 transition-colors hover:text-brick"
                                                                                 title="Bỏ liên kết bài viết"
                                                                             >
@@ -7190,6 +7276,8 @@ const ProductForm = () => {
                                                                                                 updateAdditionalInfoRow(rowId, 'post_id', String(post.id), {
                                                                                                     post_title: post.title || '',
                                                                                                     post_slug: post.slug || '',
+                                                                                                    post_invalid: false,
+                                                                                                    post_error: '',
                                                                                                 });
                                                                                                 setBlogSearchQuery(prev => ({ ...prev, [rowId]: '' }));
                                                                                                 setBlogResults(prev => ({ ...prev, [rowId]: [] }));
@@ -8569,7 +8657,7 @@ const ProductForm = () => {
                         )}
 
                         {/* Images Management */}
-                        <div className="bg-white border border-gold/10 p-4 shadow-premium-sm rounded-sm">
+                        <div className="bg-white border border-gold/10 p-4 shadow-premium-sm rounded-sm" data-product-image-section="true">
                             <div className="flex justify-between items-center mb-4 border-b border-gold/10 pb-2">
                                 <div className="flex items-center gap-3">
                                     <span className="material-symbols-outlined text-primary/40 p-2 bg-stone/5 rounded-full text-lg">photo_library</span>

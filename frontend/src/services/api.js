@@ -406,6 +406,7 @@ export const productSeoBulkApi = {
 
 export const productImageApi = {
     upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, multipartConfig(formData)),
+    syncProductImages: (productId, formData) => api.post(`/products/${productId}/images/sync`, formData, multipartConfig(formData)),
     bulkAppendPreview: (formData, config = {}) => api.post('/product-images/bulk-append/preview', formData, {
         ...multipartConfig(formData),
         ...config,

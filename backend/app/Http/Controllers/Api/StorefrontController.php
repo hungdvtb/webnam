@@ -147,6 +147,14 @@ class StorefrontController extends Controller
             return;
         }
 
+        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId);
+        $queryCategoryIds = collect($categoryDescendantIdMap)
+            ->flatten()
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->filter()
+            ->unique()
+            ->values();
+
         $assignmentRows = DB::table('category_product')
             ->join('products', 'products.id', '=', 'category_product.product_id')
             ->leftJoin('product_links as super_links', function ($join) {
@@ -154,7 +162,7 @@ class StorefrontController extends Controller
                     ->where('super_links.link_type', '=', 'super_link');
             })
             ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
-            ->whereIn('category_product.category_id', $categoryIds->all())
+            ->whereIn('category_product.category_id', $queryCategoryIds->all())
             ->where(function ($query) {
                 $query
                     ->whereIn('category_product.item_type', ['product', 'bundle_option'])
@@ -172,7 +180,7 @@ class StorefrontController extends Controller
                 'super_links.product_id as parent_product_id',
             ]);
 
-        $countMap = $assignmentRows
+        $itemKeysByCategory = $assignmentRows
             ->groupBy(fn ($row) => (int) $row->category_id)
             ->map(function ($rows) {
                 return $rows
@@ -197,12 +205,49 @@ class StorefrontController extends Controller
                             : "product:{$productId}";
                     })
                     ->unique()
-                    ->count();
+                    ->values();
             });
 
-        $normalizedCategories->each(function ($category) use ($countMap) {
-            $category->setAttribute('products_count', (int) ($countMap->get((int) $category->id) ?? 0));
+        $normalizedCategories->each(function ($category) use ($categoryDescendantIdMap, $itemKeysByCategory) {
+            $itemKeys = collect($categoryDescendantIdMap[(int) $category->id] ?? [(int) $category->id])
+                ->flatMap(fn ($categoryId) => $itemKeysByCategory->get((int) $categoryId, collect()))
+                ->unique();
+
+            $category->setAttribute('products_count', $itemKeys->count());
         });
+    }
+
+    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null): array
+    {
+        $rootIds = collect($categoryIds)
+            ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($rootIds->isEmpty()) {
+            return [];
+        }
+
+        $allCategories = Category::query()
+            ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            ->where('status', true)
+            ->get(['id', 'parent_id']);
+
+        $childrenByParent = $allCategories->groupBy(fn ($category) => (int) ($category->parent_id ?? 0));
+        $collectDescendants = function (int $categoryId) use (&$collectDescendants, $childrenByParent): array {
+            $ids = [$categoryId];
+
+            foreach ($childrenByParent->get($categoryId, collect()) as $child) {
+                $ids = array_merge($ids, $collectDescendants((int) $child->id));
+            }
+
+            return array_values(array_unique($ids));
+        };
+
+        return $rootIds
+            ->mapWithKeys(fn ($categoryId) => [$categoryId => $collectDescendants($categoryId)])
+            ->all();
     }
 
     protected function normalizeStorefrontAdditionalInfoPayload($rawValue): array
@@ -838,9 +883,10 @@ class StorefrontController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
             ->whereNull('parent_id')
-            ->withCount(['products' => fn($q) => $q->where('status', true)])
             ->orderBy('order')
             ->get(['id', 'name', 'slug', 'description', 'logo_path']);
+
+        $this->applyStorefrontCategoryItemCounts($categories, $accountId);
 
         // Recent reviews
         $reviews = ProductReview::query()

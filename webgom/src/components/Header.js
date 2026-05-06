@@ -76,6 +76,7 @@ const MOBILE_BOTTOM_LABEL_LINE_MAP = {
 };
 const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
 const MAX_SEARCH_HISTORY_ITEMS = 6;
+const MOBILE_SEARCH_DEBOUNCE_MS = 320;
 
 const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
 
@@ -437,6 +438,15 @@ export default function Header({
   }, [pathname, isMobileProductsMenuOpen]);
 
   useEffect(() => {
+    if (!isMobileViewport) {
+      return;
+    }
+
+    const nextSearchQuery = new URLSearchParams(currentMobileSearchParamsString).get("search") || "";
+    setSearchQuery((currentValue) => (currentValue === nextSearchQuery ? currentValue : nextSearchQuery));
+  }, [isMobileViewport, currentMobileSearchParamsString]);
+
+  useEffect(() => {
     setSelectedMobileParentId(
       getSelectedParentIdForSlug(buildMobileProductCategoryTree(productCategories), currentMobileCategorySlug)
     );
@@ -547,19 +557,53 @@ export default function Header({
     setIsSearchHistoryOpen(false);
   };
 
-  const submitSearch = (value) => {
+  const buildMobileSearchHref = (value) => {
     const nextValue = String(value || "").trim();
+
+    if (!isMobileViewport) {
+      return nextValue ? `/products?search=${encodeURIComponent(nextValue)}` : "/products";
+    }
+
+    const params = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : currentMobileSearchParamsString
+    );
+
+    params.delete("page");
+
+    if (!nextValue) {
+      params.delete("search");
+      params.delete("mobile_search");
+
+      const query = params.toString();
+      return query ? `/products?${query}` : "/products";
+    }
+
+    params.set("search", nextValue);
+    params.set("mobile_search", "1");
+
+    return `/products?${params.toString()}`;
+  };
+
+  const submitSearch = (value, options = {}) => {
+    const nextValue = String(value || "").trim();
+    const replace = Boolean(options.replace);
 
     setSearchQuery(nextValue);
     setIsSearchHistoryOpen(false);
+    setCurrentMobileSearchParamsString(() => {
+      const href = buildMobileSearchHref(nextValue);
+      const queryString = href.split("?")[1] || "";
+
+      return queryString;
+    });
 
     if (!nextValue) {
-      router.push("/products");
+      router[replace ? "replace" : "push"](buildMobileSearchHref(""));
       return;
     }
 
     saveSearchHistoryEntry(nextValue);
-    router.push(`/products?search=${encodeURIComponent(nextValue)}`);
+    router[replace ? "replace" : "push"](buildMobileSearchHref(nextValue));
   };
 
   const handleSearchSubmit = (event) => {
@@ -608,6 +652,27 @@ export default function Header({
       setIsSearchHistoryOpen(searchHistory.length > 0);
     }
   };
+
+  useEffect(() => {
+    if (!isMobileViewport || currentNormalizedPath !== "/products") {
+      return undefined;
+    }
+
+    const nextValue = searchQuery.trim();
+    const currentSearch = new URLSearchParams(currentMobileSearchParamsString).get("search") || "";
+    const shouldClearActiveSearch = !nextValue && currentSearch;
+    const shouldRunQuickSearch = nextValue && nextValue !== currentSearch;
+
+    if (!shouldClearActiveSearch && !shouldRunQuickSearch) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      submitSearch(nextValue, { replace: true });
+    }, MOBILE_SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [isMobileViewport, currentNormalizedPath, searchQuery, currentMobileSearchParamsString]);
 
   const selectSearchInputContent = () => {
     const input = searchInputRef.current;

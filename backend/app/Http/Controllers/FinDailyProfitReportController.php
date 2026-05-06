@@ -6,6 +6,7 @@ use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
 use App\Models\InventoryDocument;
 use App\Models\Order;
+use App\Services\FacebookAdsSyncService;
 use App\Support\OrderShippingFeeCalculator;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -141,10 +142,30 @@ class FinDailyProfitReportController extends Controller
 
     private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate): array
     {
-        return DailyAdsSpend::query()
+        $config = FinDailyReportConfig::first();
+        $configuredAccountIds = app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config);
+
+        $query = DailyAdsSpend::query()
             ->whereBetween('date', [$startDate, $endDate])
-            ->select('date', DB::raw('ROUND(SUM(COALESCE(amount, 0)), 2) as total_amount'))
-            ->groupBy('date')
+            ->select('date', DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
+            ->groupBy('date');
+
+        if ($configuredAccountIds !== []) {
+            $hasConfiguredAccountRows = DailyAdsSpend::query()
+                ->whereBetween('date', [$startDate, $endDate])
+                ->whereIn('account_id', $configuredAccountIds)
+                ->exists();
+
+            if ($hasConfiguredAccountRows) {
+                $query->whereIn('account_id', $configuredAccountIds);
+            } else {
+                $query->whereNull('account_id');
+            }
+        } else {
+            $query->whereNull('account_id');
+        }
+
+        return $query
             ->pluck('total_amount', 'date')
             ->map(fn ($amount) => (float) $amount)
             ->toArray();
@@ -390,8 +411,8 @@ class FinDailyProfitReportController extends Controller
             $fixedCostDaily = isset($fixedCosts[$dateStr]) ? (float) $fixedCosts[$dateStr] : 0;
 
             $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
-            $adsSpendRawDaily = round((float) ($adsSpends[$dateStr] ?? 0), 2);
-            $adsSpendDaily = round($adsSpendRawDaily * (1 + $fbTaxRate / 100), 2);
+            $adsSpendRawDaily = (float) ($adsSpends[$dateStr] ?? 0);
+            $adsSpendDaily = $adsSpendRawDaily * (1 + $fbTaxRate / 100);
 
             $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $adsSpendDaily;
             $specialProfit = $specialProfitByDate->get($dateStr);
@@ -1030,6 +1051,8 @@ class FinDailyProfitReportController extends Controller
         $startDate = $request->start_date ?: date('Y-m-01');
         $endDate = $request->end_date ?: date('Y-m-d');
 
+        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
+
         $payload = $this->buildDailyReportPayload($startDate, $endDate, [
             'status' => $request->input('status'),
             'order_type' => $request->input('order_type'),
@@ -1046,6 +1069,8 @@ class FinDailyProfitReportController extends Controller
     {
         $startDate = $request->start_date ?: date('Y-01-01');
         $endDate = $request->end_date ?: date('Y-m-d');
+
+        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate);
         $config = FinDailyReportConfig::query()->first();
@@ -1257,6 +1282,8 @@ class FinDailyProfitReportController extends Controller
         if (empty($tokenConfigs)) {
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Access Token']);
         }
+
+        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
 
         $taxRate = (float) ($config->fb_tax_rate ?: 0);
 

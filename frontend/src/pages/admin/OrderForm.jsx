@@ -1124,6 +1124,33 @@ const normalizeSignedMoneyInputValue = (value) => {
     return isNegative ? `-${formattedValue}` : formattedValue;
 };
 const formatSignedMoneyInputValue = (value) => normalizeSignedMoneyInputValue(parseMoneyNumber(value, 0) || 0);
+const resolveSignedMoneyInputCommitValue = (value, fallback = 0) => {
+    const parsedValue = parseSignedMoneyInputValue(value);
+    if (parsedValue !== null) {
+        return parsedValue;
+    }
+
+    const rawValue = String(value ?? '').replace(/\s+/g, '');
+    return rawValue === '' || rawValue === '-' ? 0 : fallback;
+};
+const resolveFormattedMoneyCaretPosition = (formattedValue, digitCountBeforeCaret) => {
+    if (digitCountBeforeCaret <= 0) {
+        return formattedValue.startsWith('-') ? 1 : 0;
+    }
+
+    let seenDigits = 0;
+    for (let index = 0; index < formattedValue.length; index += 1) {
+        if (/\d/.test(formattedValue[index])) {
+            seenDigits += 1;
+        }
+
+        if (seenDigits >= digitCountBeforeCaret) {
+            return index + 1;
+        }
+    }
+
+    return formattedValue.length;
+};
 const parseQuantityNumber = (value, fallback = null) => {
     if (value === null || value === undefined || value === '') {
         return fallback;
@@ -3406,6 +3433,7 @@ const OrderForm = () => {
         province: ''
     });
     const [discountInputValue, setDiscountInputValue] = useState(() => formatSignedMoneyInputValue(0));
+    const discountInputRef = useRef(null);
     const activeOrderAiReplaceLine = useMemo(
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
@@ -5913,6 +5941,11 @@ const OrderForm = () => {
             }))
             .filter((item) => item.product_id && item.quantity > 0);
 
+        const submittedDiscount = resolveSignedMoneyInputCommitValue(
+            discountInputValue,
+            parseMoneyNumber(formData.discount, 0) || 0
+        );
+
         return {
             normalizedOrderKind,
             payload: {
@@ -5920,8 +5953,12 @@ const OrderForm = () => {
                 customer_name: trimmedCustomerName,
                 customer_phone: trimmedCustomerPhone,
                 shipping_fee: parseMoneyNumber(formData.shipping_fee, 0) || 0,
-                manual_discount: parseMoneyNumber(formData.manual_discount, 0) || 0,
-                discount: parseSignedMoneyInputValue(discountInputValue) ?? (parseMoneyNumber(formData.discount, 0) || 0),
+                manual_discount: calculateManualDiscountValue(
+                    submittedDiscount,
+                    normalizedOrderType,
+                    formData.supplement_items
+                ),
+                discount: submittedDiscount,
                 items: normalizedItems,
                 order_kind: normalizedOrderKind,
                 order_type: normalizedOrderType,
@@ -6010,26 +6047,30 @@ const OrderForm = () => {
         }));
     };
     const handleDiscountInputChange = (event) => {
-        const normalizedValue = normalizeSignedMoneyInputValue(event.target.value);
+        const rawValue = event.target.value;
+        const selectionStart = event.target.selectionStart ?? rawValue.length;
+        const digitCountBeforeCaret = rawValue.slice(0, selectionStart).replace(/[^0-9]/g, '').length;
+        const normalizedValue = normalizeSignedMoneyInputValue(rawValue);
+        const nextCaretPosition = resolveFormattedMoneyCaretPosition(normalizedValue, digitCountBeforeCaret);
+
         setDiscountInputValue(normalizedValue);
+        window.requestAnimationFrame(() => {
+            const input = discountInputRef.current;
+            if (!input || document.activeElement !== input) {
+                return;
+            }
 
-        const parsedValue = parseSignedMoneyInputValue(normalizedValue);
-        if (parsedValue === null) {
-            return;
-        }
-
-        setFormData((prev) => ({
-            ...prev,
-            manual_discount: calculateManualDiscountValue(parsedValue, prev.order_type, prev.supplement_items),
-            discount: parsedValue,
-        }));
+            input.setSelectionRange(nextCaretPosition, nextCaretPosition);
+        });
     };
     const handleDiscountInputBlur = () => {
-        const normalizedDiscount = parseSignedMoneyInputValue(discountInputValue);
-        const nextDiscount = normalizedDiscount ?? calculateEffectiveDiscountValue(
-            formData.manual_discount,
-            formData.order_type,
-            formData.supplement_items
+        const nextDiscount = resolveSignedMoneyInputCommitValue(
+            discountInputValue,
+            calculateEffectiveDiscountValue(
+                formData.manual_discount,
+                formData.order_type,
+                formData.supplement_items
+            )
         );
         const nextManualDiscount = calculateManualDiscountValue(
             nextDiscount,
@@ -9144,6 +9185,7 @@ const OrderForm = () => {
                                     <span className="font-bold text-blue-600/40 text-[12px]">Chiết khấu/Giảm:</span>
                                     <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
                                         <input
+                                            ref={discountInputRef}
                                             type="text"
                                             value={discountInputValue}
                                             onChange={handleDiscountInputChange}

@@ -76,6 +76,39 @@ class ProductImagePrimarySelectionTest extends TestCase
         $this->assertCount(1, $orderedImages->where('is_primary', true));
     }
 
+    public function test_product_image_sync_reorders_existing_images_without_reuploading(): void
+    {
+        $product = $this->createProductWithImages([
+            ['file_name' => 'first.jpg', 'sort_order' => 0, 'is_primary' => true],
+            ['file_name' => 'second.jpg', 'sort_order' => 1, 'is_primary' => false],
+            ['file_name' => 'third.jpg', 'sort_order' => 2, 'is_primary' => false],
+        ]);
+
+        $images = $product->images()->orderBy('sort_order')->get();
+        $reorderedIds = [
+            (int) $images[2]->id,
+            (int) $images[0]->id,
+            (int) $images[1]->id,
+        ];
+
+        $this->postJson("/api/products/{$product->id}/images/sync", [
+            'sync_images' => 1,
+            'image_order' => array_map(fn ($id) => "existing:{$id}", $reorderedIds),
+            'primary_image_token' => 'existing:' . $reorderedIds[2],
+        ])
+            ->assertOk()
+            ->assertJsonCount(3, 'images');
+
+        $orderedImages = ProductImage::query()
+            ->where('product_id', $product->id)
+            ->orderBy('sort_order')
+            ->get();
+
+        $this->assertSame($reorderedIds, $orderedImages->pluck('id')->map(fn ($id) => (int) $id)->all());
+        $this->assertSame($reorderedIds[2], (int) $orderedImages->firstWhere('is_primary', true)?->id);
+        $this->assertCount(1, $orderedImages->where('is_primary', true));
+    }
+
     public function test_deleting_the_primary_image_promotes_the_first_remaining_image(): void
     {
         $product = $this->createProductWithImages([

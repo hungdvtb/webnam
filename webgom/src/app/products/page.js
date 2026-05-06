@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { getWebProducts, getWebCategories, getWebCategory } from '@/lib/api';
 import styles from './products.module.css';
 import styles2 from './layout2.module.css';
@@ -9,7 +8,7 @@ import CategoryDropdown from '@/components/CategoryDropdown';
 import DesktopCategorySidebar from '@/components/DesktopCategorySidebar';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
-import { resolveMediaUrl } from '@/lib/media';
+import { resolveImageObjectUrl, resolveMediaUrl } from '@/lib/media';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -21,6 +20,13 @@ export const metadata = {
 
 const PRODUCTS_PER_PAGE = 40;
 const PAGE_GAP = 'gap';
+const FALLBACK_CATEGORY_BANNER = '/banner-store.png';
+
+function resolveCategoryBannerUrl(categoryInfo) {
+  return resolveImageObjectUrl(categoryInfo?.banner_image, 'large', '')
+    || resolveMediaUrl(categoryInfo?.banner_path)
+    || FALLBACK_CATEGORY_BANNER;
+}
 
 function parsePageParam(value) {
   const rawValue = Array.isArray(value) ? value[0] : value;
@@ -153,6 +159,7 @@ export default async function ProductsPage({ searchParams }) {
   const requestedCategorySlug = resolvedSearchParams?.category || '';
   const currentSort = resolvedSearchParams?.sort || 'popular';
   const searchQuery = resolvedSearchParams?.search || '';
+  const isMobileSearch = resolvedSearchParams?.mobile_search === '1';
   const currentPage = parsePageParam(resolvedSearchParams?.page);
 
   const currentAttrs = {};
@@ -180,6 +187,7 @@ export default async function ProductsPage({ searchParams }) {
       category: requestedCategorySlug,
       sort: currentSort,
       search: searchQuery,
+      ...(isMobileSearch ? { mobile_search: '1' } : {}),
       attrs: currentAttrs,
       page: currentPage,
       per_page: PRODUCTS_PER_PAGE,
@@ -209,11 +217,7 @@ export default async function ProductsPage({ searchParams }) {
   const currentCategorySlug = categoryInfo?.slug
     || (categories.some((category) => category.slug === requestedCategorySlug) ? requestedCategorySlug : '');
 
-  let bannerUrl = '/banner-store.png';
-
-  if (categoryInfo?.banner_path) {
-    bannerUrl = resolveMediaUrl(categoryInfo.banner_path) || bannerUrl;
-  }
+  const bannerUrl = resolveCategoryBannerUrl(categoryInfo);
 
   const categoryTitle = searchQuery
     ? `Kết quả tìm kiếm: "${searchQuery}"`
@@ -331,13 +335,10 @@ export default async function ProductsPage({ searchParams }) {
 
         <div className={styles.categoryBanner}>
           <div className={styles.bannerOverlay}></div>
-          <Image
+          <img
             src={bannerUrl}
             alt={categoryTitle}
-            fill
-            sizes="100vw"
-            style={{ objectFit: 'cover', objectPosition: 'center' }}
-            priority
+            className={styles.bannerImage}
           />
           <div className={styles.bannerContent}>
             <h2 className={styles.bannerTitle}>{categoryTitle}</h2>

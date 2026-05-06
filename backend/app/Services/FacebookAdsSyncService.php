@@ -9,23 +9,83 @@ use Illuminate\Support\Facades\Log;
 
 class FacebookAdsSyncService
 {
-    private function normalizeDateKey(mixed $value): ?string
+    private function configuredAdAccounts(FinDailyReportConfig $config): array
     {
-        if ($value instanceof \DateTimeInterface) {
-            return $value->format('Y-m-d');
+        $tokenConfigs = [];
+        if (!empty($config->fb_tokens_configs) && is_array($config->fb_tokens_configs)) {
+            $tokenConfigs = $config->fb_tokens_configs;
+        } elseif ($config->fb_access_token && $config->fb_ad_account_ids) {
+            $tokenConfigs = [
+                [
+                    'token' => $config->fb_access_token,
+                    'account_ids' => $config->fb_ad_account_ids,
+                ],
+            ];
         }
 
-        $dateString = trim((string) $value);
+        $accounts = [];
+        $seen = [];
+        foreach ($tokenConfigs as $tokenGroup) {
+            $token = trim((string) ($tokenGroup['token'] ?? ''));
+            $accountIdsStr = trim((string) ($tokenGroup['account_ids'] ?? ''));
+            if ($token === '' || $accountIdsStr === '') {
+                continue;
+            }
 
-        if ($dateString === '') {
+            foreach (explode(',', $accountIdsStr) as $rawAccountId) {
+                $graphAccountId = $this->normalizeGraphAccountId($rawAccountId);
+                $storageAccountId = $this->normalizeStorageAccountId($graphAccountId);
+                if ($graphAccountId === null || $storageAccountId === null) {
+                    continue;
+                }
+
+                $dedupeKey = $token . '|' . $storageAccountId;
+                if (isset($seen[$dedupeKey])) {
+                    continue;
+                }
+
+                $seen[$dedupeKey] = true;
+                $accounts[] = [
+                    'token' => $token,
+                    'graph_account_id' => $graphAccountId,
+                    'storage_account_id' => $storageAccountId,
+                ];
+            }
+        }
+
+        return $accounts;
+    }
+
+    private function normalizeGraphAccountId(mixed $value): ?string
+    {
+        $accountId = trim((string) $value);
+        if ($accountId === '') {
             return null;
         }
 
-        try {
-            return \Carbon\Carbon::parse($dateString)->format('Y-m-d');
-        } catch (\Throwable) {
-            return null;
+        return str_starts_with($accountId, 'act_') ? $accountId : 'act_' . $accountId;
+    }
+
+    private function normalizeStorageAccountId(mixed $value): ?int
+    {
+        $digits = preg_replace('/\D+/', '', (string) $value);
+
+        return $digits === '' ? null : (int) $digits;
+    }
+
+    public function configuredStorageAccountIds(?FinDailyReportConfig $config = null): array
+    {
+        $config ??= FinDailyReportConfig::first();
+
+        if (!$config) {
+            return [];
         }
+
+        return collect($this->configuredAdAccounts($config))
+            ->pluck('storage_account_id')
+            ->unique()
+            ->values()
+            ->all();
     }
 
     public function syncRange(string $startDate, string $endDate)
@@ -37,24 +97,12 @@ class FacebookAdsSyncService
             return false;
         }
 
-        $tokenConfigs = [];
-        if (!empty($config->fb_tokens_configs) && is_array($config->fb_tokens_configs)) {
-            $tokenConfigs = $config->fb_tokens_configs;
-        } else if ($config->fb_access_token && $config->fb_ad_account_ids) {
-            $tokenConfigs = [
-                [
-                    'token' => $config->fb_access_token,
-                    'account_ids' => $config->fb_ad_account_ids
-                ]
-            ];
-        }
+        $configuredAccounts = $this->configuredAdAccounts($config);
 
-        if (empty($tokenConfigs)) {
+        if (empty($configuredAccounts)) {
             Log::warning("Facebook Ads Sync: No tokens/accounts configured.");
             return false;
         }
-
-        $today = date('Y-m-d');
 
         // Find which dates we actually need to fetch
         $period = \Carbon\CarbonPeriod::create($startDate, $endDate);
@@ -63,22 +111,11 @@ class FacebookAdsSyncService
             $allDates[] = $date->format('Y-m-d');
         }
 
-        $existingSpendByDate = DailyAdsSpend::query()
-            ->whereIn('date', $allDates)
-            ->pluck('amount', 'date')
-            ->mapWithKeys(function ($amount, $date) {
-                $normalizedDate = $this->normalizeDateKey($date);
-
-                return $normalizedDate ? [$normalizedDate => (float) $amount] : [];
-            })
-            ->toArray();
-
         $datesToFetch = [];
         foreach ($allDates as $d) {
-            // Fetch if not exists in DB OR if it's today
-            if (!array_key_exists($d, $existingSpendByDate) || $d === $today) {
-                $datesToFetch[] = $d;
-            }
+            // Facebook may adjust spend after the first pull. Re-fetch the requested
+            // range so the report and split modal use the same current account set.
+            $datesToFetch[] = $d;
         }
 
         if (empty($datesToFetch)) {
@@ -89,56 +126,46 @@ class FacebookAdsSyncService
         $minFetchDate = min($datesToFetch);
         $maxFetchDate = max($datesToFetch);
 
-        // Initialize an array to hold the sum per day
-        $dailyTotals = [];
-        foreach ($datesToFetch as $d) {
-            $dailyTotals[$d] = 0;
-        }
-
         $successfulRequestCount = 0;
-        $returnedDates = [];
 
-        foreach ($tokenConfigs as $tokenGroup) {
-            $token = trim($tokenGroup['token'] ?? '');
-            $accountIdsStr = trim($tokenGroup['account_ids'] ?? '');
-            if (!$token || !$accountIdsStr) continue;
+        foreach ($configuredAccounts as $accountConfig) {
+            $token = $accountConfig['token'];
+            $adAccountId = $accountConfig['graph_account_id'];
+            $storageAccountId = $accountConfig['storage_account_id'];
 
-            $adAccountIds = explode(',', $accountIdsStr);
+            try {
+                $response = Http::withoutVerifying()->get("https://graph.facebook.com/v20.0/{$adAccountId}/insights", [
+                    'access_token' => $token,
+                    'time_range' => json_encode(['since' => $minFetchDate, 'until' => $maxFetchDate]),
+                    'time_increment' => 1,
+                    'fields' => 'spend',
+                ]);
 
-            foreach ($adAccountIds as $adAccountId) {
-                $adAccountId = trim($adAccountId);
-                if (!$adAccountId) continue;
-
-                if (!str_starts_with($adAccountId, 'act_')) {
-                    $adAccountId = 'act_' . $adAccountId;
-                }
-
-                try {
-                    $response = Http::withoutVerifying()->get("https://graph.facebook.com/v20.0/{$adAccountId}/insights", [
-                        'access_token' => $token,
-                        'time_range' => json_encode(['since' => $minFetchDate, 'until' => $maxFetchDate]),
-                        'time_increment' => 1,
-                        'fields' => 'spend',
-                    ]);
-
-                    if ($response->successful()) {
-                        $successfulRequestCount++;
-                        $data = $response->json('data');
-                        if (!empty($data)) {
-                            foreach ($data as $dayData) {
-                                $dateStr = $dayData['date_start'] ?? null;
-                                if ($dateStr && isset($dailyTotals[$dateStr])) {
-                                    $returnedDates[$dateStr] = true;
-                                    $dailyTotals[$dateStr] += floatval($dayData['spend'] ?? 0);
-                                }
-                            }
+                if ($response->successful()) {
+                    $successfulRequestCount++;
+                    $dailyAmounts = array_fill_keys($datesToFetch, 0.0);
+                    $data = $response->json('data') ?? [];
+                    foreach ($data as $dayData) {
+                        $dateStr = $dayData['date_start'] ?? null;
+                        if ($dateStr && isset($dailyAmounts[$dateStr])) {
+                            $dailyAmounts[$dateStr] += (float) ($dayData['spend'] ?? 0);
                         }
-                    } else {
-                        Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $response->body());
                     }
-                } catch (\Exception $e) {
-                    Log::error("Facebook Ads Sync Exception: " . $e->getMessage());
+
+                    foreach ($dailyAmounts as $date => $amount) {
+                        DailyAdsSpend::updateOrCreate(
+                            [
+                                'date' => $date,
+                                'account_id' => $storageAccountId,
+                            ],
+                            ['amount' => $amount]
+                        );
+                    }
+                } else {
+                    Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $response->body());
                 }
+            } catch (\Exception $e) {
+                Log::error("Facebook Ads Sync Exception: " . $e->getMessage());
             }
         }
 
@@ -148,21 +175,29 @@ class FacebookAdsSyncService
             return false;
         }
 
-        // Save fetched data to DB
-        foreach ($dailyTotals as $date => $totalSpend) {
-            $hasExistingRow = array_key_exists($date, $existingSpendByDate);
-            $dateWasReturned = array_key_exists($date, $returnedDates);
-
-            if (!$dateWasReturned && $hasExistingRow) {
-                continue;
-            }
+        $configuredAccountIds = collect($configuredAccounts)->pluck('storage_account_id')->unique()->values()->all();
+        foreach ($datesToFetch as $date) {
+            $perAccountTotal = DailyAdsSpend::query()
+                ->whereDate('date', $date)
+                ->whereIn('account_id', $configuredAccountIds)
+                ->sum('amount');
 
             DailyAdsSpend::updateOrCreate(
-                ['date' => $date],
-                ['amount' => $totalSpend]
+                ['date' => $date, 'account_id' => null],
+                ['amount' => (float) $perAccountTotal]
             );
         }
 
         return true;
+    }
+
+    public function sync(string $date)
+    {
+        $this->syncRange($date, $date);
+
+        return DailyAdsSpend::query()
+            ->whereDate('date', $date)
+            ->whereNull('account_id')
+            ->value('amount');
     }
 }

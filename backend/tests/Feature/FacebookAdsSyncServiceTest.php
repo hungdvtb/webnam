@@ -39,11 +39,11 @@ class FacebookAdsSyncServiceTest extends TestCase
         $result = app(FacebookAdsSyncService::class)->syncRange('2026-04-01', '2026-04-02');
 
         $this->assertFalse($result);
-        $this->assertSame(1000.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->value('amount'));
-        $this->assertSame(2000.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->value('amount'));
+        $this->assertSame(1000.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->whereNull('account_id')->value('amount'));
+        $this->assertSame(2000.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->whereNull('account_id')->value('amount'));
     }
 
-    public function test_sync_range_updates_only_dates_explicitly_returned_by_facebook(): void
+    public function test_sync_range_stores_per_account_rows_and_refreshes_legacy_daily_totals(): void
     {
         FinDailyReportConfig::query()->create([
             'fb_access_token' => 'token-1',
@@ -74,7 +74,9 @@ class FacebookAdsSyncServiceTest extends TestCase
         $result = app(FacebookAdsSyncService::class)->syncRange('2026-04-01', '2026-04-02');
 
         $this->assertTrue($result);
-        $this->assertSame(1500.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->value('amount'));
-        $this->assertSame(2000.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->value('amount'));
+        $this->assertSame(1500.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->where('account_id', 123)->value('amount'));
+        $this->assertSame(0.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->where('account_id', 123)->value('amount'));
+        $this->assertSame(1500.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->whereNull('account_id')->value('amount'));
+        $this->assertSame(0.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->whereNull('account_id')->value('amount'));
     }
 }

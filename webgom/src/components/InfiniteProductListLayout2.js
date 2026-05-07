@@ -10,7 +10,6 @@ import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks'
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
-const BESTSELLER_LABEL = 'Bán chạy';
 const ADD_TO_CART_LABEL = 'Giỏ hàng';
 const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.';
 
@@ -48,8 +47,6 @@ export default function InfiniteProductListLayout2({ initialData }) {
                     unoptimized
                   />
                 </Link>
-                {product.is_new && <div className={styles.badge}>{BESTSELLER_LABEL}</div>}
-
               </div>
 
               <div className={styles.cardBody}>

@@ -252,12 +252,7 @@ const ProductCard = ({ product, onConsult }) => {
             label: 'Bán chạy',
             className: 'bg-[#c89b45] text-white',
         }
-        : product?.is_new
-            ? {
-                label: 'Mới',
-                className: 'bg-emerald-600 text-white',
-            }
-            : null;
+        : null;
 
     return (
         <article className="group flex h-full flex-col overflow-hidden rounded-[24px] border border-[#eee2d1] bg-white shadow-[0_18px_38px_-28px_rgba(27,54,93,0.42)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_26px_42px_-22px_rgba(27,54,93,0.34)]">

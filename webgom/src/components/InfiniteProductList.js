@@ -10,7 +10,6 @@ import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks'
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
-const NEW_BADGE_LABEL = 'Mới';
 const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.';
 const EMPTY_PRODUCTS_HINT = 'Hãy thử đổi từ khóa khác hoặc xóa bộ lọc.';
 
@@ -46,7 +45,6 @@ export default function InfiniteProductList({ initialData }) {
                   style={{ objectFit: 'cover' }}
                   unoptimized
                 />
-                {product.is_new && <span className={styles.badge}>{NEW_BADGE_LABEL}</span>}
               </Link>
 
               <div className={styles.productInfo}>

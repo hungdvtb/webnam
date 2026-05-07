@@ -51,11 +51,6 @@ const ProductCard = ({ product, onConsult }) => {
                     </div>
                 ) : null}
 
-                {product.is_new ? (
-                    <div className="m-chip absolute right-3 top-3 rounded-lg bg-emerald-600 px-2.5 py-1 font-black uppercase text-white shadow-lg">
-                        Mới
-                    </div>
-                ) : null}
             </Link>
 
             <div className="p-4">

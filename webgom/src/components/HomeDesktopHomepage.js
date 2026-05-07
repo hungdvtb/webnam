@@ -15,7 +15,6 @@ const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
 const HERO_PRIMARY_CTA_LABEL = "KH\u00c1M PH\u00c1 NGAY";
 const HERO_SECONDARY_CTA_LABEL = "Kh\u00e1m ph\u00e1 ngay";
 const VIEW_ALL_LABEL = "Xem t\u1ea5t c\u1ea3";
-const NEW_BADGE_LABEL = "M\u1edbi";
 const EMPTY_CATEGORY_MESSAGE = "Danh m\u1ee5c n\u00e0y hi\u1ec7n ch\u01b0a c\u00f3 s\u1ea3n ph\u1ea9m \u0111\u1ec3 hi\u1ec3n th\u1ecb.";
 
 function shuffleItems(items) {
@@ -214,9 +213,6 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                           />
                           {product.isFeatured && (
                             <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>
-                          )}
-                          {!product.isFeatured && product.isNew && (
-                            <span className={`${styles.badge} ${styles.badgeSale}`}>{NEW_BADGE_LABEL}</span>
                           )}
                         </div>
 

@@ -92,7 +92,6 @@ function normalizeProduct(product) {
     primaryImage: product?.primary_image || null,
     imageSrc: resolveMediaUrl(product?.main_image) || FALLBACK_PRODUCT_IMAGE,
     isFeatured: Boolean(product?.is_featured),
-    isNew: Boolean(product?.is_new),
     itemType: String(product?.item_type || "").trim().toLowerCase() || "product",
     bundleOptionKey: String(product?.bundle_option_key || "").trim(),
     bundleOptionTitle: String(product?.bundle_option_title || "").trim(),

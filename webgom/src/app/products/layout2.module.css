@@ -435,20 +435,6 @@
   transform: scale(1.08);
 }
 
-.badge {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 999px;
-  background: #c5a059;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .cardBody {
   display: flex;
   flex: 1;
@@ -798,14 +784,6 @@
     aspect-ratio: 1 / 1;
   }
 
-  .badge {
-    top: 0.4rem;
-    right: 0.4rem;
-    padding: 0.22rem 0.42rem;
-    font-size: 8px;
-    letter-spacing: 0.06em;
-  }
-
   .cardBody {
     gap: 0.18rem;
     padding: 0.64rem 0.68rem 0.72rem;
@@ -960,13 +938,6 @@
 
   .imageArea {
     aspect-ratio: 1 / 1;
-  }
-
-  .badge {
-    top: 0.34rem;
-    right: 0.34rem;
-    padding: 0.18rem 0.34rem;
-    font-size: 7px;
   }
 
   .cardBody {

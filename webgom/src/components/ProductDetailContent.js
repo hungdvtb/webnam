@@ -14,7 +14,12 @@ import {
   resolveBundleConfigName,
 } from '@/lib/bundlePricing';
 import { flyToCart } from '@/utils/flyToCart';
-import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
+import {
+  getEntityImageCandidates,
+  pickEntityPrimaryImage,
+  resolveImageObjectUrl,
+  resolveVideoEmbedUrl,
+} from '@/lib/media';
 import SimpleProductView from './product/SimpleProductView';
 import ConfigurableProductView from './product/ConfigurableProductView';
 import GroupedProductView from './product/GroupedProductView';
@@ -119,6 +124,18 @@ const filterUniqueRenderableImages = (sourceImages = []) => {
   });
 
   return validImages.length > 0 ? validImages : orderedImages;
+};
+
+const getPinnedEntityGalleryImages = (entity) => {
+  const primaryImage = pickEntityPrimaryImage(entity, 'large');
+  const pinnedPrimaryImage = primaryImage && typeof primaryImage === 'object'
+    ? { ...primaryImage, is_primary: true, sort_order: -1 }
+    : null;
+
+  return filterUniqueRenderableImages([
+    pinnedPrimaryImage,
+    ...getEntityImageCandidates(entity),
+  ].filter(Boolean));
 };
 
 const createBundleItemUid = (item, fallbackIndex = 0) => {
@@ -250,6 +267,7 @@ export default function ProductDetailContent({
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
+  const [hasCustomerSelectedVariantMedia, setHasCustomerSelectedVariantMedia] = useState(false);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState(initialBundleSelectionState.bundleItems);
   const [activeBundleConfig, setActiveBundleConfig] = useState(initialBundleSelectionState.activeBundleConfig);
@@ -317,6 +335,7 @@ export default function ProductDetailContent({
     }
 
     setHasExplicitVariantSelection(Boolean(requestedVariant?.id));
+    setHasCustomerSelectedVariantMedia(false);
 
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
@@ -541,15 +560,29 @@ export default function ProductDetailContent({
   }, [product, currentProduct, selectedGroupItems, bundleItems, selectedBundlePricing]);
 
   const images = useMemo(() => {
-    return filterUniqueRenderableImages(product.images || []);
-  }, [product.images]);
+    return getPinnedEntityGalleryImages(product);
+  }, [product]);
   const primaryDisplayImage = useMemo(() => {
-    if (!hasVariants || !currentProduct?.id || currentProduct.id === product?.id) {
+    if (
+      !hasExplicitVariantSelection
+      || !hasCustomerSelectedVariantMedia
+      || !hasVariants
+      || !currentProduct?.id
+      || currentProduct.id === product?.id
+    ) {
       return null;
     }
 
-    return filterUniqueRenderableImages(currentProduct.images || [])[0] || null;
-  }, [currentProduct?.id, currentProduct?.images, hasVariants, product?.id]);
+    return getPinnedEntityGalleryImages(currentProduct)[0] || null;
+  }, [
+    currentProduct,
+    currentProduct?.id,
+    currentProduct?.images,
+    hasExplicitVariantSelection,
+    hasCustomerSelectedVariantMedia,
+    hasVariants,
+    product?.id,
+  ]);
   const galleryVideoUrl = product.video_url || '';
   const hasGalleryVideo = Boolean(resolveVideoEmbedUrl(galleryVideoUrl));
 
@@ -726,6 +759,7 @@ export default function ProductDetailContent({
 
   const handleOptionSelect = (attrCode, value) => {
     setHasExplicitVariantSelection(true);
+    setHasCustomerSelectedVariantMedia(true);
     setSelectedOptions(prev => {
       const next = { ...prev, [attrCode]: value };
       
@@ -776,6 +810,7 @@ export default function ProductDetailContent({
 
   const handleVariantSelect = (variantId) => {
     setHasExplicitVariantSelection(true);
+    setHasCustomerSelectedVariantMedia(true);
     setSelectedVariantId(variantId);
     setActiveIndex(0);
   };

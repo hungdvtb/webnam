@@ -1502,6 +1502,12 @@ const BlogList = () => {
                                                 Bài hệ thống
                                             </span>
                                         )}
+                                        {post.is_ai_generated && (
+                                            <span className="inline-flex items-center gap-1 rounded-sm border border-emerald-600/20 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-emerald-700">
+                                                <span className="material-symbols-outlined text-[13px]">auto_awesome</span>
+                                                Bài AI
+                                            </span>
+                                        )}
                                     </div>
                                     <div className="text-[10px] text-stone/45 uppercase tracking-wider truncate">slug: {post.slug || '--'}</div>
                                     <span className="inline-block mt-1 text-[10px] px-2 py-0.5 border border-gold/25 bg-gold/5 text-umber rounded-sm">{post.seo_keyword || 'Chưa gắn từ khóa'}</span>

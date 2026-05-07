@@ -24,6 +24,7 @@ class Post extends Model
         'meta_keywords',
         'featured_image',
         'featured_media_asset_id',
+        'is_ai_generated',
         'is_system',
         'is_published',
         'is_starred',
@@ -42,6 +43,7 @@ class Post extends Model
     protected $casts = [
         'blog_category_id' => 'integer',
         'featured_media_asset_id' => 'integer',
+        'is_ai_generated' => 'boolean',
         'is_system' => 'boolean',
         'is_published' => 'boolean',
         'is_starred' => 'boolean',
@@ -52,6 +54,7 @@ class Post extends Model
 
     protected $attributes = [
         'is_system' => false,
+        'is_ai_generated' => false,
         'is_published' => true,
         'is_starred' => false,
         'sort_order' => 0,

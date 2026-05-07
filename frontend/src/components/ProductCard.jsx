@@ -50,12 +50,6 @@ const ProductCard = ({ product }) => {
                         </button>
                     </div>
                 </div>
-                {/* Badge */}
-                {product.is_new && (
-                    <div className="absolute top-4 left-4 bg-brick text-white text-xs font-ui font-bold px-2 py-1 uppercase tracking-wider z-10">
-                        Mới
-                    </div>
-                )}
             </Link>
             <div className="text-center space-y-2">
                 <Link to={productDetailPath} className="font-display text-2xl text-umber font-bold group-hover:text-primary transition-colors cursor-pointer block">

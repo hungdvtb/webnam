@@ -14,6 +14,7 @@ use App\Services\MediaService;
 use App\Services\SimpleXlsxService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -21,6 +22,7 @@ use Illuminate\Validation\ValidationException;
 class BlogAiBulkGenerationService
 {
     private const IMPORT_DIRECTORY = 'blog-ai-imports';
+    private const AI_ARTICLE_BATCH_SIZE = BlogAiArticleService::BATCH_ARTICLE_COUNT;
 
     private const KEYWORD_HEADER_ALIASES = [
         'keyword',
@@ -192,38 +194,214 @@ class BlogAiBulkGenerationService
             $errors = [];
             $aiModel = null;
 
-            foreach ($clusters as $index => $cluster) {
-                $clusterNumber = $index + 1;
+            foreach (array_chunk($clusters, self::AI_ARTICLE_BATCH_SIZE, true) as $clusterBatch) {
+                $pendingArticles = [];
 
-                try {
-                    $this->appendLog(
-                        $job,
-                        'info',
-                        'generate_cluster',
-                        sprintf(
-                            'Đang xử lý cụm %d/%d: %s',
-                            $clusterNumber,
-                            count($clusters),
-                            $cluster['primary_keyword']
-                        ),
-                        [
-                            'primary_keyword' => $cluster['primary_keyword'],
-                            'keyword_count' => count($cluster['keywords']),
-                            'search_volume_total' => $cluster['search_volume_total'],
-                        ]
-                    );
+                foreach ($clusterBatch as $index => $cluster) {
+                    $clusterNumber = $index + 1;
 
-                    $duplicateMatch = $this->findGlobalDuplicatePost($cluster, $resourceContext);
-                    if ($duplicateMatch && $duplicateMatch['match_type'] === 'semantic_duplicate') {
-                        $summary['skipped_clusters']++;
-                        $summary['skipped_duplicates']++;
-                        $summary['skipped_duplicate_posts'][] = [
-                            'post_id' => $duplicateMatch['post']['id'],
-                            'title' => $duplicateMatch['post']['title'],
-                            'slug' => $duplicateMatch['post']['slug'],
-                            'keyword' => $cluster['primary_keyword'],
-                            'score' => $duplicateMatch['score'],
+                    try {
+                        $this->appendLog(
+                            $job,
+                            'info',
+                            'generate_cluster',
+                            sprintf(
+                                'Đang chuẩn bị cụm %d/%d: %s',
+                                $clusterNumber,
+                                count($clusters),
+                                $cluster['primary_keyword']
+                            ),
+                            [
+                                'primary_keyword' => $cluster['primary_keyword'],
+                                'keyword_count' => count($cluster['keywords']),
+                                'search_volume_total' => $cluster['search_volume_total'],
+                            ]
+                        );
+
+                        $duplicateMatch = $this->findGlobalDuplicatePost($cluster, $resourceContext);
+                        if ($duplicateMatch && $duplicateMatch['match_type'] === 'semantic_duplicate') {
+                            $summary['skipped_clusters']++;
+                            $summary['skipped_duplicates']++;
+                            $summary['skipped_duplicate_posts'][] = [
+                                'post_id' => $duplicateMatch['post']['id'],
+                                'title' => $duplicateMatch['post']['title'],
+                                'slug' => $duplicateMatch['post']['slug'],
+                                'keyword' => $cluster['primary_keyword'],
+                                'score' => $duplicateMatch['score'],
+                            ];
+
+                            $job->update([
+                                'processed_clusters' => $clusterNumber,
+                                'posts_created' => $summary['posts_created'],
+                                'categories_created' => $summary['categories_created'],
+                                'ai_model' => $aiModel,
+                                'summary' => $summary,
+                            ]);
+
+                            $this->appendLog(
+                                $job,
+                                'warning',
+                                'duplicate_cluster',
+                                sprintf(
+                                    'Bỏ qua cụm "%s" vì quá gần với bài đã có "%s".',
+                                    $cluster['primary_keyword'],
+                                    $duplicateMatch['post']['title']
+                                ),
+                                [
+                                    'primary_keyword' => $cluster['primary_keyword'],
+                                    'matched_post_id' => $duplicateMatch['post']['id'],
+                                    'matched_post_slug' => $duplicateMatch['post']['slug'],
+                                    'matched_post_title' => $duplicateMatch['post']['title'],
+                                    'duplicate_score' => $duplicateMatch['score'],
+                                ]
+                            );
+
+                            continue;
+                        }
+
+                        $suggestedCategory = $this->suggestCategoryName($cluster);
+                        $blogCategory = $this->resolveOrCreateBlogCategory(
+                            $job,
+                            $suggestedCategory,
+                            $resourceContext,
+                            $summary
+                        );
+
+                        $internalLinks = $this->buildInternalLinks($cluster, $blogCategory, $resourceContext);
+                        $featuredImage = $this->resolveFeaturedImage($cluster, $resourceContext);
+
+                        $pendingArticles[] = [
+                            'cluster_number' => $clusterNumber,
+                            'cluster' => $cluster,
+                            'duplicate_match' => $duplicateMatch,
+                            'blog_category' => $blogCategory,
+                            'featured_image' => $featuredImage,
+                            'payload' => [
+                                'primary_keyword' => $cluster['primary_keyword'],
+                                'secondary_keywords' => $cluster['secondary_keywords'],
+                                'cluster_keywords' => array_map(
+                                    fn (array $item) => [
+                                        'keyword' => $item['keyword'],
+                                        'search_volume' => $item['search_volume'],
+                                    ],
+                                    $cluster['keywords']
+                                ),
+                                'intent_label' => $cluster['intent_label'],
+                                'topic_label' => $cluster['topic_label'],
+                                'suggested_category' => $blogCategory->name,
+                                'industry_context' => $this->resolveIndustryContext($cluster),
+                                'keyword_volume_total' => $cluster['search_volume_total'],
+                                'related_products' => array_values(array_filter(array_map(
+                                    fn (array $link) => ($link['type'] ?? '') === 'product'
+                                        ? ['name' => $link['anchor'], 'url' => $link['url']]
+                                        : null,
+                                    $internalLinks
+                                ))),
+                                'related_product_categories' => array_values(array_filter(array_map(
+                                    fn (array $link) => ($link['type'] ?? '') === 'product_category'
+                                        ? ['name' => $link['anchor'], 'url' => $link['url']]
+                                        : null,
+                                    $internalLinks
+                                ))),
+                                'related_blog_categories' => [
+                                    ['name' => $blogCategory->name, 'url' => '/blog?category=' . $blogCategory->slug],
+                                ],
+                                'internal_links' => $internalLinks,
+                                'inline_image_url' => $featuredImage['url'],
+                                'inline_image_alt' => $featuredImage['alt'],
+                            ],
                         ];
+                    } catch (\Throwable $exception) {
+                        $errors[] = sprintf(
+                            'Cụm "%s": %s',
+                            $cluster['primary_keyword'],
+                            trim((string) $exception->getMessage()) ?: 'Không thể chuẩn bị bài viết cho cụm này.'
+                        );
+
+                        $job->update([
+                            'processed_clusters' => $clusterNumber,
+                            'posts_failed' => count($errors),
+                        ]);
+
+                        $this->appendLog(
+                            $job,
+                            'error',
+                            'cluster_error',
+                            end($errors),
+                            [
+                                'primary_keyword' => $cluster['primary_keyword'],
+                            ]
+                        );
+                    }
+                }
+
+                if ($pendingArticles === []) {
+                    continue;
+                }
+
+                $this->appendLog(
+                    $job,
+                    'info',
+                    'ai_batch',
+                    sprintf(
+                        'Gọi Gemini viết %d bài trong 1 request. Mỗi bài mục tiêu %d-%d ký tự.',
+                        count($pendingArticles),
+                        BlogAiArticleService::MIN_ARTICLE_CHARACTERS,
+                        BlogAiArticleService::MAX_ARTICLE_CHARACTERS
+                    ),
+                    [
+                        'batch_size' => count($pendingArticles),
+                        'keywords' => array_map(
+                            fn (array $item) => $item['cluster']['primary_keyword'],
+                            $pendingArticles
+                        ),
+                    ]
+                );
+
+                $articles = $this->articleService->generateArticlesBatch(
+                    array_map(fn (array $item) => $item['payload'], $pendingArticles),
+                    $job->account_id
+                );
+
+                foreach ($pendingArticles as $pendingIndex => $pendingArticle) {
+                    $cluster = $pendingArticle['cluster'];
+                    $clusterNumber = $pendingArticle['cluster_number'];
+                    $blogCategory = $pendingArticle['blog_category'];
+                    $featuredImage = $pendingArticle['featured_image'];
+                    $duplicateMatch = $pendingArticle['duplicate_match'];
+
+                    try {
+                        $article = $articles[$pendingIndex] ?? null;
+                        if (!is_array($article)) {
+                            throw new \RuntimeException('AI không trả về nội dung hợp lệ cho bài này.');
+                        }
+
+                        if (!$aiModel && !empty($article['model'])) {
+                            $aiModel = (string) $article['model'];
+                        }
+
+                        $persistedPost = $this->persistGeneratedPost(
+                            $job,
+                            $cluster,
+                            $blogCategory,
+                            $article,
+                            $featuredImage,
+                            (int) ($duplicateMatch['post']['id'] ?? 0)
+                        );
+
+                        if ($persistedPost['action'] === 'created') {
+                            $summary['posts_created']++;
+                            $summary['created_post_ids'][] = $persistedPost['post']->id;
+                        } else {
+                            $summary['posts_updated']++;
+                            $summary['updated_post_ids'][] = $persistedPost['post']->id;
+                        }
+
+                        $this->ensureSeoKeywordsExist(
+                            $job->account_id,
+                            array_merge([$cluster['primary_keyword']], $cluster['secondary_keywords'])
+                        );
+                        $this->rememberGeneratedPostContext($persistedPost['post'], $resourceContext);
 
                         $job->update([
                             'processed_clusters' => $clusterNumber,
@@ -233,147 +411,46 @@ class BlogAiBulkGenerationService
                             'summary' => $summary,
                         ]);
 
+                        $message = $persistedPost['action'] === 'created'
+                            ? sprintf('Đã tạo bài nháp "%s".', $persistedPost['post']->title)
+                            : sprintf('Đã cập nhật bài nháp tồn tại "%s".', $persistedPost['post']->title);
+
                         $this->appendLog(
                             $job,
-                            'warning',
-                            'duplicate_cluster',
-                            sprintf(
-                                'Bỏ qua cụm "%s" vì quá gần với bài đã có "%s".',
-                                $cluster['primary_keyword'],
-                                $duplicateMatch['post']['title']
-                            ),
+                            !empty($article['used_ai']) ? 'info' : 'warning',
+                            'save_post',
+                            $message,
                             [
-                                'primary_keyword' => $cluster['primary_keyword'],
-                                'matched_post_id' => $duplicateMatch['post']['id'],
-                                'matched_post_slug' => $duplicateMatch['post']['slug'],
-                                'matched_post_title' => $duplicateMatch['post']['title'],
-                                'duplicate_score' => $duplicateMatch['score'],
+                                'post_id' => $persistedPost['post']->id,
+                                'slug' => $persistedPost['post']->slug,
+                                'category' => $blogCategory->name,
+                                'image_source' => $featuredImage['source'],
+                                'used_ai' => (bool) ($article['used_ai'] ?? false),
+                                'warning' => $article['warning'] ?? null,
                             ]
                         );
+                    } catch (\Throwable $exception) {
+                        $errors[] = sprintf(
+                            'Cụm "%s": %s',
+                            $cluster['primary_keyword'],
+                            trim((string) $exception->getMessage()) ?: 'Không thể tạo bài viết cho cụm này.'
+                        );
 
-                        continue;
+                        $job->update([
+                            'processed_clusters' => $clusterNumber,
+                            'posts_failed' => count($errors),
+                        ]);
+
+                        $this->appendLog(
+                            $job,
+                            'error',
+                            'cluster_error',
+                            end($errors),
+                            [
+                                'primary_keyword' => $cluster['primary_keyword'],
+                            ]
+                        );
                     }
-
-                    $suggestedCategory = $this->suggestCategoryName($cluster);
-                    $blogCategory = $this->resolveOrCreateBlogCategory(
-                        $job,
-                        $suggestedCategory,
-                        $resourceContext,
-                        $summary
-                    );
-
-                    $internalLinks = $this->buildInternalLinks($cluster, $blogCategory, $resourceContext);
-                    $featuredImage = $this->resolveFeaturedImage($cluster, $resourceContext);
-
-                    $article = $this->articleService->generateArticle([
-                        'primary_keyword' => $cluster['primary_keyword'],
-                        'secondary_keywords' => $cluster['secondary_keywords'],
-                        'cluster_keywords' => array_map(
-                            fn (array $item) => [
-                                'keyword' => $item['keyword'],
-                                'search_volume' => $item['search_volume'],
-                            ],
-                            $cluster['keywords']
-                        ),
-                        'intent_label' => $cluster['intent_label'],
-                        'topic_label' => $cluster['topic_label'],
-                        'suggested_category' => $blogCategory->name,
-                        'industry_context' => $this->resolveIndustryContext($cluster),
-                        'keyword_volume_total' => $cluster['search_volume_total'],
-                        'related_products' => array_values(array_filter(array_map(
-                            fn (array $link) => ($link['type'] ?? '') === 'product'
-                                ? ['name' => $link['anchor'], 'url' => $link['url']]
-                                : null,
-                            $internalLinks
-                        ))),
-                        'related_product_categories' => array_values(array_filter(array_map(
-                            fn (array $link) => ($link['type'] ?? '') === 'product_category'
-                                ? ['name' => $link['anchor'], 'url' => $link['url']]
-                                : null,
-                            $internalLinks
-                        ))),
-                        'related_blog_categories' => [
-                            ['name' => $blogCategory->name, 'url' => '/blog?category=' . $blogCategory->slug],
-                        ],
-                        'internal_links' => $internalLinks,
-                        'inline_image_url' => $featuredImage['url'],
-                        'inline_image_alt' => $featuredImage['alt'],
-                    ], $job->account_id);
-
-                    if (!$aiModel && !empty($article['model'])) {
-                        $aiModel = (string) $article['model'];
-                    }
-
-                    $persistedPost = $this->persistGeneratedPost(
-                        $job,
-                        $cluster,
-                        $blogCategory,
-                        $article,
-                        $featuredImage,
-                        (int) ($duplicateMatch['post']['id'] ?? 0)
-                    );
-
-                    if ($persistedPost['action'] === 'created') {
-                        $summary['posts_created']++;
-                        $summary['created_post_ids'][] = $persistedPost['post']->id;
-                    } else {
-                        $summary['posts_updated']++;
-                        $summary['updated_post_ids'][] = $persistedPost['post']->id;
-                    }
-
-                    $this->ensureSeoKeywordsExist(
-                        $job->account_id,
-                        array_merge([$cluster['primary_keyword']], $cluster['secondary_keywords'])
-                    );
-                    $this->rememberGeneratedPostContext($persistedPost['post'], $resourceContext);
-
-                    $job->update([
-                        'processed_clusters' => $clusterNumber,
-                        'posts_created' => $summary['posts_created'],
-                        'categories_created' => $summary['categories_created'],
-                        'ai_model' => $aiModel,
-                        'summary' => $summary,
-                    ]);
-
-                    $message = $persistedPost['action'] === 'created'
-                        ? sprintf('Đã tạo bài nháp "%s".', $persistedPost['post']->title)
-                        : sprintf('Đã cập nhật bài nháp tồn tại "%s".', $persistedPost['post']->title);
-
-                    $this->appendLog(
-                        $job,
-                        !empty($article['used_ai']) ? 'info' : 'warning',
-                        'save_post',
-                        $message,
-                        [
-                            'post_id' => $persistedPost['post']->id,
-                            'slug' => $persistedPost['post']->slug,
-                            'category' => $blogCategory->name,
-                            'image_source' => $featuredImage['source'],
-                            'used_ai' => (bool) ($article['used_ai'] ?? false),
-                            'warning' => $article['warning'] ?? null,
-                        ]
-                    );
-                } catch (\Throwable $exception) {
-                    $errors[] = sprintf(
-                        'Cụm "%s": %s',
-                        $cluster['primary_keyword'],
-                        trim((string) $exception->getMessage()) ?: 'Không thể tạo bài viết cho cụm này.'
-                    );
-
-                    $job->update([
-                        'processed_clusters' => $clusterNumber,
-                        'posts_failed' => count($errors),
-                    ]);
-
-                    $this->appendLog(
-                        $job,
-                        'error',
-                        'cluster_error',
-                        end($errors),
-                        [
-                            'primary_keyword' => $cluster['primary_keyword'],
-                        ]
-                    );
                 }
             }
 
@@ -980,29 +1057,29 @@ class BlogAiBulkGenerationService
 
         if ($this->containsAny($haystack, ['do tho', 'tho cung', 'bat huong', 'lu huong', 'chan nen', 'ban tho'])) {
             return in_array($cluster['intent_group'], ['knowledge', 'comparison'], true)
-                ? 'Kien thuc do tho Bat Trang'
-                : 'Do tho Bat Trang';
+                ? 'Kiến thức đồ thờ Bát Tràng'
+                : 'Đồ thờ Bát Tràng';
         }
 
         if ($this->containsAny($haystack, ['qua tang', 'in logo', 'qua bieu', 'doanh nghiep', 'ky niem'])) {
             return in_array($cluster['intent_group'], ['knowledge', 'comparison'], true)
-                ? 'Kinh nghiem chon qua tang gom su'
-                : 'Qua tang gom su';
+                ? 'Kinh nghiệm chọn quà tặng gốm sứ'
+                : 'Quà tặng gốm sứ';
         }
 
         if ($this->containsAny($haystack, ['loc binh', 'binh hoa', 'trang tri', 'noi that', 'de ban', 'phong khach'])) {
-            return 'Gom su trang tri';
+            return 'Gốm sứ trang trí';
         }
 
         if ($this->containsAny($haystack, ['bao quan', 've sinh', 'su dung'])) {
-            return 'Bao quan va su dung gom su';
+            return 'Bảo quản và sử dụng gốm sứ';
         }
 
         if ($this->containsAny($haystack, ['phong thuy', 'y nghia', 'kieng ky'])) {
-            return 'Phong thuy va y nghia gom su';
+            return 'Phong thủy và ý nghĩa gốm sứ';
         }
 
-        return 'Kien thuc gom su Bat Trang';
+        return 'Kiến thức gốm sứ Bát Tràng';
     }
 
     private function resolveOrCreateBlogCategory(
@@ -1016,7 +1093,7 @@ class BlogAiBulkGenerationService
             return $resourceContext['blog_categories_by_signature'][$signature];
         }
 
-        $name = trim($requestedName) !== '' ? trim($requestedName) : 'Kien thuc gom su Bat Trang';
+        $name = trim($requestedName) !== '' ? trim($requestedName) : 'Kiến thức gốm sứ Bát Tràng';
         $slug = $this->buildUniqueCategorySlug($job->account_id, $name);
         $sortOrder = $this->nextCategorySortOrder($job->account_id);
 
@@ -1060,7 +1137,7 @@ class BlogAiBulkGenerationService
             'type' => 'blog_category',
             'url' => '/blog?category=' . $blogCategory->slug,
             'anchor' => $blogCategory->name,
-            'description' => 'Chuyen muc blog lien quan de doc them cac bai cung chu de.',
+            'description' => 'Chuyên mục blog liên quan để đọc thêm các bài cùng chủ đề.',
         ];
 
         $productCandidates = $this->scoreProductsForCluster($cluster, $resourceContext['products']);
@@ -1069,7 +1146,7 @@ class BlogAiBulkGenerationService
                 'type' => 'product',
                 'url' => '/product/' . $item['product']->slug,
                 'anchor' => $item['product']->name,
-                'description' => 'San pham lien quan de doi chieu kieu dang, hoa tiet va muc dich su dung.',
+                'description' => 'Sản phẩm liên quan để đối chiếu kiểu dáng, họa tiết và mục đích sử dụng.',
             ];
         }
 
@@ -1079,7 +1156,7 @@ class BlogAiBulkGenerationService
                 'type' => 'product_category',
                 'url' => '/category/' . $item['category']->slug,
                 'anchor' => $item['category']->name,
-                'description' => 'Danh muc san pham lien quan de mo rong lua chon cung chu de.',
+                'description' => 'Danh mục sản phẩm liên quan để mở rộng lựa chọn cùng chủ đề.',
             ];
         }
 
@@ -1319,6 +1396,10 @@ SVG;
             'published_at' => null,
         ];
 
+        if ($this->hasAiGeneratedPostSupport()) {
+            $payload['is_ai_generated'] = true;
+        }
+
         if (!$existingPost) {
             $payload['sort_order'] = $this->nextPostSortOrder($job->account_id);
             $post = Post::query()->create($payload);
@@ -1388,6 +1469,17 @@ SVG;
         }
 
         return Storage::disk('local')->path($job->source_path);
+    }
+
+    private function hasAiGeneratedPostSupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('posts') && Schema::hasColumn('posts', 'is_ai_generated');
+        }
+
+        return $cache;
     }
 
     private function resolveRequestedPostCount(BlogAiBulkJob $job): ?int
@@ -1535,13 +1627,13 @@ SVG;
     private function intentLabelFromKey(string $intentKey): string
     {
         return match ($intentKey) {
-            'pricing' => 'Tim gia va doi chieu',
-            'comparison' => 'So sanh va phan biet',
-            'commercial' => 'Can chon mua',
-            'guide' => 'Huong dan va kinh nghiem',
-            'advisory' => 'Phong thuy va goi y',
-            'informational' => 'Thong tin can biet',
-            default => 'Chu de tong hop',
+            'pricing' => 'Tìm giá và đối chiếu',
+            'comparison' => 'So sánh và phân biệt',
+            'commercial' => 'Cần chọn mua',
+            'guide' => 'Hướng dẫn và kinh nghiệm',
+            'advisory' => 'Phong thủy và gợi ý',
+            'informational' => 'Thông tin cần biết',
+            default => 'Chủ đề tổng hợp',
         };
     }
 
@@ -1653,14 +1745,14 @@ SVG;
         ));
 
         if ($this->containsAny($haystack, ['do tho', 'tho cung', 'bat huong', 'lu huong'])) {
-            return 'Uu tien boi canh do tho Bat Trang, tinh trang nghiem, cach sap dat va su dong bo tren ban tho.';
+            return 'Ưu tiên bối cảnh đồ thờ Bát Tràng, tính trang nghiêm, cách sắp đặt và sự đồng bộ trên bàn thờ.';
         }
 
         if ($this->containsAny($haystack, ['qua tang', 'doanh nghiep', 'in logo', 'qua bieu'])) {
-            return 'Uu tien boi canh qua tang gom su, doi tuong nhan qua, thong diep trao tang va muc do dong bo bo qua.';
+            return 'Ưu tiên bối cảnh quà tặng gốm sứ, đối tượng nhận quà, thông điệp trao tặng và mức độ đồng bộ bộ quà.';
         }
 
-        return 'Uu tien boi canh gom su Bat Trang, cach chon theo khong gian, cong nang, hoa tiet va tinh ung dung thuc te.';
+        return 'Ưu tiên bối cảnh gốm sứ Bát Tràng, cách chọn theo không gian, công năng, họa tiết và tính ứng dụng thực tế.';
     }
 
     private function truncateForSvg(string $value, int $limit): string

@@ -70,6 +70,7 @@ const BlogForm = () => {
         meta_keywords: '',
         content: '',
         featured_image: '',
+        is_ai_generated: false,
         is_published: true,
         is_starred: false,
         published_at: '',
@@ -149,6 +150,7 @@ const BlogForm = () => {
                 meta_keywords: data.meta_keywords || '',
                 content: data.content || '',
                 featured_image: data.featured_image || '',
+                is_ai_generated: Boolean(data.is_ai_generated),
                 is_published: data.is_published ?? true,
                 is_starred: data.is_starred || false,
                 published_at: data.published_at ? new Date(data.published_at).toISOString().split('T')[0] : '',
@@ -568,6 +570,7 @@ const BlogForm = () => {
                 meta_keywords: formData.meta_keywords,
                 content: serializeEditorContent(getQuillEditor()) || formData.content,
                 featured_image: formData.featured_image,
+                is_ai_generated: Boolean(formData.is_ai_generated),
                 is_published: formData.is_published,
                 is_starred: formData.is_starred,
                 published_at: formData.published_at || null,
@@ -641,6 +644,7 @@ const BlogForm = () => {
                 seo_keyword: aiData.seo_keyword || prev.seo_keyword,
                 excerpt: aiData.excerpt || prev.excerpt,
                 content: aiData.content || prev.content,
+                is_ai_generated: true,
                 is_published: true,
             }));
 

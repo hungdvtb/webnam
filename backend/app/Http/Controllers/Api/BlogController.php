@@ -69,7 +69,7 @@ class BlogController extends Controller
         }
 
         if ($isCompactView) {
-            $query->select([
+            $compactColumns = [
                 'id',
                 'account_id',
                 'blog_category_id',
@@ -83,7 +83,13 @@ class BlogController extends Controller
                 'created_at',
                 'updated_at',
                 'deleted_at',
-            ]);
+            ];
+
+            if ($this->hasAiGeneratedPostSupport()) {
+                $compactColumns[] = 'is_ai_generated';
+            }
+
+            $query->select($compactColumns);
         }
 
         // Public visitors only see visible non-system posts.
@@ -627,6 +633,7 @@ class BlogController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'featured_image' => 'nullable|string|max:2048',
+            'is_ai_generated' => 'sometimes|boolean',
             'is_published' => 'sometimes|boolean',
             'is_starred' => 'sometimes|boolean',
             'sort_order' => 'nullable|integer|min:1',
@@ -651,12 +658,18 @@ class BlogController extends Controller
         $validated['is_starred'] = array_key_exists('is_starred', $validated)
             ? (bool) $validated['is_starred']
             : false;
+        $validated['is_ai_generated'] = array_key_exists('is_ai_generated', $validated)
+            ? (bool) $validated['is_ai_generated']
+            : false;
         $validated['slug'] = $this->buildUniqueSlug(
             $validated['slug'] ?? $validated['title'],
             $accountId
         );
         if ($this->hasSystemPostSupport()) {
             $validated['is_system'] = false;
+        }
+        if (!$this->hasAiGeneratedPostSupport()) {
+            unset($validated['is_ai_generated']);
         }
 
         $this->prepareFeaturedImageForPersistence($validated);
@@ -741,6 +754,7 @@ class BlogController extends Controller
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
             'featured_image' => 'nullable|string|max:2048',
+            'is_ai_generated' => 'sometimes|boolean',
             'is_published' => 'sometimes|boolean',
             'is_starred' => 'sometimes|boolean',
             'sort_order' => 'nullable|integer|min:1',
@@ -770,6 +784,9 @@ class BlogController extends Controller
 
         if ($post->is_system) {
             unset($validated['title'], $validated['slug']);
+        }
+        if (!$this->hasAiGeneratedPostSupport()) {
+            unset($validated['is_ai_generated']);
         }
 
         if (array_key_exists('slug', $validated) && $validated['slug'] !== null && $validated['slug'] !== '') {
@@ -1309,6 +1326,7 @@ class BlogController extends Controller
         $resolver = $this->publicSiteUrlResolver();
 
         $post['featured_image'] = $this->mediaService->normalizeLegacyUrl($post['featured_image'] ?? null);
+        $post['is_ai_generated'] = (bool) ($post['is_ai_generated'] ?? false);
         $post['content'] = BlogMediaGallerySupport::rewriteAssetReferences(
             (string) ($post['content'] ?? ''),
             fn (string $url) => $this->mediaService->normalizeLegacyUrl($url)
@@ -2126,6 +2144,17 @@ class BlogController extends Controller
 
         if ($cache === null) {
             $cache = Schema::hasTable('posts') && Schema::hasColumn('posts', 'is_system');
+        }
+
+        return $cache;
+    }
+
+    private function hasAiGeneratedPostSupport(): bool
+    {
+        static $cache = null;
+
+        if ($cache === null) {
+            $cache = Schema::hasTable('posts') && Schema::hasColumn('posts', 'is_ai_generated');
         }
 
         return $cache;

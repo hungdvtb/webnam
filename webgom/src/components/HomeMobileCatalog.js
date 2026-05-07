@@ -35,7 +35,6 @@ export default function HomeMobileCatalog({ categorySections = [] }) {
                     slug: product.slug,
                     price: product.currentPrice ?? product.price,
                     primary_image: product.primaryImage,
-                    is_new: product.isNew,
                     itemType: product.itemType,
                     bundleOptionKey: product.bundleOptionKey,
                     bundleOptionTitle: product.bundleOptionTitle,

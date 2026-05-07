@@ -694,7 +694,6 @@
 }
 
 .badgeHot { background-color: var(--brick); }
-.badgeSale { background-color: var(--accent); }
 .badgeVip { background-color: var(--brick); }
 
 .productInfo {

@@ -21,7 +21,7 @@ const sortImagesByPrimary = (images = []) => (
 );
 
 const normalizeImages = (entity) => {
-    const images = Array.isArray(entity?.images)
+    const galleryImages = Array.isArray(entity?.images)
         ? sortImagesByPrimary(entity.images)
             .map((image, index) => ({
                 id: image.id || `${entity?.id || 'image'}-${index}`,
@@ -32,18 +32,22 @@ const normalizeImages = (entity) => {
             .filter((image) => image.url)
         : [];
 
-    if (images.length > 0) {
-        return images;
-    }
-
     const primaryUrl = resolveEntityImageUrl(entity, 'large', entity?.main_image || '');
     if (primaryUrl) {
-        return [{
+        const primaryImage = {
             id: entity?.primary_image?.id || entity?.id || 0,
             url: primaryUrl,
             thumbnailUrl: resolveEntityImageUrl(entity?.primary_image || entity, 'thumbnail', primaryUrl),
             is_primary: true,
-        }];
+        };
+
+        return [primaryImage, ...galleryImages].filter((image, index, collection) => (
+            image.url && collection.findIndex((candidate) => candidate.url === image.url) === index
+        ));
+    }
+
+    if (galleryImages.length > 0) {
+        return galleryImages;
     }
 
     return [{ id: entity?.id || 0, url: FALLBACK_IMAGE, is_primary: true }];
@@ -806,6 +810,7 @@ const StorefrontProductDetail = () => {
     const [activeTab, setActiveTab] = useState('description');
     const [selectedAttributes, setSelectedAttributes] = useState({});
     const [currentVariant, setCurrentVariant] = useState(null);
+    const [hasCustomerSelectedVariant, setHasCustomerSelectedVariant] = useState(false);
     const [selectedBundleOption, setSelectedBundleOption] = useState('');
     const [selectedBundleVariants, setSelectedBundleVariants] = useState({});
     const bundleDetailRef = useRef(null);
@@ -816,6 +821,7 @@ const StorefrontProductDetail = () => {
             setQuantity(1);
             setSelectedAttributes({});
             setCurrentVariant(null);
+            setHasCustomerSelectedVariant(false);
             setSelectedBundleVariants({});
 
             try {
@@ -1029,8 +1035,10 @@ const StorefrontProductDetail = () => {
     const bundleCurrentTotal = activeBundleSelectionRows.reduce((sum, item) => sum + item.lineTotal, 0);
     const bundleBaseTotal = activeBundleSelectionRows.reduce((sum, item) => sum + (item.referenceUnitPrice * item.quantityPerBundle), 0);
     const mustChooseBundleVariants = product.type === 'bundle' && activeBundleSelectionRows.some((item) => item.requiresSelection);
-    const displayEntity = product.type === 'bundle' ? product : (displayVariant || product);
-    const mediaItems = buildMediaItems(product, displayEntity);
+    const galleryDisplayEntity = product.type === 'bundle'
+        ? product
+        : (hasCustomerSelectedVariant ? (displayVariant || product) : product);
+    const mediaItems = buildMediaItems(product, galleryDisplayEntity);
     const mobileMediaItems = product.type === 'bundle'
         ? buildBundleMobileMediaItems(product, activeBundleSelectionRows)
         : mediaItems;
@@ -1093,6 +1101,7 @@ const StorefrontProductDetail = () => {
     const knowledgeItems = normalizeAdditionalInfo(product.additional_info);
 
     const handleSelectAttribute = (attributeId, optionValue) => {
+        setHasCustomerSelectedVariant(true);
         setSelectedAttributes((prev) => {
             const nextSelections = {
                 ...prev,
@@ -1490,7 +1499,10 @@ const StorefrontProductDetail = () => {
                                             <button
                                                 key={variant.id}
                                                 type="button"
-                                                onClick={() => setCurrentVariant(variant)}
+                                                onClick={() => {
+                                                    setHasCustomerSelectedVariant(true);
+                                                    setCurrentVariant(variant);
+                                                }}
                                                 className={`rounded-[24px] border p-4 text-left transition ${
                                                     isSelected
                                                         ? 'border-primary bg-primary/5 shadow-md'

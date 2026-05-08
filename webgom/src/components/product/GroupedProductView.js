@@ -20,6 +20,7 @@ export default function GroupedProductView({
   getImageUrl,
   images,
   videoUrl,
+  videoUrls,
   activeIndex,
   setActiveIndex,
   quantity,
@@ -36,6 +37,7 @@ export default function GroupedProductView({
           <ProductGallery
             images={images}
             videoUrl={videoUrl}
+            videoUrls={videoUrls}
             activeIndex={activeIndex}
             setActiveIndex={setActiveIndex}
             getImageUrl={getImageUrl}

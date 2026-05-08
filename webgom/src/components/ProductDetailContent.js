@@ -126,6 +126,43 @@ const filterUniqueRenderableImages = (sourceImages = []) => {
   return validImages.length > 0 ? validImages : orderedImages;
 };
 
+const normalizeProductVideoUrls = (items = [], fallbackUrl = '') => {
+  const sourceItems = Array.isArray(items) ? items : [];
+  const urls = sourceItems
+    .map((item) => String(typeof item === 'object' ? (item?.url || item?.video_url || '') : item || '').trim())
+    .filter(Boolean);
+
+  const legacyUrl = String(fallbackUrl || '').trim();
+  if (urls.length === 0 && legacyUrl) {
+    urls.push(legacyUrl);
+  }
+
+  return urls.filter((url, index, collection) => (
+    collection.indexOf(url) === index && Boolean(resolveVideoEmbedUrl(url))
+  ));
+};
+
+const resolveBundleOptionVideoUrls = (product, activeConfig) => {
+  const parentVideoUrls = normalizeProductVideoUrls(product?.video_urls, product?.video_url || '');
+  const normalizedConfig = String(activeConfig || '').trim();
+
+  if (product?.type !== 'bundle' || !normalizedConfig) {
+    return parentVideoUrls;
+  }
+
+  const optionVideoUrls = (product.bundle_items || product.grouped_items || [])
+    .filter((item) => getBundleOptionTitle(item) === normalizedConfig)
+    .map((item) => item?.option_video_url || item?.pivot?.option_video_url || '')
+    .map((url) => String(url || '').trim())
+    .filter(Boolean);
+
+  const uniqueOptionVideoUrls = optionVideoUrls.filter((url, index, collection) => collection.indexOf(url) === index);
+
+  return uniqueOptionVideoUrls.length > 0
+    ? normalizeProductVideoUrls(uniqueOptionVideoUrls)
+    : parentVideoUrls;
+};
+
 const getPinnedEntityGalleryImages = (entity) => {
   const primaryImage = pickEntityPrimaryImage(entity, 'large');
   const pinnedPrimaryImage = primaryImage && typeof primaryImage === 'object'
@@ -583,8 +620,12 @@ export default function ProductDetailContent({
     hasVariants,
     product?.id,
   ]);
-  const galleryVideoUrl = product.video_url || '';
-  const hasGalleryVideo = Boolean(resolveVideoEmbedUrl(galleryVideoUrl));
+  const galleryVideoUrls = useMemo(
+    () => resolveBundleOptionVideoUrls(product, resolvedActiveBundleConfig),
+    [product, resolvedActiveBundleConfig]
+  );
+  const galleryVideoUrl = galleryVideoUrls[0] || '';
+  const hasGalleryVideo = galleryVideoUrls.length > 0;
 
   const getImageUrl = (img) => resolveImageObjectUrl(img, FALLBACK_PRODUCT_IMAGE);
 
@@ -594,8 +635,9 @@ export default function ProductDetailContent({
         return hasGalleryVideo ? -1 : 0;
       }
 
-      if (previous === -1 && hasGalleryVideo) {
-        return -1;
+      if (previous < 0 && hasGalleryVideo) {
+        const requestedVideoIndex = Math.max(0, Math.abs(previous) - 1);
+        return -1 - Math.min(requestedVideoIndex, Math.max(galleryVideoUrls.length - 1, 0));
       }
 
       if (previous >= 0 && previous < images.length) {
@@ -604,7 +646,7 @@ export default function ProductDetailContent({
 
       return 0;
     });
-  }, [images, hasGalleryVideo]);
+  }, [images, hasGalleryVideo, galleryVideoUrls]);
 
   const formatPrice = (price) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(price);
@@ -643,10 +685,35 @@ export default function ProductDetailContent({
       options.bundle_option_title = resolvedConfigName;
     }
 
+    const optionMedia = Array.isArray(product?.bundle_options)
+      ? product.bundle_options.find((option) => {
+        const optionTitle = String(
+          option?.bundle_option_title
+          || option?.title
+          || option?.name
+          || ''
+        ).trim();
+
+        return optionTitle === resolvedConfigName;
+      })
+      : null;
+    const optionMediaContext = optionMedia
+      ? {
+        variantProduct: {
+          ...product,
+          primary_image: optionMedia.primary_image || product.primary_image || null,
+          main_image: optionMedia.main_image || product.main_image || null,
+          images: optionMedia.primary_image ? [optionMedia.primary_image] : product.images,
+        },
+        parentProduct: product,
+      }
+      : null;
+
     return {
       itemsToCart: currentItems,
       finalPrice: pricing.finalSubtotal,
       pricing,
+      mediaContext: optionMediaContext,
       options,
       bundleMeta: {
         bundleConfigName: resolvedConfigName,
@@ -699,11 +766,11 @@ export default function ProductDetailContent({
     const cartProduct = product.type === 'configurable' ? currentProduct : product;
 
     if (product?.type === 'bundle') {
-      const { itemsToCart, finalPrice, options, bundleMeta } = buildBundleCartPayload(resolvedActiveBundleConfig);
+      const { itemsToCart, finalPrice, options, bundleMeta, mediaContext } = buildBundleCartPayload(resolvedActiveBundleConfig);
       if (itemsToCart.length === 0) {
         return;
       }
-      addToCart(cartProduct, quantity, options, itemsToCart, finalPrice, bundleMeta);
+      addToCart(cartProduct, quantity, options, itemsToCart, finalPrice, bundleMeta, mediaContext);
       return;
     }
 
@@ -866,10 +933,10 @@ export default function ProductDetailContent({
 
   const handleAddBundleConfig = (configName, e) => {
     if (e) e.preventDefault();
-    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
+    const { itemsToCart, finalPrice, options, bundleMeta, mediaContext } = getBundleSelectionByConfig(configName);
     if (itemsToCart.length === 0) return;
 
-    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta);
+    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta, mediaContext);
     const flyImage = primaryDisplayImage || images?.[0];
     flyToCart(
       e,
@@ -927,23 +994,23 @@ export default function ProductDetailContent({
   ]);
 
   const handleBuyBundleConfig = (configName) => {
-    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
+    const { itemsToCart, finalPrice, options, bundleMeta, mediaContext } = getBundleSelectionByConfig(configName);
     if (itemsToCart.length === 0) return;
 
-    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta);
+    addToCart(product, quantity, options, itemsToCart, finalPrice, bundleMeta, mediaContext);
     router.push('/cart');
   };
 
   // Buy only the items in a specific tab config (called from BundleProductView)
   const handleBuyTabConfig = (tabItems) => {
     const configName = resolveBundleConfigName(tabItems) || resolvedActiveBundleConfig;
-    const { itemsToCart, finalPrice, options, bundleMeta } = getBundleSelectionByConfig(configName);
+    const { itemsToCart, finalPrice, options, bundleMeta, mediaContext } = getBundleSelectionByConfig(configName);
 
     if (itemsToCart.length === 0) {
       return;
     }
 
-    addToCart(product, 1, options, itemsToCart, finalPrice, bundleMeta);
+    addToCart(product, 1, options, itemsToCart, finalPrice, bundleMeta, mediaContext);
     router.push('/cart');
   };
 
@@ -955,6 +1022,7 @@ export default function ProductDetailContent({
     images,
     primaryDisplayImage,
     videoUrl: galleryVideoUrl,
+    videoUrls: galleryVideoUrls,
     activeIndex,
     setActiveIndex,
     quantity,

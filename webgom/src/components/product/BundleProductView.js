@@ -21,7 +21,7 @@ import {
   evaluateBundleSelection,
   getBundleOptionTitle,
 } from '@/lib/bundlePricing';
-import { resolveImageObjectUrl } from '@/lib/media';
+import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
 
 const normalizeConfigMediaKey = (configName = '') =>
@@ -60,6 +60,22 @@ const getMobileStickyHeaderHeight = () => {
 
   const promoBar = document.querySelector('.top-promotion-bar');
   return Math.round(promoBar?.getBoundingClientRect().height || 32);
+};
+
+const normalizeGalleryVideoUrls = (items = [], fallbackUrl = '') => {
+  const sourceItems = Array.isArray(items) ? items : [items];
+  const urls = sourceItems
+    .map((item) => String(typeof item === 'object' ? (item?.url || item?.video_url || '') : item || '').trim())
+    .filter(Boolean);
+  const legacyUrl = String(fallbackUrl || '').trim();
+
+  if (urls.length === 0 && legacyUrl) {
+    urls.push(legacyUrl);
+  }
+
+  return urls.filter((url, index, collection) => (
+    collection.indexOf(url) === index && Boolean(resolveVideoEmbedUrl(url))
+  ));
 };
 
 const sentenceCaseButtonStyle = { textTransform: 'none' };
@@ -263,6 +279,7 @@ export default function BundleProductView({
   getImageUrl,
   images,
   videoUrl,
+  videoUrls,
   activeIndex,
   setActiveIndex,
   activeBundleConfig,
@@ -291,6 +308,10 @@ export default function BundleProductView({
   const [manualActiveTab, setManualActiveTab] = useState(null);
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
   const [isMobileConfigMenuOpen, setIsMobileConfigMenuOpen] = useState(false);
+  const galleryAnchorRef = useRef(null);
+  const gallerySectionRef = useRef(null);
+  const desktopGalleryRef = useRef(null);
+  const mobileGalleryRef = useRef(null);
   const bundleListRef = useRef(null);
   const pendingBundleWorkspaceRestoreRef = useRef(null);
   const bundleWorkspaceRestoreTimersRef = useRef([]);
@@ -464,6 +485,7 @@ export default function BundleProductView({
 
   const activeBundleOptionDisplay = useMemo(() => {
     const bundleOptions = Array.isArray(product?.bundle_options) ? product.bundle_options : [];
+    const sourceBundleItems = Array.isArray(bundleItems) ? bundleItems : [];
     const selectedConfig = String(
       activeBundleConfig
       || manualActiveTab
@@ -478,6 +500,7 @@ export default function BundleProductView({
     }
 
     const selectedConfigKey = normalizeConfigMediaKey(selectedConfig);
+    const selectedFamilyKey = getConfigMediaFamilyKey(selectedConfig);
     const matchedOption = bundleOptions.find((option) => {
       const optionTitle = String(
         option?.bundle_option_title
@@ -488,10 +511,52 @@ export default function BundleProductView({
 
       return normalizeConfigMediaKey(optionTitle) === selectedConfigKey;
     }) || null;
+    const matchedItems = sourceBundleItems.filter((item) => {
+      const itemTitle = String(
+        item?.option_title
+        || item?.pivot?.option_title
+        || item?.bundle_option_title
+        || ''
+      ).trim();
+      const itemKey = normalizeConfigMediaKey(itemTitle);
+      const itemFamilyKey = getConfigMediaFamilyKey(itemTitle);
 
-    if (!matchedOption) {
+      return itemKey === selectedConfigKey || (
+        selectedFamilyKey
+        && itemFamilyKey
+        && itemFamilyKey === selectedFamilyKey
+      );
+    });
+
+    if (!matchedOption && matchedItems.length === 0) {
       return null;
     }
+
+    const firstItemWithOptionImage = matchedItems.find((item) => (
+      item?.option_image || item?.pivot?.option_image || item?.option_image_url || item?.pivot?.option_image_url
+    ));
+    const firstItemWithOptionVideo = matchedItems.find((item) => (
+      item?.option_video_url || item?.pivot?.option_video_url
+    ));
+    const optionVideoUrls = normalizeGalleryVideoUrls(
+      matchedOption?.video_urls
+      || matchedOption?.videos
+      || matchedOption?.option_video_urls
+      || matchedOption?.option_videos
+      || [],
+      matchedOption?.video_url
+      || matchedOption?.option_video_url
+      || firstItemWithOptionVideo?.option_video_url
+      || firstItemWithOptionVideo?.pivot?.option_video_url
+      || ''
+    );
+    const optionImage = matchedOption?.primary_image
+      || matchedOption?.option_image
+      || firstItemWithOptionImage?.option_image
+      || firstItemWithOptionImage?.pivot?.option_image
+      || (firstItemWithOptionImage?.option_image_url ? { url: firstItemWithOptionImage.option_image_url } : null)
+      || (firstItemWithOptionImage?.pivot?.option_image_url ? { url: firstItemWithOptionImage.pivot.option_image_url } : null)
+      || null;
 
     return {
       name: String(
@@ -499,11 +564,20 @@ export default function BundleProductView({
         || matchedOption?.bundle_option_title
         || selectedConfig
       ).trim() || selectedConfig,
-      primaryImage: matchedOption?.primary_image || null,
+      primaryImage: optionImage,
+      videoUrls: optionVideoUrls,
     };
-  }, [activeBundleConfig, manualActiveTab, product?.bundle_options]);
+  }, [activeBundleConfig, bundleItems, manualActiveTab, product?.bundle_options]);
 
   const bundleHeroProductName = activeBundleOptionDisplay?.name || product.name;
+  const currentGalleryVideoUrls = useMemo(() => {
+    const optionVideoUrls = normalizeGalleryVideoUrls(activeBundleOptionDisplay?.videoUrls || []);
+
+    return optionVideoUrls.length > 0
+      ? optionVideoUrls
+      : normalizeGalleryVideoUrls(videoUrls, videoUrl);
+  }, [activeBundleOptionDisplay?.videoUrls, videoUrl, videoUrls]);
+  const hasCurrentGalleryVideo = currentGalleryVideoUrls.length > 0;
 
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
@@ -978,6 +1052,136 @@ export default function BundleProductView({
     window.scrollTo({ top: targetTop, behavior });
   };
 
+  const scrollToBundleGallery = ({ mediaType = 'image', behavior = 'smooth' } = {}) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    setActiveIndex(mediaType === 'video' ? -1 : 0);
+
+    const isVisibleElement = (element) => {
+      if (!element || typeof element.getBoundingClientRect !== 'function') {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const computedStyle = typeof window.getComputedStyle === 'function'
+        ? window.getComputedStyle(element)
+        : null;
+
+      return (
+        rect.width > 1
+        && rect.height > 1
+        && computedStyle?.display !== 'none'
+        && computedStyle?.visibility !== 'hidden'
+      );
+    };
+
+    const findVisibleGalleryTarget = () => {
+      const isMobileViewportNow = typeof window.matchMedia === 'function'
+        ? window.matchMedia('(max-width: 768px)').matches
+        : isMobileBundleViewport;
+      const preferredRoots = isMobileViewportNow
+        ? [mobileGalleryRef.current, gallerySectionRef.current]
+        : [desktopGalleryRef.current, gallerySectionRef.current];
+
+      for (const root of preferredRoots) {
+        if (!root) {
+          continue;
+        }
+
+        const stage = root.querySelector?.(
+          `[data-product-gallery-stage="true"][data-product-gallery-mode="${mediaType}"]`
+        ) || root.querySelector?.('[data-product-gallery-stage="true"]');
+        const target = stage || root;
+
+        if (isVisibleElement(target)) {
+          return { target, isMobileViewportNow };
+        }
+      }
+
+      const visibleStage = Array.from(document.querySelectorAll(
+        `[data-bundle-gallery-root="true"] [data-product-gallery-stage="true"][data-product-gallery-mode="${mediaType}"], `
+        + '[data-bundle-gallery-root="true"] [data-product-gallery-stage="true"]'
+      ))
+        .find(isVisibleElement);
+
+      if (visibleStage) {
+        return { target: visibleStage, isMobileViewportNow };
+      }
+
+      const fallbackTarget = [galleryAnchorRef.current, gallerySectionRef.current].find(isVisibleElement);
+
+      return fallbackTarget ? { target: fallbackTarget, isMobileViewportNow } : null;
+    };
+
+    const scrollWhenGalleryIsReady = () => {
+      const visibleGallery = findVisibleGalleryTarget();
+
+      if (!visibleGallery) {
+        return;
+      }
+
+      const stickyOffset = visibleGallery.isMobileViewportNow ? getMobileStickyHeaderHeight() + 12 : 12;
+      const targetTop = Math.max(
+        0,
+        Math.round(window.scrollY + visibleGallery.target.getBoundingClientRect().top - stickyOffset)
+      );
+
+      window.scrollTo({ top: targetTop, behavior });
+    };
+
+    const runScrollAttempts = (attempt = 0) => {
+      scrollWhenGalleryIsReady();
+
+      if (attempt >= 2) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => runScrollAttempts(attempt + 1));
+    };
+
+    window.requestAnimationFrame(() => runScrollAttempts());
+    window.setTimeout(scrollWhenGalleryIsReady, 120);
+  };
+
+  const renderGalleryJumpButtons = ({ mobile = false } = {}) => (
+    <div
+      className={[
+        mobile ? builderStyles.mobileGalleryJumpActions : builderStyles.galleryJumpActions,
+        !hasCurrentGalleryVideo ? builderStyles.galleryJumpActionsSingle : '',
+      ].filter(Boolean).join(' ')}
+    >
+      <button
+        type="button"
+        className={mobile ? builderStyles.mobileGalleryJumpBtn : builderStyles.galleryJumpBtn}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          scrollToBundleGallery({ mediaType: 'image' });
+        }}
+      >
+        <span className="material-symbols-outlined">image</span>
+        <span>Xem ảnh</span>
+      </button>
+
+      {hasCurrentGalleryVideo ? (
+        <button
+          type="button"
+          className={mobile ? builderStyles.mobileGalleryJumpBtn : builderStyles.galleryJumpBtn}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            scrollToBundleGallery({ mediaType: 'video' });
+          }}
+        >
+          <span className="material-symbols-outlined">play_circle</span>
+          <span>Xem video</span>
+        </button>
+      ) : null}
+    </div>
+  );
+
   const handleViewBundleDetails = () => {
     if (activeBundlePopover) {
       handleTabChange(activeBundlePopover);
@@ -1190,6 +1394,8 @@ export default function BundleProductView({
             </div>
           </div>
         ) : null}
+
+        {tabItems.length > 0 ? renderGalleryJumpButtons({ mobile: true }) : null}
       </div>
     );
   };
@@ -1315,7 +1521,7 @@ export default function BundleProductView({
       )}
 
       {tabItems.length > 0 && (
-              <div className={`${builderStyles.topActionBar} ${hasActiveConfigMedia ? builderStyles.topActionBarWithMedia : ''}`}>
+              <div className={`${builderStyles.topActionBar} ${builderStyles.topActionBarWithMedia}`}>
                 {isFullCombo ? (
                   <div className={builderStyles.discountBannerInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
@@ -1328,17 +1534,7 @@ export default function BundleProductView({
                   </div>
                 )}
 
-                {hasActiveConfigMedia ? (
-                  <Link
-                    href={activeConfigMedia.href}
-                    className={`${builderStyles.configMediaLink} ${builderStyles.topActionMediaLink}`}
-                    title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
-                    aria-label={`Xem media cho ${activeConfigMedia.configName}`}
-                  >
-                    <span className="material-symbols-outlined">perm_media</span>
-                    <span className={builderStyles.configMediaLinkText}>Xem media</span>
-                  </Link>
-                ) : null}
+                {renderGalleryJumpButtons()}
 
                 <div className={builderStyles.quickSummaryTopInline}>
                   <div className={builderStyles.quickSummaryPrice}>
@@ -1369,11 +1565,23 @@ export default function BundleProductView({
       <div className={styles.bundlePageSections}>
         <div className={styles.mainGrid}>
           {/* Gallery */}
-          <div className={styles.galleryColumn}>
-            <div className={styles.bundleGalleryDesktopOnly}>
+          <div
+            id="bundle-product-gallery"
+            className={styles.galleryColumn}
+            ref={gallerySectionRef}
+            data-bundle-gallery-root="true"
+          >
+            <span
+              ref={galleryAnchorRef}
+              data-bundle-gallery-anchor="true"
+              aria-hidden="true"
+              style={{ display: 'block', height: 1, marginBottom: -1, scrollMarginTop: '96px' }}
+            />
+            <div className={styles.bundleGalleryDesktopOnly} ref={desktopGalleryRef}>
               <ProductGallery
                 images={bundleMobileGalleryImages}
-                videoUrl={videoUrl}
+                videoUrl={currentGalleryVideoUrls[0] || ''}
+                videoUrls={currentGalleryVideoUrls}
                 activeIndex={activeIndex}
                 setActiveIndex={setActiveIndex}
                 getImageUrl={getImageUrl}
@@ -1381,10 +1589,11 @@ export default function BundleProductView({
               />
             </div>
 
-            <div className={`${styles.bundleGalleryMobileOnly} ${styles.configurableMediaShell}`}>
+            <div className={`${styles.bundleGalleryMobileOnly} ${styles.configurableMediaShell}`} ref={mobileGalleryRef}>
               <ProductGallery
                 images={bundleMobileGalleryImages}
-                videoUrl={videoUrl}
+                videoUrl={currentGalleryVideoUrls[0] || ''}
+                videoUrls={currentGalleryVideoUrls}
                 activeIndex={activeIndex}
                 setActiveIndex={setActiveIndex}
                 getImageUrl={getImageUrl}
@@ -1620,7 +1829,7 @@ export default function BundleProductView({
 
               {/* === Top Action Bar === */}
             {tabItems.length > 0 && (
-              <div className={`${builderStyles.topActionBar} ${hasActiveConfigMedia ? builderStyles.topActionBarWithMedia : ''}`}>
+              <div className={`${builderStyles.topActionBar} ${builderStyles.topActionBarWithMedia}`}>
                 {isFullCombo ? (
                   <div className={builderStyles.discountBannerInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
@@ -1633,17 +1842,7 @@ export default function BundleProductView({
                   </div>
                 )}
 
-                {hasActiveConfigMedia ? (
-                  <Link
-                    href={activeConfigMedia.href}
-                    className={`${builderStyles.configMediaLink} ${builderStyles.topActionMediaLink}`}
-                    title={activeConfigMedia.title ? `Xem media: ${activeConfigMedia.title}` : 'Xem media'}
-                    aria-label={`Xem media cho ${activeConfigMedia.configName}`}
-                  >
-                    <span className="material-symbols-outlined">perm_media</span>
-                    <span className={builderStyles.configMediaLinkText}>Xem media</span>
-                  </Link>
-                ) : null}
+                {renderGalleryJumpButtons()}
 
                 <div className={builderStyles.quickSummaryTopInline}>
                   <div className={builderStyles.quickSummaryPrice}>

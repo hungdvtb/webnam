@@ -16,6 +16,7 @@ export default function SimpleProductView({
   getImageUrl,
   images,
   videoUrl,
+  videoUrls,
   activeIndex,
   setActiveIndex,
   quantity,
@@ -35,6 +36,7 @@ export default function SimpleProductView({
           <ProductGallery
             images={images}
             videoUrl={videoUrl}
+            videoUrls={videoUrls}
             activeIndex={activeIndex}
             setActiveIndex={setActiveIndex}
             getImageUrl={getImageUrl}

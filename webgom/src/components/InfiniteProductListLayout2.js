@@ -6,12 +6,27 @@ import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
+import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
 const ADD_TO_CART_LABEL = 'Giỏ hàng';
 const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp với yêu cầu của bạn.';
+
+const getDisplayPrice = (product = {}) => {
+  if (product.item_type === 'bundle_option') {
+    const bundleTotal = Number(product.bundle_option_total_price ?? product.price ?? 0);
+
+    if (Number.isFinite(bundleTotal) && bundleTotal > 0) {
+      return calculateFullBundleDiscount(bundleTotal).finalSubtotal;
+    }
+
+    return product.bundle_option_discounted_price ?? product.current_price ?? product.price ?? 0;
+  }
+
+  return product.current_price ?? product.price ?? 0;
+};
 
 export default function InfiniteProductListLayout2({ initialData }) {
   const products = initialData?.data || [];
@@ -23,14 +38,14 @@ export default function InfiniteProductListLayout2({ initialData }) {
         {products.map((product) => {
           const productHref = buildProductDetailHref(product);
           const productCardKey = buildProductCardKey(product);
-          const displayPrice = product.current_price ?? product.price ?? 0;
+          const displayPrice = getDisplayPrice(product);
           const cartOptions = product.item_type === 'bundle_option'
             ? {
                 bundle_option_key: product.bundle_option_key,
                 bundle_option_title: product.bundle_option_title,
                 bundle_parent_name: product.bundle_parent_name,
                 bundle_option_total_price: product.bundle_option_total_price,
-                bundle_option_discounted_price: product.bundle_option_discounted_price,
+                bundle_option_discounted_price: displayPrice,
               }
             : {};
 

@@ -30,6 +30,7 @@ use Throwable;
 class CategoryController extends Controller
 {
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
+    private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
 
     private bool $categoryTrashSchemaEnsured = false;
 
@@ -37,6 +38,22 @@ class CategoryController extends Controller
         protected MediaService $mediaService,
         protected CategoryDemoLogoService $categoryDemoLogoService
     ) {
+    }
+
+    private function calculateFullBundleDiscountedPrice(float $totalPrice): array
+    {
+        $normalizedTotal = max(round($totalPrice, 2), 0);
+        $baseDiscountAmount = $normalizedTotal > 0
+            ? round($normalizedTotal * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
+            : 0.0;
+        $subtotalAfterBaseDiscount = max($normalizedTotal - $baseDiscountAmount, 0);
+        $discountedPrice = floor($subtotalAfterBaseDiscount / self::BUNDLE_TOTAL_ROUNDING_UNIT) * self::BUNDLE_TOTAL_ROUNDING_UNIT;
+        $discountAmount = max($normalizedTotal - $discountedPrice, 0);
+
+        return [
+            'discount_amount' => $discountAmount,
+            'discounted_price' => $discountedPrice,
+        ];
     }
 
     private function categoryImportSelectableFieldIds(): array
@@ -586,10 +603,9 @@ class CategoryController extends Controller
                     $basePrice = $totalPrice;
                 }
 
-                $discountAmount = $totalPrice > 0
-                    ? round($totalPrice * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
-                    : 0.0;
-                $discountedPrice = max($totalPrice - $discountAmount, 0);
+                $discountedPricing = $this->calculateFullBundleDiscountedPrice($totalPrice);
+                $discountAmount = $discountedPricing['discount_amount'];
+                $discountedPrice = $discountedPricing['discounted_price'];
 
                 $catalog[$productId][$optionKey]['price'] = $totalPrice;
                 $catalog[$productId][$optionKey]['current_price'] = $discountedPrice;

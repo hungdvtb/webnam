@@ -1,5 +1,6 @@
 const BUNDLE_DISCOUNT_RATE = 0.1;
 const BUNDLE_METADATA_VERSION = 2;
+const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
 
 const cloneBundleValue = (value) => {
   if (Array.isArray(value)) {
@@ -31,6 +32,33 @@ const toPositiveInteger = (value, fallback = 1) => {
 };
 
 const normalizeText = (value = '') => String(value || '').trim();
+
+const floorToUnit = (value, unit = BUNDLE_TOTAL_ROUNDING_UNIT) => {
+  const normalizedValue = Math.max(toFiniteNumber(value, 0), 0);
+  const normalizedUnit = Math.max(toInteger(unit, BUNDLE_TOTAL_ROUNDING_UNIT), 1);
+
+  return Math.floor(normalizedValue / normalizedUnit) * normalizedUnit;
+};
+
+export const calculateFullBundleDiscount = (
+  subtotal,
+  { discountRate = BUNDLE_DISCOUNT_RATE, roundingUnit = BUNDLE_TOTAL_ROUNDING_UNIT } = {},
+) => {
+  const normalizedSubtotal = Math.max(toFiniteNumber(subtotal, 0), 0);
+  const baseDiscountAmount = Math.round(
+    normalizedSubtotal * toFiniteNumber(discountRate, BUNDLE_DISCOUNT_RATE)
+  );
+  const subtotalAfterBaseDiscount = Math.max(normalizedSubtotal - baseDiscountAmount, 0);
+  const finalSubtotal = floorToUnit(subtotalAfterBaseDiscount, roundingUnit);
+  const comboDiscountAmount = Math.max(normalizedSubtotal - finalSubtotal, 0);
+
+  return {
+    baseDiscountAmount,
+    comboDiscountAmount,
+    discountRoundingAdjustment: Math.max(comboDiscountAmount - baseDiscountAmount, 0),
+    finalSubtotal,
+  };
+};
 
 export const getBundleOptionTitle = (item = {}) => normalizeText(
   item?.option_title
@@ -251,9 +279,14 @@ export const evaluateBundleSelection = (
     && missingItems.length === 0
     && invalidItems.length === 0
     && extraItems.length === 0;
-  const comboDiscountAmount = isFullBundle
-    ? Math.round(currentSubtotal * toFiniteNumber(discountRate, BUNDLE_DISCOUNT_RATE))
-    : 0;
+  const bundleDiscount = isFullBundle
+    ? calculateFullBundleDiscount(currentSubtotal, { discountRate })
+    : {
+      baseDiscountAmount: 0,
+      comboDiscountAmount: 0,
+      discountRoundingAdjustment: 0,
+      finalSubtotal: currentSubtotal,
+    };
 
   let failureCode = 'eligible';
 
@@ -280,8 +313,10 @@ export const evaluateBundleSelection = (
     expectedCount: normalizedSnapshotItems.length,
     currentCount: normalizedCurrentItems.length,
     comboDiscountRate: toFiniteNumber(discountRate, BUNDLE_DISCOUNT_RATE),
-    comboDiscountAmount,
-    finalSubtotal: Math.max(currentSubtotal - comboDiscountAmount, 0),
+    baseComboDiscountAmount: bundleDiscount.baseDiscountAmount,
+    comboDiscountAmount: bundleDiscount.comboDiscountAmount,
+    comboDiscountRoundingAdjustment: bundleDiscount.discountRoundingAdjustment,
+    finalSubtotal: bundleDiscount.finalSubtotal,
     isFullBundle,
     eligibleDiscount: isFullBundle,
     failureCode,
@@ -359,4 +394,5 @@ export const getCartBundlePricing = (cartItem = {}) => {
 export {
   BUNDLE_DISCOUNT_RATE,
   BUNDLE_METADATA_VERSION,
+  BUNDLE_TOTAL_ROUNDING_UNIT,
 };

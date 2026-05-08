@@ -12,7 +12,7 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'additional_info', 'bundle_title', 'site_domain_id',
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id',
         'sort_order',
     ];
 
@@ -31,6 +31,7 @@ class Product extends Model
         'inventory_import_starred' => 'boolean',
         'imported_quantity_total' => 'integer',
         'imported_value_total' => 'decimal:2',
+        'video_urls' => 'array',
         'sort_order' => 'integer',
     ];
 
@@ -166,7 +167,7 @@ class Product extends Model
     public function linkedProducts()
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
-                    ->withPivot(['link_type', 'position', 'option_title', 'option_post_id', 'quantity', 'is_required', 'variant_id', 'price', 'cost_price', 'is_default'])
+                    ->withPivot(['link_type', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'quantity', 'is_required', 'variant_id', 'price', 'cost_price', 'is_default'])
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
@@ -312,7 +313,7 @@ class Product extends Model
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'bundle')
-                    ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'option_post_id', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }

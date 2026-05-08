@@ -35,14 +35,25 @@ function clampImageIndex(index, imageCount) {
 
 function resolveDisplayIndex(activeIndex, imageCount, hasVideo) {
   if (imageCount <= 0) {
-    return hasVideo ? -1 : 0;
+    return hasVideo ? buildVideoDisplayIndex(resolveVideoActiveIndex(activeIndex)) : 0;
   }
 
-  if (activeIndex === -1 && hasVideo) {
-    return -1;
+  if (Number(activeIndex) < 0 && hasVideo) {
+    return buildVideoDisplayIndex(resolveVideoActiveIndex(activeIndex));
   }
 
   return clampImageIndex(activeIndex, imageCount);
+}
+
+function resolveVideoActiveIndex(activeIndex) {
+  const numericIndex = Number(activeIndex);
+  return Number.isFinite(numericIndex) && numericIndex < 0
+    ? Math.max(0, Math.abs(numericIndex) - 1)
+    : 0;
+}
+
+function buildVideoDisplayIndex(videoIndex = 0) {
+  return -1 - Math.max(0, Number(videoIndex) || 0);
 }
 
 export default function ProductGallery({
@@ -52,13 +63,19 @@ export default function ProductGallery({
   getImageUrl,
   productName,
   videoUrl,
+  videoUrls,
   primaryDisplayImage = null,
   showSingleThumbnail = false,
 }) {
   const normalizedImages = Array.isArray(images) ? images.filter(Boolean) : [];
-  const embedUrl = resolveVideoEmbedUrl(videoUrl);
-  const videoThumbnailUrl = resolveVideoThumbnailUrl(videoUrl);
-  const hasVideo = Boolean(embedUrl);
+  const normalizedVideoUrls = (Array.isArray(videoUrls) && videoUrls.length > 0 ? videoUrls : [videoUrl])
+    .map((url) => String(url || '').trim())
+    .filter((url, index, collection) => url && collection.indexOf(url) === index)
+    .filter((url) => Boolean(resolveVideoEmbedUrl(url)));
+  const activeVideoIndex = Math.min(resolveVideoActiveIndex(activeIndex), Math.max(normalizedVideoUrls.length - 1, 0));
+  const activeVideoUrl = normalizedVideoUrls[activeVideoIndex] || '';
+  const embedUrl = resolveVideoEmbedUrl(activeVideoUrl);
+  const hasVideo = normalizedVideoUrls.length > 0;
   const galleryImages = normalizedImages.length > 0 ? normalizedImages : [{ id: '__fallback-media__', __fallback: true }];
   const requestedDisplayIndex = resolveDisplayIndex(activeIndex, normalizedImages.length, hasVideo);
   const primaryDisplayImageSignature = primaryDisplayImage
@@ -83,8 +100,8 @@ export default function ProductGallery({
   const pendingDragOffsetRef = useRef(0);
   const pendingTransitionRef = useRef(null);
 
-  const isShowingVideo = hasVideo && (displayIndex === -1 || normalizedImages.length === 0);
-  const totalMediaItems = galleryImages.length + (hasVideo ? 1 : 0);
+  const isShowingVideo = hasVideo && (displayIndex < 0 || normalizedImages.length === 0);
+  const totalMediaItems = galleryImages.length + normalizedVideoUrls.length;
   const showThumbnailStrip = totalMediaItems > 1 || (showSingleThumbnail && totalMediaItems === 1);
   const desktopThumbColumns = Math.max(1, Math.min(totalMediaItems, 5));
   const desktopThumbSize = totalMediaItems <= 1
@@ -337,7 +354,7 @@ export default function ProductGallery({
       return undefined;
     }
 
-    const activeThumbKey = isShowingVideo ? 'video' : `image-${Math.max(activeThumbIndex, 0)}`;
+    const activeThumbKey = isShowingVideo ? `video-${activeVideoIndex}` : `image-${Math.max(activeThumbIndex, 0)}`;
     const activeThumb = thumbRefs.current.get(activeThumbKey);
 
     if (!activeThumb) {
@@ -355,7 +372,7 @@ export default function ProductGallery({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThumbIndex, isMobileViewport, isShowingVideo, showThumbnailStrip]);
+  }, [activeThumbIndex, activeVideoIndex, isMobileViewport, isShowingVideo, showThumbnailStrip]);
 
   const setThumbRef = (key) => (node) => {
     if (node) {
@@ -508,10 +525,10 @@ export default function ProductGallery({
     clearGestureMotion();
     setIsPrimaryDisplayOverrideActive(false);
 
-    if (nextIndex === -1 && hasVideo) {
-      displayIndexRef.current = -1;
-      setDisplayIndex(-1);
-      setActiveIndex(-1);
+    if (nextIndex < 0 && hasVideo) {
+      displayIndexRef.current = nextIndex;
+      setDisplayIndex(nextIndex);
+      setActiveIndex(nextIndex);
       return;
     }
 
@@ -610,40 +627,47 @@ export default function ProductGallery({
           role="tablist"
           aria-label="Thư viện media sản phẩm"
         >
-          {hasVideo ? (
-            <button
-              type="button"
-              ref={setThumbRef('video')}
-              className={`${styles.productMediaThumb} ${styles.productMediaThumbVideo} ${isShowingVideo ? styles.productMediaThumbActive : ''}`}
-              data-product-gallery-thumb="video"
-              data-active={isShowingVideo ? 'true' : 'false'}
-              onClick={() => handleMediaSelect(-1)}
-              aria-pressed={isShowingVideo}
-              aria-label="Xem video YouTube"
-            >
-              {videoThumbnailUrl ? (
-                <div className={styles.productMediaThumbPoster}>
-                  <Image
-                    src={videoThumbnailUrl}
-                    alt={`${productName} video thumbnail`}
-                    fill
-                    sizes="88px"
-                    className={styles.productMediaThumbImage}
-                    draggable={false}
-                    unoptimized
-                  />
-                </div>
-              ) : (
-                <div className={styles.productMediaThumbFallback}>
-                  <span className="material-symbols-outlined" aria-hidden="true">smart_display</span>
-                </div>
-              )}
+          {hasVideo ? normalizedVideoUrls.map((candidateVideoUrl, videoIndex) => {
+            const candidateThumbnailUrl = resolveVideoThumbnailUrl(candidateVideoUrl);
+            const isActiveVideo = isShowingVideo && activeVideoIndex === videoIndex;
+            const videoDisplayIndex = buildVideoDisplayIndex(videoIndex);
 
-              <span className={styles.productMediaThumbVideoOverlay}>
-                <span className="material-symbols-outlined" aria-hidden="true">play_circle</span>
-              </span>
-            </button>
-          ) : null}
+            return (
+              <button
+                key={`${candidateVideoUrl}-${videoIndex}`}
+                type="button"
+                ref={setThumbRef(`video-${videoIndex}`)}
+                className={`${styles.productMediaThumb} ${styles.productMediaThumbVideo} ${isActiveVideo ? styles.productMediaThumbActive : ''}`}
+                data-product-gallery-thumb={`video-${videoIndex}`}
+                data-active={isActiveVideo ? 'true' : 'false'}
+                onClick={() => handleMediaSelect(videoDisplayIndex)}
+                aria-pressed={isActiveVideo}
+                aria-label={`Xem video YouTube ${videoIndex + 1}`}
+              >
+                {candidateThumbnailUrl ? (
+                  <div className={styles.productMediaThumbPoster}>
+                    <Image
+                      src={candidateThumbnailUrl}
+                      alt={`${productName} video ${videoIndex + 1} thumbnail`}
+                      fill
+                      sizes="88px"
+                      className={styles.productMediaThumbImage}
+                      draggable={false}
+                      unoptimized
+                    />
+                  </div>
+                ) : (
+                  <div className={styles.productMediaThumbFallback}>
+                    <span className="material-symbols-outlined" aria-hidden="true">smart_display</span>
+                  </div>
+                )}
+
+                <span className={styles.productMediaThumbVideoOverlay}>
+                  <span className="material-symbols-outlined" aria-hidden="true">play_circle</span>
+                </span>
+              </button>
+            );
+          }) : null}
 
           {galleryImages.map((image, index) => {
             const isActive = index === activeThumbIndex;

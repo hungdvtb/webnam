@@ -2897,7 +2897,7 @@ class ProductController extends Controller
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
@@ -5265,7 +5265,7 @@ class ProductController extends Controller
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
                 'supplier_id', 'inventory_unit_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description'
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description'
             ])
             ->withCount('suppliers')
             ->with([
@@ -8461,6 +8461,78 @@ class ProductController extends Controller
         return $normalized;
     }
 
+    protected function normalizeVideoUrlsPayload($rawValue, ?string $legacyVideoUrl = null): array
+    {
+        if (is_string($rawValue)) {
+            $trimmed = trim($rawValue);
+            if ($trimmed !== '' && str_starts_with($trimmed, '[')) {
+                $decoded = json_decode($trimmed, true);
+                $rawValue = is_array($decoded) ? $decoded : [];
+            } elseif ($trimmed !== '') {
+                $rawValue = preg_split('/\r\n|\r|\n/', $trimmed) ?: [];
+            } else {
+                $rawValue = [];
+            }
+        }
+
+        $items = is_array($rawValue) ? $rawValue : [];
+        if (empty($items) && filled($legacyVideoUrl)) {
+            $items = [$legacyVideoUrl];
+        }
+
+        $seen = [];
+        return collect($items)
+            ->map(function ($item, int $index) {
+                $title = '';
+                if (is_array($item)) {
+                    $title = trim((string) ($item['title'] ?? $item['name'] ?? ''));
+                    $item = $item['url'] ?? $item['video_url'] ?? '';
+                }
+
+                $url = $this->normalizeVideoUrl(is_string($item) ? $item : (string) $item);
+                if (!$url) {
+                    return null;
+                }
+
+                return [
+                    'title' => $title !== '' ? $title : 'Video ' . ($index + 1),
+                    'url' => $url,
+                ];
+            })
+            ->filter()
+            ->filter(function (array $video) use (&$seen) {
+                $key = Str::lower($video['url']);
+                if (isset($seen[$key])) {
+                    return false;
+                }
+
+                $seen[$key] = true;
+                return true;
+            })
+            ->values()
+            ->all();
+    }
+
+    protected function prepareVideoUrlsForPersistence(Request $request, array &$validated): void
+    {
+        if ($request->has('video_urls')) {
+            $videoUrls = $this->normalizeVideoUrlsPayload(
+                $request->input('video_urls'),
+                $request->input('video_url')
+            );
+
+            $validated['video_urls'] = !empty($videoUrls) ? $videoUrls : null;
+            $validated['video_url'] = $videoUrls[0]['url'] ?? null;
+            return;
+        }
+
+        if ($request->has('video_url') || array_key_exists('video_url', $validated)) {
+            $videoUrl = $this->normalizeVideoUrl($validated['video_url'] ?? null);
+            $validated['video_url'] = $videoUrl;
+            $validated['video_urls'] = $videoUrl ? [['title' => 'Video 1', 'url' => $videoUrl]] : null;
+        }
+    }
+
     protected function normalizeAdditionalInfoItem($item, string $attribute = 'additional_info'): ?array
     {
         if (is_object($item)) {
@@ -8913,6 +8985,7 @@ class ProductController extends Controller
             'additional_info' => 'nullable',
             'status' => 'nullable|boolean',
             'video_url' => 'nullable|string|max:2048',
+            'video_urls' => 'nullable',
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
@@ -8928,6 +9001,9 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
+            'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
+            'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
+            'grouped_items.*.option_video_source' => 'nullable|string|max:32',
             'grouped_items.*.is_default' => 'nullable|boolean',
             'grouped_items.*.price' => 'nullable|numeric|min:0',
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
@@ -8966,7 +9042,7 @@ class ProductController extends Controller
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
         );
-        $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
+        $this->prepareVideoUrlsForPersistence($request, $validated);
 
         $categoryIds = $request->boolean('clear_category_ids')
             ? []
@@ -9072,6 +9148,9 @@ class ProductController extends Controller
                             'position' => $idx,
                             'option_title' => $item['option_title'] ?? null,
                             'option_post_id' => $item['option_post_id'] ?? null,
+                            'option_image_url' => $item['option_image_url'] ?? null,
+                            'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
+                            'option_video_source' => $item['option_video_source'] ?? null,
                             'is_default' => $item['is_default'] ?? false,
                             'variant_id' => $item['variant_id'] ?? null,
                             'price' => $item['price'] ?? null,
@@ -9564,6 +9643,7 @@ class ProductController extends Controller
             'specifications' => 'nullable|string',
             'additional_info' => 'nullable',
             'video_url' => 'nullable|string|max:2048',
+            'video_urls' => 'nullable',
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
@@ -9580,6 +9660,9 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
+            'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
+            'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
+            'grouped_items.*.option_video_source' => 'nullable|string|max:32',
             'grouped_items.*.is_default' => 'nullable|boolean',
             'grouped_items.*.price' => 'nullable|numeric|min:0',
             'grouped_items.*.cost_price' => 'nullable|numeric|min:0',
@@ -9655,9 +9738,7 @@ class ProductController extends Controller
             );
         }
 
-        if ($request->has('video_url') || array_key_exists('video_url', $validated)) {
-            $validated['video_url'] = $this->normalizeVideoUrl($validated['video_url'] ?? null);
-        }
+        $this->prepareVideoUrlsForPersistence($request, $validated);
 
         $resolvedType = $validated['type'] ?? $product->type;
         if ($resolvedType === 'configurable' && $product->type !== 'configurable') {
@@ -9808,6 +9889,9 @@ class ProductController extends Controller
                     'position' => $idx,
                     'option_title' => $item['option_title'] ?? null,
                     'option_post_id' => $item['option_post_id'] ?? null,
+                    'option_image_url' => $item['option_image_url'] ?? null,
+                    'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
+                    'option_video_source' => $item['option_video_source'] ?? null,
                     'is_default' => $item['is_default'] ?? false,
                     'variant_id' => $item['variant_id'] ?? null,
                     'price' => $item['price'] ?? null,
@@ -10083,6 +10167,9 @@ class ProductController extends Controller
                         'is_required' => $bundleItem->pivot->is_required ?? true,
                         'option_title' => $bundleItem->pivot->option_title ?? null,
                         'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
+                        'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
+                        'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
+                        'option_video_source' => $bundleItem->pivot->option_video_source ?? null,
                         'is_default' => $bundleItem->pivot->is_default ?? false,
                         'variant_id' => $bundleItem->pivot->variant_id ?? null,
                         'price' => $bundleItem->pivot->price ?? null,
@@ -10209,6 +10296,9 @@ class ProductController extends Controller
                     'is_required' => $bundleItem->pivot->is_required ?? true,
                     'option_title' => $bundleItem->pivot->option_title ?? null,
                     'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
+                    'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
+                    'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
+                    'option_video_source' => $bundleItem->pivot->option_video_source ?? null,
                     'is_default' => $bundleItem->pivot->is_default ?? false,
                     'variant_id' => $bundleItem->pivot->variant_id ?? null,
                     'price' => $bundleItem->pivot->price ?? null,

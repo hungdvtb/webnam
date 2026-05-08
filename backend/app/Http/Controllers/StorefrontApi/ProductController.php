@@ -18,6 +18,23 @@ use Illuminate\Support\Str;
 class ProductController extends Controller
 {
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
+    private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
+
+    private function calculateFullBundleDiscountedPrice(float $totalPrice): array
+    {
+        $normalizedTotal = max(round($totalPrice, 2), 0);
+        $baseDiscountAmount = $normalizedTotal > 0
+            ? round($normalizedTotal * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
+            : 0.0;
+        $subtotalAfterBaseDiscount = max($normalizedTotal - $baseDiscountAmount, 0);
+        $discountedPrice = floor($subtotalAfterBaseDiscount / self::BUNDLE_TOTAL_ROUNDING_UNIT) * self::BUNDLE_TOTAL_ROUNDING_UNIT;
+        $discountAmount = max($normalizedTotal - $discountedPrice, 0);
+
+        return [
+            'discount_amount' => $discountAmount,
+            'discounted_price' => $discountedPrice,
+        ];
+    }
 
     private function normalizeBundleOptionKey($optionPostId, ?string $optionTitle): string
     {
@@ -463,6 +480,20 @@ class ProductController extends Controller
         return $this->mapPostPrimaryImage($optionPost);
     }
 
+    private function mapBundleOptionImageUrl(?string $imageUrl): ?array
+    {
+        $normalizedImageUrl = trim((string) $imageUrl);
+        if ($normalizedImageUrl === '') {
+            return null;
+        }
+
+        return [
+            'url' => $normalizedImageUrl,
+            'path' => $normalizedImageUrl,
+            'image_url' => $normalizedImageUrl,
+        ];
+    }
+
     private function buildBundleOptionCatalog(Collection $bundleProducts, Collection $variantMap, Collection $optionPosts): array
     {
         return $bundleProducts->mapWithKeys(function (Product $product) use ($variantMap, $optionPosts) {
@@ -499,7 +530,8 @@ class ProductController extends Controller
             $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
 
             if (!isset($catalog[$optionKey])) {
-                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost);
+                $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
+                    ?? $this->resolveBundleOptionPrimaryImage($optionPost);
                 $displayName = $optionTitle !== ''
                     ? $optionTitle
                     : (Str::squish((string) ($optionPost?->title ?? '')) ?: $bundleItem->name);
@@ -535,7 +567,8 @@ class ProductController extends Controller
                 ->all();
 
             if (!$catalog[$optionKey]['primary_image']) {
-                $displayImage = $this->resolveBundleOptionPrimaryImage($optionPost);
+                $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
+                    ?? $this->resolveBundleOptionPrimaryImage($optionPost);
                 $catalog[$optionKey]['primary_image'] = $displayImage;
                 $catalog[$optionKey]['main_image'] = $this->extractImageUrl($displayImage);
             }
@@ -553,10 +586,9 @@ class ProductController extends Controller
                 $basePrice = $totalPrice;
             }
 
-            $discountAmount = $totalPrice > 0
-                ? round($totalPrice * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
-                : 0.0;
-            $discountedPrice = max($totalPrice - $discountAmount, 0);
+            $discountedPricing = $this->calculateFullBundleDiscountedPrice($totalPrice);
+            $discountAmount = $discountedPricing['discount_amount'];
+            $discountedPrice = $discountedPricing['discounted_price'];
 
             $catalog[$optionKey]['price'] = $totalPrice;
             $catalog[$optionKey]['current_price'] = $discountedPrice;
@@ -1201,6 +1233,7 @@ class ProductController extends Controller
                 ->get(['id', 'name', 'code', 'frontend_type']);
             
             $responseData = $product->toArray();
+            $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
                     ->map(function (array $item) use ($bundleOptionCatalog, $bundleOptionPosts) {

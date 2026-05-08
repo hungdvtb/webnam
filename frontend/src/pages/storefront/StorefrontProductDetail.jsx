@@ -67,33 +67,6 @@ const isRenderableMediaUrl = (value) => {
     return normalized.startsWith('/') && normalized.length > 1;
 };
 
-const extractRenderableImages = (entity) => {
-    const images = Array.isArray(entity?.images)
-        ? sortImagesByPrimary(entity.images)
-            .map((image, index) => ({
-                id: image.id || `${entity?.id || 'image'}-${index}`,
-                url: resolveImageObjectUrl(image, 'large', entity?.main_image || ''),
-                is_primary: Boolean(image.is_primary),
-            }))
-            .filter((image) => isRenderableMediaUrl(image.url))
-        : [];
-
-    if (images.length > 0) {
-        return images;
-    }
-
-    const primaryUrl = resolveEntityImageUrl(entity, 'large', entity?.main_image || '');
-    if (isRenderableMediaUrl(primaryUrl)) {
-        return [{
-            id: entity?.primary_image?.id || entity?.id || 0,
-            url: primaryUrl,
-            is_primary: true,
-        }];
-    }
-
-    return [];
-};
-
 const normalizeAdditionalInfo = (rawValue) => {
     if (!rawValue) {
         return [];
@@ -233,8 +206,23 @@ const getYoutubeId = (url) => {
     return match ? match[1] : null;
 };
 
-const getVideoMediaItem = (videoUrl, fallbackThumbnail) => {
-    const normalizedUrl = String(videoUrl || '').trim();
+const normalizeVideoSource = (video) => {
+    if (video && typeof video === 'object') {
+        return {
+            url: String(video.url || video.video_url || video.src || '').trim(),
+            title: String(video.title || video.name || '').trim(),
+        };
+    }
+
+    return {
+        url: String(video || '').trim(),
+        title: '',
+    };
+};
+
+const getVideoMediaItem = (video, fallbackThumbnail, index = 0) => {
+    const source = normalizeVideoSource(video);
+    const normalizedUrl = source.url;
 
     if (!normalizedUrl) {
         return null;
@@ -243,44 +231,71 @@ const getVideoMediaItem = (videoUrl, fallbackThumbnail) => {
     const youtubeId = getYoutubeId(normalizedUrl);
     if (youtubeId) {
         return {
-            id: `video-youtube-${youtubeId}`,
+            id: `video-youtube-${youtubeId}-${index}`,
             type: 'video',
             provider: 'youtube',
             embedUrl: `https://www.youtube.com/embed/${youtubeId}?playsinline=1&rel=0&modestbranding=1&enablejsapi=1`,
             thumbnailUrl: `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`,
+            title: source.title,
         };
     }
 
     if (/facebook\.com/i.test(normalizedUrl)) {
         return {
-            id: `video-facebook-${normalizedUrl}`,
+            id: `video-facebook-${index}-${normalizedUrl}`,
             type: 'video',
             provider: 'facebook',
             embedUrl: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(normalizedUrl)}&show_text=0`,
             thumbnailUrl: fallbackThumbnail || FALLBACK_IMAGE,
+            title: source.title,
         };
     }
 
     if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(normalizedUrl)) {
         return {
-            id: `video-file-${normalizedUrl}`,
+            id: `video-file-${index}-${normalizedUrl}`,
             type: 'video',
             provider: 'file',
             url: normalizedUrl,
             thumbnailUrl: fallbackThumbnail || FALLBACK_IMAGE,
+            title: source.title,
         };
     }
 
     return {
-        id: `video-embed-${normalizedUrl}`,
+        id: `video-embed-${index}-${normalizedUrl}`,
         type: 'video',
         provider: 'embed',
         embedUrl: normalizedUrl,
         thumbnailUrl: fallbackThumbnail || FALLBACK_IMAGE,
+        title: source.title,
     };
 };
 
-const buildMediaItems = (product, displayEntity) => {
+const normalizeProductVideos = (entity) => {
+    const declaredVideos = Array.isArray(entity?.video_urls) ? entity.video_urls : [];
+    const legacyVideo = entity?.video_url ? [entity.video_url] : [];
+    const seenUrls = new Set();
+
+    return [...declaredVideos, ...legacyVideo]
+        .map(normalizeVideoSource)
+        .filter((video) => {
+            if (!video.url || seenUrls.has(video.url)) {
+                return false;
+            }
+
+            seenUrls.add(video.url);
+            return true;
+        });
+};
+
+const buildVideoMediaItems = (entity, fallbackThumbnail) => (
+    normalizeProductVideos(entity)
+        .map((video, index) => getVideoMediaItem(video, fallbackThumbnail, index))
+        .filter(Boolean)
+);
+
+const buildMediaItems = (product, displayEntity, videoEntity = product) => {
     const imageItems = normalizeImages(displayEntity || product).map((image) => ({
         id: `image-${image.id}`,
         type: 'image',
@@ -289,49 +304,70 @@ const buildMediaItems = (product, displayEntity) => {
         is_primary: image.is_primary,
     }));
 
-    const videoItem = getVideoMediaItem(product?.video_url, imageItems[0]?.thumbnailUrl);
+    const videoItems = buildVideoMediaItems(videoEntity || product, imageItems[0]?.thumbnailUrl);
 
-    if (!videoItem) {
+    if (videoItems.length === 0) {
         return imageItems;
     }
 
     if (imageItems.length === 0) {
-        return [videoItem];
+        return videoItems;
     }
 
     const [primaryImage, ...remainingImages] = imageItems;
-    return [primaryImage, videoItem, ...remainingImages];
+    return [primaryImage, ...videoItems, ...remainingImages];
 };
 
-const buildBundleMobileMediaItems = (product, selectionRows) => {
-    const productImages = extractRenderableImages(product);
-    const bundleImages = (Array.isArray(selectionRows) ? selectionRows : [])
-        .flatMap((item) => extractRenderableImages(item?.selectedVariant || item));
+const resolveBundleOptionImageUrl = (bundleGroup) => {
+    const optionImage = (bundleGroup?.items || [])
+        .map((item) => (
+            item?.option_image_url
+            || item?.option_image?.url
+            || item?.option_image?.image_url
+            || item?.option_image?.path
+            || ''
+        ))
+        .map((url) => resolveMediaUrl(url))
+        .find(isRenderableMediaUrl);
 
-    const dedupedImages = [...productImages, ...bundleImages].filter((image, index, collection) => (
-        collection.findIndex((candidate) => candidate.url === image.url) === index
-    ));
+    return optionImage || '';
+};
 
-    const imageItems = dedupedImages.map((image) => ({
-        id: `image-${image.id}`,
-        type: 'image',
-        url: image.url,
-        thumbnailUrl: image.url,
-        is_primary: image.is_primary,
-    }));
+const resolveBundleOptionVideo = (bundleGroup) => (
+    (bundleGroup?.items || [])
+        .map((item) => item?.option_video_url)
+        .map(normalizeVideoSource)
+        .find((video) => video.url)
+    || null
+);
 
-    const videoItem = getVideoMediaItem(product?.video_url, imageItems[0]?.thumbnailUrl);
+const buildBundleOptionMediaItems = (product, bundleGroup) => {
+    const optionImageUrl = resolveBundleOptionImageUrl(bundleGroup);
+    const imageEntity = optionImageUrl
+        ? {
+            id: `${product?.id || 'bundle'}-${bundleGroup?.key || bundleGroup?.title || 'option'}`,
+            main_image: optionImageUrl,
+            primary_image: {
+                id: `bundle-option-${bundleGroup?.key || bundleGroup?.title || 'image'}`,
+                url: optionImageUrl,
+                image_url: optionImageUrl,
+                large_url: optionImageUrl,
+                thumbnail_url: optionImageUrl,
+            },
+            images: [{
+                id: `bundle-option-${bundleGroup?.key || bundleGroup?.title || 'image'}`,
+                url: optionImageUrl,
+                image_url: optionImageUrl,
+                large_url: optionImageUrl,
+                thumbnail_url: optionImageUrl,
+                is_primary: true,
+            }],
+        }
+        : product;
+    const optionVideo = resolveBundleOptionVideo(bundleGroup);
+    const videoEntity = optionVideo ? { video_urls: [optionVideo] } : product;
 
-    if (!videoItem) {
-        return imageItems.length > 0 ? imageItems : buildMediaItems(product, product);
-    }
-
-    if (imageItems.length === 0) {
-        return [videoItem];
-    }
-
-    const [primaryImage, ...remainingImages] = imageItems;
-    return [primaryImage, videoItem, ...remainingImages];
+    return buildMediaItems(product, imageEntity, videoEntity);
 };
 
 const isAttributeOptionAvailable = (attributeId, optionValue, variants, superAttributes, selectedAttributes) => (
@@ -516,6 +552,10 @@ const ProductMediaGallery = ({ items, title }) => {
                             <img
                                 src={activeItem.url || FALLBACK_IMAGE}
                                 alt={title}
+                                onError={(event) => {
+                                    event.currentTarget.onerror = null;
+                                    event.currentTarget.src = FALLBACK_IMAGE;
+                                }}
                                 className="h-full w-full object-cover"
                             />
                         </button>
@@ -576,6 +616,10 @@ const ProductMediaGallery = ({ items, title }) => {
                                 <img
                                     src={item.thumbnailUrl || item.url || FALLBACK_IMAGE}
                                     alt=""
+                                    onError={(event) => {
+                                        event.currentTarget.onerror = null;
+                                        event.currentTarget.src = FALLBACK_IMAGE;
+                                    }}
                                     className="h-full w-full object-cover"
                                 />
                                 {item.type === 'video' ? (
@@ -601,6 +645,10 @@ const ProductMediaGallery = ({ items, title }) => {
                     <img
                         src={activeItem.url || FALLBACK_IMAGE}
                         alt={title}
+                        onError={(event) => {
+                            event.currentTarget.onerror = null;
+                            event.currentTarget.src = FALLBACK_IMAGE;
+                        }}
                         className="max-h-[92vh] max-w-[92vw] object-contain"
                     />
                 </div>
@@ -1038,9 +1086,11 @@ const StorefrontProductDetail = () => {
     const galleryDisplayEntity = product.type === 'bundle'
         ? product
         : (hasCustomerSelectedVariant ? (displayVariant || product) : product);
-    const mediaItems = buildMediaItems(product, galleryDisplayEntity);
+    const mediaItems = product.type === 'bundle'
+        ? buildBundleOptionMediaItems(product, activeBundleGroup)
+        : buildMediaItems(product, galleryDisplayEntity);
     const mobileMediaItems = product.type === 'bundle'
-        ? buildBundleMobileMediaItems(product, activeBundleSelectionRows)
+        ? mediaItems
         : mediaItems;
     const rawCurrentPrice = product.type === 'bundle'
         ? (activeBundleSelectionRows.length > 0 ? bundleCurrentTotal : Number(product.current_price ?? product.price ?? 0))

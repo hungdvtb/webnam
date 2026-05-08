@@ -221,6 +221,70 @@ const appendProductImageSubmissionPayload = (formData, imagePayload) => {
     imagePayload.files.forEach((file) => formData.append('images[]', file));
 };
 
+const normalizeProductVideoItems = (items = [], fallbackUrl = '') => {
+    const sourceItems = Array.isArray(items) ? items : [];
+    const mappedItems = sourceItems.map((item, index) => {
+        if (item && typeof item === 'object') {
+            return {
+                title: String(item.title ?? item.name ?? ''),
+                url: String(item.url ?? item.video_url ?? ''),
+            };
+        }
+
+        return {
+            title: `Video ${index + 1}`,
+            url: String(item ?? ''),
+        };
+    });
+
+    if (mappedItems.length === 0 && fallbackUrl) {
+        mappedItems.push({ title: 'Video 1', url: String(fallbackUrl) });
+    }
+
+    const seen = new Set();
+    return mappedItems
+        .map((item, index) => ({
+            title: item.title || `Video ${index + 1}`,
+            url: item.url,
+        }))
+        .filter((item) => {
+            if (!item.url) {
+                return false;
+            }
+
+            const key = item.url.toLowerCase();
+            if (seen.has(key)) {
+                return false;
+            }
+
+            seen.add(key);
+            return true;
+        });
+};
+
+const normalizeProductVideoDraftItems = (items = [], fallbackUrl = '') => {
+    const sourceItems = Array.isArray(items) ? items : [];
+    const mappedItems = sourceItems.map((item, index) => {
+        if (item && typeof item === 'object') {
+            return {
+                title: String(item.title ?? item.name ?? '').trim(),
+                url: String(item.url ?? item.video_url ?? '').trim(),
+            };
+        }
+
+        return {
+            title: `Video ${index + 1}`,
+            url: String(item ?? '').trim(),
+        };
+    });
+
+    if (mappedItems.length === 0 && fallbackUrl) {
+        mappedItems.push({ title: 'Video 1', url: String(fallbackUrl).trim() });
+    }
+
+    return mappedItems;
+};
+
 const buildVariantImagePickerPosition = (anchorRect, panelWidth = 336, panelHeight = 356) => {
     const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -2046,6 +2110,7 @@ const ProductForm = () => {
         super_attribute_ids: [],
         custom_attributes: {},
         video_url: '',
+        video_urls: [],
         slug: '',
         additional_info: [], // [{row_id, title, display_text, post_id, post_title, post_slug}]
         bundle_title: '',
@@ -2115,6 +2180,7 @@ const ProductForm = () => {
     const [bundleOptions, setBundleOptions] = useState([]); // [{ id, title, post_id, post_title, items: [] }]
     const [showBundleSearch, setShowBundleSearch] = useState(null); // optionId
     const [isSortingBundle, setIsSortingBundle] = useState({}); // { optionId: boolean }
+    const [bundleOptionVideoPicker, setBundleOptionVideoPicker] = useState(null);
     const [bundleItemVariants, setBundleItemVariants] = useState({}); // { productId: [variants] }
     const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
     const [expandedBundleOptions, setExpandedBundleOptions] = useState({});
@@ -2130,11 +2196,18 @@ const ProductForm = () => {
         items: [],
         positionDrafts: {},
     });
+    const [bundleOptionImagePicker, setBundleOptionImagePicker] = useState({
+        optionId: null,
+        top: 0,
+        left: 0,
+        width: 380,
+    });
     const bundleOptionCardRefs = useRef({});
     const bundleOptionTitleInputRefs = useRef({});
     const pendingCopiedBundleOptionIdRef = useRef(null);
     const blogSearchRequestRef = useRef({});
     const variantImageInputRefs = useRef({});
+    const bundleOptionImagePickerRef = useRef(null);
     const variantImagePickerRef = useRef(null);
     const variantImagePickerAnchorRef = useRef(null);
     const variantImageCellClickTimeoutRef = useRef(null);
@@ -2776,6 +2849,8 @@ const ProductForm = () => {
                     ...item,
                     option_title: option.title,
                     option_post_id: option.post_id || '',
+                    option_video_url: option.video_url || '',
+                    option_video_source: option.video_source || '',
                 }))
             ));
         }
@@ -3102,6 +3177,28 @@ const ProductForm = () => {
         })),
         [images]
     );
+    const bundleOptionImageLibraryItems = useMemo(() => {
+        const seenUrls = new Set();
+        return variantImageLibraryItems
+            .map((image) => ({
+                ...image,
+                library_source: 'product',
+            }))
+            .filter((image) => {
+                const imageUrl = String(image?.image_url || '').trim();
+                if (!imageUrl || seenUrls.has(imageUrl)) {
+                    return false;
+                }
+
+                seenUrls.add(imageUrl);
+                return true;
+            });
+    }, [variantImageLibraryItems]);
+    const bundleOptionImagePickerOption = useMemo(() => (
+        bundleOptionImagePicker.optionId === null
+            ? null
+            : (bundleOptions.find((option) => option.id === bundleOptionImagePicker.optionId) || null)
+    ), [bundleOptionImagePicker.optionId, bundleOptions]);
     const variantImagePickerVariant = useMemo(() => (
         variantImagePicker.index === null ? null : (variants[variantImagePicker.index] || null)
     ), [variantImagePicker.index, variants]);
@@ -3139,6 +3236,41 @@ const ProductForm = () => {
         setLightboxImage(null);
     }, []);
 
+    const closeBundleOptionImagePicker = useCallback(() => {
+        setBundleOptionImagePicker((prev) => ({
+            optionId: null,
+            top: 0,
+            left: 0,
+            width: prev.width || 380,
+        }));
+    }, []);
+
+    const openBundleOptionImagePicker = useCallback((optionId, anchorElement) => {
+        const nextPosition = buildVariantImagePickerPosition(
+            anchorElement?.getBoundingClientRect?.(),
+            380,
+            492,
+        );
+
+        setBundleOptionImagePicker((prev) => (
+            prev.optionId === optionId
+                ? { optionId: null, top: 0, left: 0, width: prev.width || nextPosition.width }
+                : { optionId, ...nextPosition }
+        ));
+    }, []);
+
+    const handleSelectBundleOptionLibraryImage = useCallback((optionId, image) => {
+        const imageUrl = String(image?.image_url || image?.url || image?.path || '').trim();
+        if (!imageUrl) {
+            return;
+        }
+
+        setBundleOptions((prev) => prev.map((option) => (
+            option.id === optionId ? { ...option, image_url: imageUrl } : option
+        )));
+        closeBundleOptionImagePicker();
+    }, [closeBundleOptionImagePicker]);
+
     useEffect(() => {
         setSelectedVariantIds((prev) => {
             if (prev.length === 0) return prev;
@@ -3163,6 +3295,40 @@ const ProductForm = () => {
             setVariantQuickUpdateScope('all');
         }
     }, [selectedVariantCount, variantQuickUpdateScope]);
+
+    useEffect(() => {
+        if (bundleOptionImagePicker.optionId === null) {
+            return undefined;
+        }
+
+        const handlePointerDown = (event) => {
+            const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+            if (
+                bundleOptionImagePickerRef.current?.contains(event.target)
+                || eventPath.includes(bundleOptionImagePickerRef.current)
+            ) {
+                return;
+            }
+
+            closeBundleOptionImagePicker();
+        };
+
+        const handleEscape = (event) => {
+            if (event.key === 'Escape') {
+                closeBundleOptionImagePicker();
+            }
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleEscape);
+        window.addEventListener('resize', closeBundleOptionImagePicker);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleEscape);
+            window.removeEventListener('resize', closeBundleOptionImagePicker);
+        };
+    }, [bundleOptionImagePicker.optionId, closeBundleOptionImagePicker]);
 
     const closeVariantImagePicker = useCallback(() => {
         variantImagePickerAnchorRef.current = null;
@@ -4121,6 +4287,7 @@ const ProductForm = () => {
             }));
             const resolvedCategoryIds = getProductCategoryIds(data);
             const resolvedStockQuantity = isDuplicate ? 0 : (data.stock_quantity ?? '');
+            const resolvedVideoUrls = normalizeProductVideoItems(data.video_urls, data.video_url || '');
             initialStockQuantityRef.current = normalizeStockQuantityComparableValue(resolvedStockQuantity);
             const loadedFormData = {
                 type: data.type || 'simple',
@@ -4183,6 +4350,8 @@ const ProductForm = () => {
                     quantity: item.pivot?.quantity ?? 1,
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
+                    option_video_url: item.pivot?.option_video_url || '',
+                    option_video_source: item.pivot?.option_video_source || '',
                     is_default: !!(item.pivot?.is_default),
                     variant_id: item.pivot?.variant_id || null,
                     image_url: resolveAdminImageUrl(item.images?.find(img => img.is_primary) || item.images?.[0], '')
@@ -4198,7 +4367,8 @@ const ProductForm = () => {
                     acc[curr.attribute_id] = val;
                     return acc;
                 }, {}),
-                video_url: data.video_url || '',
+                video_url: resolvedVideoUrls[0]?.url || '',
+                video_urls: resolvedVideoUrls,
                 slug: isDuplicate ? '' : (data.slug || ''),
                 additional_info: (() => {
                     if (!data.additional_info) return [];
@@ -4234,11 +4404,18 @@ const ProductForm = () => {
                         optionsMap[title] = {
                             post_id: item.pivot?.option_post_id || '',
                             post_title: item.pivot?.option_post_title || '',
+                            video_url: item.pivot?.option_video_url || '',
+                            video_source: item.pivot?.option_video_source || '',
                             items: []
                         };
                     } else if (!optionsMap[title].post_id && item.pivot?.option_post_id) {
                         optionsMap[title].post_id = item.pivot.option_post_id;
                         optionsMap[title].post_title = item.pivot?.option_post_title || '';
+                    }
+
+                    if (!optionsMap[title].video_url && item.pivot?.option_video_url) {
+                        optionsMap[title].video_url = item.pivot.option_video_url;
+                        optionsMap[title].video_source = item.pivot?.option_video_source || '';
                     }
 
                         optionsMap[title].items.push({
@@ -4269,6 +4446,8 @@ const ProductForm = () => {
                     title: title ?? '',
                     post_id: optionData.post_id || '',
                     post_title: optionData.post_title || '',
+                    video_url: optionData.video_url || '',
+                    video_source: optionData.video_source || '',
                     items: optionData.items
                 })));
 
@@ -5741,6 +5920,8 @@ const ProductForm = () => {
             title: 'Tùy chọn mới',
             post_id: '',
             post_title: '',
+            video_url: '',
+            video_source: '',
             items: []
         }, ...prev]);
     };
@@ -5857,9 +6038,109 @@ const ProductForm = () => {
         setBundleOptions(prev => prev.map(opt => opt.id === optionId ? { ...opt, image_url: '' } : opt));
     }, []);
 
+    const syncParentVideoUrls = useCallback((updater) => {
+        setFormData((prev) => {
+            const currentVideos = normalizeProductVideoDraftItems(prev.video_urls, prev.video_url);
+            const nextVideos = typeof updater === 'function' ? updater(currentVideos) : updater;
+            const draftVideos = normalizeProductVideoDraftItems(nextVideos);
+            const firstVideoUrl = draftVideos.find((video) => String(video.url || '').trim())?.url || '';
+
+            return {
+                ...prev,
+                video_urls: draftVideos,
+                video_url: firstVideoUrl,
+            };
+        });
+    }, []);
+
+    const handleAddParentVideo = useCallback(() => {
+        syncParentVideoUrls((videos) => [...videos, { title: '', url: '' }]);
+    }, [syncParentVideoUrls]);
+
+    const handleUpdateParentVideo = useCallback((index, field, value) => {
+        syncParentVideoUrls((videos) => {
+            const nextVideos = videos.length > 0 ? [...videos] : [{ title: '', url: '' }];
+            nextVideos[index] = {
+                ...(nextVideos[index] || { title: '', url: '' }),
+                [field]: value,
+            };
+            return nextVideos;
+        });
+    }, [syncParentVideoUrls]);
+
+    const handleParentVideoTitleKeyDown = useCallback((event, index) => {
+        if (event.key !== ' ' && event.key !== 'Spacebar') {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const input = event.currentTarget;
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        const nextValue = `${input.value.slice(0, start)} ${input.value.slice(end)}`;
+        handleUpdateParentVideo(index, 'title', nextValue);
+
+        window.requestAnimationFrame(() => {
+            input.setSelectionRange(start + 1, start + 1);
+        });
+    }, [handleUpdateParentVideo]);
+
+    const handleRemoveParentVideo = useCallback((index) => {
+        syncParentVideoUrls((videos) => videos.filter((_, videoIndex) => videoIndex !== index));
+    }, [syncParentVideoUrls]);
+
+    const moveParentVideo = useCallback((index, direction) => {
+        syncParentVideoUrls((videos) => {
+            const targetIndex = index + direction;
+            if (targetIndex < 0 || targetIndex >= videos.length) {
+                return videos;
+            }
+
+            const nextVideos = [...videos];
+            [nextVideos[index], nextVideos[targetIndex]] = [nextVideos[targetIndex], nextVideos[index]];
+            return nextVideos;
+        });
+    }, [syncParentVideoUrls]);
+
+    const handleChangeBundleOptionVideo = useCallback((optionId, source, url = '') => {
+        const normalizedUrl = String(url || '').trim();
+        setBundleOptions((prev) => prev.map((option) => (
+            option.id === optionId
+                ? {
+                    ...option,
+                    video_source: source === 'parent' ? 'parent' : '',
+                    video_url: source === 'parent' ? normalizedUrl : '',
+                }
+                : option
+        )));
+        setBundleOptionVideoPicker(null);
+    }, []);
+
+    const handleUpdateBundleOptionCustomVideo = useCallback((optionId, url) => {
+        setBundleOptions((prev) => prev.map((option) => (
+            option.id === optionId
+                ? { ...option, video_source: 'custom', video_url: url }
+                : option
+        )));
+    }, []);
+
+    const getBundleOptionVideoLabel = useCallback((option) => {
+        if (!option?.video_url) {
+            return 'Dùng video bundle cha';
+        }
+
+        const parentVideo = normalizeProductVideoItems(formData.video_urls, formData.video_url)
+            .find((video) => video.url === option.video_url);
+
+        return parentVideo?.title || 'Video riêng';
+    }, [formData.video_url, formData.video_urls]);
+
 
     const handleRemoveBundleOption = (optionId) => {
         setBundleOptions(prev => prev.filter(o => o.id !== optionId));
+        setBundleOptionVideoPicker((prev) => (prev === optionId ? null : prev));
         setShowBundleSearch((prev) => (prev === optionId ? null : prev));
         setIsSortingBundle((prev) => {
             const next = { ...prev };
@@ -6329,6 +6610,12 @@ const ProductForm = () => {
                         if (item.option_post_id) {
                             submitData.append(`grouped_items[${idx}][option_post_id]`, item.option_post_id);
                         }
+                        if (item.option_video_url) {
+                            submitData.append(`grouped_items[${idx}][option_video_url]`, item.option_video_url);
+                        }
+                        if (item.option_video_source) {
+                            submitData.append(`grouped_items[${idx}][option_video_source]`, item.option_video_source);
+                        }
                         submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][price]`, item.price || 0);
                         if (item.cost_price !== undefined && item.cost_price !== null) {
@@ -6341,6 +6628,8 @@ const ProductForm = () => {
                             submitData.append(`grouped_items[${idx}][variant_id]`, item.variant_id);
                         }
                     });
+                } else if (key === 'video_urls') {
+                    submitData.append(key, JSON.stringify(normalizeProductVideoItems(val, formData.video_url)));
                 } else if (key === 'specifications') {
                     submitData.append(key, JSON.stringify(normalizeSpecificationRows(val)));
                 } else if (key === 'additional_info') {
@@ -8432,7 +8721,7 @@ const ProductForm = () => {
                                             <div
                                                 key={option.id}
                                                 ref={(node) => registerBundleOptionCardRef(option.id, node)}
-                                                className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${showBundleSearch === option.id ? 'relative z-[80]' : 'relative z-10'}`}
+                                                className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${(showBundleSearch === option.id || bundleOptionVideoPicker === option.id || bundleOptionImagePicker.optionId === option.id) ? 'relative z-[140]' : 'relative z-10'}`}
                                             >
                                                 <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
                                                      <div
@@ -8483,24 +8772,83 @@ const ProductForm = () => {
                                                                  onChange={(e) => handleUploadBundleOptionImageSafe(option.id, e)}
                                                              />
                                                              {option.image_url ? (
-                                                                 <div className="relative group/optimg size-10 rounded-sm border border-gold/20 overflow-hidden shadow-sm">
+                                                                 <div
+                                                                     role="button"
+                                                                     tabIndex={0}
+                                                                     onClick={(e) => openBundleOptionImagePicker(option.id, e.currentTarget)}
+                                                                     onKeyDown={(e) => {
+                                                                         if (e.key === 'Enter' || e.key === ' ') {
+                                                                             e.preventDefault();
+                                                                             openBundleOptionImagePicker(option.id, e.currentTarget);
+                                                                         }
+                                                                     }}
+                                                                     className="relative group/optimg size-10 cursor-pointer rounded-sm border border-gold/20 overflow-hidden shadow-sm"
+                                                                     title="Chọn ảnh từ gallery sản phẩm"
+                                                                 >
                                                                      <img src={option.image_url} alt="" className="size-full object-cover" />
                                                                      <button
                                                                         type="button"
-                                                                        onClick={() => handleRemoveBundleOptionImage(option.id)}
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleRemoveBundleOptionImage(option.id);
+                                                                        }}
                                                                         className="absolute inset-0 flex items-center justify-center bg-black/40 text-white opacity-0 group-hover/optimg:opacity-100 transition-opacity"
                                                                      >
                                                                         <span className="material-symbols-outlined text-[16px]">close</span>
                                                                      </button>
                                                                  </div>
                                                              ) : (
-                                                                 <label
-                                                                     htmlFor={`bundle-option-image-${option.id}`}
+                                                                 <button
+                                                                     type="button"
+                                                                     onClick={(e) => openBundleOptionImagePicker(option.id, e.currentTarget)}
                                                                      className="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-sm bg-gold/10 text-gold transition-all hover:bg-gold/20"
                                                                      title="Thêm ảnh tùy chọn"
                                                                  >
                                                                      <span className="material-symbols-outlined text-[20px]">add_a_photo</span>
-                                                                 </label>
+                                                                 </button>
+                                                             )}
+                                                         </div>
+                                                         <div className="relative">
+                                                             <button
+                                                                type="button"
+                                                                onClick={() => setBundleOptionVideoPicker((prev) => (prev === option.id ? null : option.id))}
+                                                                className={`inline-flex h-10 w-10 items-center justify-center rounded-sm text-[0px] transition-all ${option.video_url ? 'bg-red-600 text-white shadow-sm' : 'bg-red-600/5 text-red-600 hover:bg-red-600/10'}`}
+                                                                title={getBundleOptionVideoLabel(option)}
+                                                                aria-label="Chọn video cho tùy chọn"
+                                                             >
+                                                                <span className="material-symbols-outlined text-[18px]">smart_display</span>
+                                                                Chọn video
+                                                             </button>
+                                                             {bundleOptionVideoPicker === option.id && (
+                                                                <div className="absolute right-0 top-full z-[120] mt-2 w-72 rounded-sm border border-gold/20 bg-white p-2 shadow-premium">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => handleChangeBundleOptionVideo(option.id, '', '')}
+                                                                        className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-[12px] font-bold transition hover:bg-gold/10 ${!option.video_url ? 'text-gold' : 'text-primary'}`}
+                                                                    >
+                                                                        <span>Dùng video bundle cha</span>
+                                                                        {!option.video_url && <span className="material-symbols-outlined text-[16px]">check</span>}
+                                                                    </button>
+                                                                    {normalizeProductVideoItems(formData.video_urls, formData.video_url).map((video) => (
+                                                                        <button
+                                                                            key={video.url}
+                                                                            type="button"
+                                                                            onClick={() => handleChangeBundleOptionVideo(option.id, 'parent', video.url)}
+                                                                            className={`flex w-full items-center justify-between rounded-sm px-3 py-2 text-left text-[12px] font-bold transition hover:bg-red-600/5 ${option.video_url === video.url ? 'text-red-600' : 'text-primary'}`}
+                                                                        >
+                                                                            <span className="truncate">{video.title}</span>
+                                                                            {option.video_url === video.url && <span className="material-symbols-outlined text-[16px]">check</span>}
+                                                                        </button>
+                                                                    ))}
+                                                                    <div className="mt-2 border-t border-gold/10 pt-2">
+                                                                        <input
+                                                                            value={option.video_source === 'custom' ? (option.video_url || '') : ''}
+                                                                            onChange={(event) => handleUpdateBundleOptionCustomVideo(option.id, event.target.value)}
+                                                                            placeholder="Nhập link video riêng"
+                                                                            className="w-full rounded-sm border border-gold/20 px-3 py-2 text-[12px] font-bold text-primary outline-none transition focus:border-gold focus:ring-2 focus:ring-gold/10"
+                                                                        />
+                                                                    </div>
+                                                                </div>
                                                              )}
                                                          </div>
                                                          <button
@@ -8713,27 +9061,72 @@ const ProductForm = () => {
                                 )}
                             </div>
 
-                            {/* YouTube Video Link */}
+                            {/* YouTube Video List */}
                             <div className="mb-6 px-1 mt-6">
-                                <Field label="Link Video YouTube (Tùy chọn)" className="border-red-100 bg-red-50/10">
-                                    <div className="flex items-center w-full gap-2 py-1">
-                                        <span className="material-symbols-outlined text-red-600/40 text-[20px]">movie</span>
-                                        <input
-                                            name="video_url"
-                                            value={formData.video_url}
-                                            onChange={handleChange}
-                                            placeholder="VD: https://www.youtube.com/watch?v=..."
-                                            className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[14px] placeholder:text-stone/20"
-                                        />
-                                        {formData.video_url && (
-                                            <div className="flex items-center gap-1 bg-red-600 text-white text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest shadow-sm">
-                                                <span className="material-symbols-outlined text-[12px]">verified</span>
-                                                Sẵn sàng
+                                <Field label="Danh sách video YouTube" className="border-red-100 bg-red-50/10">
+                                    <div className="space-y-3">
+                                        {normalizeProductVideoDraftItems(formData.video_urls, formData.video_url).map((video, videoIndex) => (
+                                            <div key={`product-video-${videoIndex}`} className="grid gap-2 md:grid-cols-[minmax(160px,0.45fr)_minmax(260px,1fr)_auto]">
+                                                <input
+                                                    value={video.title || ''}
+                                                    onChange={(event) => handleUpdateParentVideo(videoIndex, 'title', event.target.value)}
+                                                    onKeyDown={(event) => handleParentVideoTitleKeyDown(event, videoIndex)}
+                                                    placeholder="Tên video"
+                                                    className="w-full rounded-sm border border-gold/15 bg-white px-3 py-2 text-[13px] font-bold text-primary outline-none transition focus:border-gold focus:ring-2 focus:ring-gold/10"
+                                                />
+                                                <input
+                                                    value={video.url || ''}
+                                                    onChange={(event) => handleUpdateParentVideo(videoIndex, 'url', event.target.value)}
+                                                    placeholder="Link video"
+                                                    className="w-full rounded-sm border border-gold/15 bg-white px-3 py-2 text-[13px] font-bold text-primary outline-none transition focus:border-gold focus:ring-2 focus:ring-gold/10"
+                                                />
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => moveParentVideo(videoIndex, -1)}
+                                                        disabled={videoIndex === 0}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-sm bg-stone/5 text-stone transition hover:bg-gold/10 hover:text-gold disabled:cursor-not-allowed disabled:opacity-35"
+                                                        title="Đưa lên"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">keyboard_arrow_up</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => moveParentVideo(videoIndex, 1)}
+                                                        disabled={videoIndex === normalizeProductVideoDraftItems(formData.video_urls, formData.video_url).length - 1}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-sm bg-stone/5 text-stone transition hover:bg-gold/10 hover:text-gold disabled:cursor-not-allowed disabled:opacity-35"
+                                                        title="Đưa xuống"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">keyboard_arrow_down</span>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveParentVideo(videoIndex)}
+                                                        className="inline-flex h-9 w-9 items-center justify-center rounded-sm bg-brick/5 text-brick transition hover:bg-brick hover:text-white"
+                                                        title="Xóa video"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+
+                                        {normalizeProductVideoDraftItems(formData.video_urls, formData.video_url).length === 0 && (
+                                            <div className="rounded-sm border border-dashed border-gold/20 bg-white/60 px-4 py-5 text-center text-[12px] font-bold text-stone/45">
+                                                Chưa có video cho sản phẩm này.
                                             </div>
                                         )}
+
+                                        <button
+                                            type="button"
+                                            onClick={handleAddParentVideo}
+                                            className="inline-flex items-center gap-2 rounded-sm bg-red-600 px-3 py-2 text-[11px] font-black uppercase tracking-widest text-white shadow-sm transition hover:bg-brick"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">add</span>
+                                            Thêm video
+                                        </button>
                                     </div>
                                 </Field>
-                                <p className="text-[10px] text-stone/40 mt-1.5 ml-1 italic">Dán link YouTube vào đây để hiển thị Tab Video trong Gallery sản phẩm ở ngoài trang chủ.</p>
                             </div>
                         </div>
 
@@ -10355,6 +10748,127 @@ const ProductForm = () => {
                             </div>
                         </motion.div>
                     </div>
+                )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+                {bundleOptionImagePicker.optionId !== null && bundleOptionImagePickerOption && (
+                    <motion.div
+                        ref={bundleOptionImagePickerRef}
+                        initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                        transition={{ duration: 0.16, ease: 'easeOut' }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        style={{
+                            top: bundleOptionImagePicker.top,
+                            left: bundleOptionImagePicker.left,
+                            width: bundleOptionImagePicker.width,
+                        }}
+                        className="fixed z-[160] overflow-hidden rounded-sm border border-gold/20 bg-white shadow-[0_28px_60px_rgba(48,33,18,0.24)]"
+                    >
+                        <div className="border-b border-gold/10 bg-[#fcfaf7] px-4 py-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.2em] text-stone/45">Anh tuy chon bundle</p>
+                                    <h4 className="mt-1 truncate text-[14px] font-black text-primary">
+                                        {bundleOptionImagePickerOption.title || 'Tuy chon bundle'}
+                                    </h4>
+                                    <p className="mt-1 text-[11px] text-stone/50">
+                                        Chon anh trong gallery cua san pham bundle nay.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeBundleOptionImagePicker}
+                                    className="shrink-0 text-stone/35 transition-colors hover:text-brick"
+                                    title="Dong bo chon anh"
+                                >
+                                    <span className="material-symbols-outlined text-[20px]">close</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="max-h-[320px] overflow-y-auto bg-white p-3">
+                            {bundleOptionImageLibraryItems.length > 0 ? (
+                                <div className="grid grid-cols-4 gap-2">
+                                    {bundleOptionImageLibraryItems.map((image, imageIndex) => {
+                                        const imageUrl = String(image?.image_url || '').trim();
+                                        const isActive = imageUrl && imageUrl === String(bundleOptionImagePickerOption.image_url || '').trim();
+
+                                        return (
+                                            <button
+                                                key={`${image.library_source || 'product'}-${image.id || imageUrl || imageIndex}`}
+                                                type="button"
+                                                onClick={() => handleSelectBundleOptionLibraryImage(bundleOptionImagePicker.optionId, image)}
+                                                onDoubleClick={(event) => {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    openImageLightbox(imageUrl, image.display_name);
+                                                }}
+                                                className={`group/library relative overflow-hidden rounded-sm border bg-stone/5 text-left transition-all ${isActive ? 'border-primary ring-2 ring-primary/20' : 'border-stone/10 hover:border-gold/40 hover:shadow-sm'}`}
+                                                title={image.display_name}
+                                            >
+                                                <div className="aspect-square overflow-hidden bg-stone/5">
+                                                    {imageUrl ? (
+                                                        <img
+                                                            src={imageUrl}
+                                                            alt={image.display_name}
+                                                            className="size-full object-cover transition-transform duration-300 group-hover/library:scale-105"
+                                                        />
+                                                    ) : (
+                                                        <div className="flex size-full items-center justify-center text-stone/20">
+                                                            <span className="material-symbols-outlined text-[24px]">image</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="border-t border-stone/10 bg-white px-2 py-1.5">
+                                                    <p className="truncate text-[10px] font-bold text-primary">{image.display_name}</p>
+                                                </div>
+                                                {isActive && (
+                                                    <div className="absolute right-1.5 top-1.5 rounded-full bg-primary p-1 text-white shadow-sm">
+                                                        <span className="material-symbols-outlined text-[12px]">check</span>
+                                                    </div>
+                                                )}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="flex h-32 items-center justify-center text-center text-[11px] text-stone/45">
+                                    San pham bundle nay chua co anh trong gallery.
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3 border-t border-stone/10 bg-stone/5 px-4 py-3">
+                            <p className="min-w-0 text-[11px] text-stone/50">
+                                {bundleOptionImageLibraryItems.length} anh trong gallery san pham.
+                            </p>
+                            <div className="flex shrink-0 items-center gap-2">
+                                {bundleOptionImagePickerOption.image_url && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            handleRemoveBundleOptionImage(bundleOptionImagePicker.optionId);
+                                            closeBundleOptionImagePicker();
+                                        }}
+                                        className="inline-flex items-center gap-1.5 rounded-sm border border-stone/15 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-stone/70 transition-all hover:border-brick/30 hover:bg-brick/5 hover:text-brick"
+                                    >
+                                        <span className="material-symbols-outlined text-[14px]">restart_alt</span>
+                                        Xoa anh
+                                    </button>
+                                )}
+                                <label
+                                    htmlFor={`bundle-option-image-${bundleOptionImagePicker.optionId}`}
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm border border-gold/20 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-all hover:border-gold hover:bg-gold/10"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">upload</span>
+                                    Tai anh moi
+                                </label>
+                            </div>
+                        </div>
+                    </motion.div>
                 )}
             </AnimatePresence>
 

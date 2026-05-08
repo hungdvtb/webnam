@@ -344,6 +344,116 @@ class StorefrontController extends Controller
         ])->values()->all();
     }
 
+    protected function mapStorefrontImageUrl(?string $imageUrl): ?array
+    {
+        $normalizedImageUrl = trim((string) $imageUrl);
+
+        if ($normalizedImageUrl === '') {
+            return null;
+        }
+
+        return [
+            'url' => $normalizedImageUrl,
+            'path' => $normalizedImageUrl,
+            'image_url' => $normalizedImageUrl,
+            'thumbnail_url' => $normalizedImageUrl,
+            'medium_url' => $normalizedImageUrl,
+            'large_url' => $normalizedImageUrl,
+            'is_primary' => true,
+        ];
+    }
+
+    protected function collectBundleOptionImages($products): array
+    {
+        $productIds = collect($products)
+            ->filter(function ($product) {
+                $bundleOptionKey = trim((string) ($product->bundle_option_key ?? ''));
+                $bundleOptionTitle = Str::squish((string) ($product->bundle_option_title ?? ''));
+
+                return ($product->item_type ?? '') === 'bundle_option'
+                    || $bundleOptionKey !== ''
+                    || filled($product->bundle_option_post_id ?? null)
+                    || $bundleOptionTitle !== '';
+            })
+            ->pluck('id')
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return [];
+        }
+
+        return Product::query()
+            ->whereIn('id', $productIds->all())
+            ->with('bundleItems')
+            ->get(['id'])
+            ->mapWithKeys(function (Product $product) {
+                $optionImages = [];
+
+                foreach ($product->bundleItems as $bundleItem) {
+                    $optionImage = trim((string) ($bundleItem->pivot?->option_image_url ?? ''));
+
+                    if ($optionImage === '') {
+                        continue;
+                    }
+
+                    $optionPostId = filled($bundleItem->pivot?->option_post_id ?? null)
+                        ? (int) $bundleItem->pivot->option_post_id
+                        : null;
+                    $optionTitle = Str::squish((string) ($bundleItem->pivot?->option_title ?? ''));
+                    $optionKey = $this->normalizeStorefrontBundleOptionKey($optionPostId, $optionTitle);
+
+                    $optionImages[$optionKey] ??= $optionImage;
+
+                    if ($optionTitle !== '') {
+                        $optionImages['title:' . Str::lower($optionTitle)] ??= $optionImage;
+                    }
+
+                    if ($optionPostId) {
+                        $optionImages['post:' . $optionPostId] ??= $optionImage;
+                    }
+                }
+
+                return [(int) $product->id => $optionImages];
+            })
+            ->all();
+    }
+
+    protected function resolveBundleOptionImageFromMap(Product $product, array $bundleOptionImages): ?array
+    {
+        $productOptionImages = $bundleOptionImages[(int) $product->id] ?? [];
+
+        if (!$productOptionImages) {
+            return null;
+        }
+
+        $optionKey = trim((string) ($product->bundle_option_key ?? ''));
+        $optionPostId = filled($product->bundle_option_post_id ?? null)
+            ? (int) $product->bundle_option_post_id
+            : null;
+        $optionTitle = Str::squish((string) ($product->bundle_option_title ?? ''));
+
+        $candidates = collect([
+            $optionKey,
+            $this->normalizeStorefrontBundleOptionKey($optionPostId, $optionTitle),
+            $optionPostId ? 'post:' . $optionPostId : '',
+            $optionTitle !== '' ? 'title:' . Str::lower($optionTitle) : '',
+        ])
+            ->map(fn ($key) => trim((string) $key))
+            ->filter()
+            ->unique();
+
+        foreach ($candidates as $candidate) {
+            if (!empty($productOptionImages[$candidate])) {
+                return $this->mapStorefrontImageUrl($productOptionImages[$candidate]);
+            }
+        }
+
+        return null;
+    }
+
     protected function mapStorefrontAttributes(Product $product): array
     {
         return $product->attributeValues->map(fn ($av) => [
@@ -523,8 +633,10 @@ class StorefrontController extends Controller
         $perPage = min((int) $request->get('per_page', 20), 60);
         $products = $query->paginate($perPage);
 
+        $bundleOptionImages = $this->collectBundleOptionImages($products->getCollection());
+
         // Slim response: only essential fields
-        $products->getCollection()->transform(function ($p) {
+        $products->getCollection()->transform(function ($p) use ($bundleOptionImages) {
             $bundleOptionKey = trim((string) ($p->bundle_option_key ?? ''));
             $bundleOptionTitle = Str::squish((string) ($p->bundle_option_title ?? ''));
             $itemType = (
@@ -533,6 +645,11 @@ class StorefrontController extends Controller
                 || filled($p->bundle_option_post_id ?? null)
                 || $bundleOptionTitle !== ''
             ) ? 'bundle_option' : 'product';
+            $bundleOptionImage = $itemType === 'bundle_option'
+                ? $this->resolveBundleOptionImageFromMap($p, $bundleOptionImages)
+                : null;
+            $primaryImage = $bundleOptionImage ?: $p->primary_image;
+            $mainImage = $bundleOptionImage['url'] ?? $p->main_image;
 
             return [
                 'id' => $p->id,
@@ -542,18 +659,19 @@ class StorefrontController extends Controller
                 'price' => $p->price,
                 'current_price' => $p->current_price,
                 'special_price' => $p->special_price,
-                'main_image' => $p->main_image,
+                'main_image' => $mainImage,
                 'category' => $p->category ? ['id' => $p->category->id, 'name' => $p->category->name, 'slug' => $p->category->slug] : null,
                 'is_featured' => $p->is_featured,
                 'is_new' => $p->is_new,
                 'stock_quantity' => $p->stock_quantity,
                 'average_rating' => round($p->average_rating, 1),
-                'primary_image' => $p->primary_image,
+                'primary_image' => $primaryImage,
                 'specifications' => $p->specifications,
                 'item_type' => $itemType,
                 'bundle_option_key' => $bundleOptionKey !== '' ? $bundleOptionKey : null,
                 'bundle_option_post_id' => filled($p->bundle_option_post_id ?? null) ? (int) $p->bundle_option_post_id : null,
                 'bundle_option_title' => $itemType === 'bundle_option' ? $bundleOptionTitle : null,
+                'bundle_option_image_url' => $bundleOptionImage['url'] ?? null,
             ];
         });
 
@@ -644,6 +762,7 @@ class StorefrontController extends Controller
             'special_price_from' => $product->special_price_from,
             'special_price_to' => $product->special_price_to,
             'video_url' => $product->video_url,
+            'video_urls' => $product->video_urls ?: ($product->video_url ? [$product->video_url] : []),
             'description' => $product->description,
             'specifications' => $product->specifications,
             'additional_info' => $additionalInfoItems->map(function ($item) use ($linkedPosts) {
@@ -728,6 +847,10 @@ class StorefrontController extends Controller
                         'option_post_id' => $optionPostId,
                         'option_post_title' => $optionPost?->title,
                         'option_post_slug' => $optionPost?->slug,
+                        'option_image_url' => trim((string) ($bundleItem->pivot->option_image_url ?? '')) ?: null,
+                        'option_image' => $this->mapStorefrontImageUrl($bundleItem->pivot->option_image_url ?? null),
+                        'option_video_url' => $bundleItem->pivot->option_video_url,
+                        'option_video_source' => $bundleItem->pivot->option_video_source,
                         'is_default' => $bundleItem->pivot->is_default ?? false,
                         'position' => $bundleItem->pivot->position ?? 0,
                         'selected_variant_id' => $selectedVariantId,

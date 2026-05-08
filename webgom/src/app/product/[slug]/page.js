@@ -76,10 +76,14 @@ export default async function ProductDetailPage({ params, searchParams }) {
   let relatedProducts = [];
   let relatedMeta = null;
 
-  try {
-    product = await getWebProductDetail(slug);
-  } catch (error) {
-    console.error('Failed to fetch product detail:', error);
+  // Fetch product detail and related products concurrently to minimize SSR latency
+  const [productResult, relatedResult] = await Promise.allSettled([
+    getWebProductDetail(slug),
+    getWebRelatedProducts(slug),
+  ]);
+
+  if (productResult.status === 'rejected') {
+    console.error('Failed to fetch product detail:', productResult.reason);
     return (
       <div className="container py-20 text-center">
         <h2 className="text-2xl font-bold">Sản phẩm không tồn tại</h2>
@@ -91,14 +95,13 @@ export default async function ProductDetailPage({ params, searchParams }) {
     );
   }
 
-  try {
-    const relatedResponse = await getWebRelatedProducts(slug);
-    relatedProducts = relatedResponse?.items || [];
-    relatedMeta = relatedResponse?.meta || null;
-  } catch (error) {
-    console.error('Failed to fetch related products:', error);
-    relatedProducts = [];
-    relatedMeta = null;
+  product = productResult.value;
+
+  if (relatedResult.status === 'fulfilled') {
+    relatedProducts = relatedResult.value?.items || [];
+    relatedMeta = relatedResult.value?.meta || null;
+  } else {
+    console.error('Failed to fetch related products:', relatedResult.reason);
   }
 
   const images = product.images || [];
@@ -166,6 +169,8 @@ export async function generateMetadata({ params }) {
   const { slug } = resolvedParams;
 
   try {
+    // Next.js deduplicates fetch() calls with the same URL+options within a render pass,
+    // so this reuses the cached response from ProductDetailPage without an extra network hit.
     const product = await getWebProductDetail(slug);
     const seoTitle = String(product.meta_title || '').trim();
     const seoDescription = product.meta_description || product.description?.substring(0, 160);

@@ -11,6 +11,7 @@ use App\Models\ProductAttributeValue;
 use App\Support\Utf8Sanitizer;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -1108,10 +1109,29 @@ class ProductController extends Controller
                         $q->orWhere('id', (int)$slug);
                     }
                 })
+                // Load only base relations common to all product types.
+                // Type-specific heavy relations are loaded conditionally below.
                 ->with([
-                    'images', 
-                    'category', 
+                    'images',
+                    'category',
                     'attributeValues.attribute',
+                ])
+                ->firstOrFail();
+
+            // Conditionally load type-specific relations to avoid unnecessary DB queries.
+            // This is the key optimization for bundle products: skip variations & superAttributes.
+            if ($product->type === 'bundle') {
+                $product->load([
+                    'bundleItems.images',
+                    'bundleItems.attributeValues.attribute',
+                ]);
+            } elseif ($product->type === 'grouped') {
+                $product->load([
+                    'groupedItems.images',
+                    'groupedItems.attributeValues.attribute',
+                ]);
+            } elseif ($product->type === 'configurable') {
+                $product->load([
                     'superAttributes' => function($q) {
                         $q->withPivot('position');
 
@@ -1124,17 +1144,13 @@ class ProductController extends Controller
                     },
                     'superAttributes.options',
                     'variations' => function($q) {
-                        $q->where('status', true); // Only active variants
+                        $q->where('status', true);
                     },
                     'variations.images',
                     'variations.attributeValues.attribute',
-                    'bundleItems.images',
-                    'bundleItems.attributeValues.attribute',
-                    'groupedItems.images',
-                    'groupedItems.attributeValues.attribute',
-                    'relatedProducts.images'
-                ])
-                ->firstOrFail();
+                ]);
+            }
+            // Note: relatedProducts are fetched separately via /related endpoint.
 
             $bundleOptionPosts = collect();
             $bundleOptionCatalog = [];
@@ -1185,25 +1201,33 @@ class ProductController extends Controller
                         if ($item->pivot->price === null) $item->price = $v->price;
                         if ($item->pivot->cost_price === null) $item->cost_price = $v->cost_price;
                         $item->sku = $v->sku;
-                            $item->name = $v->name; 
-                            
-                            // Merge images if variant has images
-                            if ($v->images && $v->images->count() > 0) {
-                                $item->setRelation('images', $v->images);
-                            }
-                            
-                            // Merge attributes
-                            if ($v->attributeValues && $v->attributeValues->count() > 0) {
-                                $item->setRelation('attributeValues', $v->attributeValues);
-                            }
+                        $item->name = $v->name;
+
+                        // Merge images if variant has images
+                        if ($v->images && $v->images->count() > 0) {
+                            $item->setRelation('images', $v->images);
+                        }
+
+                        // Merge attributes
+                        if ($v->attributeValues && $v->attributeValues->count() > 0) {
+                            $item->setRelation('attributeValues', $v->attributeValues);
                         }
                     }
+                }
 
                 if ($product->type === 'bundle') {
-                    $bundleOptionCatalog = $this->buildBundleOptionCatalogForItems(
-                        $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
-                        $variantMap,
-                        $bundleOptionPosts,
+                    // Cache the bundle option catalog for 60 seconds per product+account.
+                    // The catalog computation (pricing, discounts, option grouping) is
+                    // expensive and identical for all visitors viewing the same product.
+                    $catalogCacheKey = 'bundle_catalog:' . ($accountId ?? 'all') . ':' . $product->id . ':' . ($product->updated_at?->timestamp ?? 0);
+                    $bundleOptionCatalog = Cache::remember(
+                        $catalogCacheKey,
+                        60,
+                        fn () => $this->buildBundleOptionCatalogForItems(
+                            $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
+                            $variantMap,
+                            $bundleOptionPosts,
+                        )
                     );
                 }
             }
@@ -1226,11 +1250,15 @@ class ProductController extends Controller
                 }
             }
 
-            // Also include all available product attributes
-            $allProductAttributes = Attribute::where('entity_type', 'product')
-                ->where('status', true)
-                ->ordered()
-                ->get(['id', 'name', 'code', 'frontend_type']);
+            // Cache all_attributes for 5 minutes - this list rarely changes and is fetched on every product page.
+            $allProductAttributes = Cache::remember(
+                'all_product_attributes:' . ($accountId ?? 'all'),
+                300,
+                fn () => Attribute::where('entity_type', 'product')
+                    ->where('status', true)
+                    ->ordered()
+                    ->get(['id', 'name', 'code', 'frontend_type'])
+            );
             
             $responseData = $product->toArray();
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);

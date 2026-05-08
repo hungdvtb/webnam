@@ -77,11 +77,13 @@ export async function getWebCategory(slug) {
 }
 
 export async function getWebProductDetail(slug) {
-    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 0 } });
+    // Cache for 30 seconds - balances freshness with SSR performance.
+    // Next.js also deduplicates identical fetch() calls within the same render pass.
+    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 30 } });
 }
 
 export async function getWebRelatedProducts(slug) {
-    const response = await fetchFromApi(`/web-api/products/${slug}/related`);
+    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 60 } });
 
     if (Array.isArray(response)) {
         return {

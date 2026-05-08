@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import styles from './ProductGallery.module.css';
 import { resolveVideoEmbedUrl, resolveVideoThumbnailUrl } from '@/lib/media';
+import { logProductTiming, logProductTimingOnce } from '@/lib/productPerformance';
 
 const MOBILE_MEDIA_QUERY = '(max-width: 768px)';
 const SWIPE_AXIS_LOCK_THRESHOLD = 12;
@@ -66,6 +67,8 @@ export default function ProductGallery({
   videoUrls,
   primaryDisplayImage = null,
   showSingleThumbnail = false,
+  priorityFirstImage = true,
+  deferVideoThumbnails = true,
 }) {
   const normalizedImages = Array.isArray(images) ? images.filter(Boolean) : [];
   const normalizedVideoUrls = (Array.isArray(videoUrls) && videoUrls.length > 0 ? videoUrls : [videoUrl])
@@ -88,6 +91,7 @@ export default function ProductGallery({
   const [isPrimaryDisplayOverrideActive, setIsPrimaryDisplayOverrideActive] = useState(
     Boolean(primaryDisplayImage) && requestedDisplayIndex === 0,
   );
+  const [canRenderVideoThumbnails, setCanRenderVideoThumbnails] = useState(!deferVideoThumbnails);
 
   const stageRef = useRef(null);
   const trackRef = useRef(null);
@@ -350,6 +354,33 @@ export default function ProductGallery({
   ), []);
 
   useEffect(() => {
+    if (!deferVideoThumbnails || typeof window === 'undefined') {
+      setCanRenderVideoThumbnails(true);
+      return undefined;
+    }
+
+    let timeoutId = null;
+    let idleId = null;
+    const renderThumbnails = () => setCanRenderVideoThumbnails(true);
+
+    timeoutId = window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(renderThumbnails, { timeout: 1200 });
+        return;
+      }
+
+      renderThumbnails();
+    }, 250);
+
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+    };
+  }, [deferVideoThumbnails]);
+
+  useEffect(() => {
     if (!isMobileViewport || !showThumbnailStrip || typeof window === 'undefined') {
       return undefined;
     }
@@ -565,9 +596,19 @@ export default function ProductGallery({
             fill
             sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
             className={styles.productMediaImage}
-            priority={!hidden}
+            priority={priorityFirstImage && !hidden}
+            loading={priorityFirstImage && !hidden ? undefined : 'lazy'}
             draggable={false}
             unoptimized
+            onLoad={() => {
+              if (!hidden) {
+                logProductTimingOnce(
+                  `render-image:${productName}:${resolveGalleryImageSrc(image)}`,
+                  'render-image',
+                  { productName, imageIndex: currentImageIndex }
+                );
+              }
+            }}
           />
         </div>
       ) : null}
@@ -596,6 +637,7 @@ export default function ProductGallery({
               allowFullScreen
               loading="lazy"
               referrerPolicy="strict-origin-when-cross-origin"
+              onLoad={() => logProductTiming('load-video', { productName, videoIndex: activeVideoIndex })}
             />
           </div>
         ) : currentDisplayImage ? (
@@ -644,7 +686,7 @@ export default function ProductGallery({
                 aria-pressed={isActiveVideo}
                 aria-label={`Xem video YouTube ${videoIndex + 1}`}
               >
-                {candidateThumbnailUrl ? (
+                {candidateThumbnailUrl && canRenderVideoThumbnails ? (
                   <div className={styles.productMediaThumbPoster}>
                     <Image
                       src={candidateThumbnailUrl}

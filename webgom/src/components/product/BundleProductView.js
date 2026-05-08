@@ -23,6 +23,7 @@ import {
 } from '@/lib/bundlePricing';
 import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
+import { logProductTimingOnce } from '@/lib/productPerformance';
 
 const normalizeConfigMediaKey = (configName = '') =>
   String(configName)
@@ -304,6 +305,7 @@ export default function BundleProductView({
   const [bundleActionConfig, setBundleActionConfig] = useState('');
   const [hoveredBundleConfig, setHoveredBundleConfig] = useState('');
   const [isMobileBundleViewport, setIsMobileBundleViewport] = useState(false);
+  const [showBundleDetailSection, setShowBundleDetailSection] = useState(false);
   // Active tab in the detail section (separate from upper config selector)
   const [manualActiveTab, setManualActiveTab] = useState(null);
   const [isMobileHeroConfigMenuOpen, setIsMobileHeroConfigMenuOpen] = useState(false);
@@ -681,6 +683,32 @@ export default function BundleProductView({
   }, [isMobileBundleViewport]);
 
   useEffect(() => {
+    if (showBundleDetailSection || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    let timeoutId = null;
+    let idleId = null;
+    const revealDetails = () => setShowBundleDetailSection(true);
+
+    timeoutId = window.setTimeout(() => {
+      if (typeof window.requestIdleCallback === 'function') {
+        idleId = window.requestIdleCallback(revealDetails, { timeout: 1600 });
+        return;
+      }
+
+      revealDetails();
+    }, 500);
+
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (idleId !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleId);
+      }
+    };
+  }, [showBundleDetailSection]);
+
+  useEffect(() => {
     setIsMobileHeroConfigMenuOpen(false);
     setIsMobileConfigMenuOpen(false);
   }, [resolvedActiveTab]);
@@ -833,6 +861,23 @@ export default function BundleProductView({
   const tabDiscountAmount = activeBundleEvaluation.comboDiscountAmount || 0;
   const tabFinalPrice = activeBundleEvaluation.finalSubtotal || tabSubtotal;
   const bundleRequirementCount = activeBundleEvaluation.expectedCount || tabItems.length;
+
+  useEffect(() => {
+    if (!showBundleDetailSection) {
+      return;
+    }
+
+    logProductTimingOnce(
+      `render-bundle-config:${product?.id || ''}:${resolvedActiveTab || ''}:${tabItems.length}`,
+      'render-bundle-config',
+      {
+        productId: product?.id,
+        activeConfig: resolvedActiveTab,
+        itemCount: tabItems.length,
+        isLite: Boolean(product?.is_bundle_option_lite),
+      }
+    );
+  }, [product?.id, product?.is_bundle_option_lite, resolvedActiveTab, showBundleDetailSection, tabItems.length]);
 
   // activeConfig for the upper config buttons
   const activeConfig = useMemo(() => {
@@ -1033,23 +1078,35 @@ export default function BundleProductView({
   };
 
   const scrollToBundleDetailControls = ({ behavior = 'smooth' } = {}) => {
-    const detailSection = bundleListRef.current;
-
     if (typeof window === 'undefined') {
       return;
     }
 
-    if (!detailSection) {
+    const performScroll = () => {
+      const detailSection = bundleListRef.current;
+
+      if (!detailSection) {
+        return;
+      }
+
+      const stickyOffset = isMobileBundleViewport ? getMobileStickyHeaderHeight() + 8 : 0;
+      const targetTop = Math.max(
+        0,
+        Math.round(window.scrollY + detailSection.getBoundingClientRect().top - stickyOffset)
+      );
+
+      window.scrollTo({ top: targetTop, behavior });
+    };
+
+    if (!showBundleDetailSection) {
+      setShowBundleDetailSection(true);
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(performScroll);
+      });
       return;
     }
 
-    const stickyOffset = isMobileBundleViewport ? getMobileStickyHeaderHeight() + 8 : 0;
-    const targetTop = Math.max(
-      0,
-      Math.round(window.scrollY + detailSection.getBoundingClientRect().top - stickyOffset)
-    );
-
-    window.scrollTo({ top: targetTop, behavior });
+    performScroll();
   };
 
   const scrollToBundleGallery = ({ mediaType = 'image', behavior = 'smooth' } = {}) => {
@@ -1586,6 +1643,7 @@ export default function BundleProductView({
                 setActiveIndex={setActiveIndex}
                 getImageUrl={getImageUrl}
                 productName={bundleHeroProductName}
+                priorityFirstImage
               />
             </div>
 
@@ -1599,6 +1657,7 @@ export default function BundleProductView({
                 getImageUrl={getImageUrl}
                 productName={bundleHeroProductName}
                 showSingleThumbnail
+                priorityFirstImage={false}
               />
             </div>
           </div>
@@ -1771,6 +1830,8 @@ export default function BundleProductView({
           ref={bundleListRef}
           className={`${styles.bundleDetailSection} pt-16 border-t border-stone/10`}
         >
+          {showBundleDetailSection ? (
+            <>
           <div className="text-center" style={{ marginBottom: '10px' }}>
             <h2
               className="font-display font-bold text-primary italic"
@@ -2179,6 +2240,10 @@ export default function BundleProductView({
               </div>
             )}
           </div>
+            </>
+          ) : (
+            <div style={{ minHeight: 1 }} aria-hidden="true" />
+          )}
         </div>
 
         <ComponentSelectionModal

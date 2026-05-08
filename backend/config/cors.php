@@ -66,7 +66,7 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    'exposed_headers' => ['Server-Timing', 'X-Webgom-Timing'],
 
     'max_age' => 3600,
 

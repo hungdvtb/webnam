@@ -2,12 +2,15 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 import styles from '../app/products/products.module.css';
 import { useCart } from '@/context/CartContext';
 import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
+import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from '@/lib/productPrefetch';
+import { markProductNavigationClick } from '@/lib/productPerformance';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
@@ -31,6 +34,23 @@ const getDisplayPrice = (product = {}) => {
 export default function InfiniteProductList({ initialData }) {
   const products = initialData?.data || [];
   const { addToCart } = useCart();
+  const router = useRouter();
+
+  const handleProductIntent = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    prefetchBundleOptionDetail(product, href);
+
+    try {
+      router.prefetch(href);
+    } catch {
+      // Prefetch is opportunistic.
+    }
+  };
+
+  const handleProductClick = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    markProductNavigationClick(product, href);
+  };
 
   return (
     <>
@@ -51,7 +71,14 @@ export default function InfiniteProductList({ initialData }) {
 
           return (
             <div key={productCardKey} className={styles.productCard}>
-              <Link href={productHref} className={styles.imageWrapper}>
+              <Link
+                href={productHref}
+                className={styles.imageWrapper}
+                onPointerEnter={() => handleProductIntent(product, productHref)}
+                onFocus={() => handleProductIntent(product, productHref)}
+                onTouchStart={() => handleProductIntent(product, productHref)}
+                onClick={() => handleProductClick(product, productHref)}
+              >
                 <Image
                   src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
                   alt={product.name || FALLBACK_PRODUCT_ALT}
@@ -63,7 +90,14 @@ export default function InfiniteProductList({ initialData }) {
               </Link>
 
               <div className={styles.productInfo}>
-                <Link href={productHref} style={{ textDecoration: 'none', color: 'inherit' }}>
+                <Link
+                  href={productHref}
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                  onPointerEnter={() => handleProductIntent(product, productHref)}
+                  onFocus={() => handleProductIntent(product, productHref)}
+                  onTouchStart={() => handleProductIntent(product, productHref)}
+                  onClick={() => handleProductClick(product, productHref)}
+                >
                   <h3 className={styles.productName}>{product.name}</h3>
                 </Link>
 

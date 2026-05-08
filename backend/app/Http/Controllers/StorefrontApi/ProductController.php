@@ -102,6 +102,41 @@ class ProductController extends Controller
         return $this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle);
     }
 
+    private function markTiming(array &$timings, string $name, float $startedAt): float
+    {
+        $now = microtime(true);
+        $timings[$name] = round(($now - $startedAt) * 1000, 1);
+
+        return $now;
+    }
+
+    private function timedJsonResponse(array $payload, array $timings)
+    {
+        $sanitizeStartedAt = microtime(true);
+        $normalizedPayload = Utf8Sanitizer::normalize($payload);
+        $timings['sanitize'] = round((microtime(true) - $sanitizeStartedAt) * 1000, 1);
+
+        $encodeStartedAt = microtime(true);
+        $jsonPayload = json_encode(
+            $normalizedPayload,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+        if ($jsonPayload === false) {
+            $jsonPayload = '{}';
+        }
+        $timings['json_encode'] = round((microtime(true) - $encodeStartedAt) * 1000, 1);
+
+        $serverTiming = collect($timings)
+            ->map(fn ($duration, $name) => sprintf('%s;dur=%s', preg_replace('/[^a-zA-Z0-9_-]/', '_', $name), $duration))
+            ->implode(', ');
+
+        return response()
+            ->make($jsonPayload)
+            ->header('Content-Type', 'application/json')
+            ->header('Server-Timing', $serverTiming)
+            ->header('X-Webgom-Timing', json_encode($timings, JSON_UNESCAPED_SLASHES));
+    }
+
     private function resolveAssignmentBundleOptionKey($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): ?string
     {
         $resolvedKey = trim((string) $bundleOptionKey);
@@ -129,6 +164,55 @@ class ProductController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveRequestedBundleOptionMatch(Product $product, ?string $requestedKey, ?string $requestedTitle): ?array
+    {
+        $normalizedRequestedKey = trim((string) $requestedKey);
+        $normalizedRequestedTitle = Str::squish((string) $requestedTitle);
+
+        $optionRows = DB::table('product_links')
+            ->where('product_id', $product->id)
+            ->where('link_type', 'bundle')
+            ->select('option_post_id', 'option_title')
+            ->selectRaw('MIN(position) as first_position')
+            ->groupBy('option_post_id', 'option_title')
+            ->orderBy('first_position')
+            ->get();
+
+        if ($optionRows->isEmpty()) {
+            return null;
+        }
+
+        foreach ($optionRows as $row) {
+            $optionPostId = filled($row->option_post_id ?? null) ? (int) $row->option_post_id : null;
+            $optionTitle = Str::squish((string) ($row->option_title ?? '')) ?: 'Mặc định';
+            $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+            $optionKeyCandidates = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle);
+
+            $matchesKey = $normalizedRequestedKey !== ''
+                && in_array($normalizedRequestedKey, $optionKeyCandidates, true);
+            $matchesTitle = $normalizedRequestedTitle !== ''
+                && $optionTitle === $normalizedRequestedTitle;
+
+            if ($matchesKey || $matchesTitle) {
+                return [
+                    'option_key' => $optionKey,
+                    'option_post_id' => $optionPostId,
+                    'option_title' => $optionTitle,
+                ];
+            }
+        }
+
+        $fallbackRow = $optionRows->first();
+        $fallbackPostId = filled($fallbackRow->option_post_id ?? null) ? (int) $fallbackRow->option_post_id : null;
+        $fallbackTitle = Str::squish((string) ($fallbackRow->option_title ?? '')) ?: 'Mặc định';
+
+        return [
+            'option_key' => $this->normalizeBundleOptionKey($fallbackPostId, $fallbackTitle),
+            'option_post_id' => $fallbackPostId,
+            'option_title' => $fallbackTitle,
+        ];
     }
 
     /**
@@ -1097,7 +1181,10 @@ class ProductController extends Controller
     public function show(Request $request, $slug)
     {
         try {
+            $timings = [];
+            $stepStartedAt = microtime(true);
             $accountId = $this->getAccountId($request);
+            $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
             \Illuminate\Support\Facades\Log::info("Fetching product detail for slug: '{$slug}' (Account: " . ($accountId ?? 'ALL') . ")");
 
             $product = Product::query()
@@ -1117,6 +1204,7 @@ class ProductController extends Controller
                     'attributeValues.attribute',
                 ])
                 ->firstOrFail();
+            $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             // Conditionally load type-specific relations to avoid unnecessary DB queries.
             // This is the key optimization for bundle products: skip variations & superAttributes.
@@ -1150,6 +1238,7 @@ class ProductController extends Controller
                     'variations.attributeValues.attribute',
                 ]);
             }
+            $stepStartedAt = $this->markTiming($timings, 'type_relations', $stepStartedAt);
             // Note: relatedProducts are fetched separately via /related endpoint.
 
             $bundleOptionPosts = collect();
@@ -1175,6 +1264,7 @@ class ProductController extends Controller
                         ->get()
                         ->keyBy(fn (Product $variant) => (int) $variant->id);
                 }
+                $stepStartedAt = $this->markTiming($timings, 'bundle_variants_batch', $stepStartedAt);
 
                 if (!empty($optionPostIds)) {
                     $bundleOptionPosts = Post::query()
@@ -1184,6 +1274,7 @@ class ProductController extends Controller
                         ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
                         ->keyBy(fn (Post $post) => (int) $post->id);
                 }
+                $stepStartedAt = $this->markTiming($timings, 'bundle_option_posts', $stepStartedAt);
 
                 foreach ($product->bundleItems as $item) {
                     // 1. Apply pivot price if set (this is the refreshed/saved price for this specific combo)
@@ -1230,6 +1321,7 @@ class ProductController extends Controller
                         )
                     );
                 }
+                $stepStartedAt = $this->markTiming($timings, 'bundle_catalog', $stepStartedAt);
             }
 
             if ($product->type === 'configurable') {
@@ -1259,6 +1351,7 @@ class ProductController extends Controller
                     ->ordered()
                     ->get(['id', 'name', 'code', 'frontend_type'])
             );
+            $stepStartedAt = $this->markTiming($timings, 'attributes_cache', $stepStartedAt);
             
             $responseData = $product->toArray();
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
@@ -1284,8 +1377,9 @@ class ProductController extends Controller
             }
             $responseData['bundle_options'] = $this->uniqueBundleOptionCatalogValues($bundleOptionCatalog);
             $responseData['all_attributes'] = $allProductAttributes;
+            $this->markTiming($timings, 'serialize', $stepStartedAt);
 
-            return response()->json(Utf8Sanitizer::normalize($responseData));
+            return $this->timedJsonResponse($responseData, $timings);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Error in ProductController@show for slug '{$slug}': " . $e->getMessage());
             \Illuminate\Support\Facades\Log::error($e->getTraceAsString());
@@ -1294,6 +1388,191 @@ class ProductController extends Controller
                 return response()->json(['message' => 'Product not found'], 404);
             }
             
+            return response()->json([
+                'message' => 'Internal server error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function bundleOptionDetail(Request $request, $slug)
+    {
+        try {
+            $timings = [];
+            $stepStartedAt = microtime(true);
+            $accountId = $this->getAccountId($request);
+            $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
+
+            $requestedKey = trim((string) $request->query('bundle_option_key', ''));
+            $requestedTitle = Str::squish((string) (
+                $request->query('bundle_option')
+                ?? $request->query('bundle_option_title')
+                ?? ''
+            ));
+
+            $product = Product::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('status', true)
+                ->where(function($q) use ($slug) {
+                    $q->where('slug', $slug);
+                    if (is_numeric($slug)) {
+                        $q->orWhere('id', (int)$slug);
+                    }
+                })
+                ->with([
+                    'images',
+                    'category',
+                    'attributeValues.attribute',
+                ])
+                ->firstOrFail();
+            $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
+
+            if ($product->type !== 'bundle') {
+                $responseData = $product->toArray();
+                $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
+                $responseData['bundle_items'] = [];
+                $responseData['bundle_options'] = [];
+                $responseData['is_bundle_option_lite'] = false;
+                $this->markTiming($timings, 'serialize', $stepStartedAt);
+
+                return $this->timedJsonResponse($responseData, $timings);
+            }
+
+            $optionMatch = $this->resolveRequestedBundleOptionMatch($product, $requestedKey, $requestedTitle);
+            $stepStartedAt = $this->markTiming($timings, 'resolve_option', $stepStartedAt);
+
+            $bundleItemsQuery = $product->bundleItems()
+                ->where('products.status', true)
+                ->with([
+                    'images',
+                    'attributeValues.attribute',
+                ]);
+
+            if ($optionMatch && filled($optionMatch['option_post_id'] ?? null)) {
+                $bundleItemsQuery->wherePivot('option_post_id', (int) $optionMatch['option_post_id']);
+            } elseif ($optionMatch && filled($optionMatch['option_title'] ?? null)) {
+                $bundleItemsQuery->wherePivot('option_title', $optionMatch['option_title']);
+            } elseif ($requestedTitle !== '') {
+                $bundleItemsQuery->wherePivot('option_title', $requestedTitle);
+            }
+
+            $selectedBundleItems = $bundleItemsQuery->get();
+            $product->setRelation('bundleItems', $selectedBundleItems);
+            $stepStartedAt = $this->markTiming($timings, 'selected_bundle_items', $stepStartedAt);
+
+            $variantIds = $selectedBundleItems
+                ->pluck('pivot.variant_id')
+                ->filter(fn ($variantId) => filled($variantId))
+                ->map(fn ($variantId) => (int) $variantId)
+                ->unique()
+                ->values();
+
+            $variantMap = $variantIds->isNotEmpty()
+                ? Product::query()
+                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                    ->whereIn('id', $variantIds->all())
+                    ->with(['images', 'attributeValues.attribute'])
+                    ->get()
+                    ->keyBy(fn (Product $variant) => (int) $variant->id)
+                : collect();
+            $stepStartedAt = $this->markTiming($timings, 'variants_batch', $stepStartedAt);
+
+            $optionPostIds = $selectedBundleItems
+                ->pluck('pivot.option_post_id')
+                ->filter(fn ($postId) => filled($postId))
+                ->map(fn ($postId) => (int) $postId)
+                ->unique()
+                ->values();
+
+            $bundleOptionPosts = $optionPostIds->isNotEmpty()
+                ? Post::query()
+                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                    ->with('featuredMediaAsset')
+                    ->whereIn('id', $optionPostIds->all())
+                    ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
+                    ->keyBy(fn (Post $post) => (int) $post->id)
+                : collect();
+            $stepStartedAt = $this->markTiming($timings, 'option_posts', $stepStartedAt);
+
+            foreach ($selectedBundleItems as $item) {
+                if ($item->pivot->price !== null) {
+                    $item->price = $item->pivot->price;
+                }
+
+                if ($item->pivot->cost_price !== null) {
+                    $item->cost_price = $item->pivot->cost_price;
+                }
+
+                $variantId = $item->pivot->variant_id;
+                if ($variantId && $variantMap->has((int) $variantId)) {
+                    $variant = $variantMap->get((int) $variantId);
+
+                    if ($item->pivot->price === null) {
+                        $item->price = $variant->price;
+                    }
+
+                    if ($item->pivot->cost_price === null) {
+                        $item->cost_price = $variant->cost_price;
+                    }
+
+                    $item->sku = $variant->sku;
+                    $item->name = $variant->name;
+
+                    if ($variant->images && $variant->images->count() > 0) {
+                        $item->setRelation('images', $variant->images);
+                    }
+
+                    if ($variant->attributeValues && $variant->attributeValues->count() > 0) {
+                        $item->setRelation('attributeValues', $variant->attributeValues);
+                    }
+                }
+            }
+
+            $bundleOptionCatalog = $this->buildBundleOptionCatalogForItems(
+                $selectedBundleItems instanceof Collection ? $selectedBundleItems : collect($selectedBundleItems),
+                $variantMap,
+                $bundleOptionPosts,
+            );
+            $stepStartedAt = $this->markTiming($timings, 'selected_catalog', $stepStartedAt);
+
+            $responseData = $product->toArray();
+            $responseData['description'] = '';
+            $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
+            if (is_array($responseData['bundle_items'] ?? null)) {
+                $responseData['bundle_items'] = collect($responseData['bundle_items'])
+                    ->map(function (array $item) use ($bundleOptionCatalog, $bundleOptionPosts) {
+                        $optionPostId = data_get($item, 'pivot.option_post_id');
+                        $optionTitle = data_get($item, 'pivot.option_title');
+                        $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $optionPost = filled($optionPostId) && is_numeric($optionPostId)
+                            ? $bundleOptionPosts->get((int) $optionPostId)
+                            : null;
+                        $optionMeta = $bundleOptionCatalog[$optionKey] ?? null;
+                        $item['option_key'] = $optionKey;
+                        $item['option_post_title'] = Str::squish((string) ($optionPost?->title ?? '')) ?: null;
+                        $item['option_post_slug'] = Str::squish((string) ($optionPost?->slug ?? '')) ?: null;
+                        $item['option_post_featured_image'] = $optionMeta['primary_image'] ?? $this->mapPostPrimaryImage($optionPost);
+
+                        return $item;
+                    })
+                    ->values()
+                    ->all();
+            }
+            $responseData['bundle_options'] = $this->uniqueBundleOptionCatalogValues($bundleOptionCatalog);
+            $responseData['all_attributes'] = [];
+            $responseData['is_bundle_option_lite'] = true;
+            $responseData['requested_bundle_option_key'] = $optionMatch['option_key'] ?? $requestedKey;
+            $responseData['requested_bundle_option_title'] = $optionMatch['option_title'] ?? $requestedTitle;
+            $this->markTiming($timings, 'serialize', $stepStartedAt);
+
+            return $this->timedJsonResponse($responseData, $timings);
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Error in ProductController@bundleOptionDetail for slug '{$slug}': " . $e->getMessage());
+
+            if ($e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {
+                return response()->json(['message' => 'Product not found'], 404);
+            }
+
             return response()->json([
                 'message' => 'Internal server error',
                 'error' => $e->getMessage()

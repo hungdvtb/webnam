@@ -560,6 +560,7 @@ Route::group(['prefix' => 'storefront'], function () {
 // â”€â”€â”€ Separate Storefront API (Web API) â”€â”€â”€
 Route::group(['prefix' => 'web-api'], function () {
     Route::get('/products', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'index']);
+    Route::get('/products/{slug}/bundle-option-detail', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'bundleOptionDetail']);
     Route::get('/products/{slug}', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'show']);
     Route::get('/products/{slug}/related', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'related']);
     Route::get('/categories', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'index']);

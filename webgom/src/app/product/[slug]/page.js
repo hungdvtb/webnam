@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
+import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
+import ProductDetailClientShell from '@/components/ProductDetailClientShell';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
+import { buildProductDescriptionHtml } from '@/lib/productDescription';
 
 function buildRelatedViewAllHref(product, relatedMeta) {
   if (relatedMeta?.has_explicit_related) {
@@ -22,45 +24,6 @@ function buildRelatedViewAllHref(product, relatedMeta) {
     : '/products';
 }
 
-function parseVideoLinks(html) {
-  if (!html) return '';
-
-  return html.replace(
-    /(https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/|facebook\.com\/(?:watch\/\?v=|.*\/videos\/|video\.php\?v=))[^\s<"']+)/gi,
-    (match, url, offset, fullString) => {
-      const before = fullString.substring(Math.max(0, offset - 10), offset).toLowerCase();
-
-      if (before.includes('src=') || before.includes('href=')) {
-        return match;
-      }
-
-      if (url.includes('youtube.com') || url.includes('youtu.be')) {
-        const idMatch = url.match(
-          /(?:\/watch\?v=|\/embed\/|\/shorts\/|youtu\.be\/)([a-zA-Z0-9_-]+)/
-        );
-
-        if (idMatch) {
-          return `<div class="video-container" style="display:flex; justify-content:center; margin: 2.5rem 0;"><iframe class="ql-video" src="https://www.youtube.com/embed/${idMatch[1]}" allowfullscreen="true" frameborder="0" style="width:100%; max-width:100%; aspect-ratio:16/9; border-radius:12px; box-shadow: 0 15px 45px rgba(0,0,0,0.15);"></iframe></div>`;
-        }
-      } else if (url.includes('facebook.com')) {
-        const fbEmbed = `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
-        return `<div class="video-container" style="display:flex; justify-content:center; margin: 2.5rem 0;"><iframe class="ql-video" src="${fbEmbed}" allowfullscreen="true" frameborder="0" style="width:800px; max-width:100%; aspect-ratio:16/9; border-radius:12px; box-shadow: 0 15px 45px rgba(0,0,0,0.15);"></iframe></div>`;
-      }
-
-      return match;
-    }
-  );
-}
-
-function normalizeDescriptionHtml(html) {
-  if (!html) return '';
-
-  return html
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&#160;/gi, ' ')
-    .replace(/\u00A0/g, ' ');
-}
-
 export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
@@ -71,10 +34,55 @@ export default async function ProductDetailPage({ params, searchParams }) {
     String(resolvedSearchParams?.variant_id || '').trim(),
     10,
   ) || 0;
+  const isBundleOptionRequest = Boolean(requestedBundleOptionKey || requestedBundleOptionTitle);
 
   let product = null;
   let relatedProducts = [];
   let relatedMeta = null;
+
+  if (isBundleOptionRequest) {
+    try {
+      product = await getWebProductBundleOptionDetail(slug, {
+        bundle_option_key: requestedBundleOptionKey,
+        bundle_option: requestedBundleOptionTitle,
+      });
+    } catch (error) {
+      console.error('Failed to fetch lightweight bundle option detail:', error);
+      product = null;
+    }
+
+    if (!product) {
+      return (
+        <div className="container py-20 text-center">
+          <h2 className="text-2xl font-bold">Sản phẩm không tồn tại</h2>
+          <p className="mt-4">Rất tiếc, chúng tôi không tìm thấy sản phẩm bạn yêu cầu.</p>
+          <Link href="/products" className="btn-primary mt-8 inline-block">
+            Quay lại cửa hàng
+          </Link>
+        </div>
+      );
+    }
+
+    const productPageGapClass =
+      product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
+
+    return (
+      <div className={styles.productDetail}>
+        <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
+          <div className={styles.productPageSections}>
+            <ProductDetailClientShell
+              initialProduct={product}
+              slug={slug}
+              requestedBundleOptionKey={requestedBundleOptionKey}
+              requestedBundleOptionTitle={requestedBundleOptionTitle}
+              requestedVariantId={requestedVariantId}
+              deferFullProduct={Boolean(product?.is_bundle_option_lite)}
+            />
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   // Fetch product detail and related products concurrently to minimize SSR latency
   const [productResult, relatedResult] = await Promise.allSettled([
@@ -108,9 +116,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
   const mainImage = images.find((img) => img.is_primary) || images[0];
   const productPageGapClass =
     product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
-  const descriptionHtml = parseVideoLinks(
-    normalizeDescriptionHtml(product?.description || '')
-  );
+  const descriptionHtml = buildProductDescriptionHtml(product?.description || '');
   const hasDescription = Boolean(descriptionHtml.trim());
   const relatedViewAllHref = buildRelatedViewAllHref(product, relatedMeta);
 
@@ -164,9 +170,21 @@ export default async function ProductDetailPage({ params, searchParams }) {
   );
 }
 
-export async function generateMetadata({ params }) {
+export async function generateMetadata({ params, searchParams }) {
   const resolvedParams = await params;
+  const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
+  const bundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const hasBundleOptionRequest = Boolean(
+    String(resolvedSearchParams?.bundle_option_key || '').trim()
+    || bundleOptionTitle
+  );
+
+  if (hasBundleOptionRequest) {
+    return {
+      title: `${bundleOptionTitle || 'Cấu hình bộ'} | GỐM ĐẠI THÀNH`,
+    };
+  }
 
   try {
     // Next.js deduplicates fetch() calls with the same URL+options within a render pass,

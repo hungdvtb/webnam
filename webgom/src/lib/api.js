@@ -1,6 +1,7 @@
 import config from './config';
 
 export async function fetchFromApi(endpoint, options = {}) {
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const response = await fetch(`${config.apiUrl}${endpoint}`, {
         ...options,
         headers: {
@@ -15,7 +16,23 @@ export async function fetchFromApi(endpoint, options = {}) {
         throw new Error(`API error: ${response.statusText}`);
     }
 
-    return response.json();
+    const payload = await response.json();
+    const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    if (
+        typeof window !== 'undefined'
+        && endpoint.includes('/web-api/products/')
+        && (process.env.NODE_ENV !== 'production' || window.__WEBGOM_PRODUCT_PERF__ === true)
+    ) {
+        console.info('[product-perf] api-response', {
+            endpoint,
+            durationMs: Math.round(finishedAt - startedAt),
+            serverTiming: response.headers.get('server-timing'),
+            webgomTiming: response.headers.get('x-webgom-timing'),
+        });
+    }
+
+    return payload;
 }
 
 export async function resolveAccount() {
@@ -80,6 +97,21 @@ export async function getWebProductDetail(slug) {
     // Cache for 30 seconds - balances freshness with SSR performance.
     // Next.js also deduplicates identical fetch() calls within the same render pass.
     return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 30 } });
+}
+
+export async function getWebProductBundleOptionDetail(slug, params = {}) {
+    const urlParams = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            urlParams.append(key, value);
+        }
+    });
+
+    const query = urlParams.toString();
+    return fetchFromApi(
+        `/web-api/products/${slug}/bundle-option-detail${query ? `?${query}` : ''}`,
+        { next: { revalidate: 30 } },
+    );
 }
 
 export async function getWebRelatedProducts(slug) {

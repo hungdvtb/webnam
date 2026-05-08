@@ -1239,6 +1239,16 @@ const extractUploadedImageUrl = (response) => {
     ).trim();
 };
 
+const isTransientImageUrl = (url) => {
+    const normalizedUrl = String(url || '').trim().toLowerCase();
+    return normalizedUrl.startsWith('blob:') || normalizedUrl.startsWith('data:');
+};
+
+const normalizePersistedImageUrl = (url) => {
+    const normalizedUrl = String(url || '').trim();
+    return isTransientImageUrl(normalizedUrl) ? '' : normalizedUrl;
+};
+
 const uploadImageViaMediaApi = async (file) => {
     const validationMessage = validateImageFileForUpload(file);
 
@@ -2849,6 +2859,7 @@ const ProductForm = () => {
                     ...item,
                     option_title: option.title,
                     option_post_id: option.post_id || '',
+                    option_image_url: normalizePersistedImageUrl(option.image_url),
                     option_video_url: option.video_url || '',
                     option_video_source: option.video_source || '',
                 }))
@@ -3259,17 +3270,38 @@ const ProductForm = () => {
         ));
     }, []);
 
-    const handleSelectBundleOptionLibraryImage = useCallback((optionId, image) => {
-        const imageUrl = String(image?.image_url || image?.url || image?.path || '').trim();
+    const handleSelectBundleOptionLibraryImage = useCallback(async (optionId, image) => {
+        let imageUrl = String(image?.image_url || image?.url || image?.path || '').trim();
         if (!imageUrl) {
             return;
+        }
+
+        if (isTransientImageUrl(imageUrl)) {
+            if (!image?.file) {
+                showToast({
+                    message: 'Anh nay chua co URL luu tru. Hay tai lai anh trong popup roi thu lai.',
+                    type: 'warning',
+                });
+                return;
+            }
+
+            try {
+                imageUrl = await uploadImageViaMediaApi(image.file);
+            } catch (error) {
+                showToast({
+                    message: resolveProductImageUploadErrorMessage(error),
+                    type: 'error',
+                    duration: 7000,
+                });
+                return;
+            }
         }
 
         setBundleOptions((prev) => prev.map((option) => (
             option.id === optionId ? { ...option, image_url: imageUrl } : option
         )));
         closeBundleOptionImagePicker();
-    }, [closeBundleOptionImagePicker]);
+    }, [closeBundleOptionImagePicker, showToast]);
 
     useEffect(() => {
         setSelectedVariantIds((prev) => {
@@ -6607,6 +6639,10 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
+                        const normalizedOptionImageUrl = normalizePersistedImageUrl(item.option_image_url);
+                        if (normalizedOptionImageUrl) {
+                            submitData.append(`grouped_items[${idx}][option_image_url]`, normalizedOptionImageUrl);
+                        }
                         if (item.option_post_id) {
                             submitData.append(`grouped_items[${idx}][option_post_id]`, item.option_post_id);
                         }

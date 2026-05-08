@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
 import {
@@ -299,7 +299,8 @@ export default function ProductDetailContent({
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
     ),
-    [product, requestedBundleOptionKey, requestedBundleOptionTitle],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [product?.id, requestedBundleOptionKey, requestedBundleOptionTitle],
   );
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
@@ -315,7 +316,10 @@ export default function ProductDetailContent({
   const hasStructuredVariantAttributes = product?.super_attributes?.length > 0;
   const hasVariants = product?.type === 'configurable' && product?.variations?.length > 0;
 
-  // Initialize selected options
+  // Initialize configurable/grouped selected options on mount or when product changes.
+  // Bundle state is intentionally excluded: it is initialized synchronously via useState()
+  // using the useMemo result, so running setBundleItems here would cause a redundant
+  // post-hydration re-render that manifests as a visible spinner delay (~4s on large bundles).
   useEffect(() => {
     const resolvedRequestedVariantId = Number.parseInt(String(requestedVariantId || '').trim(), 10) || 0;
     const requestedVariant = hasVariants && resolvedRequestedVariantId > 0
@@ -377,7 +381,26 @@ export default function ProductDetailContent({
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
     }
+  }, [
+    hasStructuredVariantAttributes,
+    hasVariants,
+    product,
+    requestedVariantId,
+  ]);
 
+  // Reset bundle state only when navigating to a different product (product.id changes).
+  // This avoids the redundant post-hydration re-render that causes the spinner delay.
+  const productIdRef = useRef(product?.id);
+  useEffect(() => {
+    const prevId = productIdRef.current;
+    productIdRef.current = product?.id;
+
+    // Skip on initial mount: useState() already initialized bundle state correctly.
+    if (prevId === product?.id) {
+      return;
+    }
+
+    // Product changed (e.g. SPA navigation): re-initialize bundle state.
     if (product?.type === 'bundle') {
       const items = product.bundle_items || product.grouped_items || [];
       if (items.length > 0) {
@@ -401,12 +424,12 @@ export default function ProductDetailContent({
       setActiveBundleConfig('');
     }
   }, [
-    hasStructuredVariantAttributes,
-    hasVariants,
-    product,
+    product?.id,
+    product?.type,
+    product?.bundle_items,
+    product?.grouped_items,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
-    requestedVariantId,
   ]);
 
   // Find the matching variant

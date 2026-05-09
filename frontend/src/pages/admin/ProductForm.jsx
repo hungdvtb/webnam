@@ -212,6 +212,29 @@ const buildProductImageSignature = (items = []) => (
         .join('|')
 );
 
+const normalizeBundleSignatureValue = (value) => String(value ?? '').trim();
+
+const buildBundleOptionSignature = (options = []) => JSON.stringify(
+    (Array.isArray(options) ? options : []).map((option, optionIndex) => ({
+        index: optionIndex,
+        title: normalizeBundleSignatureValue(option?.title),
+        post_id: normalizeBundleSignatureValue(option?.post_id),
+        image_url: normalizeBundleSignatureValue(option?.image_url),
+        video_url: normalizeBundleSignatureValue(option?.video_url),
+        video_source: normalizeBundleSignatureValue(option?.video_source),
+        items: (Array.isArray(option?.items) ? option.items : []).map((item, itemIndex) => ({
+            index: itemIndex,
+            id: normalizeBundleSignatureValue(item?.product_id ?? item?.id),
+            variant_id: normalizeBundleSignatureValue(item?.variant_id),
+            quantity: normalizeBundleSignatureValue(item?.quantity),
+            is_required: Boolean(item?.is_required),
+            is_default: Boolean(item?.is_default),
+            price: normalizeBundleSignatureValue(item?.price),
+            cost_price: normalizeBundleSignatureValue(item?.cost_price),
+        })),
+    }))
+);
+
 const appendProductImageSubmissionPayload = (formData, imagePayload) => {
     formData.append('sync_images', '1');
     imagePayload.order.forEach((token) => formData.append('image_order[]', token));
@@ -2129,6 +2152,7 @@ const ProductForm = () => {
     const initialStockQuantityRef = useRef('');
     const initialImageSignatureRef = useRef('');
     const initialFormDataSignatureRef = useRef('');
+    const initialBundleOptionSignatureRef = useRef(buildBundleOptionSignature([]));
     const hasNonImageFormChangesRef = useRef(false);
     const normalizeSelectedCategoryIds = useCallback((values) => normalizeCategoryIds(values), []);
     const applySelectedCategoryIds = useCallback((nextValuesOrUpdater) => {
@@ -4432,10 +4456,12 @@ const ProductForm = () => {
                 const optionsMap = {};
                 bItems.forEach(item => {
                     const title = item.pivot?.option_title || 'Tùy chọn';
+                    const optionImageUrl = normalizePersistedImageUrl(item.pivot?.option_image_url);
                     if (!optionsMap[title]) {
                         optionsMap[title] = {
                             post_id: item.pivot?.option_post_id || '',
                             post_title: item.pivot?.option_post_title || '',
+                            image_url: optionImageUrl,
                             video_url: item.pivot?.option_video_url || '',
                             video_source: item.pivot?.option_video_source || '',
                             items: []
@@ -4443,6 +4469,10 @@ const ProductForm = () => {
                     } else if (!optionsMap[title].post_id && item.pivot?.option_post_id) {
                         optionsMap[title].post_id = item.pivot.option_post_id;
                         optionsMap[title].post_title = item.pivot?.option_post_title || '';
+                    }
+
+                    if (!optionsMap[title].image_url && optionImageUrl) {
+                        optionsMap[title].image_url = optionImageUrl;
                     }
 
                     if (!optionsMap[title].video_url && item.pivot?.option_video_url) {
@@ -4473,15 +4503,18 @@ const ProductForm = () => {
                             legacy_missing_variant: item.type === 'configurable' && !item.pivot?.variant_id,
                         });
                 });
-                setBundleOptions(Object.entries(optionsMap).map(([title, optionData]) => ({
+                const loadedBundleOptions = Object.entries(optionsMap).map(([title, optionData]) => ({
                     id: createBundleOptionId(),
                     title: title ?? '',
                     post_id: optionData.post_id || '',
                     post_title: optionData.post_title || '',
+                    image_url: optionData.image_url || '',
                     video_url: optionData.video_url || '',
                     video_source: optionData.video_source || '',
                     items: optionData.items
-                })));
+                }));
+                setBundleOptions(loadedBundleOptions);
+                initialBundleOptionSignatureRef.current = buildBundleOptionSignature(loadedBundleOptions);
 
                 Array.from(new Set(
                     bItems
@@ -4493,6 +4526,7 @@ const ProductForm = () => {
                 });
             } else {
                 setBundleOptions([]);
+                initialBundleOptionSignatureRef.current = buildBundleOptionSignature([]);
                 setBundleItemVariants({});
             }
 
@@ -6569,12 +6603,15 @@ const ProductForm = () => {
             }
 
             const currentImageSignature = buildProductImageSignature(images);
+            const currentBundleOptionSignature = buildBundleOptionSignature(bundleOptions);
             const hasImageChanges = currentImageSignature !== initialImageSignatureRef.current;
             const hasFormDataChanges = JSON.stringify(formData) !== initialFormDataSignatureRef.current;
+            const hasBundleOptionChanges = currentBundleOptionSignature !== initialBundleOptionSignatureRef.current;
             const canUseImageOnlySave = isEdit
                 && !isDuplicate
                 && hasImageChanges
                 && !hasFormDataChanges
+                && !hasBundleOptionChanges
                 && !hasNonImageFormChangesRef.current;
 
             if (canUseImageOnlySave) {

@@ -240,13 +240,14 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
     </footer>
 );
 
-const StorefrontMobileBottomNav = ({ siteInfo }) => {
+const StorefrontMobileBottomNav = () => {
     const location = useLocation();
     const items = [
-        { key: 'home', label: 'Trang chủ', icon: 'home', to: '/' },
         { key: 'products', label: 'Sản phẩm', icon: 'inventory_2', to: '/san-pham' },
+        { key: 'about', label: 'Giới thiệu', icon: 'groups_2', to: '/about' },
         { key: 'stores', label: 'Cửa hàng', icon: 'storefront', to: '/stores' },
-        { key: 'blog', label: 'Blog', icon: 'menu_book', to: '/blog' },
+        { key: 'cart', label: 'Giỏ hàng', icon: 'shopping_cart', to: '/cart' },
+        { key: 'order', label: 'Đặt hàng', icon: 'shopping_bag', to: '/dat-hang' },
     ];
 
     return (
@@ -273,13 +274,6 @@ const StorefrontMobileBottomNav = ({ siteInfo }) => {
                     );
                 })}
 
-                <a
-                    href={`tel:${siteInfo?.phone || '0123456789'}`}
-                    className="flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-2xl px-2 text-center text-stone-500 transition"
-                >
-                    <span className="material-symbols-outlined text-[22px] text-stone-400">call</span>
-                    <span className="m-nav-label font-black uppercase leading-tight tracking-[0.12em]">Gọi ngay</span>
-                </a>
             </div>
         </nav>
     );
@@ -449,7 +443,7 @@ const StorefrontLayout = () => {
                 <Outlet context={{ categories, siteInfo, headerConfig, footerConfig, storeLocations }} />
             </main>
             <StorefrontFooter siteInfo={siteInfo} footerConfig={footerConfig} />
-            <StorefrontMobileBottomNav siteInfo={siteInfo} />
+            <StorefrontMobileBottomNav />
         </div>
     );
 };

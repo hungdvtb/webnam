@@ -31,6 +31,7 @@ const DEFAULT_NAV_ITEMS = [
 ];
 const MOBILE_NAV_META = [
   {
+    role: "products",
     labelKeys: ["san pham"],
     hrefKeys: ["/products", "/san-pham"],
     icon: "inventory_2",
@@ -38,6 +39,7 @@ const MOBILE_NAV_META = [
     activePrefixes: ["/products", "/product", "/san-pham"],
   },
   {
+    role: "about",
     labelKeys: ["ve chung toi"],
     hrefKeys: ["/about"],
     icon: "groups_2",
@@ -45,6 +47,7 @@ const MOBILE_NAV_META = [
     activePrefixes: ["/about"],
   },
   {
+    role: "blog",
     labelKeys: ["kien thuc gom"],
     hrefKeys: ["/blog"],
     icon: "menu_book",
@@ -52,13 +55,35 @@ const MOBILE_NAV_META = [
     activePrefixes: ["/blog"],
   },
   {
+    role: "stores",
     labelKeys: ["he thong cua hang"],
     hrefKeys: ["/stores", "/he-thong-cua-hang"],
     icon: "location_on",
     shortLabel: "C\u1eeda h\u00e0ng",
     activePrefixes: ["/stores", "/he-thong-cua-hang"],
   },
+  {
+    role: "cart",
+    labelKeys: ["gio hang"],
+    hrefKeys: ["/cart"],
+    icon: "shopping_cart",
+    shortLabel: "Gi\u1ecf h\u00e0ng",
+    activePrefixes: ["/cart"],
+  },
 ];
+const MOBILE_FALLBACK_NAV_ITEMS = {
+  products: { id: "mobile-nav-products-fallback", title: "S\u1ea3n ph\u1ea9m", url: "/products" },
+  about: { id: "mobile-nav-about-fallback", title: "Gi\u1edbi thi\u1ec7u", url: "/about" },
+  stores: { id: "mobile-nav-stores-fallback", title: "C\u1eeda h\u00e0ng", url: "/stores" },
+};
+const MOBILE_CART_ITEM = {
+  id: "mobile-nav-cart",
+  href: "/cart",
+  title: "Gi\u1ecf h\u00e0ng",
+  shortLabel: "Gi\u1ecf h\u00e0ng",
+  icon: "shopping_cart",
+  activePrefixes: ["/cart"],
+};
 const MOBILE_ORDER_ITEM = {
   id: "mobile-nav-order",
   href: "/cart",
@@ -72,6 +97,7 @@ const MOBILE_BOTTOM_LABEL_LINE_MAP = {
   "gioi thieu": ["Gi\u1edbi", "thi\u1ec7u"],
   "kien thuc": ["Ki\u1ebfn", "th\u1ee9c"],
   "cua hang": ["C\u1eeda", "h\u00e0ng"],
+  "gio hang": ["Gi\u1ecf", "h\u00e0ng"],
   "dat hang": ["\u0110\u1eb7t", "h\u00e0ng"],
 };
 const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
@@ -138,28 +164,38 @@ const getMobileMenuMeta = (item = {}) => {
         entry.labelKeys.some((key) => label.includes(key)) ||
         entry.hrefKeys.includes(href)
     ) || {
+      role: null,
       icon: "apps",
       shortLabel: String(item?.title || item?.label || "Menu").trim() || "Menu",
       activePrefixes: [href],
     }
   );
 };
-const buildMobileMenuItems = (items = []) =>
-  [
-    ...items.slice(0, 4).map((item, index) => {
-      const meta = getMobileMenuMeta(item);
+const createMobileMenuItem = (item = {}, index = 0) => {
+  const meta = getMobileMenuMeta(item);
 
-      return {
-        id: String(item?.id ?? `mobile-nav-${index + 1}`),
-        href: String(item?.url || item?.link || "#").trim() || "#",
-        title: String(item?.title || item?.label || meta.shortLabel).trim() || meta.shortLabel,
-        shortLabel: meta.shortLabel,
-        icon: meta.icon,
-        activePrefixes: meta.activePrefixes,
-      };
-    }),
+  return {
+    id: String(item?.id ?? `mobile-nav-${index + 1}`),
+    href: String(item?.url || item?.link || "#").trim() || "#",
+    title: String(item?.title || item?.label || meta.shortLabel).trim() || meta.shortLabel,
+    shortLabel: meta.shortLabel,
+    icon: meta.icon,
+    activePrefixes: meta.activePrefixes,
+    role: meta.role,
+  };
+};
+const buildMobileMenuItems = (items = []) => {
+  const mappedItems = items.map((item, index) => createMobileMenuItem(item, index));
+  const findByRole = (role) => mappedItems.find((item) => item.role === role);
+
+  return [
+    findByRole("products") || createMobileMenuItem(MOBILE_FALLBACK_NAV_ITEMS.products),
+    findByRole("about") || createMobileMenuItem(MOBILE_FALLBACK_NAV_ITEMS.about),
+    findByRole("stores") || createMobileMenuItem(MOBILE_FALLBACK_NAV_ITEMS.stores),
+    MOBILE_CART_ITEM,
     MOBILE_ORDER_ITEM,
   ];
+};
 const isMobileMenuItemActive = (pathname, item) => {
   const currentPath = normalizePath(pathname);
 

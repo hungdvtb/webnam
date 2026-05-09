@@ -226,27 +226,6 @@ export default function ComponentSelectionModal({
           </button>
         </div>
 
-        {allowSearch ? (
-          <div className={styles.modalTabs}>
-            <button
-              type="button"
-              className={`${styles.modalTab} ${mode === 'variants' ? styles.modalTabActive : ''}`}
-              onClick={() => setMode('variants')}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>tune</span>
-              Biến thể cùng loại
-            </button>
-            <button
-              type="button"
-              className={`${styles.modalTab} ${mode === 'search' ? styles.modalTabActive : ''}`}
-              onClick={() => setMode('search')}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>search</span>
-              Tìm sản phẩm khác
-            </button>
-          </div>
-        ) : null}
-
         {allowSearch && mode === 'search' ? (
           <div className={styles.searchSection}>
             <div className={styles.searchBox}>

@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 BACKEND_DIR="${BACKEND_DIR:-$PROJECT_ROOT/backend}"
+ADMIN_DIR="${ADMIN_DIR:-$PROJECT_ROOT/frontend}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-master}"
 SYNC_LIMIT="${SYNC_LIMIT:-5}"
 
@@ -35,7 +36,9 @@ usage() {
 Usage: ./deploygg.sh [command]
 
 Commands:
-  deploy        Pull code, deploy backend, validate Google Merchant config, dry-run 5 products (default)
+  deploy        Pull code, deploy backend + admin frontend, validate Google Merchant config, dry-run 5 products (default)
+  backend       Pull code, deploy backend, validate Google Merchant config, dry-run 5 products
+  admin         Pull code and build admin frontend
   check         Validate backend .env and Google Merchant service account file
   register-gcp  Register this Google Cloud project with the Merchant Center account
   sources       List Google Merchant data sources from the configured account
@@ -47,6 +50,7 @@ Commands:
 Optional environment variables:
   PROJECT_ROOT=/path/to/repo
   BACKEND_DIR=/path/to/repo/backend
+  ADMIN_DIR=/path/to/repo/frontend
   DEPLOY_BRANCH=master
   SYNC_LIMIT=5
 EOF
@@ -83,6 +87,25 @@ deploy_backend() {
     php artisan storage:link || true
     php artisan config:clear
     success "Backend xong"
+}
+
+run_npm_install() {
+    if [ -f package-lock.json ]; then
+        npm ci
+    else
+        npm install
+    fi
+}
+
+deploy_admin() {
+    require_cmd npm
+    require_dir "$ADMIN_DIR"
+
+    log "Build admin frontend"
+    cd "$ADMIN_DIR"
+    run_npm_install
+    npm run build
+    success "Admin frontend xong"
 }
 
 print_env_template() {
@@ -200,8 +223,19 @@ case "$COMMAND" in
     deploy)
         pull_latest
         deploy_backend
+        deploy_admin
         validate_google_merchant_config
         dry_run_products
+        ;;
+    backend)
+        pull_latest
+        deploy_backend
+        validate_google_merchant_config
+        dry_run_products
+        ;;
+    admin)
+        pull_latest
+        deploy_admin
         ;;
     check)
         validate_google_merchant_config

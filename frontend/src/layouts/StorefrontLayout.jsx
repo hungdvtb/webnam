@@ -6,6 +6,7 @@ import { buildHeaderConfig } from '../utils/headerSettings';
 import { buildFooterConfig } from '../utils/footerSettings';
 import { rememberLeadAttribution } from '../utils/leadAttribution';
 import { getPrimaryStoreLocation, normalizeStoreLocations } from '../utils/storeLocations';
+import { useCart } from '../context/CartContext';
 
 const isActivePath = (pathname, target) => (
     target === '/'
@@ -242,6 +243,7 @@ const StorefrontFooter = ({ siteInfo, footerConfig }) => (
 
 const StorefrontMobileBottomNav = () => {
     const location = useLocation();
+    const { cartCount } = useCart();
     const items = [
         { key: 'products', label: 'Sản phẩm', icon: 'inventory_2', to: '/san-pham' },
         { key: 'about', label: 'Giới thiệu', icon: 'groups_2', to: '/about' },
@@ -264,8 +266,15 @@ const StorefrontMobileBottomNav = () => {
                                 active ? 'text-primary' : 'text-stone-500'
                             }`}
                         >
-                            <span className={`material-symbols-outlined text-[22px] ${active ? 'text-primary' : 'text-stone-400'}`}>
-                                {item.icon}
+                            <span className="relative">
+                                <span className={`material-symbols-outlined text-[22px] ${active ? 'text-primary' : 'text-stone-400'}`}>
+                                    {item.icon}
+                                </span>
+                                {item.key === 'cart' && cartCount > 0 ? (
+                                    <span className="absolute -right-2 -top-1 flex min-h-4 min-w-4 items-center justify-center rounded-full bg-brick px-1 text-[10px] font-bold leading-none text-white">
+                                        {cartCount > 99 ? '99+' : cartCount}
+                                    </span>
+                                ) : null}
                             </span>
                             <span className="m-nav-label font-black uppercase leading-tight tracking-[0.12em]">
                                 {item.label}

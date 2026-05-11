@@ -463,23 +463,361 @@ const QuantityStepper = ({ quantity, onDecrease, onIncrease, compact = false }) 
     </div>
 );
 
+const MIN_IMAGE_SCALE = 1;
+const MAX_IMAGE_SCALE = 4;
+const SWIPE_THRESHOLD = 45;
+const DOUBLE_TAP_DELAY = 280;
+const DOUBLE_TAP_RADIUS = 24;
+
+const getTouchPoint = (touch) => ({
+    x: touch?.clientX || 0,
+    y: touch?.clientY || 0,
+});
+
+const getTouchDistance = (touches) => {
+    if (!touches || touches.length < 2) {
+        return 0;
+    }
+
+    const first = touches[0];
+    const second = touches[1];
+    return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+};
+
+const getTouchCenter = (touches) => {
+    if (!touches || touches.length < 2) {
+        return { x: 0, y: 0 };
+    }
+
+    const first = touches[0];
+    const second = touches[1];
+    return {
+        x: (first.clientX + second.clientX) / 2,
+        y: (first.clientY + second.clientY) / 2,
+    };
+};
+
+const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const clampImageTransform = (transform, rect) => {
+    const scale = clampNumber(transform?.scale || MIN_IMAGE_SCALE, MIN_IMAGE_SCALE, MAX_IMAGE_SCALE);
+
+    if (!rect || scale <= MIN_IMAGE_SCALE) {
+        return {
+            scale: MIN_IMAGE_SCALE,
+            x: 0,
+            y: 0,
+        };
+    }
+
+    const minX = rect.width * (1 - scale);
+    const minY = rect.height * (1 - scale);
+
+    return {
+        scale,
+        x: clampNumber(transform?.x || 0, minX, 0),
+        y: clampNumber(transform?.y || 0, minY, 0),
+    };
+};
+
+const scaleTransformAroundPoint = (currentTransform, nextScale, point, rect) => {
+    const currentScale = currentTransform?.scale || MIN_IMAGE_SCALE;
+    const normalizedScale = clampNumber(nextScale, MIN_IMAGE_SCALE, MAX_IMAGE_SCALE);
+
+    if (!rect || normalizedScale <= MIN_IMAGE_SCALE) {
+        return {
+            scale: MIN_IMAGE_SCALE,
+            x: 0,
+            y: 0,
+        };
+    }
+
+    const ratio = normalizedScale / currentScale;
+    const nextTransform = {
+        scale: normalizedScale,
+        x: point.x - (ratio * (point.x - (currentTransform?.x || 0))),
+        y: point.y - (ratio * (point.y - (currentTransform?.y || 0))),
+    };
+
+    return clampImageTransform(nextTransform, rect);
+};
+
+const useImageTouchTransform = ({ enabled, onSwipe = null, onDoubleTap = null }) => {
+    const containerRef = useRef(null);
+    const [transform, setTransform] = useState({
+        scale: MIN_IMAGE_SCALE,
+        x: 0,
+        y: 0,
+    });
+    const transformRef = useRef(transform);
+    const gestureRef = useRef({
+        lastPoint: null,
+        lastCenter: null,
+        lastDistance: 0,
+        swipeStart: null,
+        tapStart: null,
+        tapMoved: false,
+        lastTapAt: 0,
+        lastTapPoint: null,
+    });
+
+    useEffect(() => {
+        transformRef.current = transform;
+    }, [transform]);
+
+    const setSafeTransform = (nextTransform) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        const normalizedTransform = clampImageTransform(nextTransform, rect);
+        transformRef.current = normalizedTransform;
+        setTransform(normalizedTransform);
+        return normalizedTransform;
+    };
+
+    const resetTransform = () => {
+        const gesture = gestureRef.current;
+        gesture.lastPoint = null;
+        gesture.lastCenter = null;
+        gesture.lastDistance = 0;
+        gesture.swipeStart = null;
+        gesture.tapStart = null;
+        gesture.tapMoved = false;
+        setSafeTransform({
+            scale: MIN_IMAGE_SCALE,
+            x: 0,
+            y: 0,
+        });
+    };
+
+    const handleTouchStart = (event) => {
+        if (!enabled) {
+            return;
+        }
+
+        const touches = event.touches || [];
+        const gesture = gestureRef.current;
+
+        if (touches.length === 2) {
+            gesture.lastCenter = getTouchCenter(touches);
+            gesture.lastDistance = getTouchDistance(touches);
+            gesture.tapMoved = true;
+            return;
+        }
+
+        if (touches.length !== 1) {
+            return;
+        }
+
+        const point = getTouchPoint(touches[0]);
+        gesture.lastPoint = point;
+        gesture.swipeStart = point;
+        gesture.tapStart = point;
+        gesture.tapMoved = false;
+        gesture.lastCenter = null;
+        gesture.lastDistance = 0;
+    };
+
+    const handleTouchMove = (event) => {
+        if (!enabled) {
+            return;
+        }
+
+        const touches = event.touches || [];
+        const gesture = gestureRef.current;
+
+        if (touches.length === 2) {
+            const rect = containerRef.current?.getBoundingClientRect();
+            const currentDistance = getTouchDistance(touches);
+            const currentCenter = getTouchCenter(touches);
+
+            if (!rect || !currentDistance) {
+                return;
+            }
+
+            if (!gesture.lastDistance) {
+                gesture.lastDistance = currentDistance;
+                gesture.lastCenter = currentCenter;
+                return;
+            }
+
+            event.preventDefault();
+
+            const scaledTransform = scaleTransformAroundPoint(
+                transformRef.current,
+                transformRef.current.scale * (currentDistance / gesture.lastDistance),
+                {
+                    x: currentCenter.x - rect.left,
+                    y: currentCenter.y - rect.top,
+                },
+                rect,
+            );
+
+            const nextTransform = clampImageTransform({
+                ...scaledTransform,
+                x: scaledTransform.x + (currentCenter.x - gesture.lastCenter.x),
+                y: scaledTransform.y + (currentCenter.y - gesture.lastCenter.y),
+            }, rect);
+
+            transformRef.current = nextTransform;
+            setTransform(nextTransform);
+            gesture.lastCenter = currentCenter;
+            gesture.lastDistance = currentDistance;
+            gesture.tapMoved = true;
+            return;
+        }
+
+        if (touches.length !== 1) {
+            return;
+        }
+
+        const point = getTouchPoint(touches[0]);
+        const currentTransform = transformRef.current;
+
+        if (gesture.tapStart && (Math.abs(point.x - gesture.tapStart.x) > 8 || Math.abs(point.y - gesture.tapStart.y) > 8)) {
+            gesture.tapMoved = true;
+        }
+
+        if (currentTransform.scale > MIN_IMAGE_SCALE) {
+            const rect = containerRef.current?.getBoundingClientRect();
+            const lastPoint = gesture.lastPoint || point;
+
+            if (!rect) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const nextTransform = clampImageTransform({
+                ...currentTransform,
+                x: currentTransform.x + (point.x - lastPoint.x),
+                y: currentTransform.y + (point.y - lastPoint.y),
+            }, rect);
+
+            transformRef.current = nextTransform;
+            setTransform(nextTransform);
+        }
+
+        gesture.lastPoint = point;
+    };
+
+    const handleTouchEnd = (event) => {
+        if (!enabled) {
+            return;
+        }
+
+        const gesture = gestureRef.current;
+        const remainingTouches = event.touches?.length || 0;
+
+        if (remainingTouches === 1) {
+            const point = getTouchPoint(event.touches[0]);
+            gesture.lastPoint = point;
+            gesture.swipeStart = point;
+            gesture.tapStart = point;
+            gesture.tapMoved = true;
+            gesture.lastCenter = null;
+            gesture.lastDistance = 0;
+            return;
+        }
+
+        if (remainingTouches > 1) {
+            return;
+        }
+
+        const endPoint = event.changedTouches?.[0]
+            ? getTouchPoint(event.changedTouches[0])
+            : (gesture.lastPoint || gesture.tapStart);
+        const canNavigate = transformRef.current.scale <= MIN_IMAGE_SCALE + 0.01;
+        let swiped = false;
+
+        if (canNavigate && onSwipe && gesture.swipeStart && endPoint) {
+            const deltaX = endPoint.x - gesture.swipeStart.x;
+            const deltaY = endPoint.y - gesture.swipeStart.y;
+
+            if (Math.abs(deltaX) > SWIPE_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY)) {
+                onSwipe(deltaX < 0 ? 1 : -1);
+                swiped = true;
+            }
+        }
+
+        if (!swiped && canNavigate && !gesture.tapMoved && onDoubleTap && gesture.tapStart) {
+            const now = Date.now();
+            const isDoubleTap = (
+                now - gesture.lastTapAt <= DOUBLE_TAP_DELAY
+                && gesture.lastTapPoint
+                && Math.hypot(
+                    gesture.lastTapPoint.x - gesture.tapStart.x,
+                    gesture.lastTapPoint.y - gesture.tapStart.y,
+                ) <= DOUBLE_TAP_RADIUS
+            );
+
+            if (isDoubleTap) {
+                onDoubleTap();
+                gesture.lastTapAt = 0;
+                gesture.lastTapPoint = null;
+            } else {
+                gesture.lastTapAt = now;
+                gesture.lastTapPoint = gesture.tapStart;
+            }
+        }
+
+        gesture.lastPoint = null;
+        gesture.lastCenter = null;
+        gesture.lastDistance = 0;
+        gesture.swipeStart = null;
+        gesture.tapStart = null;
+        gesture.tapMoved = false;
+    };
+
+    return {
+        containerRef,
+        transform,
+        resetTransform,
+        isZoomed: transform.scale > MIN_IMAGE_SCALE + 0.01,
+        touchHandlers: enabled ? {
+            onTouchStart: handleTouchStart,
+            onTouchMove: handleTouchMove,
+            onTouchEnd: handleTouchEnd,
+            onTouchCancel: handleTouchEnd,
+        } : {},
+    };
+};
+
 const ProductMediaGallery = ({ items, title }) => {
     const [activeIndex, setActiveIndex] = useState(0);
-    const [zoomed, setZoomed] = useState(false);
-    const touchStartX = useRef(null);
+    const [fullscreenOpen, setFullscreenOpen] = useState(false);
+    const [isTouchDevice, setIsTouchDevice] = useState(false);
 
     useEffect(() => {
         setActiveIndex(0);
+        setFullscreenOpen(false);
     }, [items]);
 
-    const gallery = items?.length ? items : [{
+    useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+            return undefined;
+        }
+
+        const mediaQuery = window.matchMedia('(pointer: coarse)');
+        const updateDeviceMode = () => {
+            setIsTouchDevice(mediaQuery.matches || 'ontouchstart' in window);
+        };
+
+        updateDeviceMode();
+        if (typeof mediaQuery.addEventListener === 'function') {
+            mediaQuery.addEventListener('change', updateDeviceMode);
+            return () => mediaQuery.removeEventListener('change', updateDeviceMode);
+        }
+
+        mediaQuery.addListener(updateDeviceMode);
+        return () => mediaQuery.removeListener(updateDeviceMode);
+    }, []);
+
+    const gallery = useMemo(() => (items?.length ? items : [{
         id: 'fallback-image',
         type: 'image',
         url: FALLBACK_IMAGE,
         thumbnailUrl: FALLBACK_IMAGE,
-    }];
+    }]), [items]);
     const activeItem = gallery[activeIndex] || gallery[0];
-    const canSwipe = gallery.length > 1 && activeItem.type !== 'video';
 
     const changeSlide = (direction) => {
         setActiveIndex((prev) => {
@@ -496,34 +834,96 @@ const ProductMediaGallery = ({ items, title }) => {
         });
     };
 
-    const handleTouchStart = (event) => {
-        touchStartX.current = event.changedTouches?.[0]?.clientX ?? null;
+    const {
+        containerRef: inlineImageContainerRef,
+        transform: inlineImageTransform,
+        resetTransform: resetInlineImageTransform,
+        isZoomed: inlineImageIsZoomed,
+        touchHandlers: inlineImageTouchHandlers,
+    } = useImageTouchTransform({
+        enabled: activeItem.type === 'image',
+        onSwipe: gallery.length > 1 && activeItem.type !== 'video' ? changeSlide : null,
+        onDoubleTap: () => setFullscreenOpen(true),
+    });
+
+    const {
+        containerRef: fullscreenImageContainerRef,
+        transform: fullscreenImageTransform,
+        resetTransform: resetFullscreenImageTransform,
+        isZoomed: fullscreenImageIsZoomed,
+        touchHandlers: fullscreenImageTouchHandlers,
+    } = useImageTouchTransform({
+        enabled: fullscreenOpen && activeItem.type === 'image',
+        onSwipe: gallery.length > 1 ? changeSlide : null,
+    });
+
+    useEffect(() => {
+        resetInlineImageTransform();
+        resetFullscreenImageTransform();
+    }, [activeIndex]);
+
+    useEffect(() => {
+        if (!fullscreenOpen || activeItem.type !== 'image') {
+            resetFullscreenImageTransform();
+        }
+
+        if (activeItem.type !== 'image') {
+            resetInlineImageTransform();
+        }
+    }, [activeItem.type, fullscreenOpen]);
+
+    useEffect(() => {
+        if (!fullscreenOpen || typeof window === 'undefined') {
+            return undefined;
+        }
+
+        const previousOverflow = document.body.style.overflow;
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setFullscreenOpen(false);
+            }
+
+            if (gallery.length > 1 && !fullscreenImageIsZoomed) {
+                if (event.key === 'ArrowLeft') {
+                    changeSlide(-1);
+                }
+
+                if (event.key === 'ArrowRight') {
+                    changeSlide(1);
+                }
+            }
+        };
+
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.body.style.overflow = previousOverflow;
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [fullscreenOpen, gallery.length, fullscreenImageIsZoomed]);
+
+    const inlineTransformStyle = {
+        transform: `matrix(${inlineImageTransform.scale}, 0, 0, ${inlineImageTransform.scale}, ${inlineImageTransform.x}, ${inlineImageTransform.y})`,
+        transformOrigin: 'top left',
+        transition: inlineImageIsZoomed ? 'none' : 'transform 180ms ease-out',
     };
 
-    const handleTouchEnd = (event) => {
-        const startX = touchStartX.current;
-        const endX = event.changedTouches?.[0]?.clientX ?? null;
+    const fullscreenTransformStyle = {
+        transform: `matrix(${fullscreenImageTransform.scale}, 0, 0, ${fullscreenImageTransform.scale}, ${fullscreenImageTransform.x}, ${fullscreenImageTransform.y})`,
+        transformOrigin: 'top left',
+        transition: fullscreenImageIsZoomed ? 'none' : 'transform 180ms ease-out',
+    };
 
-        if (startX === null || endX === null) {
-            touchStartX.current = null;
-            return;
+    const handleInlineImageOpen = () => {
+        if (!isTouchDevice) {
+            setFullscreenOpen(true);
         }
-
-        const deltaX = endX - startX;
-        if (Math.abs(deltaX) > 45 && canSwipe) {
-            changeSlide(deltaX < 0 ? 1 : -1);
-        }
-
-        touchStartX.current = null;
     };
 
     return (
         <div className="bg-white md:rounded-[32px] md:border md:border-stone-200/80 md:p-3 md:shadow-[0_30px_60px_-45px_rgba(27,54,93,0.45)]">
-            <div
-                className="relative overflow-hidden bg-stone-100 md:rounded-[28px]"
-                onTouchStart={canSwipe ? handleTouchStart : undefined}
-                onTouchEnd={canSwipe ? handleTouchEnd : undefined}
-            >
+            <div className="relative overflow-hidden bg-stone-100 md:rounded-[28px]">
                 <div className="aspect-[100/92] md:aspect-square">
                     {activeItem.type === 'video' ? (
                         activeItem.provider === 'file' ? (
@@ -545,18 +945,23 @@ const ProductMediaGallery = ({ items, title }) => {
                         )
                     ) : (
                         <button
+                            ref={inlineImageContainerRef}
                             type="button"
-                            onClick={() => setZoomed(true)}
-                            className="block h-full w-full"
+                            onClick={handleInlineImageOpen}
+                            aria-label={`Xem anh ${title}`}
+                            className="relative block h-full w-full overflow-hidden bg-stone-100"
+                            {...inlineImageTouchHandlers}
                         >
                             <img
                                 src={activeItem.url || FALLBACK_IMAGE}
                                 alt={title}
+                                onDragStart={(event) => event.preventDefault()}
                                 onError={(event) => {
                                     event.currentTarget.onerror = null;
                                     event.currentTarget.src = FALLBACK_IMAGE;
                                 }}
-                                className="h-full w-full object-cover"
+                                className="pointer-events-none absolute left-0 top-0 h-full w-full object-cover select-none"
+                                style={inlineTransformStyle}
                             />
                         </button>
                     )}
@@ -633,24 +1038,86 @@ const ProductMediaGallery = ({ items, title }) => {
                 </div>
             ) : null}
 
-            {zoomed && activeItem.type === 'image' ? (
-                <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/95 p-4" onClick={() => setZoomed(false)}>
+            {fullscreenOpen ? (
+                <div
+                    className="fixed inset-0 z-[70] bg-black/95"
+                    onClick={(event) => {
+                        if (event.target === event.currentTarget) {
+                            setFullscreenOpen(false);
+                        }
+                    }}
+                >
                     <button
                         type="button"
-                        onClick={() => setZoomed(false)}
-                        className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
+                        onClick={() => setFullscreenOpen(false)}
+                        className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white"
                     >
                         <span className="material-symbols-outlined">close</span>
                     </button>
-                    <img
-                        src={activeItem.url || FALLBACK_IMAGE}
-                        alt={title}
-                        onError={(event) => {
-                            event.currentTarget.onerror = null;
-                            event.currentTarget.src = FALLBACK_IMAGE;
-                        }}
-                        className="max-h-[92vh] max-w-[92vw] object-contain"
-                    />
+
+                    {gallery.length > 1 ? (
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => changeSlide(-1)}
+                                className="absolute left-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/12 text-white backdrop-blur transition hover:bg-white/20"
+                            >
+                                <span className="material-symbols-outlined text-[22px]">chevron_left</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => changeSlide(1)}
+                                className="absolute right-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/12 text-white backdrop-blur transition hover:bg-white/20"
+                            >
+                                <span className="material-symbols-outlined text-[22px]">chevron_right</span>
+                            </button>
+                            <div className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full bg-white/12 px-3 py-1 text-[11px] font-bold text-white backdrop-blur">
+                                {activeIndex + 1}/{gallery.length}
+                            </div>
+                        </>
+                    ) : null}
+
+                    <div className="flex h-full items-center justify-center p-4 sm:p-6">
+                        <div className="relative h-[92vh] w-[92vw] overflow-hidden">
+                            {activeItem.type === 'video' ? (
+                                activeItem.provider === 'file' ? (
+                                    <video
+                                        src={activeItem.url}
+                                        poster={activeItem.thumbnailUrl}
+                                        controls
+                                        playsInline
+                                        className="h-full w-full bg-black object-contain"
+                                    />
+                                ) : (
+                                    <iframe
+                                        src={activeItem.embedUrl}
+                                        title={`${title} video fullscreen`}
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                        allowFullScreen
+                                        className="h-full w-full border-0 bg-black"
+                                    />
+                                )
+                            ) : (
+                                <div
+                                    ref={fullscreenImageContainerRef}
+                                    className="relative h-full w-full overflow-hidden"
+                                    {...fullscreenImageTouchHandlers}
+                                >
+                                    <img
+                                        src={activeItem.url || FALLBACK_IMAGE}
+                                        alt={title}
+                                        onDragStart={(event) => event.preventDefault()}
+                                        onError={(event) => {
+                                            event.currentTarget.onerror = null;
+                                            event.currentTarget.src = FALLBACK_IMAGE;
+                                        }}
+                                        className="pointer-events-none absolute left-0 top-0 h-full w-full object-contain select-none"
+                                        style={fullscreenTransformStyle}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
             ) : null}
         </div>

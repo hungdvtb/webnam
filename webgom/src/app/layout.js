@@ -115,7 +115,7 @@ export const metadata = {
   keywords: ["gốm sứ bát tràng", "bình hút lộc", "ấm chén cao cấp", "quà tặng gốm sứ", "gốm nghệ thuật"],
   authors: [{ name: "GỐM ĐẠI THÀNH" }],
   verification: {
-    google: "-3Zk6JnTKQ1PJLfAD_Y17109b78DTEP7iqewWAJhfMM",
+    google: "-3Zk6JnTKQlPJLfAD_Yl71O9b78DTEP7iqewWAJhfMM",
   },
   openGraph: {
     title: "GỐM ĐẠI THÀNH - Tinh Hoa Đất Việt",

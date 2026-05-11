@@ -37,6 +37,37 @@ const uniqueProductsById = (items = []) => {
   });
 };
 
+const MODAL_HISTORY_STATE_KEY = '__webgomBundleComponentModal';
+
+const getModalPageKey = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return `${window.location.pathname}${window.location.search}`;
+};
+
+const getHistoryStateObject = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const state = window.history?.state;
+  return state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+};
+
+const getModalHistoryMarker = (state) => (
+  state && typeof state === 'object' && !Array.isArray(state)
+    ? state[MODAL_HISTORY_STATE_KEY]
+    : null
+);
+
+const stripModalHistoryMarker = (state) => {
+  const safeState = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
+  const { [MODAL_HISTORY_STATE_KEY]: _modalMarker, ...restState } = safeState;
+  return restState;
+};
+
 export default function ComponentSelectionModal({
   isOpen,
   onClose,
@@ -57,6 +88,18 @@ export default function ComponentSelectionModal({
   const [errorMsg, setErrorMsg] = useState(null);
   const [mobileTopOffset, setMobileTopOffset] = useState(0);
   const savedScrollTopRef = useRef(0);
+  const modeRef = useRef(mode);
+  const isOpenRef = useRef(isOpen);
+  const modalHistoryIdRef = useRef('');
+  const modalHistoryDepthRef = useRef(0);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    isOpenRef.current = isOpen;
+  }, [isOpen]);
 
   const restorePageScrollPosition = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -72,15 +115,91 @@ export default function ComponentSelectionModal({
     });
   }, []);
 
+  const pushModalHistoryState = useCallback((view = 'variants') => {
+    if (typeof window === 'undefined' || !modalHistoryIdRef.current) {
+      return;
+    }
+
+    const currentState = getHistoryStateObject();
+    const currentMarker = getModalHistoryMarker(currentState);
+
+    if (currentMarker?.id === modalHistoryIdRef.current && currentMarker?.view === view) {
+      return;
+    }
+
+    try {
+      window.history.pushState(
+        {
+          ...currentState,
+          [MODAL_HISTORY_STATE_KEY]: {
+            id: modalHistoryIdRef.current,
+            pageKey: getModalPageKey(),
+            view,
+          },
+        },
+        '',
+        window.location.href,
+      );
+      modalHistoryDepthRef.current += 1;
+    } catch (error) {
+      console.warn('Failed to push bundle component modal history state.', error);
+    }
+  }, []);
+
+  const popModalHistoryState = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const currentState = getHistoryStateObject();
+    const currentMarker = getModalHistoryMarker(currentState);
+    const shouldPopModalState = currentMarker?.id === modalHistoryIdRef.current
+      && modalHistoryDepthRef.current > 0;
+
+    if (shouldPopModalState) {
+      const depth = modalHistoryDepthRef.current;
+      modalHistoryDepthRef.current = 0;
+      try {
+        window.history.go(-depth);
+      } catch (error) {
+        console.warn('Failed to pop bundle component modal history state.', error);
+      }
+      return;
+    }
+
+    if (currentMarker?.id === modalHistoryIdRef.current) {
+      try {
+        window.history.replaceState(
+          stripModalHistoryMarker(currentState),
+          '',
+          window.location.href,
+        );
+      } catch (error) {
+        console.warn('Failed to clear bundle component modal history state.', error);
+      }
+    }
+  }, []);
+
   const handleClose = useCallback(() => {
     onClose();
+    popModalHistoryState();
     restorePageScrollPosition();
-  }, [onClose, restorePageScrollPosition]);
+  }, [onClose, popModalHistoryState, restorePageScrollPosition]);
 
   const handleSelectItem = useCallback((item) => {
     onSelect(item);
+    popModalHistoryState();
     restorePageScrollPosition();
-  }, [onSelect, restorePageScrollPosition]);
+  }, [onSelect, popModalHistoryState, restorePageScrollPosition]);
+
+  const handleSwitchToSearch = useCallback(() => {
+    if (modeRef.current === 'search') {
+      return;
+    }
+
+    setMode('search');
+    pushModalHistoryState('search');
+  }, [pushModalHistoryState]);
 
   const fetchRelatedFallback = useCallback(async (identifier) => {
     if (!identifier) {
@@ -239,6 +358,54 @@ export default function ComponentSelectionModal({
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const currentState = getHistoryStateObject();
+    const currentMarker = getModalHistoryMarker(currentState);
+    const currentPageKey = getModalPageKey();
+
+    if (currentMarker?.pageKey === currentPageKey && currentMarker?.id) {
+      modalHistoryIdRef.current = currentMarker.id;
+      modalHistoryDepthRef.current = currentMarker.view === 'search' ? 2 : 1;
+      if (currentMarker.view === 'search') {
+        setMode('search');
+      }
+    } else {
+      modalHistoryIdRef.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      modalHistoryDepthRef.current = 0;
+      pushModalHistoryState('variants');
+    }
+
+    const handlePopState = (event) => {
+      if (!isOpenRef.current) {
+        return;
+      }
+
+      const nextMarker = getModalHistoryMarker(event.state);
+
+      if (nextMarker?.id === modalHistoryIdRef.current) {
+        const nextView = nextMarker.view === 'search' ? 'search' : 'variants';
+        modalHistoryDepthRef.current = nextView === 'search' ? 2 : 1;
+        setMode(nextView);
+        restorePageScrollPosition();
+        return;
+      }
+
+      modalHistoryDepthRef.current = 0;
+      onClose();
+      restorePageScrollPosition();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isOpen, onClose, pushModalHistoryState, restorePageScrollPosition]);
+
+  useEffect(() => {
     if (mode !== 'search' || !isOpen || !allowSearch) {
       return undefined;
     }
@@ -372,7 +539,7 @@ export default function ComponentSelectionModal({
                 <button
                   type="button"
                   className={styles.switchModeBtn}
-                  onClick={() => setMode('search')}
+                  onClick={handleSwitchToSearch}
                 >
                   Tìm sản phẩm khác →
                 </button>

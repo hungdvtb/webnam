@@ -604,6 +604,62 @@ class ProductController extends Controller
         return $this->mapPostPrimaryImage($optionPost);
     }
 
+    private function extractBundleBowlCount(?string $value): ?int
+    {
+        $normalized = $this->normalizeSearchKeyword($value);
+
+        return preg_match('/\b([0-9]+)\s*bat\b/', $normalized, $matches) === 1
+            ? (int) $matches[1]
+            : null;
+    }
+
+    private function mapProductImage($image): array
+    {
+        return [
+            'id' => $image->id,
+            'url' => $image->large_url ?: $image->image_url,
+            'path' => $image->large_url ?: $image->image_url,
+            'image_url' => $image->image_url,
+            'thumbnail_url' => $image->thumbnail_url,
+            'medium_url' => $image->medium_url,
+            'large_url' => $image->large_url,
+            'width' => $image->width,
+            'height' => $image->height,
+            'srcset' => $image->srcset,
+            'is_primary' => (bool) $image->is_primary,
+            'sort_order' => $image->sort_order,
+        ];
+    }
+
+    private function resolveBundleOptionGalleryImage(?Product $bundleProduct, ?string $optionTitle): ?array
+    {
+        if (!$bundleProduct || !$bundleProduct->relationLoaded('images') || $bundleProduct->images->isEmpty()) {
+            return null;
+        }
+
+        $optionBowlCount = $this->extractBundleBowlCount($optionTitle);
+        $optionText = $this->normalizeSearchKeyword($optionTitle);
+
+        foreach ($bundleProduct->images as $image) {
+            $imageText = $this->normalizeSearchKeyword(implode(' ', array_filter([
+                $image->file_name ?? null,
+                $image->mediaAsset?->original_name ?? null,
+                $image->image_url ?? null,
+                $image->large_url ?? null,
+            ])));
+
+            if ($optionBowlCount !== null && $this->extractBundleBowlCount($imageText) === $optionBowlCount) {
+                return $this->mapProductImage($image);
+            }
+
+            if (str_contains($optionText, 'than tai') && str_contains($imageText, 'than tai')) {
+                return $this->mapProductImage($image);
+            }
+        }
+
+        return null;
+    }
+
     private function mapBundleOptionImageUrl(?string $imageUrl): ?array
     {
         $normalizedImageUrl = trim((string) $imageUrl);
@@ -626,12 +682,13 @@ class ProductController extends Controller
                     $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
                     $variantMap,
                     $optionPosts,
+                    $product,
                 ),
             ];
         })->all();
     }
 
-    private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts): array
+    private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts, ?Product $bundleProduct = null): array
     {
         $catalog = [];
         $catalogAliases = [];
@@ -657,7 +714,8 @@ class ProductController extends Controller
 
             if (!isset($catalog[$catalogKey])) {
                 $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
-                    ?? $this->resolveBundleOptionPrimaryImage($optionPost);
+                    ?? $this->resolveBundleOptionPrimaryImage($optionPost)
+                    ?? $this->resolveBundleOptionGalleryImage($bundleProduct, $optionTitle);
                 $displayName = $optionTitle !== ''
                     ? $optionTitle
                     : (Str::squish((string) ($optionPost?->title ?? '')) ?: $bundleItem->name);
@@ -696,7 +754,8 @@ class ProductController extends Controller
 
             if (!$catalog[$catalogKey]['primary_image']) {
                 $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
-                    ?? $this->resolveBundleOptionPrimaryImage($optionPost);
+                    ?? $this->resolveBundleOptionPrimaryImage($optionPost)
+                    ?? $this->resolveBundleOptionGalleryImage($bundleProduct, $optionTitle);
                 $catalog[$catalogKey]['primary_image'] = $displayImage;
                 $catalog[$catalogKey]['main_image'] = $this->extractImageUrl($displayImage);
             }
@@ -1374,6 +1433,7 @@ class ProductController extends Controller
                             $product->bundleItems instanceof Collection ? $product->bundleItems : collect(),
                             $variantMap,
                             $bundleOptionPosts,
+                            $product,
                         )
                     );
                 }
@@ -1594,6 +1654,7 @@ class ProductController extends Controller
                 $selectedBundleItems instanceof Collection ? $selectedBundleItems : collect($selectedBundleItems),
                 $variantMap,
                 $bundleOptionPosts,
+                $product,
             );
             $stepStartedAt = $this->markTiming($timings, 'selected_catalog', $stepStartedAt);
 
@@ -1759,20 +1820,7 @@ class ProductController extends Controller
     private function mapProductImages(Product $product)
     {
         return $product->images->map(function ($image) {
-            return [
-                'id' => $image->id,
-                'url' => $image->large_url ?: $image->image_url,
-                'path' => $image->large_url ?: $image->image_url,
-                'image_url' => $image->image_url,
-                'thumbnail_url' => $image->thumbnail_url,
-                'medium_url' => $image->medium_url,
-                'large_url' => $image->large_url,
-                'width' => $image->width,
-                'height' => $image->height,
-                'srcset' => $image->srcset,
-                'is_primary' => (bool) $image->is_primary,
-                'sort_order' => $image->sort_order,
-            ];
+            return $this->mapProductImage($image);
         })->values()->all();
     }
 

@@ -19,13 +19,18 @@ const EMPTY_PRODUCTS_MESSAGE = 'Không tìm thấy sản phẩm nào phù hợp 
 
 const getDisplayPrice = (product = {}) => {
   if (product.item_type === 'bundle_option') {
+    const explicitPrice = Number(product.bundle_option_discounted_price ?? product.current_price ?? 0);
+    if (Number.isFinite(explicitPrice) && explicitPrice > 0) {
+      return explicitPrice;
+    }
+
     const bundleTotal = Number(product.bundle_option_total_price ?? product.price ?? 0);
 
     if (Number.isFinite(bundleTotal) && bundleTotal > 0) {
       return calculateFullBundleDiscount(bundleTotal).finalSubtotal;
     }
 
-    return product.bundle_option_discounted_price ?? product.current_price ?? product.price ?? 0;
+    return product.price ?? 0;
   }
 
   return product.current_price ?? product.price ?? 0;

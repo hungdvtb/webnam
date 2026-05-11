@@ -55,6 +55,57 @@ class ProductController extends Controller
         return 'title:' . ($title !== '' ? $title : 'mac dinh');
     }
 
+    private function loadExistingBundleOptionUids(Product $product): array
+    {
+        if (!$product->id || !Schema::hasColumn('product_links', 'bundle_option_uid')) {
+            return [];
+        }
+
+        return DB::table('product_links')
+            ->where('product_id', $product->id)
+            ->where('link_type', 'bundle')
+            ->whereNotNull('bundle_option_uid')
+            ->where('bundle_option_uid', '<>', '')
+            ->orderBy('position')
+            ->orderBy('id')
+            ->get(['option_post_id', 'option_title', 'bundle_option_uid'])
+            ->reduce(function (array $carry, object $row) {
+                $uid = $this->normalizeBundleOptionUid($row->bundle_option_uid ?? null);
+                if ($uid === null) {
+                    return $carry;
+                }
+
+                $groupKey = $this->buildBundleOptionGroupKey([
+                    'option_post_id' => $row->option_post_id ?? null,
+                    'option_title' => $row->option_title ?? null,
+                ]);
+
+                $carry[$groupKey] ??= $uid;
+
+                return $carry;
+            }, []);
+    }
+
+    private function resolveBundleOptionUidForItem(array $item, array &$bundleOptionUids, array $existingBundleOptionUids = []): ?string
+    {
+        $groupKey = $this->buildBundleOptionGroupKey($item);
+        $submittedUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
+
+        if ($submittedUid !== null) {
+            $bundleOptionUids[$groupKey] = $submittedUid;
+            return $submittedUid;
+        }
+
+        if (!empty($existingBundleOptionUids[$groupKey])) {
+            $bundleOptionUids[$groupKey] = $existingBundleOptionUids[$groupKey];
+            return $existingBundleOptionUids[$groupKey];
+        }
+
+        $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
+
+        return $bundleOptionUids[$groupKey];
+    }
+
     public function __construct(
         protected ProductSkuService $productSkuService,
         protected ProductPricingService $productPricingService,
@@ -2592,6 +2643,10 @@ class ProductController extends Controller
             }
         }
 
+        $existingBundleOptionUids = $product->type === 'bundle'
+            ? $this->loadExistingBundleOptionUids($product)
+            : [];
+
         if ($product->type === 'bundle') {
             $product->bundleItems()->detach();
         } else {
@@ -2603,12 +2658,7 @@ class ProductController extends Controller
         foreach ($resolvedItems as $index => $item) {
             $bundleOptionUid = null;
             if ($product->type === 'bundle') {
-                $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
-                if ($bundleOptionUid === null) {
-                    $groupKey = $this->buildBundleOptionGroupKey($item);
-                    $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
-                    $bundleOptionUid = $bundleOptionUids[$groupKey];
-                }
+                $bundleOptionUid = $this->resolveBundleOptionUidForItem($item, $bundleOptionUids, $existingBundleOptionUids);
             }
 
             $pivotData = [
@@ -9176,6 +9226,9 @@ class ProductController extends Controller
 
                 if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'], true)) {
                     $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
+                    $existingBundleOptionUids = $product->type === 'bundle'
+                        ? $this->loadExistingBundleOptionUids($product)
+                        : [];
 
                     if ($product->type === 'bundle') {
                         $product->bundleItems()->detach();
@@ -9188,12 +9241,7 @@ class ProductController extends Controller
                     foreach ($request->grouped_items as $idx => $item) {
                         $bundleOptionUid = null;
                         if ($product->type === 'bundle') {
-                            $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
-                            if ($bundleOptionUid === null) {
-                                $groupKey = $this->buildBundleOptionGroupKey($item);
-                                $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
-                                $bundleOptionUid = $bundleOptionUids[$groupKey];
-                            }
+                            $bundleOptionUid = $this->resolveBundleOptionUidForItem($item, $bundleOptionUids, $existingBundleOptionUids);
                         }
 
                         $pivotData = [
@@ -9931,6 +9979,9 @@ class ProductController extends Controller
 
         if ($request->has('grouped_items') && in_array($product->type, ['grouped', 'bundle'])) {
             $linkType = $product->type === 'bundle' ? 'bundle' : 'grouped';
+            $existingBundleOptionUids = $product->type === 'bundle'
+                ? $this->loadExistingBundleOptionUids($product)
+                : [];
 
             if ($product->type === 'bundle') {
                 $product->bundleItems()->detach();
@@ -9943,12 +9994,7 @@ class ProductController extends Controller
             foreach ($request->grouped_items as $idx => $item) {
                 $bundleOptionUid = null;
                 if ($product->type === 'bundle') {
-                    $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
-                    if ($bundleOptionUid === null) {
-                        $groupKey = $this->buildBundleOptionGroupKey($item);
-                        $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
-                        $bundleOptionUid = $bundleOptionUids[$groupKey];
-                    }
+                    $bundleOptionUid = $this->resolveBundleOptionUidForItem($item, $bundleOptionUids, $existingBundleOptionUids);
                 }
 
                 $pivotData = [

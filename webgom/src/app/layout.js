@@ -170,6 +170,10 @@ export default async function RootLayout({ children }) {
   return (
     <html lang="vi">
       <head>
+        <meta
+          name="google-site-verification"
+          content="-3Zk6JnTKQ1PJLfAD_Y17109b78DTEP7iqewWAJhfMM"
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

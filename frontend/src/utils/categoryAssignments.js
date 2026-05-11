@@ -78,6 +78,7 @@ export const normalizeCategoryAssignmentItem = (item = {}) => {
     const assignmentKey = sanitizeText(item?.assignment_key) || buildCategoryAssignmentKey({
         item_type: itemType,
         product_id: productId,
+        bundle_option_uid: bundleOptionUid,
         bundle_option_key: bundleOptionKey,
     });
 

@@ -37,6 +37,7 @@ Usage: ./deploygg.sh [command]
 Commands:
   deploy        Pull code, deploy backend, validate Google Merchant config, dry-run 5 products (default)
   check         Validate backend .env and Google Merchant service account file
+  register-gcp  Register this Google Cloud project with the Merchant Center account
   sources       List Google Merchant data sources from the configured account
   dry-run       Build product payloads without sending them to Google
   sync          Send products to Google Merchant Center
@@ -91,7 +92,8 @@ Them vao backend/.env tren server:
 GOOGLE_MERCHANT_SYNC_ENABLED=true
 GOOGLE_MERCHANT_ACCOUNT_ID=5784047046
 GOOGLE_MERCHANT_DATA_SOURCE_ID=10653538725
-GOOGLE_MERCHANT_SERVICE_ACCOUNT_JSON_PATH=/root/www/webname/backend/storage/app/google-merchant.json
+GOOGLE_MERCHANT_DEVELOPER_EMAIL=vngocnamtb@gmail.com
+GOOGLE_MERCHANT_SERVICE_ACCOUNT_JSON_PATH=/www/webname/backend/storage/app/google-merchant.json
 GOOGLE_MERCHANT_PRODUCT_URL_BASE=https://gomdaithanh.com
 GOOGLE_MERCHANT_QUEUE_CONNECTION=sync
 
@@ -177,6 +179,21 @@ list_sources() {
     php artisan google-merchant:list-data-sources
 }
 
+register_gcp_project() {
+    require_cmd php
+    require_dir "$BACKEND_DIR"
+
+    validate_google_merchant_config
+    log "Dang ky Google Cloud project voi Merchant Center"
+    cd "$BACKEND_DIR"
+
+    if [ -n "${GOOGLE_MERCHANT_DEVELOPER_EMAIL:-}" ]; then
+        php artisan google-merchant:register-gcp "$GOOGLE_MERCHANT_DEVELOPER_EMAIL"
+    else
+        php artisan google-merchant:register-gcp
+    fi
+}
+
 COMMAND="${1:-deploy}"
 
 case "$COMMAND" in
@@ -188,6 +205,9 @@ case "$COMMAND" in
         ;;
     check)
         validate_google_merchant_config
+        ;;
+    register-gcp)
+        register_gcp_project
         ;;
     sources)
         list_sources

@@ -16,6 +16,7 @@ return [
     'account_id' => env('GOOGLE_MERCHANT_ACCOUNT_ID'),
     'data_source_id' => env('GOOGLE_MERCHANT_DATA_SOURCE_ID'),
     'data_source_name' => env('GOOGLE_MERCHANT_DATA_SOURCE_NAME'),
+    'developer_email' => env('GOOGLE_MERCHANT_DEVELOPER_EMAIL'),
 
     'service_account_json_path' => env('GOOGLE_MERCHANT_SERVICE_ACCOUNT_JSON_PATH'),
     'service_account_json' => env('GOOGLE_MERCHANT_SERVICE_ACCOUNT_JSON'),

@@ -17,6 +17,7 @@ class GoogleMerchantProductSyncService
     private const SCOPE = 'https://www.googleapis.com/auth/content';
     private const INSERT_ENDPOINT = 'https://merchantapi.googleapis.com/products/v1/accounts/%s/productInputs:insert';
     private const DATA_SOURCES_ENDPOINT = 'https://merchantapi.googleapis.com/datasources/v1/accounts/%s/dataSources';
+    private const REGISTER_GCP_ENDPOINT = 'https://merchantapi.googleapis.com/accounts/v1/accounts/%s/developerRegistration:registerGcp';
 
     public function enabled(): bool
     {
@@ -88,6 +89,32 @@ class GoogleMerchantProductSyncService
         } while ($pageToken !== '');
 
         return $dataSources;
+    }
+
+    public function registerGcpProject(string $developerEmail): array
+    {
+        $developerEmail = trim($developerEmail);
+
+        if ($developerEmail === '' || !filter_var($developerEmail, FILTER_VALIDATE_EMAIL)) {
+            throw new GoogleMerchantProductSyncException('Developer email must be a valid Google account email.');
+        }
+
+        $accountId = $this->accountId();
+        $response = $this->baseRequest()
+            ->withToken($this->accessToken())
+            ->post(sprintf(self::REGISTER_GCP_ENDPOINT, rawurlencode($accountId)), [
+                'developerEmail' => $developerEmail,
+            ]);
+
+        if ($response->failed()) {
+            $message = $response->json('error.message')
+                ?: $response->body()
+                ?: 'Google Merchant API rejected the GCP project registration request.';
+
+            throw new GoogleMerchantProductSyncException($message);
+        }
+
+        return $response->json() ?: [];
     }
 
     public function buildProductInputPayload(Product $product): array

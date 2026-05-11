@@ -90,6 +90,11 @@
   height: 100%;
 }
 
+.productMediaVisualFrameZoomable {
+  touch-action: none;
+  will-change: transform;
+}
+
 .productMediaImage {
   object-fit: cover;
   object-position: center;
@@ -125,6 +130,86 @@
   margin: 0;
   font-size: 0.88rem;
   font-weight: 600;
+}
+
+.productMediaLightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(8, 12, 20, 0.94);
+}
+
+.productMediaLightboxStage {
+  position: relative;
+  width: min(96vw, 980px);
+  height: min(92vh, 980px);
+  overflow: hidden;
+}
+
+.productMediaLightboxViewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.productMediaLightboxImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transform-origin: top left;
+  will-change: transform;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.productMediaLightboxVideo {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
+}
+
+.productMediaLightboxClose,
+.productMediaLightboxNav {
+  position: absolute;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 28px rgba(8, 12, 20, 0.24);
+}
+
+.productMediaLightboxClose {
+  top: 1rem;
+  right: 1rem;
+}
+
+.productMediaLightboxNavPrev {
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.productMediaLightboxNavNext {
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .productMediaRail {
@@ -227,6 +312,34 @@
 @media (max-width: 768px) {
   .productMediaGallery {
     --product-media-thumb-gap: 0.45rem;
+  }
+
+  .productMediaLightbox {
+    padding: 0.75rem;
+  }
+
+  .productMediaLightboxStage {
+    width: 100%;
+    height: min(88vh, 100vw);
+  }
+
+  .productMediaLightboxClose,
+  .productMediaLightboxNav {
+    width: 40px;
+    height: 40px;
+  }
+
+  .productMediaLightboxClose {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+
+  .productMediaLightboxNavPrev {
+    left: 0.5rem;
+  }
+
+  .productMediaLightboxNavNext {
+    right: 0.5rem;
   }
 
   .productMediaRail {

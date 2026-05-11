@@ -1159,6 +1159,8 @@ export default function Header({
                   ? ["Lưu ảnh", "đơn hàng"]
                   : itemLabelLines;
 
+                const shouldShowMobileCartBadge = item.id === MOBILE_CART_ITEM.id && cartCount > 0;
+
                 const content = (
                   <span className="mobile-bottom-item__content">
                     <span
@@ -1173,6 +1175,14 @@ export default function Header({
                       >
                         {isOrderSaveMode ? "download" : item.icon}
                       </span>
+                      {shouldShowMobileCartBadge ? (
+                        <span
+                          className={`mobile-bottom-item__badge ${cartCount > 99 ? "mobile-bottom-item__badge-wide" : ""}`}
+                          suppressHydrationWarning
+                        >
+                          {cartBadgeLabel}
+                        </span>
+                      ) : null}
                     </span>
                     <span
                       className={`mobile-bottom-item__label-wrap ${
@@ -2404,6 +2414,7 @@ export default function Header({
 
           .mobile-bottom-item__icon-wrap {
             box-sizing: border-box;
+            position: relative;
             width: var(--mobile-bottom-icon-size);
             min-width: var(--mobile-bottom-icon-size);
             height: var(--mobile-bottom-icon-size);
@@ -2415,6 +2426,29 @@ export default function Header({
             border-radius: 999px;
             background: rgba(26, 44, 78, 0.06);
             transition: background-color 180ms ease, color 180ms ease;
+          }
+
+          .mobile-bottom-item__badge {
+            position: absolute;
+            top: -5px;
+            right: -7px;
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            background: #dc2626;
+            color: #fff;
+            font-size: 9px;
+            font-weight: 800;
+            line-height: 1;
+            box-shadow: 0 6px 14px rgba(220, 38, 38, 0.28);
+          }
+
+          .mobile-bottom-item__badge-wide {
+            min-width: 20px;
           }
 
           .mobile-bottom-item__icon {

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SyncGoogleMerchantProductJob;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
 use App\Models\Category;
@@ -113,6 +114,29 @@ class ProductController extends Controller
         protected MediaService $mediaService
     )
     {
+    }
+
+    private function queueGoogleMerchantProductSync(Product $product, bool $includeVariants = true): void
+    {
+        if (!config('google_merchant.enabled', false)) {
+            return;
+        }
+
+        $productIds = collect([(int) $product->id]);
+
+        if ($includeVariants && $product->type === 'configurable') {
+            $variantIds = $product->variations()
+                ->pluck('products.id')
+                ->map(fn ($id) => (int) $id)
+                ->filter();
+
+            $productIds = $productIds->merge($variantIds);
+        }
+
+        $productIds
+            ->filter()
+            ->unique()
+            ->each(fn (int $productId) => SyncGoogleMerchantProductJob::dispatch($productId)->afterResponse());
     }
 
     private function productImportSelectableFieldIds(): array
@@ -9337,6 +9361,8 @@ class ProductController extends Controller
             $this->throwSkuConstraintValidation($exception, 'Đã phát hiện mã SKU bị trùng trong quá trình lưu. Vui lòng kiểm tra lại mã sản phẩm và biến thể.');
         }
 
+        $this->queueGoogleMerchantProductSync($product);
+
         return response()->json($this->loadProductResource($product), 201);
     }
 
@@ -10196,6 +10222,8 @@ class ProductController extends Controller
         } catch (QueryException $exception) {
             $this->throwSkuConstraintValidation($exception, 'Đã phát hiện mã SKU bị trùng trong quá trình cập nhật. Vui lòng kiểm tra lại mã sản phẩm và biến thể.');
         }
+
+        $this->queueGoogleMerchantProductSync($product);
 
         return response()->json($this->loadProductResource($product));
     }

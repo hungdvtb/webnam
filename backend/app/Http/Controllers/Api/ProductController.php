@@ -37,6 +37,24 @@ class ProductController extends Controller
 {
     private const PRODUCT_DETAIL_PATH = '/san-pham';
 
+    private function normalizeBundleOptionUid($value): ?string
+    {
+        $uid = trim((string) $value);
+
+        return preg_match('/^[A-Za-z0-9:_-]{1,64}$/', $uid) === 1 ? $uid : null;
+    }
+
+    private function buildBundleOptionGroupKey(array $item): string
+    {
+        if (!empty($item['option_post_id']) && is_numeric($item['option_post_id'])) {
+            return 'post:' . (int) $item['option_post_id'];
+        }
+
+        $title = Str::lower(Str::squish((string) ($item['option_title'] ?? '')));
+
+        return 'title:' . ($title !== '' ? $title : 'mac dinh');
+    }
+
     public function __construct(
         protected ProductSkuService $productSkuService,
         protected ProductPricingService $productPricingService,
@@ -1265,6 +1283,7 @@ class ProductController extends Controller
                     'cost_price' => $costPrice !== null && $costPrice !== '' ? (float) $costPrice : null,
                     'variant_id' => $variantId,
                     'variant_sku' => $variantSku,
+                    'bundle_option_uid' => $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null),
                     'option_title' => trim((string) ($item['option_title'] ?? '')),
                     'option_post_id' => $optionPostId,
                     'option_post_slug' => trim((string) ($item['option_post_slug'] ?? '')),
@@ -1296,6 +1315,7 @@ class ProductController extends Controller
                 'variant_sku' => trim($token),
                 'option_title' => '',
                 'option_post_id' => null,
+                'bundle_option_uid' => null,
                 'option_post_slug' => '',
                 'is_default' => false,
             ])
@@ -2578,7 +2598,19 @@ class ProductController extends Controller
             $product->groupedItems()->detach();
         }
 
+        $bundleOptionUids = [];
+
         foreach ($resolvedItems as $index => $item) {
+            $bundleOptionUid = null;
+            if ($product->type === 'bundle') {
+                $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
+                if ($bundleOptionUid === null) {
+                    $groupKey = $this->buildBundleOptionGroupKey($item);
+                    $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
+                    $bundleOptionUid = $bundleOptionUids[$groupKey];
+                }
+            }
+
             $pivotData = [
                 'quantity' => $item['quantity'],
                 'is_required' => $item['is_required'],
@@ -2586,6 +2618,7 @@ class ProductController extends Controller
                 'position' => $index,
                 'option_title' => $item['option_title'] ?? null,
                 'option_post_id' => $item['option_post_id'] ?? null,
+                'bundle_option_uid' => $bundleOptionUid,
                 'is_default' => $item['is_default'] ?? false,
                 'variant_id' => $item['variant_id'] ?? null,
                 'price' => $item['price'] ?? null,
@@ -2705,6 +2738,7 @@ class ProductController extends Controller
                 'variant_id' => $variant instanceof Product ? (int) $variant->id : null,
                 'option_title' => trim((string) ($item['option_title'] ?? '')) !== '' ? trim((string) $item['option_title']) : null,
                 'option_post_id' => $optionPost instanceof Post ? (int) $optionPost->id : null,
+                'bundle_option_uid' => $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null),
                 'is_default' => !empty($item['is_default']),
                 'price' => array_key_exists('price', $item) && $item['price'] !== null ? (float) $item['price'] : null,
                 'cost_price' => array_key_exists('cost_price', $item) && $item['cost_price'] !== null ? (float) $item['cost_price'] : null,
@@ -2897,7 +2931,7 @@ class ProductController extends Controller
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
@@ -5525,6 +5559,11 @@ class ProductController extends Controller
 
         return $product->bundleItems
             ->groupBy(function (Product $bundleItem) {
+                $optionUid = $this->normalizeBundleOptionUid($bundleItem->pivot?->bundle_option_uid ?? null);
+                if ($optionUid !== null) {
+                    return 'uid:' . $optionUid;
+                }
+
                 $optionPostId = filled($bundleItem->pivot?->option_post_id ?? null)
                     ? (int) $bundleItem->pivot->option_post_id
                     : null;
@@ -5546,6 +5585,7 @@ class ProductController extends Controller
                 $optionPostId = filled($firstItem->pivot?->option_post_id ?? null)
                     ? (int) $firstItem->pivot->option_post_id
                     : null;
+                $optionUid = $this->normalizeBundleOptionUid($firstItem->pivot?->bundle_option_uid ?? null);
                 $optionTitle = trim((string) ($firstItem->pivot?->option_post_title
                     ?? $firstItem->pivot?->option_title
                     ?? 'Mặc định'));
@@ -5590,6 +5630,8 @@ class ProductController extends Controller
 
                 return [
                     'key' => $groupKey,
+                    'uid' => $optionUid,
+                    'bundle_option_uid' => $optionUid,
                     'option_title' => $optionTitle,
                     'option_post_id' => $optionPostId,
                     'option_post_title' => filled($firstItem->pivot?->option_post_title ?? null)
@@ -9001,6 +9043,7 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
+            'grouped_items.*.bundle_option_uid' => 'nullable|string|max:64',
             'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_source' => 'nullable|string|max:32',
@@ -9140,7 +9183,19 @@ class ProductController extends Controller
                         $product->groupedItems()->detach();
                     }
 
+                    $bundleOptionUids = [];
+
                     foreach ($request->grouped_items as $idx => $item) {
+                        $bundleOptionUid = null;
+                        if ($product->type === 'bundle') {
+                            $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
+                            if ($bundleOptionUid === null) {
+                                $groupKey = $this->buildBundleOptionGroupKey($item);
+                                $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
+                                $bundleOptionUid = $bundleOptionUids[$groupKey];
+                            }
+                        }
+
                         $pivotData = [
                             'quantity' => $item['quantity'],
                             'is_required' => $item['is_required'],
@@ -9148,6 +9203,7 @@ class ProductController extends Controller
                             'position' => $idx,
                             'option_title' => $item['option_title'] ?? null,
                             'option_post_id' => $item['option_post_id'] ?? null,
+                            'bundle_option_uid' => $bundleOptionUid,
                             'option_image_url' => $item['option_image_url'] ?? null,
                             'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
                             'option_video_source' => $item['option_video_source'] ?? null,
@@ -9660,6 +9716,7 @@ class ProductController extends Controller
             'grouped_items.*.variant_id' => 'nullable|exists:products,id',
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
+            'grouped_items.*.bundle_option_uid' => 'nullable|string|max:64',
             'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_source' => 'nullable|string|max:32',
@@ -9881,7 +9938,19 @@ class ProductController extends Controller
                 $product->groupedItems()->detach();
             }
 
+            $bundleOptionUids = [];
+
             foreach ($request->grouped_items as $idx => $item) {
+                $bundleOptionUid = null;
+                if ($product->type === 'bundle') {
+                    $bundleOptionUid = $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null);
+                    if ($bundleOptionUid === null) {
+                        $groupKey = $this->buildBundleOptionGroupKey($item);
+                        $bundleOptionUids[$groupKey] ??= (string) Str::uuid();
+                        $bundleOptionUid = $bundleOptionUids[$groupKey];
+                    }
+                }
+
                 $pivotData = [
                     'quantity' => $item['quantity'],
                     'is_required' => $item['is_required'],
@@ -9889,6 +9958,7 @@ class ProductController extends Controller
                     'position' => $idx,
                     'option_title' => $item['option_title'] ?? null,
                     'option_post_id' => $item['option_post_id'] ?? null,
+                    'bundle_option_uid' => $bundleOptionUid,
                     'option_image_url' => $item['option_image_url'] ?? null,
                     'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
                     'option_video_source' => $item['option_video_source'] ?? null,
@@ -10167,6 +10237,7 @@ class ProductController extends Controller
                         'is_required' => $bundleItem->pivot->is_required ?? true,
                         'option_title' => $bundleItem->pivot->option_title ?? null,
                         'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
+                        'bundle_option_uid' => $bundleItem->pivot->bundle_option_uid ?? null,
                         'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
                         'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
                         'option_video_source' => $bundleItem->pivot->option_video_source ?? null,
@@ -10296,6 +10367,7 @@ class ProductController extends Controller
                     'is_required' => $bundleItem->pivot->is_required ?? true,
                     'option_title' => $bundleItem->pivot->option_title ?? null,
                     'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
+                    'bundle_option_uid' => $bundleItem->pivot->bundle_option_uid ?? null,
                     'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
                     'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
                     'option_video_source' => $bundleItem->pivot->option_video_source ?? null,

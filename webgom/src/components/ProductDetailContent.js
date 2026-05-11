@@ -202,23 +202,36 @@ const normalizeBundleItemState = (item, fallbackIndex = 0) => {
   };
 };
 
-const resolveRequestedBundleConfig = (items = [], requestedKey = '', requestedTitle = '') => {
+const getBundleOptionUid = (item = {}) => String(
+  item?.option_uid
+  || item?.bundle_option_uid
+  || item?.pivot?.bundle_option_uid
+  || ''
+).trim();
+
+const resolveRequestedBundleConfig = (items = [], requestedKey = '', requestedTitle = '', requestedUid = '') => {
+  const normalizedUid = String(requestedUid || '').trim();
   const normalizedKey = String(requestedKey || '').trim();
   const normalizedTitle = String(requestedTitle || '').trim();
 
-  if (!normalizedKey && !normalizedTitle) {
+  if (!normalizedUid && !normalizedKey && !normalizedTitle) {
     return '';
   }
 
   for (const item of Array.isArray(items) ? items : []) {
     const optionTitle = getBundleOptionTitle(item);
+    const optionUid = getBundleOptionUid(item);
     const optionKey = String(
       item?.option_key
       || item?.pivot?.option_key
       || (item?.option_post_id ? `post:${item.option_post_id}` : optionTitle)
     ).trim();
 
-    if ((normalizedKey && optionKey === normalizedKey) || (normalizedTitle && optionTitle === normalizedTitle)) {
+    if (
+      (normalizedUid && optionUid === normalizedUid)
+      || (normalizedKey && optionKey === normalizedKey)
+      || (normalizedTitle && optionTitle === normalizedTitle)
+    ) {
       return optionTitle;
     }
   }
@@ -226,7 +239,7 @@ const resolveRequestedBundleConfig = (items = [], requestedKey = '', requestedTi
   return '';
 };
 
-const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle = '') => {
+const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle = '', requestedUid = '') => {
   let firstConfigTitle = '';
   const mappedItems = (Array.isArray(items) ? items : []).map((item, index) => {
     const groupName = getBundleOptionTitle(item);
@@ -243,6 +256,7 @@ const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle =
     mappedItems,
     requestedKey,
     requestedTitle,
+    requestedUid,
   );
 
   return {
@@ -253,6 +267,7 @@ const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle =
 
 const buildInitialBundleSelectionState = (
   product,
+  requestedUid = '',
   requestedKey = '',
   requestedTitle = '',
 ) => {
@@ -276,6 +291,7 @@ const buildInitialBundleSelectionState = (
     items,
     requestedKey,
     requestedTitle,
+    requestedUid,
   );
 
   return {
@@ -289,6 +305,7 @@ const buildInitialBundleSelectionState = (
 
 export default function ProductDetailContent({
   product,
+  requestedBundleOptionUid = '',
   requestedBundleOptionKey = '',
   requestedBundleOptionTitle = '',
   requestedVariantId = 0,
@@ -296,11 +313,12 @@ export default function ProductDetailContent({
   const initialBundleSelectionState = useMemo(
     () => buildInitialBundleSelectionState(
       product,
+      requestedBundleOptionUid,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [product?.id, requestedBundleOptionKey, requestedBundleOptionTitle],
+    [product?.id, requestedBundleOptionUid, requestedBundleOptionKey, requestedBundleOptionTitle],
   );
   const [selectedOptions, setSelectedOptions] = useState({});
   const [selectedVariantId, setSelectedVariantId] = useState(null);
@@ -408,6 +426,7 @@ export default function ProductDetailContent({
           items,
           requestedBundleOptionKey,
           requestedBundleOptionTitle,
+          requestedBundleOptionUid,
         );
 
         setBundleItems(mappedItems.map(item => ({
@@ -428,6 +447,7 @@ export default function ProductDetailContent({
     product?.type,
     product?.bundle_items,
     product?.grouped_items,
+    requestedBundleOptionUid,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
   ]);
@@ -720,6 +740,19 @@ export default function ProductDetailContent({
         return optionTitle === resolvedConfigName;
       })
       : null;
+    const optionUid = String(
+      optionMedia?.bundle_option_uid
+      || optionMedia?.uid
+      || currentItems.find((item) => getBundleOptionTitle(item) === resolvedConfigName)?.option_uid
+      || currentItems.find((item) => getBundleOptionTitle(item) === resolvedConfigName)?.bundle_option_uid
+      || currentItems.find((item) => getBundleOptionTitle(item) === resolvedConfigName)?.pivot?.bundle_option_uid
+      || ''
+    ).trim();
+
+    if (optionUid) {
+      options.bundle_option_uid = optionUid;
+    }
+
     const optionMediaContext = optionMedia
       ? {
         variantProduct: {

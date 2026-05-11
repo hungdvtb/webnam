@@ -166,9 +166,23 @@ class CategoryController extends Controller
         return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
     }
 
-    private function getCategoryBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): array
+    private function normalizeCategoryBundleOptionUid($value): ?string
+    {
+        $uid = trim((string) $value);
+
+        return preg_match('/^[A-Za-z0-9:_-]{1,64}$/', $uid) === 1 ? $uid : null;
+    }
+
+    private function getCategoryBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): array
     {
         $candidates = [];
+        $uid = $this->normalizeCategoryBundleOptionUid($bundleOptionUid);
+
+        if ($uid !== null) {
+            $candidates[] = 'uid:' . $uid;
+            $candidates[] = $uid;
+        }
+
         $explicitKey = Str::lower(Str::squish((string) $bundleOptionKey));
 
         if ($explicitKey !== '') {
@@ -192,13 +206,13 @@ class CategoryController extends Controller
             ->all();
     }
 
-    private function resolveCategoryBundleOptionCatalogMeta(array $catalog, int $productId, ?string $bundleOptionKey, $bundleOptionPostId = null, $bundleOptionTitle = null): ?array
+    private function resolveCategoryBundleOptionCatalogMeta(array $catalog, int $productId, ?string $bundleOptionKey, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): ?array
     {
         if ($productId <= 0 || empty($catalog[$productId]) || !is_array($catalog[$productId])) {
             return null;
         }
 
-        foreach ($this->getCategoryBundleOptionKeyCandidates($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle) as $candidateKey) {
+        foreach ($this->getCategoryBundleOptionKeyCandidates($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle, $bundleOptionUid) as $candidateKey) {
             if (isset($catalog[$productId][$candidateKey]) && is_array($catalog[$productId][$candidateKey])) {
                 return $catalog[$productId][$candidateKey];
             }
@@ -207,18 +221,21 @@ class CategoryController extends Controller
         return null;
     }
 
-    private function isCategoryBundleOptionAssignment($itemType = null, $bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): bool
+    private function isCategoryBundleOptionAssignment($itemType = null, $bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): bool
     {
         return (string) $itemType === 'bundle_option'
+            || $this->normalizeCategoryBundleOptionUid($bundleOptionUid) !== null
             || trim((string) $bundleOptionKey) !== ''
             || filled($bundleOptionPostId)
             || Str::squish((string) $bundleOptionTitle) !== '';
     }
 
-    private function buildCategoryAssignmentKey(string $itemType, int $productId, string $bundleOptionKey = ''): string
+    private function buildCategoryAssignmentKey(string $itemType, int $productId, string $bundleOptionKey = '', ?string $bundleOptionUid = null): string
     {
+        $uid = $this->normalizeCategoryBundleOptionUid($bundleOptionUid);
+
         return $itemType === 'bundle_option'
-            ? "bundle_option:{$productId}:{$bundleOptionKey}"
+            ? "bundle_option:{$productId}:" . ($uid !== null ? "uid:{$uid}" : $bundleOptionKey)
             : "product:{$productId}";
     }
 
@@ -233,6 +250,7 @@ class CategoryController extends Controller
                 'id',
                 'product_id',
                 'item_type',
+                'bundle_option_uid',
                 'bundle_option_key',
                 'bundle_option_post_id',
                 'bundle_option_title',
@@ -282,7 +300,8 @@ class CategoryController extends Controller
                     $row->item_type ?? null,
                     $row->bundle_option_key ?? null,
                     $row->bundle_option_post_id ?? null,
-                    $row->bundle_option_title ?? null
+                    $row->bundle_option_title ?? null,
+                    $row->bundle_option_uid ?? null
                 ))
                 ->pluck('product_id')
         );
@@ -294,9 +313,13 @@ class CategoryController extends Controller
                 $row->item_type ?? null,
                 $row->bundle_option_key ?? null,
                 $row->bundle_option_post_id ?? null,
-                $row->bundle_option_title ?? null
+                $row->bundle_option_title ?? null,
+                $row->bundle_option_uid ?? null
             ) ? 'bundle_option' : 'product';
             $productId = (int) $row->product_id;
+            $bundleOptionUid = $itemType === 'bundle_option'
+                ? $this->normalizeCategoryBundleOptionUid($row->bundle_option_uid ?? null)
+                : null;
             $bundleOptionKey = $itemType === 'bundle_option'
                 ? Str::lower(Str::squish((string) ($row->bundle_option_key ?? '')))
                 : '';
@@ -312,7 +335,7 @@ class CategoryController extends Controller
                 );
             }
 
-            $assignmentKey = $this->buildCategoryAssignmentKey($itemType, $productId, $bundleOptionKey);
+            $assignmentKey = $this->buildCategoryAssignmentKey($itemType, $productId, $bundleOptionKey, $bundleOptionUid);
             if (isset($seenKeys[$assignmentKey])) {
                 continue;
             }
@@ -321,9 +344,11 @@ class CategoryController extends Controller
             $normalizedRow = clone $row;
             $normalizedRow->product_id = $productId;
             $normalizedRow->item_type = $itemType;
+            $normalizedRow->bundle_option_uid = $bundleOptionUid;
             $normalizedRow->bundle_option_key = $bundleOptionKey;
 
             if ($itemType === 'product') {
+                $normalizedRow->bundle_option_uid = null;
                 $normalizedRow->bundle_option_post_id = null;
                 $normalizedRow->bundle_option_title = null;
             }
@@ -457,6 +482,7 @@ class CategoryController extends Controller
                 'product_links.linked_product_id',
                 'product_links.variant_id',
                 'product_links.option_post_id',
+                'product_links.bundle_option_uid',
                 'product_links.option_title',
                 'product_links.quantity',
                 'product_links.price',
@@ -520,8 +546,10 @@ class CategoryController extends Controller
             $resolvedTitle = $optionTitle !== ''
                 ? $optionTitle
                 : (Str::squish((string) ($optionPost?->title ?? '')) ?: 'Mac dinh');
+            $optionUid = $this->normalizeCategoryBundleOptionUid($row->bundle_option_uid ?? null);
             $optionKey = $this->normalizeCategoryBundleOptionKey($optionPostId, $resolvedTitle);
-            $optionAliases = $this->getCategoryBundleOptionKeyCandidates(null, $optionPostId, $resolvedTitle);
+            $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
+            $optionAliases = $this->getCategoryBundleOptionKeyCandidates(null, $optionPostId, $resolvedTitle, $optionUid);
             /** @var Product|null $bundleItem */
             $bundleItem = is_numeric($row->linked_product_id ?? null)
                 ? $componentProducts->get((int) $row->linked_product_id)
@@ -532,11 +560,12 @@ class CategoryController extends Controller
                 : null;
             $resolvedProduct = $selectedVariant ?: $bundleItem;
 
-            if (!isset($catalog[$productId][$optionKey])) {
+            if (!isset($catalog[$productId][$catalogKey])) {
                 $postImage = $this->mapCategoryPostPrimaryImage($optionPost);
                 $componentImage = $resolvedProduct instanceof Product ? $resolvedProduct->main_image : null;
 
-                $catalog[$productId][$optionKey] = [
+                $catalog[$productId][$catalogKey] = [
+                    'bundle_option_uid' => $optionUid,
                     'bundle_option_key' => $optionKey,
                     'bundle_option_post_id' => $optionPostId,
                     'bundle_option_title' => $resolvedTitle,
@@ -558,40 +587,41 @@ class CategoryController extends Controller
                 ];
             }
 
-            $catalogAliases[$productId][$optionKey] = collect($catalogAliases[$productId][$optionKey] ?? [])
+            $catalogAliases[$productId][$catalogKey] = collect($catalogAliases[$productId][$catalogKey] ?? [])
                 ->merge($optionAliases)
+                ->push($catalogKey)
                 ->push($optionKey)
                 ->filter(fn ($key) => trim((string) $key) !== '')
                 ->unique()
                 ->values()
                 ->all();
 
-            if (!$catalog[$productId][$optionKey]['main_image'] && $resolvedProduct instanceof Product) {
-                $catalog[$productId][$optionKey]['main_image'] = $resolvedProduct->main_image;
+            if (!$catalog[$productId][$catalogKey]['main_image'] && $resolvedProduct instanceof Product) {
+                $catalog[$productId][$catalogKey]['main_image'] = $resolvedProduct->main_image;
             }
 
             if ($resolvedProduct instanceof Product && !$resolvedProduct->status) {
-                $catalog[$productId][$optionKey]['status'] = false;
+                $catalog[$productId][$catalogKey]['status'] = false;
             }
 
             $quantity = max(1, (int) ($row->quantity ?? 1));
             $currentUnitPrice = $this->resolveCategoryBundleItemCurrentUnitPrice($row, $bundleItem, $selectedVariant);
             $baseUnitPrice = $this->resolveCategoryBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
-            $catalog[$productId][$optionKey]['current_price'] += $currentUnitPrice * $quantity;
-            $catalog[$productId][$optionKey]['price'] += $baseUnitPrice * $quantity;
+            $catalog[$productId][$catalogKey]['current_price'] += $currentUnitPrice * $quantity;
+            $catalog[$productId][$catalogKey]['price'] += $baseUnitPrice * $quantity;
 
             $itemName = Str::squish((string) ($resolvedProduct?->name ?? $row->variant_product_name ?? $row->linked_product_name ?? ''));
             $itemSku = Str::squish((string) ($resolvedProduct?->sku ?? $row->variant_product_sku ?? $row->linked_product_sku ?? ''));
             $summaryKey = Str::lower($itemName . '|' . $itemSku);
 
-            if ($summaryKey !== '|' && !isset($catalog[$productId][$optionKey]['bundle_items_summary'][$summaryKey])) {
-                $catalog[$productId][$optionKey]['bundle_items_summary'][$summaryKey] = [
+            if ($summaryKey !== '|' && !isset($catalog[$productId][$catalogKey]['bundle_items_summary'][$summaryKey])) {
+                $catalog[$productId][$catalogKey]['bundle_items_summary'][$summaryKey] = [
                     'name' => $itemName,
                     'sku' => $itemSku,
                 ];
             }
 
-            $catalog[$productId][$optionKey]['bundle_items_count']++;
+            $catalog[$productId][$catalogKey]['bundle_items_count']++;
         }
 
         foreach ($catalog as $productId => $options) {
@@ -650,11 +680,13 @@ class CategoryController extends Controller
                     : null;
                 $optionTitle = Str::squish((string) ($item['bundle_option_title'] ?? ''));
                 $optionKey = Str::lower(Str::squish((string) ($item['bundle_option_key'] ?? '')));
+                $optionUid = $this->normalizeCategoryBundleOptionUid($item['bundle_option_uid'] ?? null);
 
                 return [
                     'index' => $index,
                     'item_type' => $itemType === 'bundle_option' ? 'bundle_option' : 'product',
                     'product_id' => $productId,
+                    'bundle_option_uid' => $optionUid,
                     'bundle_option_key' => $optionKey,
                     'bundle_option_post_id' => $optionPostId,
                     'bundle_option_title' => $optionTitle,
@@ -725,7 +757,8 @@ class CategoryController extends Controller
                     $productId,
                     $resolvedOptionKey,
                     $item['bundle_option_post_id'],
-                    $item['bundle_option_title']
+                    $item['bundle_option_title'],
+                    $item['bundle_option_uid']
                 );
 
                 if (!$optionMeta) {
@@ -734,13 +767,15 @@ class CategoryController extends Controller
                 }
 
                 $resolvedOptionKey = $optionMeta['bundle_option_key'] ?? $resolvedOptionKey;
-                $assignmentKey = $this->buildCategoryAssignmentKey('bundle_option', $productId, $resolvedOptionKey);
+                $resolvedOptionUid = $this->normalizeCategoryBundleOptionUid($optionMeta['bundle_option_uid'] ?? $item['bundle_option_uid'] ?? null);
+                $assignmentKey = $this->buildCategoryAssignmentKey('bundle_option', $productId, $resolvedOptionKey, $resolvedOptionUid);
 
                 if (!isset($resolvedItems[$assignmentKey])) {
                     $resolvedItems[$assignmentKey] = [
                         'assignment_key' => $assignmentKey,
                         'item_type' => 'bundle_option',
                         'product_id' => $productId,
+                        'bundle_option_uid' => $resolvedOptionUid,
                         'bundle_option_key' => $resolvedOptionKey,
                         'bundle_option_post_id' => $optionMeta['bundle_option_post_id'],
                         'bundle_option_title' => $optionMeta['bundle_option_title'],
@@ -757,6 +792,7 @@ class CategoryController extends Controller
                     'assignment_key' => $assignmentKey,
                     'item_type' => 'product',
                     'product_id' => $productId,
+                    'bundle_option_uid' => null,
                     'bundle_option_key' => '',
                     'bundle_option_post_id' => null,
                     'bundle_option_title' => null,
@@ -788,8 +824,12 @@ class CategoryController extends Controller
                     $row->item_type ?? null,
                     $row->bundle_option_key ?? null,
                     $row->bundle_option_post_id ?? null,
-                    $row->bundle_option_title ?? null
+                    $row->bundle_option_title ?? null,
+                    $row->bundle_option_uid ?? null
                 ) ? 'bundle_option' : 'product';
+                $bundleOptionUid = $itemType === 'bundle_option'
+                    ? $this->normalizeCategoryBundleOptionUid($row->bundle_option_uid ?? null)
+                    : null;
                 $bundleOptionKey = $itemType === 'bundle_option'
                     ? trim((string) ($row->bundle_option_key ?? ''))
                     : '';
@@ -797,7 +837,8 @@ class CategoryController extends Controller
                 return $this->buildCategoryAssignmentKey(
                     $itemType,
                     (int) $row->product_id,
-                    $bundleOptionKey
+                    $bundleOptionKey,
+                    $bundleOptionUid
                 );
             });
             $requestedKeys = $requestedItems
@@ -822,15 +863,20 @@ class CategoryController extends Controller
                         $row->item_type ?? null,
                         $row->bundle_option_key ?? null,
                         $row->bundle_option_post_id ?? null,
-                        $row->bundle_option_title ?? null
+                        $row->bundle_option_title ?? null,
+                        $row->bundle_option_uid ?? null
                     ) ? 'bundle_option' : 'product';
+                    $bundleOptionUid = $itemType === 'bundle_option'
+                        ? $this->normalizeCategoryBundleOptionUid($row->bundle_option_uid ?? null)
+                        : null;
                     $bundleOptionKey = $itemType === 'bundle_option'
                         ? trim((string) ($row->bundle_option_key ?? ''))
                         : '';
                     $assignmentKey = $this->buildCategoryAssignmentKey(
                         $itemType,
                         (int) $row->product_id,
-                        $bundleOptionKey
+                        $bundleOptionKey,
+                        $bundleOptionUid
                     );
 
                     if (isset($requestedKeys[$assignmentKey])) {
@@ -856,6 +902,7 @@ class CategoryController extends Controller
             foreach ($requestedItems as $index => $item) {
                 $payload = [
                     'item_type' => $item['item_type'],
+                    'bundle_option_uid' => $item['bundle_option_uid'],
                     'bundle_option_key' => $item['bundle_option_key'],
                     'bundle_option_post_id' => $item['bundle_option_post_id'],
                     'bundle_option_title' => $item['bundle_option_title'],
@@ -1569,7 +1616,8 @@ class CategoryController extends Controller
                     $row->item_type ?? null,
                     $row->bundle_option_key ?? null,
                     $row->bundle_option_post_id ?? null,
-                    $row->bundle_option_title ?? null
+                    $row->bundle_option_title ?? null,
+                    $row->bundle_option_uid ?? null
                 ))
                 ->pluck('product_id')
                 ->map(fn ($productId) => (int) $productId)
@@ -1591,8 +1639,12 @@ class CategoryController extends Controller
                     $row->item_type ?? null,
                     $row->bundle_option_key ?? null,
                     $row->bundle_option_post_id ?? null,
-                    $row->bundle_option_title ?? null
+                    $row->bundle_option_title ?? null,
+                    $row->bundle_option_uid ?? null
                 ) ? 'bundle_option' : 'product';
+                $bundleOptionUid = $itemType === 'bundle_option'
+                    ? $this->normalizeCategoryBundleOptionUid($row->bundle_option_uid ?? null)
+                    : null;
                 $bundleOptionKey = $itemType === 'bundle_option'
                     ? Str::lower(Str::squish((string) ($row->bundle_option_key ?? '')))
                     : '';
@@ -1602,7 +1654,7 @@ class CategoryController extends Controller
                         Str::squish((string) ($row->bundle_option_title ?? '')) ?: null
                     );
                 }
-                $assignmentKey = $this->buildCategoryAssignmentKey($itemType, (int) $product->id, $bundleOptionKey);
+                $assignmentKey = $this->buildCategoryAssignmentKey($itemType, (int) $product->id, $bundleOptionKey, $bundleOptionUid);
                 $basePayload = [
                     'id' => $assignmentKey,
                     'assignment_key' => $assignmentKey,
@@ -1627,8 +1679,10 @@ class CategoryController extends Controller
                         (int) $product->id,
                         $bundleOptionKey,
                         $row->bundle_option_post_id ?? null,
-                        $row->bundle_option_title ?? null
+                        $row->bundle_option_title ?? null,
+                        $bundleOptionUid
                     ) ?? [
+                        'bundle_option_uid' => $bundleOptionUid,
                         'bundle_option_key' => $bundleOptionKey,
                         'bundle_option_post_id' => filled($row->bundle_option_post_id) ? (int) $row->bundle_option_post_id : null,
                         'bundle_option_title' => Str::squish((string) ($row->bundle_option_title ?? '')) ?: 'Mac dinh',
@@ -1650,6 +1704,7 @@ class CategoryController extends Controller
                         ->filter()
                         ->values();
                     $resolvedOptionKey = $optionMeta['bundle_option_key'] ?? $bundleOptionKey;
+                    $resolvedOptionUid = $this->normalizeCategoryBundleOptionUid($optionMeta['bundle_option_uid'] ?? $bundleOptionUid);
                     $optionKeyDisplay = $optionMeta['option_key_display'] ?? $resolvedOptionKey;
                     $optionCurrentPrice = $optionMeta['current_price'] ?? $optionMeta['bundle_option_discounted_price'] ?? null;
                     $optionBasePrice = $optionMeta['price'] ?? $optionMeta['bundle_option_total_price'] ?? null;
@@ -1672,6 +1727,7 @@ class CategoryController extends Controller
                         'status' => (bool) $product->status && (bool) ($optionMeta['status'] ?? true),
                         'bundle_parent_name' => $product->name,
                         'bundle_parent_product_id' => (int) $product->id,
+                        'bundle_option_uid' => $resolvedOptionUid,
                         'bundle_option_key' => $resolvedOptionKey,
                         'bundle_option_post_id' => $optionMeta['bundle_option_post_id'],
                         'bundle_option_title' => $optionMeta['bundle_option_title'],
@@ -1719,6 +1775,7 @@ class CategoryController extends Controller
                     'is_primary_category' => $isPrimaryCategory,
                     'is_variant_child' => $isVariantChild,
                     'is_removable' => !$isPrimaryCategory,
+                    'bundle_option_uid' => null,
                     'bundle_option_key' => null,
                     'bundle_option_post_id' => null,
                     'bundle_option_title' => null,

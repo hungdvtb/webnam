@@ -10,15 +10,17 @@ const normalizeText = (value) => String(value || '').trim();
 
 const isBundleOptionProduct = (product = {}) => (
   normalizeText(product?.item_type || product?.itemType) === 'bundle_option'
+  || normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid) !== ''
   || normalizeText(product?.bundle_option_key || product?.bundleOptionKey) !== ''
   || normalizeText(product?.bundle_option_title || product?.bundleOptionTitle) !== ''
 );
 
 const getOptionKey = (product = {}) => normalizeText(product?.bundle_option_key || product?.bundleOptionKey);
+const getOptionUid = (product = {}) => normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid);
 const getOptionTitle = (product = {}) => normalizeText(product?.bundle_option_title || product?.bundleOptionTitle);
 
-const getCacheKey = (slug = '', optionKey = '', optionTitle = '') => {
-  const identity = normalizeText(optionKey) || normalizeText(optionTitle) || 'default';
+const getCacheKey = (slug = '', optionUid = '', optionKey = '', optionTitle = '') => {
+  const identity = normalizeText(optionUid) || normalizeText(optionKey) || normalizeText(optionTitle) || 'default';
   return `${normalizeText(slug)}::${identity}`;
 };
 
@@ -37,6 +39,7 @@ const pickBundleOptionSnapshot = (product = {}, href = '') => ({
   primary_image: product?.primary_image ?? null,
   main_image: product?.main_image ?? null,
   category: product?.category ?? null,
+  bundle_option_uid: getOptionUid(product),
   bundle_option_key: getOptionKey(product),
   bundle_option_title: getOptionTitle(product),
   bundle_option_total_price: product?.bundle_option_total_price ?? null,
@@ -52,7 +55,7 @@ export function cacheBundleOptionSnapshot(product = {}, href = '') {
   }
 
   const snapshot = pickBundleOptionSnapshot(product, href);
-  const cacheKey = getCacheKey(product.slug, snapshot.bundle_option_key, snapshot.bundle_option_title);
+  const cacheKey = getCacheKey(product.slug, snapshot.bundle_option_uid, snapshot.bundle_option_key, snapshot.bundle_option_title);
 
   try {
     window.sessionStorage.setItem(`${SNAPSHOT_PREFIX}${cacheKey}`, JSON.stringify(snapshot));
@@ -62,13 +65,13 @@ export function cacheBundleOptionSnapshot(product = {}, href = '') {
   }
 }
 
-export function readBundleOptionSnapshot(slug = '', optionKey = '', optionTitle = '') {
+export function readBundleOptionSnapshot(slug = '', optionKey = '', optionTitle = '', optionUid = '') {
   if (typeof window === 'undefined') {
     return null;
   }
 
   const keys = [
-    `${SNAPSHOT_PREFIX}${getCacheKey(slug, optionKey, optionTitle)}`,
+    `${SNAPSHOT_PREFIX}${getCacheKey(slug, optionUid, optionKey, optionTitle)}`,
     `${SNAPSHOT_PREFIX}last`,
   ];
 
@@ -82,10 +85,11 @@ export function readBundleOptionSnapshot(slug = '', optionKey = '', optionTitle 
       }
 
       const sameSlug = normalizeText(snapshot.slug) === normalizeText(slug);
-      const sameOption = !optionKey && !optionTitle
+      const sameOption = !optionUid && !optionKey && !optionTitle
         ? true
         : (
-          (optionKey && normalizeText(snapshot.bundle_option_key) === normalizeText(optionKey))
+          (optionUid && normalizeText(snapshot.bundle_option_uid) === normalizeText(optionUid))
+          || (optionKey && normalizeText(snapshot.bundle_option_key) === normalizeText(optionKey))
           || (optionTitle && normalizeText(snapshot.bundle_option_title) === normalizeText(optionTitle))
         );
 
@@ -100,13 +104,13 @@ export function readBundleOptionSnapshot(slug = '', optionKey = '', optionTitle 
   return null;
 }
 
-export function readCachedBundleOptionDetail(slug = '', optionKey = '', optionTitle = '') {
+export function readCachedBundleOptionDetail(slug = '', optionKey = '', optionTitle = '', optionUid = '') {
   if (typeof window === 'undefined') {
     return null;
   }
 
   try {
-    const raw = window.sessionStorage.getItem(`${DETAIL_PREFIX}${getCacheKey(slug, optionKey, optionTitle)}`);
+    const raw = window.sessionStorage.getItem(`${DETAIL_PREFIX}${getCacheKey(slug, optionUid, optionKey, optionTitle)}`);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -121,14 +125,16 @@ export function prefetchBundleOptionDetail(product = {}, href = '') {
   cacheBundleOptionSnapshot(product, href);
 
   const optionKey = getOptionKey(product);
+  const optionUid = getOptionUid(product);
   const optionTitle = getOptionTitle(product);
-  const cacheKey = getCacheKey(product.slug, optionKey, optionTitle);
+  const cacheKey = getCacheKey(product.slug, optionUid, optionKey, optionTitle);
 
   if (pendingPrefetches.has(cacheKey)) {
     return pendingPrefetches.get(cacheKey);
   }
 
   const params = new URLSearchParams();
+  if (optionUid) params.set('bundle_option_uid', optionUid);
   if (optionKey) params.set('bundle_option_key', optionKey);
   if (optionTitle) params.set('bundle_option', optionTitle);
 

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Schema;
 
 class Product extends Model
 {
@@ -153,12 +154,27 @@ class Product extends Model
 
     public function categories()
     {
+        $pivotColumns = ['sort_order', 'item_type', 'bundle_option_key'];
+
+        if (Schema::hasColumn('category_product', 'bundle_option_uid')) {
+            $pivotColumns[] = 'bundle_option_uid';
+        }
+
         return $this->belongsToMany(Category::class)
             ->wherePivot('item_type', 'product')
-            ->withPivot(['sort_order', 'item_type', 'bundle_option_key'])
+            ->withPivot($pivotColumns)
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('categories.id');
+    }
+
+    protected function productLinksPivotColumns(array $columns): array
+    {
+        if (Schema::hasColumn('product_links', 'bundle_option_uid')) {
+            $columns[] = 'bundle_option_uid';
+        }
+
+        return $columns;
     }
 
     /**
@@ -167,7 +183,7 @@ class Product extends Model
     public function linkedProducts()
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
-                    ->withPivot(['link_type', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'quantity', 'is_required', 'variant_id', 'price', 'cost_price', 'is_default'])
+                    ->withPivot($this->productLinksPivotColumns(['link_type', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'quantity', 'is_required', 'variant_id', 'price', 'cost_price', 'is_default']))
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }
@@ -313,7 +329,7 @@ class Product extends Model
     {
         return $this->belongsToMany(Product::class, 'product_links', 'product_id', 'linked_product_id')
                     ->wherePivot('link_type', 'bundle')
-                    ->withPivot(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot($this->productLinksPivotColumns(['link_type', 'quantity', 'is_required', 'position', 'option_title', 'option_post_id', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price']))
                     ->orderByPivot('position', 'asc')
                     ->withTimestamps();
     }

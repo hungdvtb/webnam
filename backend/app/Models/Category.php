@@ -144,9 +144,15 @@ class Category extends Model
 
     public function products()
     {
+        $pivotColumns = ['sort_order', 'item_type', 'bundle_option_key'];
+
+        if (Schema::hasColumn('category_product', 'bundle_option_uid')) {
+            $pivotColumns[] = 'bundle_option_uid';
+        }
+
         return $this->belongsToMany(Product::class)
             ->wherePivot('item_type', 'product')
-            ->withPivot(['sort_order', 'item_type', 'bundle_option_key'])
+            ->withPivot($pivotColumns)
             ->withTimestamps()
             ->orderBy('category_product.sort_order')
             ->orderBy('category_product.id');
@@ -288,6 +294,7 @@ class Category extends Model
                 'sort_order' => $sortOrder,
                 'item_type' => 'product',
                 'bundle_option_key' => '',
+                'bundle_option_uid' => null,
                 'bundle_option_post_id' => null,
                 'bundle_option_title' => null,
             ];
@@ -359,6 +366,7 @@ class Category extends Model
                 'category_id' => $categoryId,
                 'item_type' => 'product',
                 'bundle_option_key' => '',
+                'bundle_option_uid' => null,
                 'bundle_option_post_id' => null,
                 'bundle_option_title' => null,
                 'sort_order' => $nextSortOrder++,

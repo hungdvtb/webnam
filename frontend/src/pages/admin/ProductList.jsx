@@ -699,8 +699,13 @@ function buildBundleOptionGroups(bundleItems) {
 
     bundleItems.forEach((bundleItem, index) => {
         const optionTitle = resolveBundleOptionTitle(bundleItem);
+        const optionUid = typeof bundleItem?.pivot?.bundle_option_uid === 'string'
+            ? bundleItem.pivot.bundle_option_uid.trim()
+            : '';
         const optionPostId = Number(bundleItem?.pivot?.option_post_id || 0);
-        const groupKey = optionPostId > 0
+        const groupKey = optionUid
+            ? `uid:${optionUid}`
+            : optionPostId > 0
             ? `post:${optionPostId}`
             : `title:${optionTitle.toLowerCase()}`;
 

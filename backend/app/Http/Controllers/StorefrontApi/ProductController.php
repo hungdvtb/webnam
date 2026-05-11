@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
@@ -64,16 +65,35 @@ class ProductController extends Controller
         return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
     }
 
-    private function getBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): array
+    private function normalizeBundleOptionUid($value): ?string
+    {
+        $uid = trim((string) $value);
+
+        return preg_match('/^[A-Za-z0-9:_-]{1,64}$/', $uid) === 1 ? $uid : null;
+    }
+
+    private function hasProductLinksBundleOptionUid(): bool
+    {
+        return Schema::hasColumn('product_links', 'bundle_option_uid');
+    }
+
+    private function getBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): array
     {
         $candidates = [];
+        $uid = $this->normalizeBundleOptionUid($bundleOptionUid);
+
+        if ($uid !== null) {
+            $candidates[] = 'uid:' . $uid;
+            $candidates[] = $uid;
+        }
+
         $explicitKey = trim((string) $bundleOptionKey);
 
         if ($explicitKey !== '') {
             $candidates[] = $explicitKey;
         }
 
-        if ($this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle)) {
+        if ($this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle, $bundleOptionUid)) {
             $title = Str::squish((string) $bundleOptionTitle) ?: null;
             $candidates[] = $this->normalizeBundleOptionKey($bundleOptionPostId, $title);
             $candidates[] = $this->normalizeLocalizedBundleOptionKey($bundleOptionPostId, $title);
@@ -86,20 +106,21 @@ class ProductController extends Controller
             ->all();
     }
 
-    private function hasBundleOptionAssignmentMeta($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): bool
+    private function hasBundleOptionAssignmentMeta($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): bool
     {
-        return trim((string) $bundleOptionKey) !== ''
+        return $this->normalizeBundleOptionUid($bundleOptionUid) !== null
+            || trim((string) $bundleOptionKey) !== ''
             || filled($bundleOptionPostId)
             || Str::squish((string) $bundleOptionTitle) !== '';
     }
 
-    private function isBundleOptionAssignment($itemType = null, $bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null): bool
+    private function isBundleOptionAssignment($itemType = null, $bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): bool
     {
         if ((string) $itemType === 'bundle_option') {
             return true;
         }
 
-        return $this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle);
+        return $this->hasBundleOptionAssignmentMeta($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle, $bundleOptionUid);
     }
 
     private function markTiming(array &$timings, string $name, float $startedAt): float
@@ -151,13 +172,13 @@ class ProductController extends Controller
         return $this->normalizeBundleOptionKey($bundleOptionPostId, Str::squish((string) $bundleOptionTitle) ?: null);
     }
 
-    private function resolveBundleOptionCatalogMeta(array $catalog, int $productId, ?string $bundleOptionKey, $bundleOptionPostId = null, $bundleOptionTitle = null): ?array
+    private function resolveBundleOptionCatalogMeta(array $catalog, int $productId, ?string $bundleOptionKey, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): ?array
     {
         if ($productId <= 0 || empty($catalog[$productId]) || !is_array($catalog[$productId])) {
             return null;
         }
 
-        foreach ($this->getBundleOptionKeyCandidates($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle) as $candidateKey) {
+        foreach ($this->getBundleOptionKeyCandidates($bundleOptionKey, $bundleOptionPostId, $bundleOptionTitle, $bundleOptionUid) as $candidateKey) {
             if (isset($catalog[$productId][$candidateKey]) && is_array($catalog[$productId][$candidateKey])) {
                 return $catalog[$productId][$candidateKey];
             }
@@ -166,17 +187,25 @@ class ProductController extends Controller
         return null;
     }
 
-    private function resolveRequestedBundleOptionMatch(Product $product, ?string $requestedKey, ?string $requestedTitle): ?array
+    private function resolveRequestedBundleOptionMatch(Product $product, ?string $requestedKey, ?string $requestedTitle, ?string $requestedUid = null): ?array
     {
         $normalizedRequestedKey = trim((string) $requestedKey);
         $normalizedRequestedTitle = Str::squish((string) $requestedTitle);
+        $normalizedRequestedUid = $this->normalizeBundleOptionUid($requestedUid);
+
+        $hasBundleOptionUid = $this->hasProductLinksBundleOptionUid();
+        $bundleOptionUidSelectSql = $hasBundleOptionUid ? 'bundle_option_uid' : 'NULL as bundle_option_uid';
+        $bundleOptionUidGroupColumns = $hasBundleOptionUid
+            ? ['bundle_option_uid', 'option_post_id', 'option_title']
+            : ['option_post_id', 'option_title'];
 
         $optionRows = DB::table('product_links')
             ->where('product_id', $product->id)
             ->where('link_type', 'bundle')
-            ->select('option_post_id', 'option_title')
+            ->selectRaw($bundleOptionUidSelectSql)
+            ->addSelect('option_post_id', 'option_title')
             ->selectRaw('MIN(position) as first_position')
-            ->groupBy('option_post_id', 'option_title')
+            ->groupBy(...$bundleOptionUidGroupColumns)
             ->orderBy('first_position')
             ->get();
 
@@ -187,16 +216,19 @@ class ProductController extends Controller
         foreach ($optionRows as $row) {
             $optionPostId = filled($row->option_post_id ?? null) ? (int) $row->option_post_id : null;
             $optionTitle = Str::squish((string) ($row->option_title ?? '')) ?: 'Mặc định';
+            $optionUid = $this->normalizeBundleOptionUid($row->bundle_option_uid ?? null);
             $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
-            $optionKeyCandidates = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle);
+            $optionKeyCandidates = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle, $optionUid);
 
+            $matchesUid = $normalizedRequestedUid !== null && $optionUid !== null && $normalizedRequestedUid === $optionUid;
             $matchesKey = $normalizedRequestedKey !== ''
                 && in_array($normalizedRequestedKey, $optionKeyCandidates, true);
             $matchesTitle = $normalizedRequestedTitle !== ''
                 && $optionTitle === $normalizedRequestedTitle;
 
-            if ($matchesKey || $matchesTitle) {
+            if ($matchesUid || $matchesKey || $matchesTitle) {
                 return [
+                    'option_uid' => $optionUid,
                     'option_key' => $optionKey,
                     'option_post_id' => $optionPostId,
                     'option_title' => $optionTitle,
@@ -209,6 +241,7 @@ class ProductController extends Controller
         $fallbackTitle = Str::squish((string) ($fallbackRow->option_title ?? '')) ?: 'Mặc định';
 
         return [
+            'option_uid' => $this->normalizeBundleOptionUid($fallbackRow->bundle_option_uid ?? null),
             'option_key' => $this->normalizeBundleOptionKey($fallbackPostId, $fallbackTitle),
             'option_post_id' => $fallbackPostId,
             'option_title' => $fallbackTitle,
@@ -426,7 +459,11 @@ class ProductController extends Controller
             ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
             ->implode(' ');
 
-        $bundleOptionAssignmentSql = "category_product.item_type = 'bundle_option' OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> ''";
+        $hasBundleOptionUid = Schema::hasColumn('category_product', 'bundle_option_uid');
+        $bundleOptionUidAssignmentSql = $hasBundleOptionUid ? " OR COALESCE(category_product.bundle_option_uid, '') <> ''" : '';
+        $bundleOptionUidSelectSql = $hasBundleOptionUid ? "COALESCE(category_product.bundle_option_uid, '')" : "''";
+        $bundleOptionUidGroupSql = $hasBundleOptionUid ? ', category_product.bundle_option_uid' : '';
+        $bundleOptionAssignmentSql = "category_product.item_type = 'bundle_option'{$bundleOptionUidAssignmentSql} OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> ''";
         $resolvedProductIdSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN category_product.product_id ELSE COALESCE(super_links.product_id, category_product.product_id) END";
         $itemTypeSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN 'bundle_option' ELSE 'product' END";
 
@@ -438,17 +475,18 @@ class ProductController extends Controller
             })
             ->selectRaw("{$resolvedProductIdSql} as product_id")
             ->selectRaw("{$itemTypeSql} as item_type")
+            ->selectRaw("{$bundleOptionUidSelectSql} as bundle_option_uid")
             ->selectRaw("COALESCE(category_product.bundle_option_key, '') as bundle_option_key")
             ->selectRaw('category_product.bundle_option_post_id')
             ->selectRaw('category_product.bundle_option_title')
-            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000000 + COALESCE(category_product.sort_order, 999999) * 1000) as category_order_key")
+            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(category_product.sort_order, 999999)) as category_order_key")
             ->whereIn('category_product.category_id', $normalizedCategoryIds)
             ->where(function ($categoryQuery) {
                 $categoryQuery
                     ->whereIn('category_product.item_type', ['product', 'bundle_option'])
                     ->orWhereNull('category_product.item_type');
             })
-            ->groupByRaw("{$resolvedProductIdSql}, {$itemTypeSql}, category_product.bundle_option_key, category_product.bundle_option_post_id, category_product.bundle_option_title");
+            ->groupByRaw("{$resolvedProductIdSql}, {$itemTypeSql}{$bundleOptionUidGroupSql}, category_product.bundle_option_key, category_product.bundle_option_post_id, category_product.bundle_option_title");
 
         $query
             ->joinSub($subquery, $alias, function ($join) use ($alias) {
@@ -457,6 +495,7 @@ class ProductController extends Controller
             ->select('products.*')
             ->addSelect([
                 "{$alias}.item_type as item_type",
+                "{$alias}.bundle_option_uid as bundle_option_uid",
                 "{$alias}.bundle_option_key as bundle_option_key",
                 "{$alias}.bundle_option_post_id as bundle_option_post_id",
                 "{$alias}.bundle_option_title as bundle_option_title",
@@ -606,23 +645,26 @@ class ProductController extends Controller
                 ? (int) $bundleItem->pivot->option_post_id
                 : null;
             $optionTitle = Str::squish((string) ($bundleItem->pivot?->option_title ?? '')) ?: 'Mặc định';
+            $optionUid = $this->normalizeBundleOptionUid($bundleItem->pivot?->bundle_option_uid ?? null);
             $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
-            $optionAliases = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle);
+            $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
+            $optionAliases = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle, $optionUid);
             $optionPost = $optionPostId ? $optionPosts->get($optionPostId) : null;
             $selectedVariant = $this->resolveBundleItemVariantFromMap($bundleItem, $variantMap);
             $quantity = max(1, (int) ($bundleItem->pivot?->quantity ?? 1));
             $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
             $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
 
-            if (!isset($catalog[$optionKey])) {
+            if (!isset($catalog[$catalogKey])) {
                 $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
                     ?? $this->resolveBundleOptionPrimaryImage($optionPost);
                 $displayName = $optionTitle !== ''
                     ? $optionTitle
                     : (Str::squish((string) ($optionPost?->title ?? '')) ?: $bundleItem->name);
 
-                $catalog[$optionKey] = [
+                $catalog[$catalogKey] = [
                     'key' => $optionKey,
+                    'bundle_option_uid' => $optionUid,
                     'name' => $displayName,
                     'title' => $optionTitle,
                     'bundle_option_title' => $optionTitle,
@@ -643,24 +685,25 @@ class ProductController extends Controller
                 ];
             }
 
-            $catalogAliases[$optionKey] = collect($catalogAliases[$optionKey] ?? [])
+            $catalogAliases[$catalogKey] = collect($catalogAliases[$catalogKey] ?? [])
                 ->merge($optionAliases)
+                ->push($catalogKey)
                 ->push($optionKey)
                 ->filter(fn ($key) => trim((string) $key) !== '')
                 ->unique()
                 ->values()
                 ->all();
 
-            if (!$catalog[$optionKey]['primary_image']) {
+            if (!$catalog[$catalogKey]['primary_image']) {
                 $displayImage = $this->mapBundleOptionImageUrl($bundleItem->pivot?->option_image_url ?? null)
                     ?? $this->resolveBundleOptionPrimaryImage($optionPost);
-                $catalog[$optionKey]['primary_image'] = $displayImage;
-                $catalog[$optionKey]['main_image'] = $this->extractImageUrl($displayImage);
+                $catalog[$catalogKey]['primary_image'] = $displayImage;
+                $catalog[$catalogKey]['main_image'] = $this->extractImageUrl($displayImage);
             }
 
-            $catalog[$optionKey]['current_price'] += $currentUnitPrice * $quantity;
-            $catalog[$optionKey]['price'] += $baseUnitPrice * $quantity;
-            $catalog[$optionKey]['items_count'] += $quantity;
+            $catalog[$catalogKey]['current_price'] += $currentUnitPrice * $quantity;
+            $catalog[$catalogKey]['price'] += $baseUnitPrice * $quantity;
+            $catalog[$catalogKey]['items_count'] += $quantity;
         }
 
         foreach ($catalog as $optionKey => $optionMeta) {
@@ -702,7 +745,7 @@ class ProductController extends Controller
     {
         return collect($catalog)
             ->filter(fn ($meta) => is_array($meta))
-            ->unique(fn (array $meta) => (string) ($meta['key'] ?? $meta['bundle_option_title'] ?? ''))
+            ->unique(fn (array $meta) => (string) ($meta['bundle_option_uid'] ?? $meta['key'] ?? $meta['bundle_option_title'] ?? ''))
             ->values()
             ->all();
     }
@@ -736,6 +779,7 @@ class ProductController extends Controller
             'special_price' => $totalPrice > $finalPrice ? $finalPrice : null,
             'primary_image' => $primaryImage,
             'main_image' => $mainImage,
+            'bundle_option_uid' => $optionMeta['bundle_option_uid'] ?? null,
             'bundle_option_key' => $optionMeta['key'] ?? $bundleOptionKey,
             'bundle_option_title' => $optionMeta['bundle_option_title'] ?? $bundleOptionTitle,
             'bundle_option_post_id' => $optionMeta['bundle_option_post_id'] ?? $bundleOptionPostId,
@@ -923,8 +967,12 @@ class ProductController extends Controller
                 $product->item_type ?? null,
                 $product->bundle_option_key ?? null,
                 $product->bundle_option_post_id ?? null,
-                $product->bundle_option_title ?? null
+                $product->bundle_option_title ?? null,
+                $product->bundle_option_uid ?? null
             ) ? 'bundle_option' : 'product';
+            $bundleOptionUid = $itemType === 'bundle_option'
+                ? $this->normalizeBundleOptionUid($product->bundle_option_uid ?? null)
+                : null;
             $bundleOptionKey = $this->resolveAssignmentBundleOptionKey(
                 $product->bundle_option_key ?? null,
                 $product->bundle_option_post_id ?? null,
@@ -935,6 +983,7 @@ class ProductController extends Controller
                 : null;
 
             $product->setAttribute('item_type', $itemType);
+            $product->setAttribute('bundle_option_uid', $bundleOptionUid);
             $product->setAttribute('bundle_option_key', $bundleOptionKey !== '' ? $bundleOptionKey : null);
             $product->setAttribute(
                 'bundle_option_post_id',
@@ -1121,6 +1170,7 @@ class ProductController extends Controller
         $responseData['data'] = collect($responseData['data'] ?? [])
             ->flatMap(function (array $product) use ($bundleOptionCatalog, $parentIdMap, $attrValuesMap) {
                 $productId = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
+                $bundleOptionUid = $this->normalizeBundleOptionUid($product['bundle_option_uid'] ?? null);
                 $bundleOptionKey = $this->resolveAssignmentBundleOptionKey(
                     $product['bundle_option_key'] ?? null,
                     $product['bundle_option_post_id'] ?? null,
@@ -1130,7 +1180,8 @@ class ProductController extends Controller
                     $product['item_type'] ?? null,
                     $bundleOptionKey,
                     $product['bundle_option_post_id'] ?? null,
-                    $product['bundle_option_title'] ?? null
+                    $product['bundle_option_title'] ?? null,
+                    $bundleOptionUid
                 ) ? 'bundle_option' : 'product';
                 $bundleOptionTitle = $itemType === 'bundle_option'
                     ? (Str::squish((string) ($product['bundle_option_title'] ?? '')) ?: null)
@@ -1141,7 +1192,8 @@ class ProductController extends Controller
                         $productId,
                         $bundleOptionKey,
                         $product['bundle_option_post_id'] ?? null,
-                        $product['bundle_option_title'] ?? null
+                        $product['bundle_option_title'] ?? null,
+                        $bundleOptionUid
                     )
                     : null;
 
@@ -1152,7 +1204,11 @@ class ProductController extends Controller
                 if (!is_array($optionMeta)) {
                     return [[
                         ...$product,
+                        'name' => $itemType === 'bundle_option' && $bundleOptionTitle
+                            ? $bundleOptionTitle
+                            : ($product['name'] ?? null),
                         'item_type' => $itemType,
+                        'bundle_option_uid' => $itemType === 'bundle_option' ? $bundleOptionUid : null,
                         'bundle_option_key' => $bundleOptionKey,
                         'bundle_option_post_id' => $itemType === 'bundle_option' ? ($product['bundle_option_post_id'] ?? null) : null,
                         'bundle_option_title' => $bundleOptionTitle,
@@ -1359,13 +1415,16 @@ class ProductController extends Controller
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
                     ->map(function (array $item) use ($bundleOptionCatalog, $bundleOptionPosts) {
                         $optionPostId = data_get($item, 'pivot.option_post_id');
+                        $optionUid = $this->normalizeBundleOptionUid(data_get($item, 'pivot.bundle_option_uid'));
                         $optionTitle = data_get($item, 'pivot.option_title');
                         $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
                         $optionPost = filled($optionPostId) && is_numeric($optionPostId)
                             ? $bundleOptionPosts->get((int) $optionPostId)
                             : null;
-                        $optionMeta = $bundleOptionCatalog[$optionKey] ?? null;
+                        $optionMeta = $bundleOptionCatalog[$catalogKey] ?? $bundleOptionCatalog[$optionKey] ?? null;
                         $item['option_key'] = $optionKey;
+                        $item['option_uid'] = $optionUid;
                         $item['option_post_title'] = Str::squish((string) ($optionPost?->title ?? '')) ?: null;
                         $item['option_post_slug'] = Str::squish((string) ($optionPost?->slug ?? '')) ?: null;
                         $item['option_post_featured_image'] = $optionMeta['primary_image'] ?? $this->mapPostPrimaryImage($optionPost);
@@ -1404,6 +1463,7 @@ class ProductController extends Controller
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
             $requestedKey = trim((string) $request->query('bundle_option_key', ''));
+            $requestedUid = $this->normalizeBundleOptionUid($request->query('bundle_option_uid', ''));
             $requestedTitle = Str::squish((string) (
                 $request->query('bundle_option')
                 ?? $request->query('bundle_option_title')
@@ -1438,7 +1498,7 @@ class ProductController extends Controller
                 return $this->timedJsonResponse($responseData, $timings);
             }
 
-            $optionMatch = $this->resolveRequestedBundleOptionMatch($product, $requestedKey, $requestedTitle);
+            $optionMatch = $this->resolveRequestedBundleOptionMatch($product, $requestedKey, $requestedTitle, $requestedUid);
             $stepStartedAt = $this->markTiming($timings, 'resolve_option', $stepStartedAt);
 
             $bundleItemsQuery = $product->bundleItems()
@@ -1448,7 +1508,9 @@ class ProductController extends Controller
                     'attributeValues.attribute',
                 ]);
 
-            if ($optionMatch && filled($optionMatch['option_post_id'] ?? null)) {
+            if ($optionMatch && filled($optionMatch['option_uid'] ?? null)) {
+                $bundleItemsQuery->wherePivot('bundle_option_uid', $optionMatch['option_uid']);
+            } elseif ($optionMatch && filled($optionMatch['option_post_id'] ?? null)) {
                 $bundleItemsQuery->wherePivot('option_post_id', (int) $optionMatch['option_post_id']);
             } elseif ($optionMatch && filled($optionMatch['option_title'] ?? null)) {
                 $bundleItemsQuery->wherePivot('option_title', $optionMatch['option_title']);
@@ -1542,13 +1604,16 @@ class ProductController extends Controller
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
                     ->map(function (array $item) use ($bundleOptionCatalog, $bundleOptionPosts) {
                         $optionPostId = data_get($item, 'pivot.option_post_id');
+                        $optionUid = $this->normalizeBundleOptionUid(data_get($item, 'pivot.bundle_option_uid'));
                         $optionTitle = data_get($item, 'pivot.option_title');
                         $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
                         $optionPost = filled($optionPostId) && is_numeric($optionPostId)
                             ? $bundleOptionPosts->get((int) $optionPostId)
                             : null;
-                        $optionMeta = $bundleOptionCatalog[$optionKey] ?? null;
+                        $optionMeta = $bundleOptionCatalog[$catalogKey] ?? $bundleOptionCatalog[$optionKey] ?? null;
                         $item['option_key'] = $optionKey;
+                        $item['option_uid'] = $optionUid;
                         $item['option_post_title'] = Str::squish((string) ($optionPost?->title ?? '')) ?: null;
                         $item['option_post_slug'] = Str::squish((string) ($optionPost?->slug ?? '')) ?: null;
                         $item['option_post_featured_image'] = $optionMeta['primary_image'] ?? $this->mapPostPrimaryImage($optionPost);
@@ -1561,6 +1626,7 @@ class ProductController extends Controller
             $responseData['bundle_options'] = $this->uniqueBundleOptionCatalogValues($bundleOptionCatalog);
             $responseData['all_attributes'] = [];
             $responseData['is_bundle_option_lite'] = true;
+            $responseData['requested_bundle_option_uid'] = $optionMatch['option_uid'] ?? $requestedUid;
             $responseData['requested_bundle_option_key'] = $optionMatch['option_key'] ?? $requestedKey;
             $responseData['requested_bundle_option_title'] = $optionMatch['option_title'] ?? $requestedTitle;
             $this->markTiming($timings, 'serialize', $stepStartedAt);

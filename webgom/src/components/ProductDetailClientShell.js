@@ -50,7 +50,7 @@ const scheduleAfterFirstPaint = (callback) => {
   };
 };
 
-const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', requestedBundleOptionTitle = '') => {
+const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', requestedBundleOptionTitle = '', requestedBundleOptionUid = '') => {
   if (!snapshot) {
     return null;
   }
@@ -75,6 +75,8 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
     bundle_items: [],
     grouped_items: [],
     bundle_options: [{
+      uid: requestedBundleOptionUid || snapshot.bundle_option_uid || '',
+      bundle_option_uid: requestedBundleOptionUid || snapshot.bundle_option_uid || '',
       key: requestedBundleOptionKey || snapshot.bundle_option_key || '',
       name: requestedBundleOptionTitle || snapshot.bundle_option_title || snapshot.name || '',
       bundle_option_title: requestedBundleOptionTitle || snapshot.bundle_option_title || '',
@@ -145,6 +147,7 @@ export default function ProductDetailClientShell({
   initialRelatedProducts = [],
   initialRelatedViewAllHref = '/products',
   deferFullProduct = false,
+  requestedBundleOptionUid = '',
 }) {
   const [product, setProduct] = useState(initialProduct || null);
   const [relatedProducts, setRelatedProducts] = useState(initialRelatedProducts);
@@ -178,6 +181,7 @@ export default function ProductDetailClientShell({
       slug,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
+      requestedBundleOptionUid,
     );
 
     if (cachedDetail) {
@@ -191,11 +195,13 @@ export default function ProductDetailClientShell({
       slug,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
+      requestedBundleOptionUid,
     );
     const optimisticProduct = buildOptimisticBundleProduct(
       snapshot,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
+      requestedBundleOptionUid,
     );
 
     if (optimisticProduct) {
@@ -205,7 +211,7 @@ export default function ProductDetailClientShell({
     return () => {
       cancelled = true;
     };
-  }, [product, requestedBundleOptionKey, requestedBundleOptionTitle, slug]);
+  }, [product, requestedBundleOptionKey, requestedBundleOptionTitle, requestedBundleOptionUid, slug]);
 
   useEffect(() => {
     if (!deferFullProduct || !slug) {
@@ -263,6 +269,7 @@ export default function ProductDetailClientShell({
     product?.id || slug,
     product?.is_bundle_option_lite ? 'lite' : 'full',
     requestedBundleOptionKey || requestedBundleOptionTitle || '',
+    requestedBundleOptionUid || '',
   ].join(':');
 
   return (
@@ -270,6 +277,7 @@ export default function ProductDetailClientShell({
       <ProductDetailContent
         key={productContentKey}
         product={product}
+        requestedBundleOptionUid={requestedBundleOptionUid}
         requestedBundleOptionKey={requestedBundleOptionKey}
         requestedBundleOptionTitle={requestedBundleOptionTitle}
         requestedVariantId={requestedVariantId}

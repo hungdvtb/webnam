@@ -5,26 +5,36 @@ import Image from 'next/image';
 import { getWebProducts, fetchFromApi } from '@/lib/api';
 import styles from '../builder.module.css';
 
-const isOptionOutOfStock = (item = {}) => {
-  if (!item || typeof item !== 'object') {
-    return false;
+const getCurrentSlotProduct = (slot = {}) => {
+  const id = slot?.selected_product_id || slot?.pivot?.variant_id || slot?.id || slot?.base_product_id;
+
+  if (!id) {
+    return null;
   }
 
-  if (item.status === false || item.is_in_stock === false || item.isInStock === false) {
+  return {
+    ...slot,
+    id,
+    name: slot?.name || slot?.display_name || '',
+    price: slot?.current_price ?? slot?.price ?? slot?.pivot?.price ?? 0,
+    current_price: slot?.current_price ?? slot?.price ?? slot?.pivot?.price ?? 0,
+    slug: slot?.slug || slot?.base_product_slug || '',
+  };
+};
+
+const uniqueProductsById = (items = []) => {
+  const seen = new Set();
+
+  return items.filter((item) => {
+    const key = item?.id || item?.slug || item?.sku;
+
+    if (!key || seen.has(String(key))) {
+      return false;
+    }
+
+    seen.add(String(key));
     return true;
-  }
-
-  const stockStatus = String(item.stock_status || item.inventory_status || '').trim().toLowerCase();
-  if (stockStatus === 'out_of_stock' || stockStatus === 'out of stock') {
-    return true;
-  }
-
-  if (item.sold_out === true || item.soldOut === true) {
-    return true;
-  }
-
-  const stockQuantity = Number(item.stock_quantity);
-  return Number.isFinite(stockQuantity) && stockQuantity === 0;
+  });
 };
 
 export default function ComponentSelectionModal({
@@ -72,6 +82,40 @@ export default function ComponentSelectionModal({
     restorePageScrollPosition();
   }, [onSelect, restorePageScrollPosition]);
 
+  const fetchRelatedFallback = useCallback(async (identifier) => {
+    if (!identifier) {
+      return [];
+    }
+
+    try {
+      const encodedIdentifier = encodeURIComponent(String(identifier));
+      const response = await fetchFromApi(`/web-api/products/${encodedIdentifier}/related`);
+      return Array.isArray(response?.items) ? response.items : (Array.isArray(response) ? response : []);
+    } catch (error) {
+      console.warn('Bundle replacement related fallback failed', error);
+      return [];
+    }
+  }, []);
+
+  const fetchSearchFallback = useCallback(async () => {
+    if (!allowSearch) {
+      return [];
+    }
+
+    try {
+      const response = await getWebProducts({
+        search: currentSlot?.name || '',
+        per_page: 12,
+        allow_variants: 1,
+      });
+
+      return Array.isArray(response.data) ? response.data : (response.data?.data || []);
+    } catch (error) {
+      console.warn('Bundle replacement search fallback failed', error);
+      return [];
+    }
+  }, [allowSearch, currentSlot]);
+
   const fetchVariants = useCallback(async () => {
     const identifier = currentSlot?.base_product_slug
       || currentSlot?.base_product_id
@@ -85,8 +129,11 @@ export default function ComponentSelectionModal({
     setLoading(true);
     setErrorMsg(null);
 
+    const currentProduct = getCurrentSlotProduct(currentSlot);
+
     try {
-      const response = await fetchFromApi(`/web-api/products/${identifier}`);
+      const encodedIdentifier = encodeURIComponent(String(identifier));
+      const response = await fetchFromApi(`/web-api/products/${encodedIdentifier}`);
       const data = response || {};
       const linkedVariants = (data.linked_products || []).filter(
         (product) => product?.pivot?.link_type === 'super_link'
@@ -97,19 +144,32 @@ export default function ComponentSelectionModal({
       } else if (Array.isArray(data.variations) && data.variations.length > 0) {
         setVariants(data.variations);
       } else if (data.id) {
-        setVariants([data]);
+        const relatedProducts = await fetchRelatedFallback(identifier);
+        setVariants(uniqueProductsById([data, ...relatedProducts]));
       } else {
+        const fallbackItems = uniqueProductsById([
+          ...(currentProduct ? [currentProduct] : []),
+          ...(await fetchRelatedFallback(identifier)),
+          ...(await fetchSearchFallback()),
+        ]);
         setErrorMsg(`API không trả về thông tin sản phẩm: ${JSON.stringify(data)}`);
-        setVariants([]);
+        setVariants(fallbackItems);
+        setErrorMsg(fallbackItems.length > 0 ? null : 'Khong tim thay san pham thay the phu hop.');
       }
     } catch (error) {
       console.error(error);
+      const fallbackItems = uniqueProductsById([
+        ...(currentProduct ? [currentProduct] : []),
+        ...(await fetchRelatedFallback(identifier)),
+        ...(await fetchSearchFallback()),
+      ]);
       setErrorMsg(`Lỗi khi gọi API biến thể: ${error.message || 'Unknown error'}`);
-      setVariants([]);
+      setVariants(fallbackItems);
+      setErrorMsg(fallbackItems.length > 0 ? null : 'Khong tim thay san pham thay the phu hop.');
     } finally {
       setLoading(false);
     }
-  }, [currentSlot, isOpen]);
+  }, [currentSlot, fetchRelatedFallback, fetchSearchFallback, isOpen]);
 
   const fetchSearch = useCallback(async () => {
     if (!isOpen || !allowSearch) {
@@ -254,15 +314,6 @@ export default function ComponentSelectionModal({
                   || currentSlot?.pivot?.variant_id
                   || currentSlot?.id;
                 const isCurrent = Number(item.id) === Number(currentProductId);
-                const isDisabled = !isCurrent && isOptionOutOfStock(item);
-                const showStockState = item.stock_quantity !== undefined
-                  || item.status !== undefined
-                  || item.is_in_stock !== undefined
-                  || item.isInStock !== undefined
-                  || Boolean(item.stock_status)
-                  || Boolean(item.inventory_status)
-                  || Boolean(item.sold_out)
-                  || Boolean(item.soldOut);
 
                 return (
                   <div
@@ -270,10 +321,8 @@ export default function ComponentSelectionModal({
                     className={[
                       styles.productCard,
                       isCurrent ? styles.productCardActive : '',
-                      isDisabled ? styles.productCardDisabled : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={isDisabled ? undefined : () => handleSelectItem(item)}
-                    aria-disabled={isDisabled}
+                    onClick={() => handleSelectItem(item)}
                   >
                     {isCurrent ? (
                       <span className={styles.currentBadge}>Đang dùng</span>
@@ -290,19 +339,16 @@ export default function ComponentSelectionModal({
                     <div className={styles.productCardInfo}>
                       <p className={styles.productCardName}>{item.name}</p>
                       <p className={styles.productCardPrice}>{formatPrice(item.current_price ?? item.price ?? 0)}</p>
-                      {showStockState ? (
-                        <span className={isDisabled ? styles.outStock : styles.inStock}>
-                          {isDisabled ? '● Hết hàng' : '● Sẵn sàng giao ngay'}
-                        </span>
-                      ) : null}
+                      <span className={styles.inStock}>
+                        ● Sẵn sàng giao ngay
+                      </span>
                     </div>
                     <button
                       type="button"
-                      className={`${styles.productCardSelectBtn} ${isDisabled ? styles.productCardSelectBtnDisabled : ''}`}
-                      disabled={isDisabled}
+                      className={styles.productCardSelectBtn}
                     >
                       <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check_circle</span>
-                      {isCurrent ? 'Giữ nguyên' : isDisabled ? 'Hết hàng' : 'Chọn'}
+                      {isCurrent ? 'Giữ nguyên' : 'Chọn'}
                     </button>
                   </div>
                 );

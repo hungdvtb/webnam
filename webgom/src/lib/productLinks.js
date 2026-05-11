@@ -4,6 +4,10 @@ const resolveBundleOptionKey = (product = {}) => (
   normalizeText(product?.bundle_option_key || product?.bundleOptionKey)
 );
 
+const resolveBundleOptionUid = (product = {}) => (
+  normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid)
+);
+
 const resolveBundleOptionTitle = (product = {}) => (
   normalizeText(product?.bundle_option_title || product?.bundleOptionTitle)
 );
@@ -34,15 +38,20 @@ const buildProductPathname = (slugOrId = '') => {
 export function buildProductDetailHref(product = {}) {
   const slugOrId = resolveProductSlugOrId(product);
   const pathname = slugOrId ? `/product/${slugOrId}` : '/products';
+  const bundleOptionUid = resolveBundleOptionUid(product);
   const bundleOptionKey = resolveBundleOptionKey(product);
   const bundleOptionTitle = resolveBundleOptionTitle(product);
   const itemType = resolveProductItemType(product);
 
-  if (itemType !== 'bundle_option' && !bundleOptionKey && !bundleOptionTitle) {
+  if (itemType !== 'bundle_option' && !bundleOptionUid && !bundleOptionKey && !bundleOptionTitle) {
     return pathname;
   }
 
   const query = {};
+
+  if (bundleOptionUid) {
+    query.bundle_option_uid = bundleOptionUid;
+  }
 
   if (bundleOptionKey) {
     query.bundle_option_key = bundleOptionKey;
@@ -122,13 +131,14 @@ export function buildBundleComponentDetailHref(item = {}) {
 
 export function buildProductCardKey(product = {}) {
   const productId = resolveProductSlugOrId(product) || 'product';
+  const bundleOptionUid = resolveBundleOptionUid(product);
   const bundleOptionKey = resolveBundleOptionKey(product);
   const bundleOptionTitle = resolveBundleOptionTitle(product);
   const itemType = resolveProductItemType(product);
 
-  if (itemType !== 'bundle_option' && !bundleOptionKey && !bundleOptionTitle) {
+  if (itemType !== 'bundle_option' && !bundleOptionUid && !bundleOptionKey && !bundleOptionTitle) {
     return productId;
   }
 
-  return `${productId}:${bundleOptionKey || bundleOptionTitle || 'bundle-option'}`;
+  return `${productId}:${bundleOptionUid || bundleOptionKey || bundleOptionTitle || 'bundle-option'}`;
 }

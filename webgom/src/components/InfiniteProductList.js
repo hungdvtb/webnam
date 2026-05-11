@@ -61,6 +61,7 @@ export default function InfiniteProductList({ initialData }) {
           const displayPrice = getDisplayPrice(product);
           const cartOptions = product.item_type === 'bundle_option'
             ? {
+                bundle_option_uid: product.bundle_option_uid,
                 bundle_option_key: product.bundle_option_key,
                 bundle_option_title: product.bundle_option_title,
                 bundle_parent_name: product.bundle_parent_name,

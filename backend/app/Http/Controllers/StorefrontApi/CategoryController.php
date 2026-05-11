@@ -60,6 +60,7 @@ class CategoryController extends Controller
                 'category_product.category_id',
                 'category_product.product_id',
                 'category_product.item_type',
+                'category_product.bundle_option_uid',
                 'category_product.bundle_option_key',
                 'category_product.bundle_option_post_id',
                 'category_product.bundle_option_title',
@@ -73,18 +74,22 @@ class CategoryController extends Controller
                     ->map(function ($row) {
                         $bundleOptionKey = trim((string) ($row->bundle_option_key ?? ''));
                         $bundleOptionTitle = trim((string) ($row->bundle_option_title ?? ''));
+                        $bundleOptionUid = trim((string) ($row->bundle_option_uid ?? ''));
                         $isBundleOption = (string) ($row->item_type ?? '') === 'bundle_option'
+                            || $bundleOptionUid !== ''
                             || $bundleOptionKey !== ''
                             || filled($row->bundle_option_post_id ?? null)
                             || $bundleOptionTitle !== '';
                         $productId = $isBundleOption
                             ? (int) $row->product_id
                             : (int) ($row->parent_product_id ?: $row->product_id);
-                        $optionKey = $bundleOptionKey !== ''
+                        $optionKey = $bundleOptionUid !== ''
+                            ? 'uid:' . $bundleOptionUid
+                            : ($bundleOptionKey !== ''
                             ? $bundleOptionKey
                             : (filled($row->bundle_option_post_id ?? null)
                                 ? 'post:' . (int) $row->bundle_option_post_id
-                                : 'title:' . strtolower($bundleOptionTitle));
+                                : 'title:' . strtolower($bundleOptionTitle)));
 
                         return $isBundleOption
                             ? "bundle_option:{$productId}:{$optionKey}"

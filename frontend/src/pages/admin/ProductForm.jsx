@@ -2883,6 +2883,7 @@ const ProductForm = () => {
                     ...item,
                     option_title: option.title,
                     option_post_id: option.post_id || '',
+                    bundle_option_uid: option.uid || option.bundle_option_uid || '',
                     option_image_url: normalizePersistedImageUrl(option.image_url),
                     option_video_url: option.video_url || '',
                     option_video_source: option.video_source || '',
@@ -4406,6 +4407,7 @@ const ProductForm = () => {
                     quantity: item.pivot?.quantity ?? 1,
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
+                    bundle_option_uid: item.pivot?.bundle_option_uid || '',
                     option_video_url: item.pivot?.option_video_url || '',
                     option_video_source: item.pivot?.option_video_source || '',
                     is_default: !!(item.pivot?.is_default),
@@ -4455,10 +4457,14 @@ const ProductForm = () => {
                 const bItems = data.bundle_items || data.grouped_items || [];
                 const optionsMap = {};
                 bItems.forEach(item => {
+                    const optionUid = item.pivot?.bundle_option_uid || '';
                     const title = item.pivot?.option_title || 'Tùy chọn';
+                    const optionMapKey = optionUid ? `uid:${optionUid}` : title;
                     const optionImageUrl = normalizePersistedImageUrl(item.pivot?.option_image_url);
-                    if (!optionsMap[title]) {
-                        optionsMap[title] = {
+                    if (!optionsMap[optionMapKey]) {
+                        optionsMap[optionMapKey] = {
+                            uid: optionUid,
+                            title,
                             post_id: item.pivot?.option_post_id || '',
                             post_title: item.pivot?.option_post_title || '',
                             image_url: optionImageUrl,
@@ -4466,21 +4472,21 @@ const ProductForm = () => {
                             video_source: item.pivot?.option_video_source || '',
                             items: []
                         };
-                    } else if (!optionsMap[title].post_id && item.pivot?.option_post_id) {
-                        optionsMap[title].post_id = item.pivot.option_post_id;
-                        optionsMap[title].post_title = item.pivot?.option_post_title || '';
+                    } else if (!optionsMap[optionMapKey].post_id && item.pivot?.option_post_id) {
+                        optionsMap[optionMapKey].post_id = item.pivot.option_post_id;
+                        optionsMap[optionMapKey].post_title = item.pivot?.option_post_title || '';
                     }
 
-                    if (!optionsMap[title].image_url && optionImageUrl) {
-                        optionsMap[title].image_url = optionImageUrl;
+                    if (!optionsMap[optionMapKey].image_url && optionImageUrl) {
+                        optionsMap[optionMapKey].image_url = optionImageUrl;
                     }
 
-                    if (!optionsMap[title].video_url && item.pivot?.option_video_url) {
-                        optionsMap[title].video_url = item.pivot.option_video_url;
-                        optionsMap[title].video_source = item.pivot?.option_video_source || '';
+                    if (!optionsMap[optionMapKey].video_url && item.pivot?.option_video_url) {
+                        optionsMap[optionMapKey].video_url = item.pivot.option_video_url;
+                        optionsMap[optionMapKey].video_source = item.pivot?.option_video_source || '';
                     }
 
-                        optionsMap[title].items.push({
+                        optionsMap[optionMapKey].items.push({
                             entry_id: createBundleItemEntryId(),
                             id: item.id,
                             product_id: item.id,
@@ -4503,9 +4509,11 @@ const ProductForm = () => {
                             legacy_missing_variant: item.type === 'configurable' && !item.pivot?.variant_id,
                         });
                 });
-                const loadedBundleOptions = Object.entries(optionsMap).map(([title, optionData]) => ({
+                const loadedBundleOptions = Object.values(optionsMap).map((optionData) => ({
                     id: createBundleOptionId(),
-                    title: title ?? '',
+                    uid: optionData.uid || '',
+                    bundle_option_uid: optionData.uid || '',
+                    title: optionData.title ?? '',
                     post_id: optionData.post_id || '',
                     post_title: optionData.post_title || '',
                     image_url: optionData.image_url || '',
@@ -6676,6 +6684,9 @@ const ProductForm = () => {
                         submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
                         submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
                         submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
+                        if (item.bundle_option_uid) {
+                            submitData.append(`grouped_items[${idx}][bundle_option_uid]`, item.bundle_option_uid);
+                        }
                         const normalizedOptionImageUrl = normalizePersistedImageUrl(item.option_image_url);
                         if (normalizedOptionImageUrl) {
                             submitData.append(`grouped_items[${idx}][option_image_url]`, normalizedOptionImageUrl);

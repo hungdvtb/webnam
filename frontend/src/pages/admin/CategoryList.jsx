@@ -1405,6 +1405,7 @@ const CategoryList = () => {
                 categoryProducts.map((product) => ({
                     item_type: product.item_type,
                     product_id: product.product_id,
+                    bundle_option_uid: product.bundle_option_uid || '',
                     bundle_option_key: product.bundle_option_key || '',
                     bundle_option_post_id: product.bundle_option_post_id || null,
                     bundle_option_title: product.bundle_option_title || null,
@@ -1754,6 +1755,7 @@ const CategoryList = () => {
             const payloadCategoryItems = normalizeCategoryAssignmentItems(formData.category_items).map((item) => ({
                 item_type: item.item_type,
                 product_id: item.product_id,
+                bundle_option_uid: item.bundle_option_uid || '',
                 bundle_option_key: item.bundle_option_key || '',
                 bundle_option_post_id: item.bundle_option_post_id || null,
                 bundle_option_title: item.bundle_option_title || null,

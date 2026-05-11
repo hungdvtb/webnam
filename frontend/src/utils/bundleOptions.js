@@ -38,6 +38,8 @@ export const cloneBundleOptionForCopy = (
     return {
         ...clonedOption,
         id: createOptionId(),
+        uid: '',
+        bundle_option_uid: '',
         items: clonedItems,
     };
 };

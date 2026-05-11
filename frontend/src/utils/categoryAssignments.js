@@ -24,10 +24,11 @@ export const normalizeCategoryAssignmentSearchValue = (value = '') => String(val
 export const buildCategoryAssignmentKey = (item = {}) => {
     const itemType = item?.item_type === 'bundle_option' ? 'bundle_option' : 'product';
     const productId = toNumber(item?.product_id ?? item?.admin_product_id ?? item?.id) || 0;
+    const bundleOptionUid = sanitizeText(item?.bundle_option_uid || item?.uid || '');
     const bundleOptionKey = sanitizeText(item?.bundle_option_key || '');
 
     return itemType === 'bundle_option'
-        ? `bundle_option:${productId}:${bundleOptionKey}`
+        ? `bundle_option:${productId}:${bundleOptionUid ? `uid:${bundleOptionUid}` : bundleOptionKey}`
         : `product:${productId}`;
 };
 
@@ -52,6 +53,7 @@ export const buildCategoryAssignmentSearchText = (item = {}) => [
     item?.sku,
     item?.variant_parent_name,
     item?.bundle_parent_name,
+    item?.bundle_option_uid,
     item?.bundle_option_title,
     item?.option_key_display,
     item?.bundle_option_key,
@@ -67,6 +69,9 @@ export const normalizeCategoryAssignmentItem = (item = {}) => {
     const itemType = item?.item_type === 'bundle_option' ? 'bundle_option' : 'product';
     const productId = toNumber(item?.product_id ?? item?.admin_product_id ?? (itemType === 'product' ? item?.id : null));
     const adminProductId = toNumber(item?.admin_product_id ?? productId);
+    const bundleOptionUid = itemType === 'bundle_option'
+        ? sanitizeText(item?.bundle_option_uid || item?.uid || '')
+        : '';
     const bundleOptionKey = itemType === 'bundle_option'
         ? sanitizeText(item?.bundle_option_key || '')
         : '';
@@ -94,6 +99,7 @@ export const normalizeCategoryAssignmentItem = (item = {}) => {
         variant_parent_product_id: toNumber(item?.variant_parent_product_id),
         bundle_parent_name: sanitizeText(item?.bundle_parent_name),
         bundle_parent_product_id: toNumber(item?.bundle_parent_product_id ?? item?.product_id),
+        bundle_option_uid: bundleOptionUid,
         bundle_option_key: bundleOptionKey,
         option_key_display: itemType === 'bundle_option'
             ? sanitizeText(item?.option_key_display || bundleOptionKey)
@@ -182,6 +188,7 @@ const createVariantPickerItem = (product = {}, variation = {}) => normalizeCateg
 });
 
 const createBundleOptionPickerItem = (product = {}, option = {}) => {
+    const optionUid = sanitizeText(option?.bundle_option_uid || option?.uid || '');
     const optionKey = option?.key || createBundleOptionKey(option);
     const subtotal = Number(option?.subtotal || 0) || 0;
     const discountedPrice = calculateBundleOptionDiscountedPrice(subtotal);
@@ -199,6 +206,7 @@ const createBundleOptionPickerItem = (product = {}, option = {}) => {
     display_label: 'Tuy chon bundle',
     bundle_parent_name: product?.name,
     bundle_parent_product_id: product?.id,
+    bundle_option_uid: optionUid,
     bundle_option_key: optionKey,
     option_key_display: optionKey,
     bundle_option_post_id: option?.option_post_id,

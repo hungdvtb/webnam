@@ -28,13 +28,14 @@ export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
+  const requestedBundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
   const requestedBundleOptionKey = String(resolvedSearchParams?.bundle_option_key || '').trim();
   const requestedBundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
   const requestedVariantId = Number.parseInt(
     String(resolvedSearchParams?.variant_id || '').trim(),
     10,
   ) || 0;
-  const isBundleOptionRequest = Boolean(requestedBundleOptionKey || requestedBundleOptionTitle);
+  const isBundleOptionRequest = Boolean(requestedBundleOptionUid || requestedBundleOptionKey || requestedBundleOptionTitle);
 
   let product = null;
   let relatedProducts = [];
@@ -43,6 +44,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
   if (isBundleOptionRequest) {
     try {
       product = await getWebProductBundleOptionDetail(slug, {
+        bundle_option_uid: requestedBundleOptionUid,
         bundle_option_key: requestedBundleOptionKey,
         bundle_option: requestedBundleOptionTitle,
       });
@@ -73,6 +75,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
             <ProductDetailClientShell
               initialProduct={product}
               slug={slug}
+              requestedBundleOptionUid={requestedBundleOptionUid}
               requestedBundleOptionKey={requestedBundleOptionKey}
               requestedBundleOptionTitle={requestedBundleOptionTitle}
               requestedVariantId={requestedVariantId}
@@ -126,6 +129,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
         <div className={styles.productPageSections}>
           <ProductDetailContent
             product={product}
+            requestedBundleOptionUid={requestedBundleOptionUid}
             requestedBundleOptionKey={requestedBundleOptionKey}
             requestedBundleOptionTitle={requestedBundleOptionTitle}
             requestedVariantId={requestedVariantId}
@@ -174,9 +178,11 @@ export async function generateMetadata({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
+  const bundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
   const bundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
   const hasBundleOptionRequest = Boolean(
-    String(resolvedSearchParams?.bundle_option_key || '').trim()
+    bundleOptionUid
+    || String(resolvedSearchParams?.bundle_option_key || '').trim()
     || bundleOptionTitle
   );
 

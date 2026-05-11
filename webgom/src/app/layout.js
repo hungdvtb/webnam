@@ -114,6 +114,9 @@ export const metadata = {
     "Chuyên cung cấp các tác phẩm gốm sứ nghệ thuật, bình hút lộc, ấm chén trà đạo cao cấp từ làng gốm Bát Tràng. Di sản văn hóa trong từng tác phẩm.",
   keywords: ["gốm sứ bát tràng", "bình hút lộc", "ấm chén cao cấp", "quà tặng gốm sứ", "gốm nghệ thuật"],
   authors: [{ name: "GỐM ĐẠI THÀNH" }],
+  verification: {
+    google: "-3Zk6JnTKQ1PJLfAD_Y17109b78DTEP7iqewWAJhfMM",
+  },
   openGraph: {
     title: "GỐM ĐẠI THÀNH - Tinh Hoa Đất Việt",
     description: "Khám phá bộ sưu tập gốm sứ nghệ thuật độc bản.",
@@ -170,10 +173,6 @@ export default async function RootLayout({ children }) {
   return (
     <html lang="vi">
       <head>
-        <meta
-          name="google-site-verification"
-          content="-3Zk6JnTKQ1PJLfAD_Y17109b78DTEP7iqewWAJhfMM"
-        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link

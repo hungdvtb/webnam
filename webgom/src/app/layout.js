@@ -45,6 +45,12 @@ const DEFAULT_FOOTER_GROUPS = [
   },
 ];
 
+const normalizeMultilineText = (value = "") =>
+  String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\\r\\n|\\n|\\r/g, "\n");
+
 const parseMenuArray = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value !== "string" || !value.trim()) return [];
@@ -163,7 +169,7 @@ export default async function RootLayout({ children }) {
     description: String(settings?.footer_description || "").trim() || DEFAULT_FOOTER_DESCRIPTION,
     hotline: String(settings?.footer_hotline || settings?.contact_phone || "").trim(),
     email: String(settings?.footer_email || settings?.contact_email || "").trim(),
-    address: String(settings?.footer_address || "").trim(),
+    address: normalizeMultilineText(settings?.footer_address || "").trim(),
     copyrightText:
       String(settings?.footer_copyright_text || "").trim() ||
       `© ${new Date().getFullYear()} ${brandText}. Tất cả quyền được bảo lưu.`,

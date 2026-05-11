@@ -18,11 +18,6 @@ class SyncGoogleMerchantProducts extends Command
 
     public function handle(GoogleMerchantProductSyncService $syncService): int
     {
-        if (!$this->option('dry-run') && !$syncService->enabled()) {
-            $this->error('Google Merchant sync is disabled. Set GOOGLE_MERCHANT_SYNC_ENABLED=true.');
-            return self::FAILURE;
-        }
-
         $ids = collect($this->option('id'))
             ->map(fn ($id) => (int) $id)
             ->filter()

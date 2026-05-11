@@ -33,6 +33,10 @@ class SiteSettingController extends Controller
         GeminiService::SETTING_API_KEY,
     ];
 
+    private const MULTILINE_TEXT_SETTING_KEYS = [
+        'footer_address',
+    ];
+
     public function __construct(
         private readonly GeminiService $geminiService,
     ) {
@@ -239,6 +243,10 @@ class SiteSettingController extends Controller
             return $this->toBoolean($value);
         }
 
+        if (in_array($key, self::MULTILINE_TEXT_SETTING_KEYS, true)) {
+            return $this->normalizeMultilineText($value);
+        }
+
         return $value;
     }
 
@@ -269,6 +277,10 @@ class SiteSettingController extends Controller
             return $this->toBoolean($value) ? '1' : '0';
         }
 
+        if (in_array($key, self::MULTILINE_TEXT_SETTING_KEYS, true)) {
+            return $this->normalizeMultilineText($value);
+        }
+
         if (is_bool($value)) {
             return $value ? '1' : '0';
         }
@@ -278,6 +290,26 @@ class SiteSettingController extends Controller
         }
 
         return json_encode($value, JSON_UNESCAPED_UNICODE);
+    }
+
+    private function normalizeMultilineText(mixed $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        $text = is_scalar($value)
+            ? (string) $value
+            : json_encode($value, JSON_UNESCAPED_UNICODE);
+
+        if (!is_string($text)) {
+            return '';
+        }
+
+        $text = str_replace(["\r\n", "\r"], "\n", $text);
+        $normalized = preg_replace('/\\\\r\\\\n|\\\\n|\\\\r/', "\n", $text);
+
+        return $normalized ?? $text;
     }
 
     private function shouldSkipEmptySecretSetting(string $key, mixed $value): bool

@@ -65,8 +65,8 @@ const Footer = () => {
 
                             {address ? (
                                 <div className="flex items-start gap-2">
-                                    <span className="material-symbols-outlined text-[18px] text-gold mt-0.5">location_on</span>
-                                    <span>{address}</span>
+                                    <span className="material-symbols-outlined text-[18px] text-gold mt-0.5 shrink-0">location_on</span>
+                                    <span className="min-w-0 whitespace-pre-line break-words leading-relaxed">{address}</span>
                                 </div>
                             ) : null}
                         </div>

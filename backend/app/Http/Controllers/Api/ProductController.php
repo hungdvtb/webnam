@@ -19,6 +19,7 @@ use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\MediaService;
+use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
 use App\Support\OrderStatusCatalog;
@@ -118,7 +119,7 @@ class ProductController extends Controller
 
     private function queueGoogleMerchantProductSync(Product $product, bool $includeVariants = true): void
     {
-        if (!config('google_merchant.enabled', false)) {
+        if (!app(GoogleMerchantSettingsService::class)->enabledForAccount((int) $product->account_id ?: null)) {
             return;
         }
 
@@ -137,6 +138,15 @@ class ProductController extends Controller
             ->filter()
             ->unique()
             ->each(fn (int $productId) => SyncGoogleMerchantProductJob::dispatch($productId)->afterResponse());
+    }
+
+    private function queueGoogleMerchantInactiveSyncForIds(array $productIds): void
+    {
+        collect($productIds)
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->each(fn (int $productId) => SyncGoogleMerchantProductJob::dispatch($productId, 'out_of_stock')->afterResponse());
     }
 
     private function productImportSelectableFieldIds(): array
@@ -5373,7 +5383,9 @@ class ProductController extends Controller
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
                 'supplier_id', 'inventory_unit_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description'
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description',
+                'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
+                'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
             ])
             ->withCount('suppliers')
             ->with([
@@ -9519,6 +9531,13 @@ class ProductController extends Controller
                 ];
             }
         }
+        collect($ids)
+            ->each(function ($productId) {
+                $product = Product::query()->find((int) $productId);
+                if ($product) {
+                    $this->queueGoogleMerchantProductSync($product, false);
+                }
+            });
 
         return response()->json([
             'items' => $items,
@@ -10499,13 +10518,15 @@ class ProductController extends Controller
             ->all();
     }
 
-    protected function trashProductsWithVariants(array $productIds): void
+    protected function trashProductsWithVariants(array $productIds): array
     {
         $targetIds = $this->resolveProductTrashCascadeIds($productIds);
 
         if (!empty($targetIds)) {
             Product::query()->whereIn('id', $targetIds)->delete();
         }
+
+        return $targetIds;
     }
 
     protected function restoreProductsWithVariants(array $productIds): void
@@ -10545,9 +10566,11 @@ class ProductController extends Controller
     public function destroy($id)
     {
         $product = Product::findOrFail($id);
-        DB::transaction(function () use ($product) {
-            $this->trashProductsWithVariants([$product->id]);
+        $trashedIds = [];
+        DB::transaction(function () use ($product, &$trashedIds) {
+            $trashedIds = $this->trashProductsWithVariants([$product->id]);
         });
+        $this->queueGoogleMerchantInactiveSyncForIds($trashedIds);
 
         return response()->json(['message' => 'Sản phẩm đã được chuyển vào thùng rác']);
     }
@@ -10626,9 +10649,11 @@ class ProductController extends Controller
             ->values()
             ->all();
 
-        DB::transaction(function () use ($ids) {
-            $this->trashProductsWithVariants($ids);
+        $trashedIds = [];
+        DB::transaction(function () use ($ids, &$trashedIds) {
+            $trashedIds = $this->trashProductsWithVariants($ids);
         });
+        $this->queueGoogleMerchantInactiveSyncForIds($trashedIds);
         return response()->json(['message' => 'Đã chuyển các sản phẩm đã chọn vào thùng rác']);
     }
 
@@ -10899,6 +10924,14 @@ class ProductController extends Controller
 
         // Optional: delete the log after undoing
         $log->delete();
+        collect($originalData)
+            ->pluck('id')
+            ->each(function ($productId) {
+                $product = Product::query()->find((int) $productId);
+                if ($product) {
+                    $this->queueGoogleMerchantProductSync($product, false);
+                }
+            });
 
         return response()->json(['message' => 'Đã hoàn tác cập nhật thành công']);
     }

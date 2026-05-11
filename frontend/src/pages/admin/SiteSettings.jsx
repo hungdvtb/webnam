@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { cmsApi, mediaApi, orderApi, quoteTemplateApi } from '../../services/api';
+import { cmsApi, mediaApi, orderApi, quoteTemplateApi, googleMerchantApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
-import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups } from '../../utils/footerSettings';
+import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups, normalizeMultilineText } from '../../utils/footerSettings';
 import { useSearchParams } from 'react-router-dom';
 import OrderQuickPickGroupEditor from '../../components/admin/OrderQuickPickGroupEditor';
 import {
@@ -58,6 +58,34 @@ const defaultSettings = {
     footer_menu_groups: createDefaultFooterMenuGroups(),
     store_locations: [],
     order_quick_pick_groups: [],
+};
+
+const defaultGoogleMerchantSettings = {
+    enabled: false,
+    merchant_id: '5784047046',
+    data_source_id: '',
+    data_source_name: '',
+    developer_email: '',
+    credential_type: 'service_account',
+    service_account_json: '',
+    oauth_client_id: '',
+    oauth_client_secret: '',
+    oauth_refresh_token: '',
+    access_token: '',
+    content_language: 'vi',
+    feed_label: 'VN',
+    currency: 'VND',
+    offer_id_field: 'sku',
+    product_url_base: 'https://gomdaithanh.com',
+    default_brand: 'Gom Dai Thanh',
+    default_google_product_category: '',
+    inactive_action: 'out_of_stock',
+    has_credentials: false,
+    has_service_account_json: false,
+    has_oauth_client_secret: false,
+    has_oauth_refresh_token: false,
+    has_access_token: false,
+    service_account_email: '',
 };
 
 const createGeminiKey = () => ({
@@ -116,7 +144,8 @@ const normalizeIncomingSettings = (incomingSettings = {}) => {
 
     Object.entries(defaultSettings).forEach(([key, defaultValue]) => {
         if (typeof defaultValue === 'string') {
-            normalized[key] = incomingSettings[key] == null ? '' : String(incomingSettings[key]);
+            const value = incomingSettings[key] == null ? '' : String(incomingSettings[key]);
+            normalized[key] = key === 'footer_address' ? normalizeMultilineText(value) : value;
         }
     });
 
@@ -494,6 +523,10 @@ const SiteSettings = () => {
     const [saving, setSaving] = useState(false);
     const [activeTab, setActiveTab] = useState(searchParams.get('tab') === 'shipping' ? 'contact' : (searchParams.get('tab') || 'contact'));
     const [settings, setSettings] = useState(defaultSettings);
+    const [googleMerchantSettings, setGoogleMerchantSettings] = useState(defaultGoogleMerchantSettings);
+    const [googleMerchantStats, setGoogleMerchantStats] = useState(null);
+    const [savingGoogleMerchant, setSavingGoogleMerchant] = useState(false);
+    const [testingGoogleMerchant, setTestingGoogleMerchant] = useState(false);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
     const [quoteTemplates, setQuoteTemplates] = useState([]);
@@ -579,12 +612,30 @@ const SiteSettings = () => {
         }
     }, []);
 
+    const fetchGoogleMerchantSettings = useCallback(async () => {
+        try {
+            const response = await googleMerchantApi.getSettings();
+            setGoogleMerchantSettings((prev) => ({
+                ...prev,
+                ...(response.data?.settings || {}),
+                service_account_json: '',
+                oauth_client_secret: '',
+                oauth_refresh_token: '',
+                access_token: '',
+            }));
+            setGoogleMerchantStats(response.data?.stats || null);
+        } catch (error) {
+            console.error('Error fetching Google Merchant settings', error);
+        }
+    }, []);
+
     useEffect(() => {
         fetchSettings();
         fetchDomains();
         fetchQuoteTemplates();
         fetchOrderQuickPickAttributes();
-    }, [fetchSettings, fetchDomains, fetchQuoteTemplates, fetchOrderQuickPickAttributes]);
+        fetchGoogleMerchantSettings();
+    }, [fetchSettings, fetchDomains, fetchQuoteTemplates, fetchOrderQuickPickAttributes, fetchGoogleMerchantSettings]);
 
     useEffect(() => {
         const currentTab = searchParams.get('tab');
@@ -602,6 +653,62 @@ const SiteSettings = () => {
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
         setSettings((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    };
+
+    const handleGoogleMerchantChange = (event) => {
+        const { name, value, type, checked } = event.target;
+        setGoogleMerchantSettings((prev) => ({
+            ...prev,
+            [name]: type === 'checkbox' ? checked : value,
+        }));
+    };
+
+    const handleSaveGoogleMerchant = async () => {
+        if (!activeAccountId) {
+            showModal({ title: 'Loi', content: 'Vui long chon account truoc khi luu.', type: 'error' });
+            return;
+        }
+
+        setSavingGoogleMerchant(true);
+        try {
+            const payload = {
+                ...googleMerchantSettings,
+                account_id: activeAccountId,
+            };
+            const response = await googleMerchantApi.updateSettings(payload);
+            setGoogleMerchantSettings((prev) => ({
+                ...prev,
+                ...(response.data?.settings || {}),
+                service_account_json: '',
+                oauth_client_secret: '',
+                oauth_refresh_token: '',
+                access_token: '',
+            }));
+            setGoogleMerchantStats(response.data?.stats || null);
+            showModal({ title: 'Thanh cong', content: 'Da luu cau hinh Google Merchant.', type: 'success' });
+        } catch (error) {
+            const message = error.response?.data?.message || 'Khong the luu cau hinh Google Merchant.';
+            showModal({ title: 'Loi', content: message, type: 'error' });
+        } finally {
+            setSavingGoogleMerchant(false);
+        }
+    };
+
+    const handleTestGoogleMerchant = async () => {
+        setTestingGoogleMerchant(true);
+        try {
+            const response = await googleMerchantApi.testConnection();
+            showModal({
+                title: 'Ket noi OK',
+                content: `Tim thay ${(response.data?.data_sources || []).length} data source.`,
+                type: 'success',
+            });
+        } catch (error) {
+            const message = error.response?.data?.message || 'Khong the ket noi Google Merchant.';
+            showModal({ title: 'Loi', content: message, type: 'error' });
+        } finally {
+            setTestingGoogleMerchant(false);
+        }
     };
 
     const handleAddGeminiKey = () => {
@@ -1138,6 +1245,8 @@ const SiteSettings = () => {
         { id: 'quote', title: 'Báo giá', icon: 'image' },
     ];
 
+    settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'google-merchant', title: 'Google Merchant', icon: 'shopping_bag' });
+
     const orderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
 
     return (
@@ -1157,7 +1266,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, cửa hàng, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && (
+                {activeTab !== 'domains' && activeTab !== 'google-merchant' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -2051,6 +2160,159 @@ const SiteSettings = () => {
                                 </div>
                             </div>
                         </SectionCard>
+                    )}
+
+                    {activeTab === 'google-merchant' && (
+                        <div className="space-y-6">
+                            <SectionCard
+                                icon="shopping_bag"
+                                title="Google Merchant Center"
+                                rightSlot={(
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleTestGoogleMerchant}
+                                            disabled={testingGoogleMerchant}
+                                            className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
+                                        >
+                                            {testingGoogleMerchant ? 'Dang test...' : 'Test ket noi'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleSaveGoogleMerchant}
+                                            disabled={savingGoogleMerchant}
+                                            className="h-9 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 disabled:opacity-50"
+                                        >
+                                            {savingGoogleMerchant ? 'Dang luu...' : 'Luu Google Merchant'}
+                                        </button>
+                                    </div>
+                                )}
+                            >
+                                <div className="space-y-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <label className="flex items-center gap-3 rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3">
+                                            <input type="checkbox" name="enabled" checked={Boolean(googleMerchantSettings.enabled)} onChange={handleGoogleMerchantChange} className="size-4 accent-primary" />
+                                            <span className="text-[13px] font-black text-primary">Bat dong bo Google Merchant</span>
+                                        </label>
+                                        <div>
+                                            <label className={labelClasses}>Merchant Center ID</label>
+                                            <input name="merchant_id" value={googleMerchantSettings.merchant_id || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>DataSource ID</label>
+                                            <input name="data_source_id" value={googleMerchantSettings.data_source_id || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder="API primary data source ID" />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div>
+                                            <label className={labelClasses}>Credential type</label>
+                                            <select name="credential_type" value={googleMerchantSettings.credential_type || 'service_account'} onChange={handleGoogleMerchantChange} className={inputClasses}>
+                                                <option value="service_account">Service Account</option>
+                                                <option value="oauth2">OAuth refresh token</option>
+                                                <option value="access_token">Access token tam thoi</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Ngon ngu</label>
+                                            <input name="content_language" value={googleMerchantSettings.content_language || 'vi'} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Feed label</label>
+                                            <input name="feed_label" value={googleMerchantSettings.feed_label || 'VN'} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Tien te</label>
+                                            <input name="currency" value={googleMerchantSettings.currency || 'VND'} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                    </div>
+
+                                    {googleMerchantSettings.credential_type === 'service_account' && (
+                                        <div>
+                                            <label className={labelClasses}>Service Account JSON</label>
+                                            <textarea
+                                                name="service_account_json"
+                                                value={googleMerchantSettings.service_account_json || ''}
+                                                onChange={handleGoogleMerchantChange}
+                                                className={`${textareaClasses} font-mono`}
+                                                placeholder={googleMerchantSettings.has_service_account_json ? `Da luu credential${googleMerchantSettings.service_account_email ? `: ${googleMerchantSettings.service_account_email}` : ''}` : 'Dan noi dung file service account JSON vao day'}
+                                            />
+                                        </div>
+                                    )}
+
+                                    {googleMerchantSettings.credential_type === 'oauth2' && (
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div>
+                                                <label className={labelClasses}>OAuth client ID</label>
+                                                <input name="oauth_client_id" value={googleMerchantSettings.oauth_client_id || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                            </div>
+                                            <div>
+                                                <label className={labelClasses}>OAuth client secret</label>
+                                                <input name="oauth_client_secret" value={googleMerchantSettings.oauth_client_secret || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_client_secret ? 'Da luu secret' : ''} />
+                                            </div>
+                                            <div>
+                                                <label className={labelClasses}>OAuth refresh token</label>
+                                                <input name="oauth_refresh_token" value={googleMerchantSettings.oauth_refresh_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_refresh_token ? 'Da luu refresh token' : ''} />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {googleMerchantSettings.credential_type === 'access_token' && (
+                                        <div>
+                                            <label className={labelClasses}>Access token</label>
+                                            <input name="access_token" value={googleMerchantSettings.access_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_access_token ? 'Da luu access token' : ''} />
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div>
+                                            <label className={labelClasses}>Offer ID</label>
+                                            <select name="offer_id_field" value={googleMerchantSettings.offer_id_field || 'sku'} onChange={handleGoogleMerchantChange} className={inputClasses}>
+                                                <option value="sku">SKU</option>
+                                                <option value="id">Product ID</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Product URL base</label>
+                                            <input name="product_url_base" value={googleMerchantSettings.product_url_base || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Brand mac dinh</label>
+                                            <input name="default_brand" value={googleMerchantSettings.default_brand || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
+                                        </div>
+                                        <div>
+                                            <label className={labelClasses}>Ngung ban</label>
+                                            <select name="inactive_action" value={googleMerchantSettings.inactive_action || 'out_of_stock'} onChange={handleGoogleMerchantChange} className={inputClasses}>
+                                                <option value="out_of_stock">Cap nhat OUT_OF_STOCK</option>
+                                                <option value="delete">Xoa product input</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label className={labelClasses}>Google product category mac dinh</label>
+                                        <input name="default_google_product_category" value={googleMerchantSettings.default_google_product_category || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder="VD: Home & Garden > Decor" />
+                                    </div>
+
+                                    {googleMerchantStats && (
+                                        <div className="grid grid-cols-3 gap-3">
+                                            <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase text-primary/35">Chua sync</p>
+                                                <p className="text-xl font-black text-primary">{googleMerchantStats.not_synced || 0}</p>
+                                            </div>
+                                            <div className="rounded-sm border border-green-100 bg-green-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase text-green-700/60">Da sync</p>
+                                                <p className="text-xl font-black text-green-700">{googleMerchantStats.synced || 0}</p>
+                                            </div>
+                                            <div className="rounded-sm border border-red-100 bg-red-50 px-4 py-3">
+                                                <p className="text-[10px] font-black uppercase text-red-700/60">Loi</p>
+                                                <p className="text-xl font-black text-red-700">{googleMerchantStats.error || 0}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </SectionCard>
+                        </div>
                     )}
 
                     {activeTab === 'quote' && (

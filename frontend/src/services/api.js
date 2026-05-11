@@ -404,6 +404,20 @@ export const productSeoBulkApi = {
     cancelRun: (runId) => api.post(`/products/seo-bulk/runs/${runId}/cancel`),
 };
 
+export const googleMerchantApi = {
+    getSettings: () => api.get('/google-merchant/settings'),
+    updateSettings: (data) => api.put('/google-merchant/settings', data),
+    testConnection: () => api.post('/google-merchant/test'),
+    listDataSources: () => api.get('/google-merchant/data-sources'),
+    syncProduct: (id, data = {}) => api.post(`/google-merchant/products/${id}/sync`, data, {
+        retryPolicy: 'never',
+    }),
+    syncProducts: (data = {}) => api.post('/google-merchant/products/sync', data, {
+        retryPolicy: 'never',
+    }),
+    getLogs: (params) => api.get('/google-merchant/logs', { params }),
+};
+
 export const productImageApi = {
     upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, multipartConfig(formData)),
     syncProductImages: (productId, formData) => api.post(`/products/${productId}/images/sync`, formData, multipartConfig(formData)),

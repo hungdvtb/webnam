@@ -45,6 +45,11 @@ const DEFAULT_FOOTER_DESCRIPTION = 'Tôn vinh nét đẹp văn hóa truyền th�
 const DEFAULT_FOOTER_COPYRIGHT = `© ${new Date().getFullYear()} Gốm Đại Thành. Bảo lưu mọi quyền.`;
 const DEFAULT_FOOTER_NEWSLETTER_PLACEHOLDER = 'Email của bạn';
 
+export const normalizeMultilineText = (value = '') => String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\r\\n|\\n|\\r/g, '\n');
+
 const parseMaybeJson = (value) => {
     if (Array.isArray(value)) return value;
     if (typeof value !== 'string') return null;
@@ -114,7 +119,7 @@ export const buildFooterConfig = (settings = {}) => {
         description: settings.footer_description || DEFAULT_FOOTER_DESCRIPTION,
         hotline: settings.footer_hotline || settings.contact_phone || '',
         email: settings.footer_email || settings.contact_email || '',
-        address: settings.footer_address || '',
+        address: normalizeMultilineText(settings.footer_address || ''),
         copyrightText: settings.footer_copyright_text || DEFAULT_FOOTER_COPYRIGHT,
         newsletterPlaceholder: settings.footer_newsletter_placeholder || DEFAULT_FOOTER_NEWSLETTER_PLACEHOLDER,
         allGroups,

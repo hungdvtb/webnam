@@ -15,6 +15,9 @@ class Product extends Model
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id',
         'sort_order',
+        'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
+        'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_product_input_name',
+        'google_merchant_last_payload_hash', 'google_merchant_last_action',
     ];
 
     public function siteDomain()
@@ -34,6 +37,8 @@ class Product extends Model
         'imported_value_total' => 'decimal:2',
         'video_urls' => 'array',
         'sort_order' => 'integer',
+        'google_merchant_last_synced_at' => 'datetime',
+        'google_merchant_last_attempted_at' => 'datetime',
     ];
 
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];

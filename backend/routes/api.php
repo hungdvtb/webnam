@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\FinanceController;
 use App\Http\Controllers\Api\FinanceReceiptController;
+use App\Http\Controllers\Api\GoogleMerchantController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\OrderAiController;
@@ -89,6 +90,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/products/{id}', [ProductController::class , 'destroy']);
     Route::post('/products/{id}/restore', [ProductController::class , 'restore']);
     Route::delete('/products/{id}/force', [ProductController::class , 'forceDelete']);
+
+    // Google Merchant Center sync
+    Route::get('/google-merchant/settings', [GoogleMerchantController::class, 'settings']);
+    Route::put('/google-merchant/settings', [GoogleMerchantController::class, 'updateSettings']);
+    Route::post('/google-merchant/test', [GoogleMerchantController::class, 'test']);
+    Route::get('/google-merchant/data-sources', [GoogleMerchantController::class, 'dataSources']);
+    Route::post('/google-merchant/products/sync', [GoogleMerchantController::class, 'syncProducts']);
+    Route::post('/google-merchant/products/{id}/sync', [GoogleMerchantController::class, 'syncProduct'])->whereNumber('id');
+    Route::get('/google-merchant/logs', [GoogleMerchantController::class, 'logs']);
 
     // Admin Product Image routes
     Route::post('/products/{id}/images/sync', [ProductImageController::class , 'syncProductImages'])->whereNumber('id');

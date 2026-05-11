@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\SyncGoogleMerchantProductJob;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\ProductImageBulkAppendService;
 use App\Services\MediaService;
 use App\Services\ProductImageRefreshService;
@@ -20,6 +22,25 @@ class ProductImageController extends Controller
         protected ProductImageRefreshService $productImageRefreshService,
         protected ProductImageBulkAppendService $productImageBulkAppendService
     ) {
+    }
+
+    private function queueGoogleMerchantProductSync(int $productId): void
+    {
+        $product = Product::query()->find($productId);
+        if (!$product || !app(GoogleMerchantSettingsService::class)->enabledForAccount((int) $product->account_id ?: null)) {
+            return;
+        }
+
+        SyncGoogleMerchantProductJob::dispatch($productId)->afterResponse();
+    }
+
+    private function queueGoogleMerchantProductSyncForIds(iterable $productIds): void
+    {
+        collect($productIds)
+            ->map(fn ($productId) => (int) $productId)
+            ->filter()
+            ->unique()
+            ->each(fn (int $productId) => $this->queueGoogleMerchantProductSync($productId));
     }
 
     /**
@@ -62,6 +83,7 @@ class ProductImageController extends Controller
         }
 
         $this->syncPrimaryImageForProduct((int) $productId);
+        $this->queueGoogleMerchantProductSync((int) $productId);
 
         return response()->json($uploadedImages, 201);
     }
@@ -84,6 +106,7 @@ class ProductImageController extends Controller
 
         $images = $product->images()
             ->get(['id', 'product_id', 'media_asset_id', 'image_url', 'is_primary', 'sort_order', 'file_name', 'file_size']);
+        $this->queueGoogleMerchantProductSync((int) $product->id);
 
         return response()->json([
             'message' => 'Images synced successfully.',
@@ -137,11 +160,13 @@ class ProductImageController extends Controller
         ));
 
         return response()->json(
-            $this->productImageRefreshService->apply($files, [
+            tap($this->productImageRefreshService->apply($files, [
                 'product_ids' => $validated['product_ids'] ?? [],
                 'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
                 'update_all_matches' => (bool) ($validated['update_all_matches'] ?? false),
-            ])
+            ]), function (array $result) {
+                $this->queueGoogleMerchantProductSyncForIds($result['updated_product_ids'] ?? $result['changed_product_ids'] ?? $result['product_ids'] ?? []);
+            })
         );
     }
 
@@ -197,13 +222,15 @@ class ProductImageController extends Controller
         ));
 
         return response()->json(
-            $this->productImageBulkAppendService->apply($files, [
+            tap($this->productImageBulkAppendService->apply($files, [
                 'product_ids' => $validated['product_ids'] ?? [],
                 'scope_selected_only' => (bool) ($validated['scope_selected_only'] ?? false),
                 'insertion_mode' => $validated['insertion_mode'],
                 'after_index' => $validated['after_index'] ?? null,
                 'preview_limit' => $validated['preview_limit'] ?? null,
-            ])
+            ]), function (array $result) {
+                $this->queueGoogleMerchantProductSyncForIds($result['applied_product_ids'] ?? $result['changed_product_ids'] ?? $result['product_ids'] ?? []);
+            })
         );
     }
 
@@ -223,6 +250,7 @@ class ProductImageController extends Controller
 
             $this->syncPrimaryImageForProduct((int) $image->product_id, (int) $image->id);
         });
+        $this->queueGoogleMerchantProductSync((int) $image->product_id);
         
         return response()->json(['message' => 'Image set as primary.']);
     }
@@ -240,6 +268,7 @@ class ProductImageController extends Controller
         if ($wasPrimary) {
             $this->syncPrimaryImageForProduct($productId);
         }
+        $this->queueGoogleMerchantProductSync($productId);
 
         return response()->json(['message' => 'Image deleted successfully.']);
     }
@@ -272,6 +301,7 @@ class ProductImageController extends Controller
         foreach ($affectedProductIds as $productId) {
             $this->syncPrimaryImageForProduct($productId);
         }
+        $this->queueGoogleMerchantProductSyncForIds($affectedProductIds);
 
         return response()->json(['message' => 'Images reordered successfully.']);
     }

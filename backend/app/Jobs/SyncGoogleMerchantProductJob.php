@@ -17,7 +17,7 @@ class SyncGoogleMerchantProductJob implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 120;
 
-    public function __construct(public int $productId)
+    public function __construct(public int $productId, public ?string $action = null)
     {
         $this->onConnection((string) config('google_merchant.queue_connection', 'sync'));
         $this->onQueue((string) config('google_merchant.queue_name', 'google-merchant'));
@@ -25,13 +25,13 @@ class SyncGoogleMerchantProductJob implements ShouldQueue
 
     public function handle(GoogleMerchantProductSyncService $syncService): void
     {
-        $product = Product::query()->find($this->productId);
+        $product = Product::withTrashed()->find($this->productId);
         if (!$product) {
             return;
         }
 
         try {
-            $syncService->syncProduct($product);
+            $syncService->syncProduct($product, $this->action);
         } catch (\Throwable $exception) {
             $syncService->logFailure($product, $exception);
             throw $exception;

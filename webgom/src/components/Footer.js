@@ -8,6 +8,12 @@ const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
 
 const isExternalUrl = (value = "") => /^https?:\/\//i.test(String(value).trim());
 
+const normalizeMultilineText = (value = "") =>
+  String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\\r\\n|\\n|\\r/g, "\n");
+
 const FooterLink = ({ href, children }) => {
   const resolvedHref = String(href || "#").trim() || "#";
 
@@ -28,7 +34,7 @@ export default function Footer({ config = {} }) {
   const description = String(config?.description || "").trim() || DEFAULT_DESCRIPTION;
   const hotline = String(config?.hotline || "").trim();
   const email = String(config?.email || "").trim();
-  const address = String(config?.address || "").trim();
+  const address = normalizeMultilineText(config?.address || "").trim();
   const copyrightText =
     String(config?.copyrightText || "").trim() ||
     `© ${new Date().getFullYear()} ${brandText}. Tất cả quyền được bảo lưu.`;
@@ -64,7 +70,7 @@ export default function Footer({ config = {} }) {
               {address ? (
                 <div className="footer-contact-item footer-address">
                   <span className="material-symbols-outlined">location_on</span>
-                  <span>{address}</span>
+                  <span className="footer-address-text">{address}</span>
                 </div>
               ) : null}
             </div>
@@ -181,6 +187,18 @@ export default function Footer({ config = {} }) {
 
         .footer-address {
           align-items: flex-start;
+        }
+
+        .footer-address :global(.material-symbols-outlined) {
+          flex-shrink: 0;
+          margin-top: 0.1rem;
+        }
+
+        .footer-address-text {
+          min-width: 0;
+          white-space: pre-line;
+          overflow-wrap: anywhere;
+          line-height: 1.55;
         }
 
         .footer-col {

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, aiApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, aiApi, googleMerchantApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
@@ -198,6 +198,7 @@ const DEFAULT_COLUMNS = [
     { id: 'seo_status', label: 'Mô tả SEO', minWidth: '100px', align: 'center', sortable: false },
     { id: 'actions', label: 'Thao tác', minWidth: '100px', align: 'right', fixed: true },
     { id: 'product_link', label: 'Link SP', minWidth: '150px' },
+    { id: 'google_merchant', label: 'Google Merchant', minWidth: '140px', align: 'center', sortable: false },
 ];
 
 const DEFAULT_SORT_CONFIG = { key: 'created_at', direction: 'desc', phase: 1 };
@@ -311,6 +312,17 @@ function getDisplayStock(product) {
     const numericStock = Number(rawStock);
 
     return Number.isFinite(numericStock) ? numericStock : 0;
+}
+
+function getGoogleMerchantStatus(product) {
+    const status = String(product?.google_merchant_sync_status || 'not_synced');
+    const meta = {
+        synced: { label: 'Da sync', className: 'bg-green-100 text-green-700', icon: 'cloud_done' },
+        error: { label: 'Loi sync', className: 'bg-red-100 text-red-700', icon: 'error' },
+        not_synced: { label: 'Chua sync', className: 'bg-stone-100 text-stone-600', icon: 'cloud_off' },
+    };
+
+    return meta[status] || meta.not_synced;
 }
 
 function getVariantParentProduct(product) {
@@ -1276,6 +1288,7 @@ const ProductList = () => {
     const [quickEditTableMetrics, setQuickEditTableMetrics] = useState({ scrollWidth: 0, clientWidth: 0 });
     const [bulkSeoGenerating, setBulkSeoGenerating] = useState(false);
     const [bulkSeoProgress, setBulkSeoProgress] = useState({ current: 0, total: 0, failed: 0 });
+    const [syncingGoogleMerchant, setSyncingGoogleMerchant] = useState(false);
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -3473,6 +3486,57 @@ const ProductList = () => {
         } catch (error) { setNotification({ type: 'error', message: "Lỗi thực hiện!" }); } finally { setLoading(false); }
     };
 
+    const handleSyncGoogleMerchantProduct = async (id, event) => {
+        event?.stopPropagation();
+        setSyncingGoogleMerchant(true);
+        try {
+            await googleMerchantApi.syncProduct(id);
+            setNotification({ type: 'success', message: 'Da dong bo Google Merchant.' });
+            fetchProducts(pagination.current_page);
+        } catch (error) {
+            const message = error.response?.data?.message || 'Khong the dong bo Google Merchant.';
+            setNotification({ type: 'error', message });
+        } finally {
+            setSyncingGoogleMerchant(false);
+        }
+    };
+
+    const handleSyncSelectedGoogleMerchant = async () => {
+        if (selectedIds.length === 0 || isTrashView) return;
+        setSyncingGoogleMerchant(true);
+        try {
+            const response = await googleMerchantApi.syncProducts({ ids: selectedIds });
+            const failed = Number(response.data?.failed || 0);
+            setNotification({
+                type: failed > 0 ? 'error' : 'success',
+                message: failed > 0
+                    ? `Dong bo Google Merchant xong, loi ${failed} san pham.`
+                    : `Da dong bo ${selectedIds.length} san pham len Google Merchant.`,
+            });
+            fetchProducts(pagination.current_page);
+        } catch (error) {
+            const message = error.response?.data?.message || 'Khong the dong bo Google Merchant.';
+            setNotification({ type: 'error', message });
+        } finally {
+            setSyncingGoogleMerchant(false);
+        }
+    };
+
+    const handleSyncAllGoogleMerchant = async () => {
+        if (isTrashView) return;
+        if (!window.confirm('Dong bo toan bo san pham dang ban len Google Merchant?')) return;
+        setSyncingGoogleMerchant(true);
+        try {
+            const response = await googleMerchantApi.syncProducts({ all: true });
+            setNotification({ type: 'success', message: `Da dua ${response.data?.queued || 0} san pham vao hang doi Google Merchant.` });
+        } catch (error) {
+            const message = error.response?.data?.message || 'Khong the dong bo toan bo Google Merchant.';
+            setNotification({ type: 'error', message });
+        } finally {
+            setSyncingGoogleMerchant(false);
+        }
+    };
+
     const handleDuplicate = async (id) => {
         setLoading(true);
         try {
@@ -5207,6 +5271,20 @@ const ProductList = () => {
                         <div className="flex gap-1 items-center border-primary/10 pr-1">
                             <button
                                 type="button"
+                                disabled={selectedIds.length === 0 || isTrashView || syncingGoogleMerchant}
+                                onClick={handleSyncSelectedGoogleMerchant}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
+                                    selectedIds.length > 0 && !isTrashView && !syncingGoogleMerchant
+                                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white shadow-sm'
+                                        : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
+                                }`}
+                                title="Dong bo Google Merchant cac san pham da chon"
+                                aria-label="Dong bo Google Merchant cac san pham da chon"
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${syncingGoogleMerchant ? 'animate-refresh-spin' : ''}`}>cloud_sync</span>
+                            </button>
+                            <button
+                                type="button"
                                 disabled={selectedIds.length === 0 || isTrashView}
                                 onClick={() => openQuickEditModal(selectedIds)}
                                 data-quick-edit-trigger="bulk"
@@ -6374,6 +6452,21 @@ const ProductList = () => {
                                                         </td>
                                                     );
                                                 }
+                                                if (col.id === 'google_merchant') {
+                                                    const merchantStatus = getGoogleMerchantStatus(p);
+                                                    const title = p.google_merchant_last_error
+                                                        || (p.google_merchant_last_synced_at ? `Last sync: ${p.google_merchant_last_synced_at}` : 'Chua dong bo Google Merchant');
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center group/cell">
+                                                            <div className="flex items-center justify-center gap-2">
+                                                                <span title={title} className={`inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[10px] font-bold ${merchantStatus.className}`}>
+                                                                    <span className="material-symbols-outlined text-[14px]">{merchantStatus.icon}</span>
+                                                                    {merchantStatus.label}
+                                                                </span>
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
                                                 if (col.id === 'seo_status') {
                                                     const hasSeo = Boolean(p.meta_description && String(p.meta_description).trim() !== '');
                                                     return (
@@ -6396,6 +6489,7 @@ const ProductList = () => {
                                                                 </React.Fragment>
                                                             ) : (
                                                                 <React.Fragment>
+                                                                    <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Dong bo Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                                     <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>

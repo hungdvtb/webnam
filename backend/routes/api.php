@@ -97,6 +97,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/google-merchant/settings', [GoogleMerchantController::class, 'settings']);
     Route::match(['put', 'post'], '/google-merchant/settings', [GoogleMerchantController::class, 'updateSettings']);
     Route::post('/google-merchant/test', [GoogleMerchantController::class, 'test']);
+    Route::post('/google-merchant/register-gcp', [GoogleMerchantController::class, 'registerGcp']);
     Route::get('/google-merchant/data-sources', [GoogleMerchantController::class, 'dataSources']);
     Route::post('/google-merchant/products/sync', [GoogleMerchantController::class, 'syncProducts']);
     Route::post('/google-merchant/products/{id}/sync', [GoogleMerchantController::class, 'syncProduct'])->whereNumber('id');

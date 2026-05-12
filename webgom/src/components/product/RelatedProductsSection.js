@@ -186,8 +186,6 @@ export default function RelatedProductsSection({
       startScrollLeft: railElement.scrollLeft,
       startX: event.clientX,
     };
-    railElement.setPointerCapture?.(event.pointerId);
-    setIsDraggingRail(true);
   };
 
   const handleRailPointerMove = (event) => {
@@ -203,6 +201,8 @@ export default function RelatedProductsSection({
     if (!dragState.hasMoved && Math.abs(deltaX) > 6) {
       dragState.hasMoved = true;
       suppressClickRef.current = true;
+      railElement.setPointerCapture?.(event.pointerId);
+      setIsDraggingRail(true);
     }
 
     if (!dragState.hasMoved) return;

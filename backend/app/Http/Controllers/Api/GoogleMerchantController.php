@@ -121,6 +121,49 @@ class GoogleMerchantController extends Controller
         ]);
     }
 
+    public function registerGcp(Request $request)
+    {
+        $validated = $request->validate([
+            'account_id' => 'nullable|exists:accounts,id',
+            'developer_email' => 'nullable|email|max:255',
+        ]);
+
+        $accountId = $this->resolveAccountId($request);
+        if (!$accountId) {
+            return response()->json([
+                'message' => 'Vui lòng chọn account trước khi đăng ký GCP project.',
+            ], 422);
+        }
+
+        $developerEmail = trim((string) ($validated['developer_email'] ?? ''));
+        if ($developerEmail === '') {
+            $settings = $this->settingsService->settingsFor($accountId);
+            $developerEmail = trim((string) ($settings['developer_email'] ?? ''));
+        }
+
+        if ($developerEmail === '') {
+            return response()->json([
+                'message' => 'Vui lòng nhập email Google của nhà phát triển.',
+            ], 422);
+        }
+
+        try {
+            $response = $this->syncService->registerGcpProject($developerEmail, $accountId);
+            $settings = $this->settingsService->update($accountId, [
+                'developer_email' => $developerEmail,
+            ]);
+        } catch (\Throwable $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => 'Đã đăng ký GCP project với Merchant Center. Vui lòng chờ khoảng 5 phút rồi kiểm tra kết nối lại.',
+            'developer_email' => $developerEmail,
+            'response' => $response,
+            'settings' => $settings,
+        ]);
+    }
+
     public function syncProduct(Request $request, int $id)
     {
         $product = Product::withTrashed()->findOrFail($id);

@@ -529,6 +529,7 @@ const SiteSettings = () => {
     const [googleMerchantStats, setGoogleMerchantStats] = useState(null);
     const [savingGoogleMerchant, setSavingGoogleMerchant] = useState(false);
     const [testingGoogleMerchant, setTestingGoogleMerchant] = useState(false);
+    const [registeringGoogleMerchantGcp, setRegisteringGoogleMerchantGcp] = useState(false);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
     const [quoteTemplates, setQuoteTemplates] = useState([]);
@@ -744,6 +745,46 @@ const SiteSettings = () => {
             showModal({ title: 'Lỗi', content: message, type: 'error' });
         } finally {
             setTestingGoogleMerchant(false);
+        }
+    };
+
+    const handleRegisterGoogleMerchantGcp = async () => {
+        if (!activeAccountId) {
+            showModal({ title: 'Lỗi', content: 'Vui lòng chọn account trước khi đăng ký GCP project.', type: 'error' });
+            return;
+        }
+
+        const developerEmail = String(googleMerchantSettings.developer_email || '').trim();
+        if (!developerEmail) {
+            showModal({ title: 'Lỗi', content: 'Vui lòng nhập email Google của nhà phát triển.', type: 'error' });
+            return;
+        }
+
+        setRegisteringGoogleMerchantGcp(true);
+        try {
+            const response = await googleMerchantApi.registerGcp({
+                account_id: activeAccountId,
+                developer_email: developerEmail,
+            });
+            setGoogleMerchantSettings((prev) => ({
+                ...prev,
+                ...(response.data?.settings || {}),
+                service_account_json: '',
+                service_account_manifest_file: null,
+                oauth_client_secret: '',
+                oauth_refresh_token: '',
+                access_token: '',
+            }));
+            showModal({
+                title: 'Đã đăng ký',
+                content: response.data?.message || 'Đã đăng ký GCP project. Vui lòng chờ khoảng 5 phút rồi kiểm tra kết nối lại.',
+                type: 'success',
+            });
+        } catch (error) {
+            const message = error.response?.data?.message || 'Không thể đăng ký GCP project.';
+            showModal({ title: 'Lỗi', content: message, type: 'error' });
+        } finally {
+            setRegisteringGoogleMerchantGcp(false);
         }
     };
 
@@ -2207,8 +2248,16 @@ const SiteSettings = () => {
                                     <div className="flex items-center gap-2">
                                         <button
                                             type="button"
+                                            onClick={handleRegisterGoogleMerchantGcp}
+                                            disabled={registeringGoogleMerchantGcp || savingGoogleMerchant || testingGoogleMerchant}
+                                            className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
+                                        >
+                                            {registeringGoogleMerchantGcp ? 'Đang đăng ký...' : 'Đăng ký GCP'}
+                                        </button>
+                                        <button
+                                            type="button"
                                             onClick={handleTestGoogleMerchant}
-                                            disabled={testingGoogleMerchant}
+                                            disabled={testingGoogleMerchant || registeringGoogleMerchantGcp}
                                             className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
                                         >
                                             {testingGoogleMerchant ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}
@@ -2241,6 +2290,16 @@ const SiteSettings = () => {
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <div>
+                                            <label className={labelClasses}>Email nhà phát triển</label>
+                                            <input
+                                                name="developer_email"
+                                                value={googleMerchantSettings.developer_email || ''}
+                                                onChange={handleGoogleMerchantChange}
+                                                className={inputClasses}
+                                                placeholder="email-admin@gmail.com"
+                                            />
+                                        </div>
                                         <div>
                                             <label className={labelClasses}>Loại xác thực</label>
                                             <select name="credential_type" value={googleMerchantSettings.credential_type || 'service_account'} onChange={handleGoogleMerchantChange} className={inputClasses}>

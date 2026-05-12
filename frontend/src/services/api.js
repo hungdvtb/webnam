@@ -412,6 +412,9 @@ export const googleMerchantApi = {
             : api.put('/google-merchant/settings', data)
     ),
     testConnection: () => api.post('/google-merchant/test'),
+    registerGcp: (data = {}) => api.post('/google-merchant/register-gcp', data, {
+        retryPolicy: 'never',
+    }),
     listDataSources: () => api.get('/google-merchant/data-sources'),
     syncProduct: (id, data = {}) => api.post(`/google-merchant/products/${id}/sync`, data, {
         retryPolicy: 'never',

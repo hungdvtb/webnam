@@ -16,9 +16,6 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd /root/www/webname
+            cd /www/webname
             git pull origin master
-            # Run the rebuild script
             ./deploy.sh rebuild
-            # Optional: Clear Laravel cache after deploy
-            docker exec webnam-api php artisan optimize:clear

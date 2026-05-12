@@ -317,9 +317,9 @@ function getDisplayStock(product) {
 function getGoogleMerchantStatus(product) {
     const status = String(product?.google_merchant_sync_status || 'not_synced');
     const meta = {
-        synced: { label: 'Da sync', className: 'bg-green-100 text-green-700', icon: 'cloud_done' },
-        error: { label: 'Loi sync', className: 'bg-red-100 text-red-700', icon: 'error' },
-        not_synced: { label: 'Chua sync', className: 'bg-stone-100 text-stone-600', icon: 'cloud_off' },
+        synced: { label: 'Đã đồng bộ', className: 'bg-green-100 text-green-700', icon: 'cloud_done' },
+        error: { label: 'Lỗi đồng bộ', className: 'bg-red-100 text-red-700', icon: 'error' },
+        not_synced: { label: 'Chưa đồng bộ', className: 'bg-stone-100 text-stone-600', icon: 'cloud_off' },
     };
 
     return meta[status] || meta.not_synced;
@@ -3491,10 +3491,10 @@ const ProductList = () => {
         setSyncingGoogleMerchant(true);
         try {
             await googleMerchantApi.syncProduct(id);
-            setNotification({ type: 'success', message: 'Da dong bo Google Merchant.' });
+            setNotification({ type: 'success', message: 'Đã đồng bộ Google Merchant.' });
             fetchProducts(pagination.current_page);
         } catch (error) {
-            const message = error.response?.data?.message || 'Khong the dong bo Google Merchant.';
+            const message = error.response?.data?.message || 'Không thể đồng bộ Google Merchant.';
             setNotification({ type: 'error', message });
         } finally {
             setSyncingGoogleMerchant(false);
@@ -3510,12 +3510,12 @@ const ProductList = () => {
             setNotification({
                 type: failed > 0 ? 'error' : 'success',
                 message: failed > 0
-                    ? `Dong bo Google Merchant xong, loi ${failed} san pham.`
-                    : `Da dong bo ${selectedIds.length} san pham len Google Merchant.`,
+                    ? `Đồng bộ Google Merchant xong, lỗi ${failed} sản phẩm.`
+                    : `Đã đồng bộ ${selectedIds.length} sản phẩm lên Google Merchant.`,
             });
             fetchProducts(pagination.current_page);
         } catch (error) {
-            const message = error.response?.data?.message || 'Khong the dong bo Google Merchant.';
+            const message = error.response?.data?.message || 'Không thể đồng bộ Google Merchant.';
             setNotification({ type: 'error', message });
         } finally {
             setSyncingGoogleMerchant(false);
@@ -3524,13 +3524,13 @@ const ProductList = () => {
 
     const handleSyncAllGoogleMerchant = async () => {
         if (isTrashView) return;
-        if (!window.confirm('Dong bo toan bo san pham dang ban len Google Merchant?')) return;
+        if (!window.confirm('Đồng bộ toàn bộ sản phẩm đang bán lên Google Merchant?')) return;
         setSyncingGoogleMerchant(true);
         try {
             const response = await googleMerchantApi.syncProducts({ all: true });
-            setNotification({ type: 'success', message: `Da dua ${response.data?.queued || 0} san pham vao hang doi Google Merchant.` });
+            setNotification({ type: 'success', message: `Đã đưa ${response.data?.queued || 0} sản phẩm vào hàng đợi Google Merchant.` });
         } catch (error) {
-            const message = error.response?.data?.message || 'Khong the dong bo toan bo Google Merchant.';
+            const message = error.response?.data?.message || 'Không thể đồng bộ toàn bộ Google Merchant.';
             setNotification({ type: 'error', message });
         } finally {
             setSyncingGoogleMerchant(false);
@@ -5278,8 +5278,8 @@ const ProductList = () => {
                                         ? 'bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
-                                title="Dong bo Google Merchant cac san pham da chon"
-                                aria-label="Dong bo Google Merchant cac san pham da chon"
+                                title="Đồng bộ Google Merchant các sản phẩm đã chọn"
+                                aria-label="Đồng bộ Google Merchant các sản phẩm đã chọn"
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${syncingGoogleMerchant ? 'animate-refresh-spin' : ''}`}>cloud_sync</span>
                             </button>
@@ -6455,7 +6455,7 @@ const ProductList = () => {
                                                 if (col.id === 'google_merchant') {
                                                     const merchantStatus = getGoogleMerchantStatus(p);
                                                     const title = p.google_merchant_last_error
-                                                        || (p.google_merchant_last_synced_at ? `Last sync: ${p.google_merchant_last_synced_at}` : 'Chua dong bo Google Merchant');
+                                                        || (p.google_merchant_last_synced_at ? `Lần đồng bộ cuối: ${p.google_merchant_last_synced_at}` : 'Chưa đồng bộ Google Merchant');
                                                     return (
                                                         <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-center group/cell">
                                                             <div className="flex items-center justify-center gap-2">
@@ -6489,7 +6489,7 @@ const ProductList = () => {
                                                                 </React.Fragment>
                                                             ) : (
                                                                 <React.Fragment>
-                                                                    <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Dong bo Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>
+                                                                    <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Đồng bộ Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                                                     <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
                                                                     <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>

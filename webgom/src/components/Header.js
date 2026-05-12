@@ -304,7 +304,6 @@ export default function Header({
     selectedMobileParentId
   );
   const currentNormalizedPath = normalizePath(pathname);
-  const isAllProductsView = currentNormalizedPath === "/products" && !currentMobileSearchParamsString;
   const isProductDetailPage = currentNormalizedPath.startsWith("/product/");
   const isCartCheckoutView = currentNormalizedPath === "/cart";
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -747,17 +746,6 @@ export default function Header({
     setSelectedMobileParentId((currentParentId) => (currentParentId === parentId ? null : parentId));
   };
 
-  const handleMobileAllProductsClick = (event) => {
-    event.preventDefault();
-    setCurrentMobileCategorySlug("");
-    setSelectedMobileParentId(null);
-    setIsMobileProductsMenuOpen(false);
-
-    if (currentNormalizedPath !== "/products" || currentMobileSearchParamsString) {
-      router.push("/products");
-    }
-  };
-
   const handleMobileOrderClick = (event, item) => {
     event.preventDefault();
     setIsMobileProductsMenuOpen(false);
@@ -1001,22 +989,6 @@ export default function Header({
               </div>
 
               <div ref={mobileProductsListRef} className="mobile-products-sheet__list">
-                <Link
-                  href="/products"
-                  className={`mobile-products-link mobile-products-link-all ${isAllProductsView ? "mobile-products-link-active" : ""}`}
-                  onClick={handleMobileAllProductsClick}
-                >
-                  <span className="mobile-products-link__main">
-                    <span className="mobile-products-link__logo mobile-products-link__logo-generic" aria-hidden="true">
-                      <span className="material-symbols-outlined">grid_view</span>
-                    </span>
-                    <span className="mobile-products-link__name">Tất cả sản phẩm</span>
-                  </span>
-                  <span className="mobile-products-link__meta">
-                    <span className="material-symbols-outlined mobile-products-link__arrow">chevron_right</span>
-                  </span>
-                </Link>
-
                 {orderedMobileProductCategories.map((category) => {
                   const hasChildren = Array.isArray(category.children) && category.children.length > 0;
                   const isExpanded = hasChildren && category._nodeKey === selectedMobileParentId;
@@ -2002,10 +1974,6 @@ export default function Header({
 
           .mobile-products-link:active {
             transform: scale(0.985);
-          }
-
-          .mobile-products-link-all {
-            background: linear-gradient(180deg, rgba(248, 243, 233, 0.55) 0%, #ffffff 100%);
           }
 
           .mobile-products-group {

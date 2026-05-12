@@ -2,15 +2,19 @@
 
 namespace App\Services\GoogleMerchant;
 
+use App\Models\GoogleMerchantConfig;
 use App\Models\SiteSetting;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
 class GoogleMerchantSettingsService
 {
     public const KEY_PREFIX = 'google_merchant_';
+
+    private ?bool $configTableExists = null;
 
     private const SECRET_KEYS = [
         'service_account_json',
@@ -45,38 +49,42 @@ class GoogleMerchantSettingsService
         'inactive_action',
     ];
 
+    private const CONFIG_COLUMNS = [
+        'enabled',
+        'merchant_id',
+        'data_source_id',
+        'data_source_name',
+        'developer_email',
+        'credential_type',
+        'service_account_json',
+        'oauth_client_id',
+        'oauth_client_secret',
+        'oauth_refresh_token',
+        'access_token',
+        'content_language',
+        'feed_label',
+        'currency',
+        'offer_id_field',
+        'product_url_base',
+        'default_brand',
+        'default_google_product_category',
+        'inactive_action',
+        'service_account_manifest_name',
+    ];
+
     public function settingsFor(?int $accountId = null): array
     {
         $settings = $this->defaults();
 
         if ($accountId !== null && $accountId > 0) {
-            try {
-                $stored = SiteSetting::query()
-                    ->where('account_id', $accountId)
-                    ->whereIn('key', array_map(fn (string $key) => $this->storageKey($key), self::STORED_KEYS))
-                    ->get(['key', 'value'])
-                    ->keyBy('key');
-            } catch (Throwable $exception) {
-                if (!app()->runningUnitTests()) {
-                    throw $exception;
-                }
-
-                $stored = collect();
-            }
-
-            foreach (self::STORED_KEYS as $key) {
-                $setting = $stored->get($this->storageKey($key));
-                if (!$setting) {
-                    continue;
-                }
-
-                $settings[$key] = $this->decodeValue($key, $setting->value);
-            }
+            $stored = $this->configSettingsFor($accountId) ?: $this->legacySiteSettingsFor($accountId);
+            $settings = array_replace($settings, $stored);
         }
 
         $settings['merchant_id'] = trim((string) ($settings['merchant_id'] ?? ''));
         $settings['data_source_id'] = trim((string) ($settings['data_source_id'] ?? ''));
         $settings['data_source_name'] = trim((string) ($settings['data_source_name'] ?? ''));
+        $settings['service_account_manifest_name'] = trim((string) ($settings['service_account_manifest_name'] ?? ''));
         $settings['credential_type'] = $this->normalizeCredentialType($settings['credential_type'] ?? 'service_account');
         $settings['content_language'] = Str::lower(trim((string) ($settings['content_language'] ?? 'vi'))) ?: 'vi';
         $settings['feed_label'] = Str::upper(trim((string) ($settings['feed_label'] ?? 'VN'))) ?: 'VN';
@@ -114,14 +122,20 @@ class GoogleMerchantSettingsService
 
     public function update(int $accountId, array $input): array
     {
-        if (!empty($input['clear_credentials'])) {
-            SiteSetting::query()
-                ->where('account_id', $accountId)
-                ->whereIn('key', array_map(fn (string $key) => $this->storageKey($key), self::SECRET_KEYS))
-                ->delete();
+        if (!$this->configTableExists()) {
+            throw new GoogleMerchantProductSyncException('Bảng cấu hình Google Merchant chưa được migrate.');
         }
 
         DB::transaction(function () use ($accountId, $input) {
+            $updates = [];
+
+            if (!empty($input['clear_credentials'])) {
+                foreach (self::SECRET_KEYS as $key) {
+                    $updates[$key] = null;
+                }
+                $updates['service_account_manifest_name'] = null;
+            }
+
             foreach (self::STORED_KEYS as $key) {
                 if (!array_key_exists($key, $input)) {
                     continue;
@@ -136,7 +150,21 @@ class GoogleMerchantSettingsService
                     $this->assertValidServiceAccountJson((string) $value);
                 }
 
-                SiteSetting::setValue($this->storageKey($key), $this->encodeValue($key, $value), $accountId);
+                $updates[$key] = $this->encodeValue($key, $value);
+            }
+
+            if (
+                array_key_exists('service_account_manifest_name', $input)
+                && array_key_exists('service_account_json', $updates)
+            ) {
+                $updates['service_account_manifest_name'] = trim((string) $input['service_account_manifest_name']);
+            }
+
+            if (!empty($updates)) {
+                GoogleMerchantConfig::query()->updateOrCreate(
+                    ['account_id' => $accountId],
+                    $updates
+                );
             }
         });
 
@@ -188,7 +216,89 @@ class GoogleMerchantSettingsService
             'default_brand' => (string) config('google_merchant.default_brand', 'Gom Dai Thanh'),
             'default_google_product_category' => (string) config('google_merchant.default_google_product_category', ''),
             'inactive_action' => (string) config('google_merchant.inactive_action', 'out_of_stock'),
+            'service_account_manifest_name' => '',
         ];
+    }
+
+    private function configSettingsFor(int $accountId): array
+    {
+        if (!$this->configTableExists()) {
+            return [];
+        }
+
+        try {
+            $config = GoogleMerchantConfig::query()
+                ->where('account_id', $accountId)
+                ->first();
+        } catch (Throwable $exception) {
+            if (!app()->runningUnitTests()) {
+                throw $exception;
+            }
+
+            return [];
+        }
+
+        if (!$config) {
+            return [];
+        }
+
+        $settings = [];
+        foreach (self::CONFIG_COLUMNS as $key) {
+            $value = $config->getAttribute($key);
+            if ($value === null) {
+                continue;
+            }
+
+            $settings[$key] = $this->decodeValue($key, $value);
+        }
+
+        return $settings;
+    }
+
+    private function legacySiteSettingsFor(int $accountId): array
+    {
+        try {
+            $stored = SiteSetting::query()
+                ->where('account_id', $accountId)
+                ->whereIn('key', array_map(fn (string $key) => $this->storageKey($key), self::STORED_KEYS))
+                ->get(['key', 'value'])
+                ->keyBy('key');
+        } catch (Throwable $exception) {
+            if (!app()->runningUnitTests()) {
+                throw $exception;
+            }
+
+            $stored = collect();
+        }
+
+        $settings = [];
+        foreach (self::STORED_KEYS as $key) {
+            $setting = $stored->get($this->storageKey($key));
+            if (!$setting) {
+                continue;
+            }
+
+            $settings[$key] = $this->decodeValue($key, $setting->value);
+        }
+
+        return $settings;
+    }
+
+    private function configTableExists(): bool
+    {
+        if ($this->configTableExists !== null) {
+            return $this->configTableExists;
+        }
+
+        try {
+            return $this->configTableExists = Schema::hasTable('google_merchant_configs');
+        } catch (Throwable $exception) {
+            if (!app()->runningUnitTests()) {
+                throw $exception;
+            }
+
+            return $this->configTableExists = false;
+        }
     }
 
     private function storageKey(string $key): string
@@ -220,7 +330,7 @@ class GoogleMerchantSettingsService
         }
 
         if (in_array($key, self::BOOLEAN_KEYS, true)) {
-            return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ? '1' : '0';
+            return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? false;
         }
 
         if ($key === 'credential_type') {
@@ -276,11 +386,11 @@ class GoogleMerchantSettingsService
         try {
             $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
         } catch (Throwable $exception) {
-            throw new GoogleMerchantProductSyncException('Service account JSON khong hop le.', 0, $exception);
+            throw new GoogleMerchantProductSyncException('Service account JSON không hợp lệ.', 0, $exception);
         }
 
         if (!is_array($decoded) || empty($decoded['client_email']) || empty($decoded['private_key'])) {
-            throw new GoogleMerchantProductSyncException('Service account JSON phai co client_email va private_key.');
+            throw new GoogleMerchantProductSyncException('Service account JSON phải có client_email và private_key.');
         }
     }
 }

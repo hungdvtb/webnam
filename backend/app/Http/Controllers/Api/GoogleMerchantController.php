@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Services\GoogleMerchant\GoogleMerchantProductSyncService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class GoogleMerchantController extends Controller
 {
@@ -40,6 +41,7 @@ class GoogleMerchantController extends Controller
             'developer_email' => 'nullable|email|max:255',
             'credential_type' => 'required|string|in:service_account,oauth2,access_token',
             'service_account_json' => 'nullable|string',
+            'service_account_manifest' => 'nullable|file|max:512',
             'oauth_client_id' => 'nullable|string|max:255',
             'oauth_client_secret' => 'nullable|string|max:2000',
             'oauth_refresh_token' => 'nullable|string|max:4000',
@@ -54,6 +56,27 @@ class GoogleMerchantController extends Controller
             'inactive_action' => 'required|string|in:out_of_stock,delete',
             'clear_credentials' => 'nullable|boolean',
         ]);
+
+        if ($request->hasFile('service_account_manifest')) {
+            $manifest = $request->file('service_account_manifest');
+            $extension = Str::lower((string) $manifest->getClientOriginalExtension());
+
+            if ($extension !== 'json') {
+                return response()->json([
+                    'message' => 'File manifest phải có định dạng .json.',
+                ], 422);
+            }
+
+            $json = trim((string) $manifest->get());
+            if ($json === '') {
+                return response()->json([
+                    'message' => 'File manifest.json đang rỗng.',
+                ], 422);
+            }
+
+            $validated['service_account_json'] = $json;
+            $validated['service_account_manifest_name'] = $manifest->getClientOriginalName() ?: 'manifest.json';
+        }
 
         try {
             $settings = $this->settingsService->update((int) $validated['account_id'], $validated);

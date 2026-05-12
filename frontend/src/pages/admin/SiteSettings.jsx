@@ -68,6 +68,8 @@ const defaultGoogleMerchantSettings = {
     developer_email: '',
     credential_type: 'service_account',
     service_account_json: '',
+    service_account_manifest_file: null,
+    service_account_manifest_name: '',
     oauth_client_id: '',
     oauth_client_secret: '',
     oauth_refresh_token: '',
@@ -619,6 +621,7 @@ const SiteSettings = () => {
                 ...prev,
                 ...(response.data?.settings || {}),
                 service_account_json: '',
+                service_account_manifest_file: null,
                 oauth_client_secret: '',
                 oauth_refresh_token: '',
                 access_token: '',
@@ -663,32 +666,65 @@ const SiteSettings = () => {
         }));
     };
 
+    const handleGoogleMerchantManifestChange = (event) => {
+        const file = event.target.files?.[0] || null;
+        setGoogleMerchantSettings((prev) => ({
+            ...prev,
+            service_account_manifest_file: file,
+        }));
+    };
+
+    const buildGoogleMerchantSavePayload = () => {
+        const payload = {
+            ...googleMerchantSettings,
+            account_id: activeAccountId,
+        };
+
+        if (!googleMerchantSettings.service_account_manifest_file) {
+            delete payload.service_account_manifest_file;
+            return payload;
+        }
+
+        const formData = new FormData();
+        Object.entries(payload).forEach(([key, value]) => {
+            if (key === 'service_account_manifest_file') {
+                return;
+            }
+
+            if (value === null || value === undefined) {
+                return;
+            }
+
+            formData.append(key, typeof value === 'boolean' ? (value ? '1' : '0') : String(value));
+        });
+        formData.append('service_account_manifest', googleMerchantSettings.service_account_manifest_file);
+
+        return formData;
+    };
+
     const handleSaveGoogleMerchant = async () => {
         if (!activeAccountId) {
-            showModal({ title: 'Loi', content: 'Vui long chon account truoc khi luu.', type: 'error' });
+            showModal({ title: 'Lỗi', content: 'Vui lòng chọn account trước khi lưu.', type: 'error' });
             return;
         }
 
         setSavingGoogleMerchant(true);
         try {
-            const payload = {
-                ...googleMerchantSettings,
-                account_id: activeAccountId,
-            };
-            const response = await googleMerchantApi.updateSettings(payload);
+            const response = await googleMerchantApi.updateSettings(buildGoogleMerchantSavePayload());
             setGoogleMerchantSettings((prev) => ({
                 ...prev,
                 ...(response.data?.settings || {}),
                 service_account_json: '',
+                service_account_manifest_file: null,
                 oauth_client_secret: '',
                 oauth_refresh_token: '',
                 access_token: '',
             }));
             setGoogleMerchantStats(response.data?.stats || null);
-            showModal({ title: 'Thanh cong', content: 'Da luu cau hinh Google Merchant.', type: 'success' });
+            showModal({ title: 'Thành công', content: 'Đã lưu cấu hình Google Merchant.', type: 'success' });
         } catch (error) {
-            const message = error.response?.data?.message || 'Khong the luu cau hinh Google Merchant.';
-            showModal({ title: 'Loi', content: message, type: 'error' });
+            const message = error.response?.data?.message || 'Không thể lưu cấu hình Google Merchant.';
+            showModal({ title: 'Lỗi', content: message, type: 'error' });
         } finally {
             setSavingGoogleMerchant(false);
         }
@@ -699,13 +735,13 @@ const SiteSettings = () => {
         try {
             const response = await googleMerchantApi.testConnection();
             showModal({
-                title: 'Ket noi OK',
-                content: `Tim thay ${(response.data?.data_sources || []).length} data source.`,
+                title: 'Kết nối OK',
+                content: `Tìm thấy ${(response.data?.data_sources || []).length} data source.`,
                 type: 'success',
             });
         } catch (error) {
-            const message = error.response?.data?.message || 'Khong the ket noi Google Merchant.';
-            showModal({ title: 'Loi', content: message, type: 'error' });
+            const message = error.response?.data?.message || 'Không thể kết nối Google Merchant.';
+            showModal({ title: 'Lỗi', content: message, type: 'error' });
         } finally {
             setTestingGoogleMerchant(false);
         }
@@ -2175,7 +2211,7 @@ const SiteSettings = () => {
                                             disabled={testingGoogleMerchant}
                                             className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
                                         >
-                                            {testingGoogleMerchant ? 'Dang test...' : 'Test ket noi'}
+                                            {testingGoogleMerchant ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}
                                         </button>
                                         <button
                                             type="button"
@@ -2183,7 +2219,7 @@ const SiteSettings = () => {
                                             disabled={savingGoogleMerchant}
                                             className="h-9 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 disabled:opacity-50"
                                         >
-                                            {savingGoogleMerchant ? 'Dang luu...' : 'Luu Google Merchant'}
+                                            {savingGoogleMerchant ? 'Đang lưu...' : 'Lưu Google Merchant'}
                                         </button>
                                     </div>
                                 )}
@@ -2192,7 +2228,7 @@ const SiteSettings = () => {
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                         <label className="flex items-center gap-3 rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3">
                                             <input type="checkbox" name="enabled" checked={Boolean(googleMerchantSettings.enabled)} onChange={handleGoogleMerchantChange} className="size-4 accent-primary" />
-                                            <span className="text-[13px] font-black text-primary">Bat dong bo Google Merchant</span>
+                                            <span className="text-[13px] font-black text-primary">Bật đồng bộ Google Merchant</span>
                                         </label>
                                         <div>
                                             <label className={labelClasses}>Merchant Center ID</label>
@@ -2206,7 +2242,7 @@ const SiteSettings = () => {
 
                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                                         <div>
-                                            <label className={labelClasses}>Credential type</label>
+                                            <label className={labelClasses}>Loại xác thực</label>
                                             <select name="credential_type" value={googleMerchantSettings.credential_type || 'service_account'} onChange={handleGoogleMerchantChange} className={inputClasses}>
                                                 <option value="service_account">Service Account</option>
                                                 <option value="oauth2">OAuth refresh token</option>
@@ -2214,7 +2250,7 @@ const SiteSettings = () => {
                                             </select>
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Ngon ngu</label>
+                                            <label className={labelClasses}>Ngôn ngữ</label>
                                             <input name="content_language" value={googleMerchantSettings.content_language || 'vi'} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                         <div>
@@ -2222,21 +2258,48 @@ const SiteSettings = () => {
                                             <input name="feed_label" value={googleMerchantSettings.feed_label || 'VN'} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Tien te</label>
+                                            <label className={labelClasses}>Tiền tệ</label>
                                             <input name="currency" value={googleMerchantSettings.currency || 'VND'} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                     </div>
 
                                     {googleMerchantSettings.credential_type === 'service_account' && (
                                         <div>
-                                            <label className={labelClasses}>Service Account JSON</label>
-                                            <textarea
-                                                name="service_account_json"
-                                                value={googleMerchantSettings.service_account_json || ''}
-                                                onChange={handleGoogleMerchantChange}
-                                                className={`${textareaClasses} font-mono`}
-                                                placeholder={googleMerchantSettings.has_service_account_json ? `Da luu credential${googleMerchantSettings.service_account_email ? `: ${googleMerchantSettings.service_account_email}` : ''}` : 'Dan noi dung file service account JSON vao day'}
-                                            />
+                                            <label className={labelClasses}>Manifest JSON</label>
+                                            <div className="flex flex-col gap-3 rounded-sm border border-primary/10 bg-white p-4 md:flex-row md:items-center md:justify-between">
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-[13px] font-black text-primary">
+                                                        {googleMerchantSettings.service_account_manifest_file?.name
+                                                            || googleMerchantSettings.service_account_manifest_name
+                                                            || (googleMerchantSettings.has_service_account_json ? 'Đã lưu manifest.json' : 'Chưa có manifest.json')}
+                                                    </p>
+                                                    <p className="mt-1 truncate text-[12px] text-primary/45">
+                                                        {googleMerchantSettings.service_account_email || 'Service account'}
+                                                    </p>
+                                                </div>
+                                                <div className="flex shrink-0 items-center gap-2">
+                                                    <label className="h-10 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider inline-flex items-center gap-2 cursor-pointer hover:bg-primary/[0.02]">
+                                                        <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                                                        Tải manifest
+                                                        <input
+                                                            key={googleMerchantSettings.service_account_manifest_file ? 'manifest-selected' : 'manifest-empty'}
+                                                            type="file"
+                                                            accept=".json,application/json"
+                                                            className="hidden"
+                                                            onChange={handleGoogleMerchantManifestChange}
+                                                        />
+                                                    </label>
+                                                    {googleMerchantSettings.service_account_manifest_file && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setGoogleMerchantSettings((prev) => ({ ...prev, service_account_manifest_file: null }))}
+                                                            className="h-10 px-4 rounded-sm border border-brick/20 bg-white text-brick text-[12px] font-black uppercase tracking-wider"
+                                                        >
+                                                            Xóa file
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
                                     )}
 
@@ -2248,11 +2311,11 @@ const SiteSettings = () => {
                                             </div>
                                             <div>
                                                 <label className={labelClasses}>OAuth client secret</label>
-                                                <input name="oauth_client_secret" value={googleMerchantSettings.oauth_client_secret || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_client_secret ? 'Da luu secret' : ''} />
+                                                <input name="oauth_client_secret" value={googleMerchantSettings.oauth_client_secret || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_client_secret ? 'Đã lưu secret' : ''} />
                                             </div>
                                             <div>
                                                 <label className={labelClasses}>OAuth refresh token</label>
-                                                <input name="oauth_refresh_token" value={googleMerchantSettings.oauth_refresh_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_refresh_token ? 'Da luu refresh token' : ''} />
+                                                <input name="oauth_refresh_token" value={googleMerchantSettings.oauth_refresh_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_oauth_refresh_token ? 'Đã lưu refresh token' : ''} />
                                             </div>
                                         </div>
                                     )}
@@ -2260,7 +2323,7 @@ const SiteSettings = () => {
                                     {googleMerchantSettings.credential_type === 'access_token' && (
                                         <div>
                                             <label className={labelClasses}>Access token</label>
-                                            <input name="access_token" value={googleMerchantSettings.access_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_access_token ? 'Da luu access token' : ''} />
+                                            <input name="access_token" value={googleMerchantSettings.access_token || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder={googleMerchantSettings.has_access_token ? 'Đã lưu access token' : ''} />
                                         </div>
                                     )}
 
@@ -2273,39 +2336,39 @@ const SiteSettings = () => {
                                             </select>
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Product URL base</label>
+                                            <label className={labelClasses}>URL gốc sản phẩm</label>
                                             <input name="product_url_base" value={googleMerchantSettings.product_url_base || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Brand mac dinh</label>
+                                            <label className={labelClasses}>Thương hiệu mặc định</label>
                                             <input name="default_brand" value={googleMerchantSettings.default_brand || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Ngung ban</label>
+                                            <label className={labelClasses}>Ngừng bán</label>
                                             <select name="inactive_action" value={googleMerchantSettings.inactive_action || 'out_of_stock'} onChange={handleGoogleMerchantChange} className={inputClasses}>
-                                                <option value="out_of_stock">Cap nhat OUT_OF_STOCK</option>
-                                                <option value="delete">Xoa product input</option>
+                                                <option value="out_of_stock">Cập nhật HẾT HÀNG</option>
+                                                <option value="delete">Xóa product input</option>
                                             </select>
                                         </div>
                                     </div>
 
                                     <div>
-                                        <label className={labelClasses}>Google product category mac dinh</label>
-                                        <input name="default_google_product_category" value={googleMerchantSettings.default_google_product_category || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder="VD: Home & Garden > Decor" />
+                                        <label className={labelClasses}>Danh mục Google mặc định</label>
+                                        <input name="default_google_product_category" value={googleMerchantSettings.default_google_product_category || ''} onChange={handleGoogleMerchantChange} className={inputClasses} placeholder="Ví dụ: Home & Garden > Decor" />
                                     </div>
 
                                     {googleMerchantStats && (
                                         <div className="grid grid-cols-3 gap-3">
                                             <div className="rounded-sm border border-primary/10 bg-white px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase text-primary/35">Chua sync</p>
+                                                <p className="text-[10px] font-black uppercase text-primary/35">Chưa đồng bộ</p>
                                                 <p className="text-xl font-black text-primary">{googleMerchantStats.not_synced || 0}</p>
                                             </div>
                                             <div className="rounded-sm border border-green-100 bg-green-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase text-green-700/60">Da sync</p>
+                                                <p className="text-[10px] font-black uppercase text-green-700/60">Đã đồng bộ</p>
                                                 <p className="text-xl font-black text-green-700">{googleMerchantStats.synced || 0}</p>
                                             </div>
                                             <div className="rounded-sm border border-red-100 bg-red-50 px-4 py-3">
-                                                <p className="text-[10px] font-black uppercase text-red-700/60">Loi</p>
+                                                <p className="text-[10px] font-black uppercase text-red-700/60">Lỗi</p>
                                                 <p className="text-xl font-black text-red-700">{googleMerchantStats.error || 0}</p>
                                             </div>
                                         </div>

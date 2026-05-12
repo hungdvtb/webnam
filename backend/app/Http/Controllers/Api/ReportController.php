@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\InventoryItem;
+use App\Models\SiteAnalyticsEvent;
 use App\Services\Reports\ProductSalesByDayReportService;
 use App\Services\Reports\SalesProductReportService;
 use Carbon\Carbon;
@@ -12,6 +13,7 @@ use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class ReportController extends Controller
 {
@@ -231,6 +233,138 @@ class ReportController extends Controller
         return response()->json($sales);
     }
 
+    public function webAnalytics(Request $request)
+    {
+        $validated = $request->validate([
+            'date_from' => 'nullable|date',
+            'date_to' => 'nullable|date',
+            'product_limit' => 'nullable|integer|min:5|max:100',
+        ]);
+
+        $accountId = (int) $request->header('X-Account-Id');
+        $now = now();
+        $from = Carbon::parse($validated['date_from'] ?? $now->copy()->subDays(13)->toDateString())->startOfDay();
+        $to = Carbon::parse($validated['date_to'] ?? $now->toDateString())->endOfDay();
+
+        if ($from->greaterThan($to)) {
+            [$from, $to] = [$to->copy()->startOfDay(), $from->copy()->endOfDay()];
+        }
+
+        if ($from->diffInDays($to) > 180) {
+            $from = $to->copy()->subDays(180)->startOfDay();
+        }
+
+        $fromDate = $from->toDateString();
+        $toDate = $to->toDateString();
+        $eventsTableExists = Schema::hasTable('site_analytics_events');
+
+        $eventRows = $eventsTableExists
+            ? DB::table('site_analytics_events')
+                ->where('account_id', $accountId)
+                ->whereBetween('event_date', [$fromDate, $toDate])
+                ->selectRaw('event_date as date_key')
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as page_views", [SiteAnalyticsEvent::EVENT_PAGE_VIEW])
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as product_views", [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW])
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as add_to_carts", [SiteAnalyticsEvent::EVENT_ADD_TO_CART])
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as checkout_started", [SiteAnalyticsEvent::EVENT_CHECKOUT_STARTED])
+                ->groupBy('event_date')
+                ->orderBy('event_date')
+                ->get()
+                ->keyBy(fn ($row) => (string) $row->date_key)
+            : collect();
+
+        $orderRows = DB::table('leads')
+            ->where('leads.account_id', $accountId)
+            ->where('leads.is_draft', false)
+            ->whereNotNull('leads.placed_at')
+            ->whereBetween('leads.placed_at', [$from, $to])
+            ->whereExists(function ($query) {
+                $query
+                    ->selectRaw('1')
+                    ->from('lead_items')
+                    ->whereColumn('lead_items.lead_id', 'leads.id');
+            })
+            ->selectRaw('DATE(leads.placed_at) as date_key')
+            ->selectRaw('COUNT(DISTINCT leads.id) as orders_count')
+            ->selectRaw('COALESCE(SUM(leads.total_amount), 0) as order_revenue')
+            ->groupBy('date_key')
+            ->orderBy('date_key')
+            ->get()
+            ->keyBy(fn ($row) => (string) $row->date_key);
+
+        $series = [];
+        $totals = [
+            'page_views' => 0,
+            'product_views' => 0,
+            'add_to_carts' => 0,
+            'checkout_started' => 0,
+            'orders_count' => 0,
+            'order_revenue' => 0.0,
+        ];
+
+        foreach (CarbonPeriod::create($from->copy()->startOfDay(), $to->copy()->startOfDay()) as $date) {
+            $dateKey = $date->toDateString();
+            $eventRow = $eventRows->get($dateKey);
+            $orderRow = $orderRows->get($dateKey);
+            $row = [
+                'date' => $dateKey,
+                'label' => $date->format('d/m'),
+                'page_views' => (int) ($eventRow->page_views ?? 0),
+                'product_views' => (int) ($eventRow->product_views ?? 0),
+                'add_to_carts' => (int) ($eventRow->add_to_carts ?? 0),
+                'checkout_started' => (int) ($eventRow->checkout_started ?? 0),
+                'orders_count' => (int) ($orderRow->orders_count ?? 0),
+                'order_revenue' => round((float) ($orderRow->order_revenue ?? 0), 2),
+            ];
+            $row['add_to_cart_rate'] = $this->percentage($row['add_to_carts'], $row['page_views']);
+            $row['conversion_rate'] = $this->percentage($row['orders_count'], $row['page_views']);
+            $row['cart_to_order_rate'] = $this->percentage($row['orders_count'], $row['add_to_carts']);
+
+            foreach ($totals as $key => $value) {
+                $totals[$key] += $row[$key];
+            }
+
+            $series[] = $row;
+        }
+
+        $uniqueVisitors = $eventsTableExists
+            ? (int) DB::table('site_analytics_events')
+                ->where('account_id', $accountId)
+                ->where('event_name', SiteAnalyticsEvent::EVENT_PAGE_VIEW)
+                ->whereBetween('event_date', [$fromDate, $toDate])
+                ->selectRaw("COUNT(DISTINCT COALESCE(visitor_id, session_id, ip_hash)) as unique_visitors")
+                ->value('unique_visitors')
+            : 0;
+
+        $totals['order_revenue'] = round((float) $totals['order_revenue'], 2);
+        $totals['unique_visitors'] = $uniqueVisitors;
+        $totals['add_to_cart_rate'] = $this->percentage($totals['add_to_carts'], $totals['page_views']);
+        $totals['conversion_rate'] = $this->percentage($totals['orders_count'], $totals['page_views']);
+        $totals['cart_to_order_rate'] = $this->percentage($totals['orders_count'], $totals['add_to_carts']);
+
+        return response()->json([
+            'summary' => $totals,
+            'series' => $series,
+            'products' => $this->buildWebAnalyticsProductRows(
+                $accountId,
+                $from,
+                $to,
+                $eventsTableExists,
+                (int) ($validated['product_limit'] ?? 25)
+            ),
+            'filters' => [
+                'date_from' => $fromDate,
+                'date_to' => $toDate,
+                'product_limit' => (int) ($validated['product_limit'] ?? 25),
+            ],
+            'meta' => [
+                'generated_at' => now()->toIso8601String(),
+                'orders_source' => 'website_leads',
+                'traffic_source' => 'site_analytics_events',
+            ],
+        ]);
+    }
+
     private function dashboardRevenueOrdersQuery(int $accountId): Builder
     {
         return Order::query()
@@ -376,5 +510,103 @@ class ReportController extends Controller
             ->sortDesc()
             ->values()
             ->all();
+    }
+
+    private function buildWebAnalyticsProductRows(int $accountId, Carbon $from, Carbon $to, bool $eventsTableExists, int $limit): array
+    {
+        $fromDate = $from->toDateString();
+        $toDate = $to->toDateString();
+        $productMetrics = [];
+
+        if ($eventsTableExists) {
+            DB::table('site_analytics_events')
+                ->where('account_id', $accountId)
+                ->whereNotNull('product_id')
+                ->whereBetween('event_date', [$fromDate, $toDate])
+                ->whereIn('event_name', [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW, SiteAnalyticsEvent::EVENT_ADD_TO_CART])
+                ->select('product_id')
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as product_views", [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW])
+                ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as add_to_carts", [SiteAnalyticsEvent::EVENT_ADD_TO_CART])
+                ->groupBy('product_id')
+                ->get()
+                ->each(function ($row) use (&$productMetrics) {
+                    $productId = (int) $row->product_id;
+                    $productMetrics[$productId] = array_replace($productMetrics[$productId] ?? [], [
+                        'product_id' => $productId,
+                        'product_views' => (int) ($row->product_views ?? 0),
+                        'add_to_carts' => (int) ($row->add_to_carts ?? 0),
+                    ]);
+                });
+        }
+
+        DB::table('lead_items')
+            ->join('leads', 'leads.id', '=', 'lead_items.lead_id')
+            ->where('leads.account_id', $accountId)
+            ->where('leads.is_draft', false)
+            ->whereNotNull('leads.placed_at')
+            ->whereBetween('leads.placed_at', [$from, $to])
+            ->whereNotNull('lead_items.product_id')
+            ->select('lead_items.product_id')
+            ->selectRaw('COUNT(DISTINCT leads.id) as orders_count')
+            ->selectRaw('COALESCE(SUM(lead_items.quantity), 0) as ordered_quantity')
+            ->selectRaw('COALESCE(SUM(lead_items.line_total), 0) as ordered_revenue')
+            ->groupBy('lead_items.product_id')
+            ->get()
+            ->each(function ($row) use (&$productMetrics) {
+                $productId = (int) $row->product_id;
+                $productMetrics[$productId] = array_replace($productMetrics[$productId] ?? [], [
+                    'product_id' => $productId,
+                    'orders_count' => (int) ($row->orders_count ?? 0),
+                    'ordered_quantity' => (int) ($row->ordered_quantity ?? 0),
+                    'ordered_revenue' => round((float) ($row->ordered_revenue ?? 0), 2),
+                ]);
+            });
+
+        if (empty($productMetrics)) {
+            return [];
+        }
+
+        $productIds = array_keys($productMetrics);
+        $productsById = DB::table('products')
+            ->where('account_id', $accountId)
+            ->whereIn('id', $productIds)
+            ->get(['id', 'name', 'sku', 'slug'])
+            ->keyBy('id');
+
+        return collect($productMetrics)
+            ->map(function (array $row) use ($productsById) {
+                $product = $productsById->get($row['product_id']);
+                $productViews = (int) ($row['product_views'] ?? 0);
+                $addToCarts = (int) ($row['add_to_carts'] ?? 0);
+                $ordersCount = (int) ($row['orders_count'] ?? 0);
+
+                return [
+                    'product_id' => $row['product_id'],
+                    'product_name' => $product?->name ?: ('#' . $row['product_id']),
+                    'product_sku' => $product?->sku,
+                    'product_slug' => $product?->slug,
+                    'product_views' => $productViews,
+                    'add_to_carts' => $addToCarts,
+                    'orders_count' => $ordersCount,
+                    'ordered_quantity' => (int) ($row['ordered_quantity'] ?? 0),
+                    'ordered_revenue' => round((float) ($row['ordered_revenue'] ?? 0), 2),
+                    'add_to_cart_rate' => $this->percentage($addToCarts, $productViews),
+                    'product_conversion_rate' => $this->percentage($ordersCount, $productViews),
+                    'engagement_score' => $productViews + ($addToCarts * 3) + ($ordersCount * 5),
+                ];
+            })
+            ->sortByDesc('engagement_score')
+            ->take($limit)
+            ->values()
+            ->map(function (array $row) {
+                unset($row['engagement_score']);
+                return $row;
+            })
+            ->all();
+    }
+
+    private function percentage(int|float $numerator, int|float $denominator): float
+    {
+        return $denominator > 0 ? round(($numerator / $denominator) * 100, 2) : 0.0;
     }
 }

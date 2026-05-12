@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\OrderAiTrainingController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
+use App\Http\Controllers\Api\SiteAnalyticsController;
 use App\Http\Controllers\Api\AIController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\MediaAssetController;
@@ -51,6 +52,7 @@ Route::get('/thumbnail', [ProductImageController::class , 'thumbnail']);
 Route::get('/media/proxy', [MediaController::class, 'proxy']);
 Route::get('/media/assets/{publicId}/{variant?}', [MediaAssetController::class, 'show'])
     ->where('variant', 'thumbnail|medium|large|original');
+Route::post('/analytics/events', [SiteAnalyticsController::class, 'store']);
 Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\Api\ShipmentController::class, 'processViettelPostWebhook']);
 
 
@@ -93,7 +95,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Google Merchant Center sync
     Route::get('/google-merchant/settings', [GoogleMerchantController::class, 'settings']);
-    Route::put('/google-merchant/settings', [GoogleMerchantController::class, 'updateSettings']);
+    Route::match(['put', 'post'], '/google-merchant/settings', [GoogleMerchantController::class, 'updateSettings']);
     Route::post('/google-merchant/test', [GoogleMerchantController::class, 'test']);
     Route::get('/google-merchant/data-sources', [GoogleMerchantController::class, 'dataSources']);
     Route::post('/google-merchant/products/sync', [GoogleMerchantController::class, 'syncProducts']);
@@ -499,6 +501,7 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::get('/reports/sales', [\App\Http\Controllers\Api\ReportController::class , 'salesReport']);
         Route::get('/reports/sales-matrix', [\App\Http\Controllers\Api\ReportController::class , 'salesProductMatrix']);
         Route::get('/reports/product-sales-by-day', [\App\Http\Controllers\Api\ReportController::class , 'productSalesByDay']);
+        Route::get('/reports/web-analytics', [\App\Http\Controllers\Api\ReportController::class , 'webAnalytics']);
 
         // Invoices
         Route::get('/invoices', [\App\Http\Controllers\Api\InvoiceController::class , 'index']);

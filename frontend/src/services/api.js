@@ -406,7 +406,11 @@ export const productSeoBulkApi = {
 
 export const googleMerchantApi = {
     getSettings: () => api.get('/google-merchant/settings'),
-    updateSettings: (data) => api.put('/google-merchant/settings', data),
+    updateSettings: (data) => (
+        data instanceof FormData
+            ? api.post('/google-merchant/settings', data, multipartConfig(data))
+            : api.put('/google-merchant/settings', data)
+    ),
     testConnection: () => api.post('/google-merchant/test'),
     listDataSources: () => api.get('/google-merchant/data-sources'),
     syncProduct: (id, data = {}) => api.post(`/google-merchant/products/${id}/sync`, data, {
@@ -682,6 +686,7 @@ export const reportApi = {
     getSales: (days) => api.get('/reports/sales', { params: { days } }),
     getSalesMatrix: (params) => api.get('/reports/sales-matrix', { params }),
     getProductSalesByDay: (params) => api.get('/reports/product-sales-by-day', { params }),
+    getWebAnalytics: (params) => api.get('/reports/web-analytics', { params }),
 };
 
 export const customerApi = {

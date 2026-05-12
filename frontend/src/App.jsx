@@ -38,6 +38,7 @@ import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import SalesReportPage from './pages/admin/SalesReportPage';
+import WebAnalyticsReport from './pages/admin/WebAnalyticsReport';
 import BlogList from './pages/admin/BlogList';
 import BlogForm from './pages/admin/BlogForm';
 import SiteSettings from './pages/admin/SiteSettings';
@@ -182,6 +183,7 @@ function App() {
                 <Route path="ai-training" element={<AiTrainingManager />} />
                 <Route path="users" element={<UserList />} />
                 <Route path="reports" element={<SalesReportPage />} />
+                <Route path="reports/web-analytics" element={<WebAnalyticsReport />} />
                 <Route path="finance/fixed-costs" element={<FixedCostTracker />} />
                 <Route path="finance/funds" element={<FundManagement />} />
                 <Route path="finance/debts" element={<DebtManagement />} />

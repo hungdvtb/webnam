@@ -10,6 +10,7 @@ import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api'
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import { resolveCartItemImageUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
+import { getAnalyticsIdentity, trackCheckoutStarted } from '@/lib/analytics';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import ComponentSelectionModal from '@/components/product/common/ComponentSelectionModal';
 import styles from './cart.module.css';
@@ -326,6 +327,7 @@ export default function CartPage() {
   const draftRequestInFlightRef = useRef(null);
   const lastDraftPayloadRef = useRef('');
   const checkoutCompletedRef = useRef(false);
+  const checkoutStartedTrackedRef = useRef(false);
   const latestCheckoutStateRef = useRef(null);
 
   useEffect(() => {
@@ -732,6 +734,7 @@ export default function CartPage() {
       useNewAddress,
     };
     const attribution = rememberLeadAttribution();
+    const analyticsIdentity = getAnalyticsIdentity();
     const currentUrl = typeof window !== 'undefined' ? window.location.href : '';
     const addressDetail = String(state.formData?.address || '').trim();
     const province = String(state.formData?.province || '').trim();
@@ -759,6 +762,8 @@ export default function CartPage() {
       total: state.totalAfterDiscount || 0,
       draft_token: draftToken,
       draft_lead_id: draftLeadIdRef.current,
+      visitor_id: analyticsIdentity.visitor_id,
+      session_id: analyticsIdentity.session_id,
       landing_url: attribution.landing_url || attribution.first_url || currentUrl,
       current_url: currentUrl,
       referrer: attribution.referrer || (typeof document !== 'undefined' ? document.referrer : '') || '',
@@ -1067,6 +1072,24 @@ export default function CartPage() {
 
   const totalAfterDiscount = Math.max(cartTotal - discount, 0);
   const isPhoneReadyForDraft = CHECKOUT_PHONE_REGEX.test(String(formData.phone || '').trim());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (isOrderSuccess || cartItems.length === 0) {
+      checkoutStartedTrackedRef.current = false;
+      return;
+    }
+
+    if (checkoutStartedTrackedRef.current) {
+      return;
+    }
+
+    checkoutStartedTrackedRef.current = true;
+    trackCheckoutStarted(cartItems, totalAfterDiscount || cartTotal);
+  }, [cartItems, cartTotal, isOrderSuccess, totalAfterDiscount]);
 
   useEffect(() => {
     latestCheckoutStateRef.current = {

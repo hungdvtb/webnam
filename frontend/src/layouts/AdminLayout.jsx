@@ -199,7 +199,7 @@ const AdminLayout = () => {
             <div className="flex items-center justify-center h-screen bg-background-light">
                 <div className="text-center space-y-3">
                     <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary mx-auto"></div>
-                    <div className="text-primary/60 text-sm font-sans font-semibold">Dang tai cai dat nguoi dung...</div>
+                    <div className="text-primary/60 text-sm font-sans font-semibold">Đang tải cài đặt người dùng...</div>
                 </div>
             </div>
         );
@@ -661,6 +661,18 @@ const AdminLayout = () => {
                         <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/monthly-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>calendar_month</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
                             Báo cáo lãi lỗ tháng
+                        </SidebarText>
+                    </Link>
+
+                    <Link
+                        to="/admin/reports/web-analytics"
+                        aria-label="Phân tích web"
+                        title={collapsedTitle('Phân tích web')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/reports/web-analytics' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/reports/web-analytics' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>monitoring</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Phân tích web
                         </SidebarText>
                     </Link>
 

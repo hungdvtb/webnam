@@ -6,6 +6,7 @@ import { getActiveMenu, getWebCategories, getWebSiteSettings } from "@/lib/api";
 import { CartProvider } from "@/context/CartContext";
 import TrackingScripts from "@/components/common/TrackingScripts";
 import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
+import WebAnalyticsTracker from "@/components/common/WebAnalyticsTracker";
 
 const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
@@ -193,6 +194,7 @@ export default async function RootLayout({ children }) {
       </head>
       <body>
         <LeadAttributionTracker />
+        <WebAnalyticsTracker />
         <CartProvider>
           <div className="mobile-sticky-header-shell">
             <div className="top-promotion-bar">{topNoticeText}</div>

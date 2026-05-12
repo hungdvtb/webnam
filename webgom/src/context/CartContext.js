@@ -12,6 +12,7 @@ import {
   pickEntityPrimaryImage,
   resolveCartItemImageUrl,
 } from '@/lib/media';
+import { trackAddToCart } from '@/lib/analytics';
 
 const CartContext = createContext();
 
@@ -471,6 +472,13 @@ export function CartProvider({ children }) {
 
     const itemKey = buildCartItemKey(product.id, normalizedOptions, normalizedGroupedItems);
     const cartItemMediaPayload = buildCartItemMediaPayload(product, mediaContext);
+    trackAddToCart(product, quantity, {
+      price: finalPrice ?? product.price,
+      unit_value: finalPrice ?? product.current_price ?? product.price,
+      options: normalizedOptions,
+      bundle_config: bundleConfigName,
+      grouped_items_count: normalizedGroupedItems.length,
+    });
 
     setCartItems((prev) => {
       const existingItem = prev.find((item) => item.cartKey === itemKey);

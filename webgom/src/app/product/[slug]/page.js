@@ -7,6 +7,7 @@ import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailClientShell from '@/components/ProductDetailClientShell';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
+import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
 
 function buildRelatedViewAllHref(product, relatedMeta) {
   if (relatedMeta?.has_explicit_related) {
@@ -70,6 +71,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
 
     return (
       <div className={styles.productDetail}>
+        <ProductAnalyticsTracker product={product} />
         <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
           <div className={styles.productPageSections}>
             <ProductDetailClientShell
@@ -125,6 +127,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
 
   return (
     <div className={styles.productDetail}>
+      <ProductAnalyticsTracker product={product} />
       <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
         <div className={styles.productPageSections}>
           <ProductDetailContent

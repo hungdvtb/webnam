@@ -9,6 +9,7 @@ use App\Models\Banner;
 use App\Models\Post;
 use App\Models\ProductReview;
 use App\Services\Leads\LeadCaptureService;
+use App\Services\Analytics\SiteAnalyticsService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -1075,6 +1076,7 @@ class StorefrontController extends Controller
         ]);
 
         $lead = app(LeadCaptureService::class)->createWebsiteOrderLead($request);
+        app(SiteAnalyticsService::class)->recordOrderPlaced($request, $lead);
 
         return response()->json([
             'success' => true,

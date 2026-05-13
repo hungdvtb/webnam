@@ -37,10 +37,17 @@ export const cloneBundleOptionForCopy = (
     const optionId = createOptionId();
     const optionUid = createOptionUid();
     const clonedItems = Array.isArray(clonedOption.items)
-        ? clonedOption.items.map((item) => ({
-            ...item,
-            entry_id: createEntryId(),
-        }))
+        ? clonedOption.items.map((item) => {
+            const clonedItem = { ...item };
+            const productId = clonedItem.product_id ?? clonedItem.id ?? null;
+
+            return {
+                ...clonedItem,
+                id: productId,
+                product_id: productId,
+                entry_id: createEntryId(),
+            };
+        })
         : [];
 
     return {

@@ -95,6 +95,7 @@ runTest('cloneBundleOptionForCopy clones full option data but regenerates IDs', 
 
     assert.deepEqual(
         clonedOption.items.map((item) => ({
+            id: item.id,
             product_id: item.product_id,
             variant_id: item.variant_id,
             quantity: item.quantity,
@@ -102,6 +103,7 @@ runTest('cloneBundleOptionForCopy clones full option data but regenerates IDs', 
             name: item.name,
         })),
         sourceOption.items.map((item) => ({
+            id: item.product_id,
             product_id: item.product_id,
             variant_id: item.variant_id,
             quantity: item.quantity,
@@ -117,6 +119,35 @@ runTest('cloneBundleOptionForCopy clones full option data but regenerates IDs', 
     assert.notEqual(clonedOption.items[0], sourceOption.items[0]);
     assert.notEqual(clonedOption.items[0].metadata, sourceOption.items[0].metadata);
     assert.deepEqual(clonedOption.items[0].metadata, sourceOption.items[0].metadata);
+});
+
+runTest('cloneBundleOptionForCopy backfills product_id from item id when needed', () => {
+    const clonedOption = cloneBundleOptionForCopy(
+        {
+            id: 'source-option',
+            title: 'Source',
+            items: [
+                {
+                    entry_id: 'source-entry',
+                    id: 301,
+                    sku: 'CONFIG-PARENT',
+                    type: 'configurable',
+                    variant_id: 401,
+                    name: 'Selected variant',
+                },
+            ],
+        },
+        {
+            createOptionId: () => 'copy-option',
+            createEntryId: () => 'copy-entry',
+            createOptionUid: () => 'copy-option-uid',
+        },
+    );
+
+    assert.equal(clonedOption.items[0].id, 301);
+    assert.equal(clonedOption.items[0].product_id, 301);
+    assert.equal(clonedOption.items[0].variant_id, 401);
+    assert.equal(clonedOption.items[0].sku, 'CONFIG-PARENT');
 });
 
 runTest('copyBundleOptionBelowSource inserts the copied option below the source and keeps source untouched', () => {

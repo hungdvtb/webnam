@@ -286,7 +286,7 @@ const OrderProductsPortal = ({
                             <div key={idx} className="flex items-center gap-4 px-4 py-3 transition-all group/item">
                                 <div className="w-12 shrink-0 flex justify-center">
                                     <div className="flex h-8 min-w-[36px] items-center justify-center rounded-sm border border-orange-200 bg-orange-50 px-2 text-[13px] font-black leading-none text-orange-600">
-                                        {item.quantity}x
+                                        {formatOrderItemQuantity(item.quantity)}x
                                     </div>
                                 </div>
 
@@ -385,6 +385,14 @@ const StatusDropdownPortal = ({ order, orderStatuses, onUpdate, anchorRef, visib
 const SHIPPING_ALERT_SEEN_STORAGE_KEY = 'order_shipping_alert_seen_v1';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+const formatOrderItemQuantity = (value) => {
+    const numericValue = Number(typeof value === 'string' ? value.replace(',', '.') : value);
+    if (!Number.isFinite(numericValue)) {
+        return String(value ?? '').trim() || '0';
+    }
+
+    return numericValue.toFixed(3).replace(/\.?0+$/, '');
+};
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
 const getOrderCostTotalValue = (order) => {
     const parsedValue = Number(order?.cost_total ?? 0);
@@ -5573,7 +5581,7 @@ const OrderList = () => {
                                                     return (
                                                         <div key={`${o.id}-mobile-item-${itemIndex}`} className="flex items-start gap-2">
                                                             <span className="inline-flex min-w-[34px] items-center justify-center rounded-full bg-orange-50 px-2 py-1 text-[10px] font-black text-orange-700">
-                                                                {item.quantity}x
+                                                                {formatOrderItemQuantity(item.quantity)}x
                                                             </span>
                                                             <div className="min-w-0 flex-1">
                                                                 <div className={`truncate text-[13px] font-bold ${matchesAnySearchKeyword(itemName, itemSku) ? 'text-primary' : 'text-primary/75'}`}>{itemName}</div>
@@ -5822,7 +5830,7 @@ const OrderList = () => {
                                                                     <div key={idx} className="flex items-start gap-2.5 relative">
                                                                         <div className="shrink-0 mt-0.5 w-10">
                                                                             <div className="flex h-6 min-w-[34px] items-center justify-center rounded-sm border border-orange-200 bg-orange-50 px-1.5 text-[12px] font-black leading-none text-orange-600">
-                                                                                {item.quantity}x
+                                                                                {formatOrderItemQuantity(item.quantity)}x
                                                                             </div>
                                                                         </div>
                                                                         <div className="flex-1 min-w-0">

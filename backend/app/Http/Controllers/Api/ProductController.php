@@ -109,6 +109,37 @@ class ProductController extends Controller
         return $bundleOptionUids[$groupKey];
     }
 
+    private function mergeJsonArrayPayloadField(Request $request, string $targetKey, ?string $sourceKey = null): void
+    {
+        $sourceKey ??= $targetKey . '_json';
+
+        if (!$request->exists($sourceKey)) {
+            return;
+        }
+
+        $rawValue = $request->input($sourceKey);
+
+        if (is_array($rawValue)) {
+            $request->merge([$targetKey => $rawValue]);
+            return;
+        }
+
+        $decoded = json_decode((string) $rawValue, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            throw ValidationException::withMessages([
+                $targetKey => ['Du lieu gui len khong dung dinh dang JSON.'],
+            ]);
+        }
+
+        $request->merge([$targetKey => $decoded]);
+    }
+
+    private function mergeStructuredProductPayloads(Request $request): void
+    {
+        $this->mergeJsonArrayPayloadField($request, 'grouped_items');
+    }
+
     public function __construct(
         protected ProductSkuService $productSkuService,
         protected ProductPricingService $productPricingService,
@@ -9094,6 +9125,8 @@ class ProductController extends Controller
      */
     public function store(Request $request)
     {
+        $this->mergeStructuredProductPayloads($request);
+
         $validated = $request->validate([
             'type' => 'required|string|in:simple,configurable,grouped,virtual,bundle,downloadable',
             'name' => 'required|string|max:255',
@@ -9765,6 +9798,8 @@ class ProductController extends Controller
      */
     public function update(Request $request, $id)
     {
+        $this->mergeStructuredProductPayloads($request);
+
         $product = Product::findOrFail($id);
 
         $validated = $request->validate([

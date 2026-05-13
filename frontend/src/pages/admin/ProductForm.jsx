@@ -236,12 +236,23 @@ const buildBundleOptionSignature = (options = []) => JSON.stringify(
 );
 
 const appendProductImageSubmissionPayload = (formData, imagePayload) => {
-    formData.append('sync_images', '1');
-    imagePayload.order.forEach((token) => formData.append('image_order[]', token));
-    if (imagePayload.primaryToken) {
-        formData.append('primary_image_token', imagePayload.primaryToken);
+    if (formData instanceof FormData) {
+        formData.append('sync_images', '1');
+        imagePayload.order.forEach((token) => formData.append('image_order[]', token));
+        if (imagePayload.primaryToken) {
+            formData.append('primary_image_token', imagePayload.primaryToken);
+        }
+        imagePayload.files.forEach((file) => formData.append('images[]', file));
+        return;
     }
-    imagePayload.files.forEach((file) => formData.append('images[]', file));
+
+    if (formData && typeof formData === 'object') {
+        formData.sync_images = true;
+        formData.image_order = imagePayload.order;
+        if (imagePayload.primaryToken) {
+            formData.primary_image_token = imagePayload.primaryToken;
+        }
+    }
 };
 
 const normalizeProductVideoItems = (items = [], fallbackUrl = '') => {
@@ -2058,6 +2069,88 @@ const getOrderedSuperLinkVariants = (productData) => (
         .sort((left, right) => (Number(left?.pivot?.position ?? 0) - Number(right?.pivot?.position ?? 0)))
 );
 
+const flattenBundleOptionsToCompositeItems = (options = []) => (
+    (Array.isArray(options) ? options : []).flatMap((option) => (
+        (Array.isArray(option?.items) ? option.items : []).map((item) => ({
+            ...item,
+            option_title: option.title,
+            option_post_id: option.post_id || '',
+            bundle_option_uid: option.uid || option.bundle_option_uid || '',
+            option_image_url: normalizePersistedImageUrl(option.image_url),
+            option_video_url: option.video_url || '',
+            option_video_source: option.video_source || '',
+        }))
+    ))
+);
+
+const calculateCompositeItemsTotal = (items = []) => (
+    (Array.isArray(items) ? items : []).reduce((total, item) => {
+        const quantity = Number(item?.quantity ?? 0);
+        const unitPrice = normalizeWholeMoneyNumber(item?.price) ?? 0;
+        return total + unitPrice * (Number.isFinite(quantity) ? quantity : 0);
+    }, 0)
+);
+
+const normalizeCompositeItemForSubmit = (item = {}) => {
+    const productId = Number(item.product_id ?? item.id ?? 0);
+    const quantity = Number.parseInt(String(item.quantity ?? 1), 10);
+    const normalizedPrice = normalizeWholeMoneyNumber(item.price);
+    const normalizedCostPrice = normalizeRoundedImportCostNumber(item.cost_price);
+    const normalizedImageUrl = normalizePersistedImageUrl(item.option_image_url);
+    const variantId = Number(item.variant_id ?? 0);
+
+    const payload = {
+        id: productId,
+        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        is_required: Boolean(item.is_required),
+        option_title: item.option_title || '',
+        is_default: Boolean(item.is_default),
+        price: normalizedPrice ?? 0,
+    };
+
+    if (item.bundle_option_uid) {
+        payload.bundle_option_uid = String(item.bundle_option_uid);
+    }
+
+    if (item.option_post_id) {
+        payload.option_post_id = item.option_post_id;
+    }
+
+    if (normalizedImageUrl) {
+        payload.option_image_url = normalizedImageUrl;
+    }
+
+    if (item.option_video_url) {
+        payload.option_video_url = item.option_video_url;
+    }
+
+    if (item.option_video_source) {
+        payload.option_video_source = item.option_video_source;
+    }
+
+    if (normalizedCostPrice !== null) {
+        payload.cost_price = normalizedCostPrice;
+    }
+
+    if (Number.isFinite(variantId) && variantId > 0) {
+        payload.variant_id = variantId;
+    }
+
+    return payload;
+};
+
+const buildCompositeItemsSubmitPayload = (items = []) => (
+    (Array.isArray(items) ? items : [])
+        .map(normalizeCompositeItemForSubmit)
+        .filter((item) => Number.isFinite(Number(item.id)) && Number(item.id) > 0)
+);
+
+const isFileLikeValue = (value) => (
+    Boolean(value)
+    && typeof File !== 'undefined'
+    && value instanceof File
+);
+
 const ProductForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
@@ -2878,28 +2971,14 @@ const ProductForm = () => {
 
     const compositeItemsForPricing = useMemo(() => {
         if (formData.type === 'bundle' && bundleOptions.length > 0) {
-            return bundleOptions.flatMap((option) => (
-                option.items.map((item) => ({
-                    ...item,
-                    option_title: option.title,
-                    option_post_id: option.post_id || '',
-                    bundle_option_uid: option.uid || option.bundle_option_uid || '',
-                    option_image_url: normalizePersistedImageUrl(option.image_url),
-                    option_video_url: option.video_url || '',
-                    option_video_source: option.video_source || '',
-                }))
-            ));
+            return flattenBundleOptionsToCompositeItems(bundleOptions);
         }
 
         return Array.isArray(formData.grouped_items) ? formData.grouped_items : [];
     }, [bundleOptions, formData.grouped_items, formData.type]);
 
     const compositeSumPrice = useMemo(
-        () => compositeItemsForPricing.reduce((total, item) => {
-            const quantity = Number(item?.quantity ?? 0);
-            const unitPrice = normalizeWholeMoneyNumber(item?.price) ?? 0;
-            return total + unitPrice * (Number.isFinite(quantity) ? quantity : 0);
-        }, 0),
+        () => calculateCompositeItemsTotal(compositeItemsForPricing),
         [compositeItemsForPricing]
     );
 
@@ -3102,6 +3181,137 @@ const ProductForm = () => {
             console.error('Error fetching bundle item variants', error);
             return [];
         }
+    };
+
+    const resolveBundleOptionsForSubmit = async () => {
+        if (formData.type !== 'bundle') {
+            return {
+                nextOptions: bundleOptions,
+                compositeItems: compositeItemsForPricing,
+                unresolvedItems: [],
+                autoResolvedCount: 0,
+            };
+        }
+
+        const nextOptions = (Array.isArray(bundleOptions) ? bundleOptions : []).map((option) => ({
+            ...option,
+            items: (Array.isArray(option?.items) ? option.items : []).map((item) => ({ ...item })),
+        }));
+
+        const candidates = new Map();
+        nextOptions.forEach((option) => {
+            (option.items || []).forEach((item) => {
+                if (item?.variant_id) {
+                    return;
+                }
+
+                const productId = getBundleItemProductId(item);
+                if (!productId) {
+                    return;
+                }
+
+                if (item?.type === 'configurable' || !item?.type) {
+                    candidates.set(productId, {
+                        needsTypeCheck: candidates.get(productId)?.needsTypeCheck || !item?.type,
+                    });
+                }
+            });
+        });
+
+        if (candidates.size === 0) {
+            return {
+                nextOptions,
+                compositeItems: flattenBundleOptionsToCompositeItems(nextOptions),
+                unresolvedItems: [],
+                autoResolvedCount: 0,
+            };
+        }
+
+        const productTypes = {};
+        const variantsByProductId = {};
+        const variantCacheUpdates = {};
+
+        await Promise.all(Array.from(candidates.entries()).map(async ([productId, meta]) => {
+            const cachedVariants = bundleItemVariants[productId];
+            if (!meta.needsTypeCheck && cachedVariants) {
+                productTypes[productId] = 'configurable';
+                variantsByProductId[productId] = cachedVariants;
+                return;
+            }
+
+            try {
+                const response = await productApi.getOne(productId);
+                const product = response.data || {};
+                productTypes[productId] = product.type || '';
+
+                if (product.type === 'configurable') {
+                    const variants = (product.linked_products || []).filter((variant) => (
+                        variant?.pivot?.link_type === 'super_link'
+                        && normalizeVariantStatus(variant.status, true)
+                    ));
+                    variantsByProductId[productId] = variants;
+                    variantCacheUpdates[productId] = variants;
+                }
+            } catch (error) {
+                console.error('Error resolving bundle item variant before submit', error);
+                if (cachedVariants) {
+                    productTypes[productId] = 'configurable';
+                    variantsByProductId[productId] = cachedVariants;
+                }
+            }
+        }));
+
+        if (Object.keys(variantCacheUpdates).length > 0) {
+            setBundleItemVariants((prev) => ({ ...prev, ...variantCacheUpdates }));
+        }
+
+        let autoResolvedCount = 0;
+        const unresolvedItems = [];
+        const resolvedOptions = nextOptions.map((option) => ({
+            ...option,
+            items: (option.items || []).map((item) => {
+                if (item?.variant_id) {
+                    return item;
+                }
+
+                const productId = getBundleItemProductId(item);
+                const productType = item?.type || productTypes[productId] || '';
+                if (productType !== 'configurable') {
+                    return productType && item?.type !== productType
+                        ? { ...item, type: productType }
+                        : item;
+                }
+
+                const variants = variantsByProductId[productId] || [];
+                const baseItem = restoreBundleItemBaseDisplay({
+                    ...item,
+                    type: 'configurable',
+                    legacy_missing_variant: true,
+                });
+                const fallbackVariant = resolveLegacyBundleVariantSelection(baseItem, variants, option.items)
+                    || variants[0]
+                    || null;
+
+                if (!fallbackVariant) {
+                    unresolvedItems.push({ ...baseItem, type: 'configurable' });
+                    return { ...baseItem, type: 'configurable' };
+                }
+
+                autoResolvedCount += 1;
+                return applyBundleItemVariantDisplay({ ...baseItem, type: 'configurable' }, fallbackVariant);
+            }),
+        }));
+
+        if (autoResolvedCount > 0 || unresolvedItems.length > 0) {
+            setBundleOptions(resolvedOptions);
+        }
+
+        return {
+            nextOptions: resolvedOptions,
+            compositeItems: flattenBundleOptionsToCompositeItems(resolvedOptions),
+            unresolvedItems,
+            autoResolvedCount,
+        };
     };
 
     const localSkuValidation = useMemo(() => {
@@ -6584,8 +6794,37 @@ const ProductForm = () => {
             });
             return;
         }
+        let submitCompositeItems = compositeItemsForPricing;
+        let submitCompositeSumPrice = compositeSumPrice;
+
+        if (formData.type === 'bundle') {
+            setIsSaving(true);
+            setSaveStatusText('Đang kiểm tra biến thể bundle...');
+
+            try {
+                const resolvedBundleSubmit = await resolveBundleOptionsForSubmit();
+                submitCompositeItems = resolvedBundleSubmit.compositeItems;
+                submitCompositeSumPrice = calculateCompositeItemsTotal(submitCompositeItems);
+
+                if (resolvedBundleSubmit.autoResolvedCount > 0) {
+                    showToast({
+                        message: `Đã tự chọn biến thể cho ${resolvedBundleSubmit.autoResolvedCount} item bundle còn thiếu.`,
+                        type: 'info',
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to resolve bundle variants before submit', error);
+                setIsSaving(false);
+                showToast({
+                    message: 'Không thể kiểm tra biến thể bundle. Vui lòng thử lưu lại.',
+                    type: 'error',
+                });
+                return;
+            }
+        }
+
         const missingBundleVariantItems = formData.type === 'bundle'
-            ? compositeItemsForPricing.filter((item) => item?.type === 'configurable' && !item?.variant_id)
+            ? submitCompositeItems.filter((item) => item?.type === 'configurable' && !item?.variant_id)
             : [];
         if (missingBundleVariantItems.length > 0) {
             setIsSaving(false);
@@ -6649,81 +6888,108 @@ const ProductForm = () => {
                 }
             }
 
-            const submitData = new FormData();
             const shouldAutoSumCompositePrice = ['grouped', 'bundle'].includes(formData.type) && formData.price_type === 'sum';
             const duplicateDefaults = duplicateDraftDefaultsRef.current || { parentSku: '', variantSkus: [] };
             const orderedDuplicateVariants = isDuplicate ? getOrderedSuperLinkVariants(duplicateCloneData) : [];
+            const groupedItemsSubmitPayload = ['grouped', 'bundle'].includes(formData.type)
+                ? buildCompositeItemsSubmitPayload(submitCompositeItems)
+                : [];
+            const hasVariantImageUploads = formData.type === 'configurable'
+                && variants.some((variant) => isFileLikeValue(variant?.image_file));
+            const hasProductImageUploads = (isEdit || isDuplicate)
+                ? imageDraftPayload.files.length > 0
+                : images.some((image) => isFileLikeValue(image?.file));
+            const useMultipartSubmit = hasProductImageUploads || hasVariantImageUploads;
+            const submitData = useMultipartSubmit ? new FormData() : {};
+            const appendSubmitValue = (key, value) => {
+                if (submitData instanceof FormData) {
+                    submitData.append(key, typeof value === 'boolean' ? (value ? '1' : '0') : value);
+                } else {
+                    submitData[key] = value;
+                }
+            };
+            const setSubmitValue = (key, value) => {
+                if (submitData instanceof FormData) {
+                    submitData.set(key, typeof value === 'boolean' ? (value ? '1' : '0') : value);
+                } else {
+                    submitData[key] = value;
+                }
+            };
+            const appendSubmitArray = (key, values) => {
+                const normalizedValues = Array.isArray(values) ? values : [];
+                if (submitData instanceof FormData) {
+                    normalizedValues.forEach((value) => appendSubmitValue(`${key}[]`, value));
+                } else if (normalizedValues.length > 0) {
+                    submitData[key] = [...normalizedValues];
+                }
+            };
+            const setGroupedItemsPayload = () => {
+                if (!['grouped', 'bundle'].includes(formData.type)) {
+                    return;
+                }
+
+                if (submitData instanceof FormData) {
+                    submitData.append('grouped_items_json', JSON.stringify(groupedItemsSubmitPayload));
+                } else {
+                    submitData.grouped_items = groupedItemsSubmitPayload;
+                }
+            };
 
             // Build FormData from state
             Object.entries(formData).forEach(([key, val]) => {
                 if (key === 'custom_attributes') {
-                    Object.entries(val).forEach(([attrId, attrVal]) => {
-                        if (Array.isArray(attrVal)) {
-                            attrVal.forEach(av => submitData.append(`custom_attributes[${attrId}][]`, av));
-                        } else {
-                            submitData.append(`custom_attributes[${attrId}]`, attrVal);
-                        }
-                    });
+                    if (submitData instanceof FormData) {
+                        Object.entries(val).forEach(([attrId, attrVal]) => {
+                            if (Array.isArray(attrVal)) {
+                                attrVal.forEach(av => submitData.append(`custom_attributes[${attrId}][]`, av));
+                            } else {
+                                submitData.append(`custom_attributes[${attrId}]`, attrVal);
+                            }
+                        });
+                    } else if (val && typeof val === 'object') {
+                        submitData.custom_attributes = { ...val };
+                    }
                 } else if (key === 'super_attribute_ids') {
-                    selectedSuperAttributes.forEach(attr => submitData.append('super_attribute_ids[]', attr.id));
+                    appendSubmitArray('super_attribute_ids', selectedSuperAttributes.map((attr) => attr.id));
                 } else if (key === 'linked_product_ids') {
                     if (selectedProductsData.length === 0) {
                         // Gửi tham số tường minh để Backend thực hiện detach/sync
-                        submitData.append('clear_linked_products', '1');
+                        appendSubmitValue('clear_linked_products', true);
                     } else {
-                        selectedProductsData.forEach((v, idx) => {
-                            submitData.append(`linked_product_ids[${idx}][id]`, v.id);
-                            if (v.option_title || (v.pivot && v.pivot.option_title)) {
-                                submitData.append(`linked_product_ids[${idx}][option_title]`, v.option_title || v.pivot.option_title);
+                        const linkedProductsPayload = selectedProductsData.map((v) => {
+                            const payload = { id: v.id };
+                            const optionTitle = v.option_title || v.pivot?.option_title || '';
+                            if (optionTitle) {
+                                payload.option_title = optionTitle;
                             }
+                            return payload;
                         });
+
+                        if (submitData instanceof FormData) {
+                            linkedProductsPayload.forEach((linkedProduct, idx) => {
+                                submitData.append(`linked_product_ids[${idx}][id]`, linkedProduct.id);
+                                if (linkedProduct.option_title) {
+                                    submitData.append(`linked_product_ids[${idx}][option_title]`, linkedProduct.option_title);
+                                }
+                            });
+                        } else {
+                            submitData.linked_product_ids = linkedProductsPayload;
+                        }
                     }
                 } else if (key === 'grouped_items') {
-                    const itemsToSubmit = compositeItemsForPricing;
-                    itemsToSubmit.forEach((item, idx) => {
-                        submitData.append(`grouped_items[${idx}][id]`, item.product_id ?? item.id);
-                        submitData.append(`grouped_items[${idx}][quantity]`, item.quantity);
-                        submitData.append(`grouped_items[${idx}][is_required]`, item.is_required ? '1' : '0');
-                        submitData.append(`grouped_items[${idx}][option_title]`, item.option_title || '');
-                        if (item.bundle_option_uid) {
-                            submitData.append(`grouped_items[${idx}][bundle_option_uid]`, item.bundle_option_uid);
-                        }
-                        const normalizedOptionImageUrl = normalizePersistedImageUrl(item.option_image_url);
-                        if (normalizedOptionImageUrl) {
-                            submitData.append(`grouped_items[${idx}][option_image_url]`, normalizedOptionImageUrl);
-                        }
-                        if (item.option_post_id) {
-                            submitData.append(`grouped_items[${idx}][option_post_id]`, item.option_post_id);
-                        }
-                        if (item.option_video_url) {
-                            submitData.append(`grouped_items[${idx}][option_video_url]`, item.option_video_url);
-                        }
-                        if (item.option_video_source) {
-                            submitData.append(`grouped_items[${idx}][option_video_source]`, item.option_video_source);
-                        }
-                        submitData.append(`grouped_items[${idx}][is_default]`, item.is_default ? '1' : '0');
-                        submitData.append(`grouped_items[${idx}][price]`, item.price || 0);
-                        if (item.cost_price !== undefined && item.cost_price !== null) {
-                            const normalizedGroupCost = normalizeRoundedImportCostNumber(item.cost_price);
-                            if (normalizedGroupCost !== null) {
-                                submitData.append(`grouped_items[${idx}][cost_price]`, normalizedGroupCost);
-                            }
-                        }
-                        if (item.variant_id) {
-                            submitData.append(`grouped_items[${idx}][variant_id]`, item.variant_id);
-                        }
-                    });
+                    setGroupedItemsPayload();
                 } else if (key === 'video_urls') {
-                    submitData.append(key, JSON.stringify(normalizeProductVideoItems(val, formData.video_url)));
+                    const videoPayload = normalizeProductVideoItems(val, formData.video_url);
+                    appendSubmitValue(key, submitData instanceof FormData ? JSON.stringify(videoPayload) : videoPayload);
                 } else if (key === 'specifications') {
-                    submitData.append(key, JSON.stringify(normalizeSpecificationRows(val)));
+                    appendSubmitValue(key, JSON.stringify(normalizeSpecificationRows(val)));
                 } else if (key === 'additional_info') {
-                    submitData.append(key, JSON.stringify(normalizeAdditionalInfoRows(val)));
+                    appendSubmitValue(key, JSON.stringify(normalizeAdditionalInfoRows(val)));
                 } else if (key === 'supplier_ids') {
                     if (Array.isArray(val) && val.length > 0) {
-                        val.forEach((supplierId) => submitData.append('supplier_ids[]', supplierId));
+                        appendSubmitArray('supplier_ids', val);
                     } else {
-                        submitData.append('clear_supplier_ids', '1');
+                        appendSubmitValue('clear_supplier_ids', true);
                     }
                 } else if (key === 'stock_quantity') {
                     const normalizedCurrentStock = normalizeStockQuantityComparableValue(val);
@@ -6731,20 +6997,20 @@ const ProductForm = () => {
                         normalizedCurrentStock !== ''
                         && normalizedCurrentStock !== initialStockQuantityRef.current
                     ) {
-                        submitData.append(key, String(val).trim());
+                        appendSubmitValue(key, String(val).trim());
                     }
                 } else if (Array.isArray(val)) {
-                    val.forEach(v => submitData.append(`${key}[]`, v));
+                    appendSubmitArray(key, val);
                 } else if (typeof val === 'boolean') {
-                    submitData.append(key, val ? '1' : '0');
+                    appendSubmitValue(key, val);
                 } else if (val !== '' && val !== null && val !== undefined) {
                     if (key === 'expected_cost' || key === 'cost_price') {
                         const normalizedValue = normalizeRoundedImportCostNumber(val);
                         if (normalizedValue !== null) {
-                            submitData.append(key, normalizedValue);
+                            appendSubmitValue(key, normalizedValue);
                         }
                     } else if (key === 'description') {
-                        submitData.append(key, processVideoLinks(val));
+                        appendSubmitValue(key, processVideoLinks(val));
                     } else if (isDuplicate && key === 'sku') {
                         const normalizedDraftSku = normalizeSkuSeed(val);
                         const normalizedDefaultSku = normalizeSkuSeed(duplicateDefaults.parentSku);
@@ -6756,36 +7022,46 @@ const ProductForm = () => {
                             : normalizeSkuDraft(val);
 
                         if (resolvedSku) {
-                            submitData.append(key, resolvedSku);
+                            appendSubmitValue(key, resolvedSku);
                         }
                     } else {
-                        submitData.append(key, val);
+                        appendSubmitValue(key, val);
                     }
                 }
             });
 
             if (Array.isArray(formData.category_ids) && formData.category_ids.length > 0) {
-                submitData.set('category_id', formData.category_ids[0]);
+                setSubmitValue('category_id', formData.category_ids[0]);
             } else if (isEdit || isDuplicate) {
-                submitData.append('clear_category_ids', '1');
+                appendSubmitValue('clear_category_ids', true);
             }
 
             if (shouldAutoSumCompositePrice) {
-                submitData.set('price', String(compositeSumPrice));
+                setSubmitValue('price', String(submitCompositeSumPrice));
             }
 
             // Add variants if configurable
             if (formData.type === 'configurable') {
+                const variantsPayload = [];
+
                 variants.forEach((v, idx) => {
                     const duplicateVariant = orderedDuplicateVariants[idx] || null;
+                    const variantPayload = {};
+                    const setVariantValue = (field, value) => {
+                        if (submitData instanceof FormData) {
+                            submitData.append(`variants[${idx}][${field}]`, value);
+                        } else {
+                            variantPayload[field] = value;
+                        }
+                    };
 
                     if (isDuplicate) {
                         if (duplicateVariant?.id) {
-                            submitData.append(`variants[${idx}][id]`, duplicateVariant.id);
+                            setVariantValue('id', duplicateVariant.id);
                         }
                     } else if (v.id && !v.id.toString().startsWith('new_') && !v.id.toString().startsWith('manual_')) {
                         // If variant already has an ID, send it for update
-                        submitData.append(`variants[${idx}][id]`, v.id);
+                        setVariantValue('id', v.id);
                     }
 
                     const normalizedVariantDraftSku = normalizeSkuSeed(v?.sku);
@@ -6797,38 +7073,47 @@ const ProductForm = () => {
                         ? (duplicateVariant?.sku || normalizeSkuDraft(v.sku))
                         : normalizeSkuDraft(v.sku);
 
-                    submitData.append(`variants[${idx}][sku]`, resolvedVariantSku);
-                    submitData.append(`variants[${idx}][name]`, v.label); // Send label as name
-                    submitData.append(`variants[${idx}][price]`, v.price);
+                    setVariantValue('sku', resolvedVariantSku);
+                    setVariantValue('name', v.label); // Send label as name
+                    setVariantValue('price', v.price);
                     const normalizedVariantExpectedCost = normalizeRoundedImportCostNumber(v.expected_cost);
-                    submitData.append(`variants[${idx}][expected_cost]`, normalizedVariantExpectedCost ?? '');
-                    submitData.append(`variants[${idx}][weight]`, v.weight || '');
-                    submitData.append(`variants[${idx}][inventory_unit_id]`, v.inventory_unit_id || formData.inventory_unit_id || '');
-                    submitData.append(`variants[${idx}][status]`, isActiveVariantDraft(v) ? '1' : '0');
+                    setVariantValue('expected_cost', normalizedVariantExpectedCost ?? '');
+                    setVariantValue('weight', v.weight || '');
+                    setVariantValue('inventory_unit_id', v.inventory_unit_id || formData.inventory_unit_id || '');
+                    setVariantValue('status', submitData instanceof FormData ? (isActiveVariantDraft(v) ? '1' : '0') : isActiveVariantDraft(v));
 
-                    if (v.image_file) {
+                    if (submitData instanceof FormData && v.image_file) {
                         submitData.append(`variants[${idx}][image]`, v.image_file);
                     } else if (v.library_image_id) {
-                        submitData.append(`variants[${idx}][library_image_id]`, v.library_image_id);
+                        setVariantValue('library_image_id', v.library_image_id);
                     }
                     if (v.image_reference_url) {
-                        submitData.append(`variants[${idx}][image_reference_url]`, v.image_reference_url);
+                        setVariantValue('image_reference_url', v.image_reference_url);
                     }
                     if (v.remove_image) {
-                        submitData.append(`variants[${idx}][remove_image]`, 'true');
+                        setVariantValue('remove_image', submitData instanceof FormData ? 'true' : true);
                     }
 
-                    Object.entries(v.attributes).forEach(([attrId, attrVal]) => {
-                        submitData.append(`variants[${idx}][attributes][${attrId}]`, attrVal);
-                    });
+                    if (submitData instanceof FormData) {
+                        Object.entries(v.attributes).forEach(([attrId, attrVal]) => {
+                            submitData.append(`variants[${idx}][attributes][${attrId}]`, attrVal);
+                        });
+                    } else {
+                        variantPayload.attributes = { ...v.attributes };
+                        variantsPayload.push(variantPayload);
+                    }
                 });
+
+                if (!(submitData instanceof FormData)) {
+                    submitData.variants = variantsPayload;
+                }
             }
 
             if (isEdit || isDuplicate) {
                 appendProductImageSubmissionPayload(submitData, imageDraftPayload);
             } else {
                 images.forEach((img) => {
-                    if (img.file) submitData.append('images[]', img.file);
+                    if (img.file && submitData instanceof FormData) submitData.append('images[]', img.file);
                 });
             }
 

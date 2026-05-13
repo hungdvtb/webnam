@@ -188,7 +188,13 @@ class GoogleMerchantController extends Controller
 
         if (!empty($validated['all'])) {
             $query = Product::query()
-                ->where('status', true)
+                ->where(function ($productQuery) {
+                    $productQuery
+                        ->where('status', true)
+                        ->orWhereNotNull('google_merchant_offer_id')
+                        ->orWhereNotNull('google_merchant_product_input_name')
+                        ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                })
                 ->orderBy('id');
 
             $accountId = $this->resolveAccountId($request);

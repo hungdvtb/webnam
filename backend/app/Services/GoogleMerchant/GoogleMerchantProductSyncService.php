@@ -197,7 +197,6 @@ class GoogleMerchantProductSyncService
         $additionalImages = $this->resolveAdditionalImageUrls($product, $imageLink);
         $regularPrice = $this->resolveRegularPrice($product);
         $salePrice = $this->resolveSalePrice($product, $regularPrice);
-        $brand = $this->resolveBrand($product, $settings);
         $googleProductCategory = $this->resolveGoogleProductCategory($product, $settings);
         $productTypes = $this->resolveProductTypes($product);
 
@@ -237,10 +236,6 @@ class GoogleMerchantProductSyncService
 
         if ($salePrice !== null) {
             $attributes['salePrice'] = $this->pricePayload($salePrice, $settings);
-        }
-
-        if ($brand !== '') {
-            $attributes['brand'] = $brand;
         }
 
         if ($googleProductCategory !== '') {
@@ -517,9 +512,8 @@ class GoogleMerchantProductSyncService
             return 'delete';
         }
 
-        $isInactive = !$this->isProductSellable($product);
-        if ($isInactive) {
-            return ($settings['inactive_action'] ?? 'out_of_stock') === 'delete' ? 'delete' : 'out_of_stock';
+        if (!$this->isProductBusinessActive($product)) {
+            return 'delete';
         }
 
         return 'upsert';
@@ -738,37 +732,16 @@ class GoogleMerchantProductSyncService
 
     private function resolveAvailability(Product $product): string
     {
-        return $this->isProductSellable($product) ? 'IN_STOCK' : 'OUT_OF_STOCK';
+        return 'IN_STOCK';
     }
 
-    private function isProductSellable(Product $product): bool
+    private function isProductBusinessActive(Product $product): bool
     {
         if (method_exists($product, 'trashed') && $product->trashed()) {
             return false;
         }
 
-        if (!$product->status) {
-            return false;
-        }
-
-        return ((int) $product->stock_quantity) > 0;
-    }
-
-    private function resolveBrand(Product $product, array $settings): string
-    {
-        $attributeBrand = $this->productAttributeValue($product, ['brand', 'thuong_hieu', 'thuong hieu']);
-        if ($attributeBrand !== '') {
-            return $this->cleanText($attributeBrand, 70);
-        }
-
-        $supplierName = $product->relationLoaded('supplier')
-            ? trim((string) $product->supplier?->name)
-            : '';
-        if ($supplierName !== '') {
-            return $this->cleanText($supplierName, 70);
-        }
-
-        return $this->cleanText((string) ($settings['default_brand'] ?? ''), 70);
+        return (bool) $product->status;
     }
 
     private function resolveGoogleProductCategory(Product $product, array $settings): string

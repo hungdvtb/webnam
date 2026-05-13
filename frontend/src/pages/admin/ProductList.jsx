@@ -3524,7 +3524,7 @@ const ProductList = () => {
 
     const handleSyncAllGoogleMerchant = async () => {
         if (isTrashView) return;
-        if (!window.confirm('Đồng bộ toàn bộ sản phẩm đang bán lên Google Merchant?')) return;
+        if (!window.confirm('Đồng bộ sản phẩm đang bán và xóa khỏi Merchant các sản phẩm tạm ngừng đã từng đồng bộ?')) return;
         setSyncingGoogleMerchant(true);
         try {
             const response = await googleMerchantApi.syncProducts({ all: true });

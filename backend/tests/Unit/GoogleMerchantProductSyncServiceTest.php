@@ -36,7 +36,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
             'description' => '<p>Bo do tho gom su Bat Trang.</p>',
             'price' => 250000,
             'sku' => 'GDT-001',
-            'stock_quantity' => 5,
+            'stock_quantity' => 0,
             'status' => true,
         ]);
         $product->id = 123;
@@ -61,10 +61,27 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
         $this->assertSame('vi', $payload['contentLanguage']);
         $this->assertSame('VN', $payload['feedLabel']);
         $this->assertSame('Bo do tho men lam', $payload['productAttributes']['title']);
+        $this->assertSame('Bo do tho gom su Bat Trang.', $payload['productAttributes']['description']);
+        $this->assertArrayNotHasKey('brand', $payload['productAttributes']);
         $this->assertSame('https://gomdaithanh.com/san-pham/bo-do-tho-men-lam', $payload['productAttributes']['link']);
         $this->assertSame('https://cdn.gomdaithanh.com/products/gdt-001.jpg', $payload['productAttributes']['imageLink']);
         $this->assertSame('IN_STOCK', $payload['productAttributes']['availability']);
         $this->assertSame('250000000000', $payload['productAttributes']['price']['amountMicros']);
         $this->assertSame('VND', $payload['productAttributes']['price']['currencyCode']);
+    }
+
+    public function test_inactive_products_resolve_to_delete_action(): void
+    {
+        $product = new Product([
+            'status' => false,
+        ]);
+        $product->id = 123;
+        $product->exists = true;
+
+        $service = app(GoogleMerchantProductSyncService::class);
+        $method = new \ReflectionMethod($service, 'resolveSyncAction');
+        $method->setAccessible(true);
+
+        $this->assertSame('delete', $method->invoke($service, $product, [], null));
     }
 }

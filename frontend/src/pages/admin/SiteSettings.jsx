@@ -81,7 +81,7 @@ const defaultGoogleMerchantSettings = {
     product_url_base: 'https://gomdaithanh.com',
     default_brand: 'Gom Dai Thanh',
     default_google_product_category: '',
-    inactive_action: 'out_of_stock',
+    inactive_action: 'delete',
     has_credentials: false,
     has_service_account_json: false,
     has_oauth_client_secret: false,
@@ -679,6 +679,7 @@ const SiteSettings = () => {
         const payload = {
             ...googleMerchantSettings,
             account_id: activeAccountId,
+            inactive_action: 'delete',
         };
 
         if (!googleMerchantSettings.service_account_manifest_file) {
@@ -2399,14 +2400,9 @@ const SiteSettings = () => {
                                             <input name="product_url_base" value={googleMerchantSettings.product_url_base || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
                                         </div>
                                         <div>
-                                            <label className={labelClasses}>Thương hiệu mặc định</label>
-                                            <input name="default_brand" value={googleMerchantSettings.default_brand || ''} onChange={handleGoogleMerchantChange} className={inputClasses} />
-                                        </div>
-                                        <div>
-                                            <label className={labelClasses}>Ngừng bán</label>
-                                            <select name="inactive_action" value={googleMerchantSettings.inactive_action || 'out_of_stock'} onChange={handleGoogleMerchantChange} className={inputClasses}>
-                                                <option value="out_of_stock">Cập nhật HẾT HÀNG</option>
-                                                <option value="delete">Xóa product input</option>
+                                            <label className={labelClasses}>Tạm ngừng kinh doanh</label>
+                                            <select name="inactive_action" value="delete" disabled className={`${inputClasses} bg-stone-50 text-primary/60`}>
+                                                <option value="delete">Không đẩy / xóa khỏi Merchant</option>
                                             </select>
                                         </div>
                                     </div>

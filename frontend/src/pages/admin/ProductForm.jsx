@@ -18,7 +18,7 @@ import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
 import {
-    copyBundleOptionToTop,
+    copyBundleOptionBelowSource,
     createBundleItemEntryId,
     createBundleOptionId,
 } from '../../utils/bundleOptions';
@@ -6001,9 +6001,10 @@ const ProductForm = () => {
     };
 
     const handleCopyBundleOption = (optionId) => {
-        const { copiedOption, nextOptions } = copyBundleOptionToTop(bundleOptions, optionId, {
+        const { copiedOption, nextOptions } = copyBundleOptionBelowSource(bundleOptions, optionId, {
             createOptionId: createBundleOptionId,
             createEntryId: createBundleItemEntryId,
+            createOptionUid: createBundleOptionId,
         });
 
         if (!copiedOption) {
@@ -6018,7 +6019,7 @@ const ProductForm = () => {
         setBlogSearchQuery((prev) => ({ ...prev, [copiedOption.id]: '' }));
         setBlogResults((prev) => ({ ...prev, [copiedOption.id]: [] }));
         setIsSearchingBlog((prev) => ({ ...prev, [copiedOption.id]: false }));
-        showToast({ message: 'Đã nhân bản tùy chọn lên đầu danh sách.', type: 'success' });
+        showToast({ message: 'Đã copy tùy chọn ngay bên dưới tùy chọn gốc.', type: 'success' });
     };
 
     const closeBundleItemQuickSorter = useCallback(() => {

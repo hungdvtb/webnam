@@ -30,6 +30,39 @@ const TYPE_LABELS = PRODUCT_TYPE_META;
 const PRODUCT_DETAIL_PATH = '/san-pham';
 const PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY = 'product_management_persistent_state';
 const PRODUCT_MANAGEMENT_WORKING_STATE_KEY = 'product_management_working_state';
+const quantityFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 });
+
+function normalizeQuantityDraft(value) {
+    const rawValue = String(value ?? '').trimStart().replace(/,/g, '.');
+    const numericValue = rawValue.replace(/[^0-9.]/g, '');
+    if (!numericValue) {
+        return '';
+    }
+
+    const [integerPartRaw, ...decimalParts] = numericValue.split('.');
+    const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '') || (decimalParts.length ? '0' : '');
+    const decimalPart = decimalParts.join('').slice(0, 3);
+
+    if (decimalParts.length > 0) {
+        return `${integerPart || '0'}.${decimalPart}`;
+    }
+
+    return integerPart;
+}
+
+function parseQuantityNumber(value, fallback = null) {
+    const normalizedValue = normalizeQuantityDraft(value);
+    if (!normalizedValue || normalizedValue === '.') {
+        return fallback;
+    }
+
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) ? Math.round(numericValue * 1000) / 1000 : fallback;
+}
+
+function formatQuantityValue(value) {
+    return quantityFormatter.format(Number(value || 0));
+}
 
 function readStorageJson(storage, key) {
     if (!storage) {
@@ -3505,11 +3538,13 @@ const ProductList = () => {
         if (selectedIds.length === 0 || isTrashView) return;
         setSyncingGoogleMerchant(true);
         try {
-            const response = await googleMerchantApi.syncProducts({ ids: selectedIds });
+            const response = await googleMerchantApi.syncProducts({ ids: selectedIds, queue: true });
             const failed = Number(response.data?.failed || 0);
             setNotification({
                 type: failed > 0 ? 'error' : 'success',
-                message: failed > 0
+                message: response.data?.status === 'queued'
+                    ? `Đã đưa ${response.data?.queued || selectedIds.length} sản phẩm vào hàng đợi Google Merchant.`
+                    : failed > 0
                     ? `Đồng bộ Google Merchant xong, lỗi ${failed} sản phẩm.`
                     : `Đã đồng bộ ${selectedIds.length} sản phẩm lên Google Merchant.`,
             });
@@ -3891,9 +3926,9 @@ const ProductList = () => {
             if (rawStockQuantity === '') {
                 delete basic_info.stock_quantity;
             } else {
-                const normalizedStockQuantity = Number(rawStockQuantity);
-                if (!Number.isInteger(normalizedStockQuantity) || normalizedStockQuantity < 0) {
-                    setNotification({ type: 'error', message: 'Tồn kho phải là số nguyên không âm.' });
+                const normalizedStockQuantity = parseQuantityNumber(rawStockQuantity);
+                if (normalizedStockQuantity === null || normalizedStockQuantity < 0) {
+                    setNotification({ type: 'error', message: 'Tồn kho phải là số hợp lệ không âm.' });
                     setTimeout(() => setNotification(null), 4000);
                     return;
                 }
@@ -6341,7 +6376,7 @@ const ProductList = () => {
                                                 if (col.id === 'stock') return (
                                                     <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 font-black text-primary group/cell">
                                                         <div className="flex items-center justify-between">
-                                                            <span>{getDisplayStock(p)}</span>
+                                                            <span>{formatQuantityValue(getDisplayStock(p))}</span>
                                                             <button onClick={(e) => handleCopy(String(getDisplayStock(p)), 'số lượng tồn kho', e, `${p.id}-stock`)} className={`${copiedText === `${p.id}-stock` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép tồn kho">
                                                                 <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-stock` ? 'check' : 'content_copy'}</span>
                                                             </button>
@@ -7171,11 +7206,12 @@ const ProductList = () => {
                                     <div className="space-y-1">
                                         <label className="text-[13px] font-bold text-primary/80">Tồn kho</label>
                                         <input 
-                                            type="number" 
+                                            type="text"
+                                            inputMode="decimal"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="Số lượng"
                                             value={bulkUpdateData.stock_quantity ?? ''} 
-                                            onChange={e => setBulkUpdateData({...bulkUpdateData, stock_quantity: e.target.value})}
+                                            onChange={e => setBulkUpdateData({...bulkUpdateData, stock_quantity: normalizeQuantityDraft(e.target.value)})}
                                         />
                                     </div>
                                     <div className="space-y-1">

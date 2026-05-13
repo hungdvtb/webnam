@@ -21,6 +21,7 @@ use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\SiteSetting;
 use App\Support\ImportCostRounding;
+use App\Support\InventoryQuantity;
 use App\Support\OrderBootstrapCache;
 use App\Support\OrderCodAdjustmentSystemNote;
 use App\Support\OrderExchangeRefundSystemNote;
@@ -869,7 +870,7 @@ class OrderController extends Controller
         $currentCostTotal = 0;
 
         $order->items->each(function (OrderItem $item) use (&$itemRevenue, &$currentCostTotal) {
-            $quantity = (int) ($item->quantity ?? 0);
+            $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
             $unitPrice = round((float) ($item->price ?? 0), 2);
             $orderedCurrentCostPrice = $this->resolveCurrentProductCost($item->product, $item->cost_price);
             $currentCostPrice = $this->resolveCurrentProductCost($item->actualProduct ?: $item->product, $item->cost_price);
@@ -1889,7 +1890,7 @@ class OrderController extends Controller
     {
         return collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
-            ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
+            ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0) && !empty($item['product_id']))
             ->values()
             ->map(function (array $item, int $index) {
                 $item['sort_order'] = $index + 1;
@@ -1951,7 +1952,7 @@ class OrderController extends Controller
             if ($actualProductId > 0) {
                 $actualProduct = $products->get($actualProductId);
             }
-            $quantity = (int) $item['quantity'];
+            $quantity = InventoryQuantity::normalize($item['quantity']);
             $price = round((float) ($item['price'] ?? $product->price ?? 0), 2);
             $costPrice = $actualProduct
                 ? ImportCostRounding::roundUnitCost($actualProduct->cost_price ?? $actualProduct->expected_cost ?? $item['cost_price'] ?? 0)
@@ -1983,7 +1984,7 @@ class OrderController extends Controller
 
         return [
             'items' => $createdItems,
-            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * (int) $row->quantity), 2),
+            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * InventoryQuantity::normalize($row->quantity)), 2),
             'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->cost_total), 2),
             'profit_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->profit_total), 2),
         ];
@@ -2117,10 +2118,10 @@ class OrderController extends Controller
         $sentQuantities = $order->items
             ->reduce(function (Collection $summary, OrderItem $item) {
                 $productId = $this->supplementLimitProductId($item);
-                $quantity = max(0, (int) ($item->quantity ?? 0));
+                $quantity = max(0, InventoryQuantity::normalize($item->quantity ?? 0));
 
                 if ($productId > 0 && $quantity > 0) {
-                    $summary->put($productId, ((int) $summary->get($productId, 0)) + $quantity);
+                    $summary->put($productId, InventoryQuantity::normalize($summary->get($productId, 0)) + $quantity);
                 }
 
                 return $summary;
@@ -2132,11 +2133,11 @@ class OrderController extends Controller
 
         $requestedQuantities = $normalizedItems
             ->groupBy(fn ($item) => (int) ($item['product_id'] ?? 0))
-            ->map(fn (Collection $items) => (int) $items->sum(fn ($item) => max(0, (int) ($item['quantity'] ?? 0))));
+            ->map(fn (Collection $items) => (float) $items->sum(fn ($item) => max(0, InventoryQuantity::normalize($item['quantity'] ?? 0))));
 
         $violations = [];
         foreach ($requestedQuantities as $productId => $quantity) {
-            $sentQuantity = (int) $sentQuantities->get((int) $productId, 0);
+            $sentQuantity = InventoryQuantity::normalize($sentQuantities->get((int) $productId, 0));
             if ($sentQuantity <= 0 || $quantity <= $sentQuantity) {
                 continue;
             }
@@ -2155,7 +2156,7 @@ class OrderController extends Controller
     {
         $normalizedItems = collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
-            ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
+            ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0) && !empty($item['product_id']))
             ->values();
 
         if (!$this->orderSupplementItemsTableExists()) {
@@ -2206,7 +2207,7 @@ class OrderController extends Controller
         foreach ($normalizedItems as $item) {
             /** @var Product $product */
             $product = $products->get((int) $item['product_id']);
-            $quantity = (int) ($item['quantity'] ?? 0);
+            $quantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
             $price = round((float) ($item['price'] ?? $product->current_price ?? $product->price ?? 0), 2);
             $costPrice = ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
             $totalPrice = round($price * $quantity, 2);
@@ -2233,7 +2234,7 @@ class OrderController extends Controller
         ];
     }
 
-    private function resolveStoredImportCostFromOrderLine($costPrice, $costTotal, int $quantity): float
+    private function resolveStoredImportCostFromOrderLine($costPrice, $costTotal, int|float $quantity): float
     {
         if ($costPrice !== null && $costPrice !== '') {
             return ImportCostRounding::roundUnitCost((float) $costPrice);
@@ -2334,7 +2335,7 @@ class OrderController extends Controller
         $updatedItems = 0;
 
         foreach ($order->items as $item) {
-            $quantity = (int) ($item->quantity ?? 0);
+            $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
             $lineRevenue = round((float) ($item->price ?? 0) * $quantity, 2);
             $fallbackCostPrice = $this->resolveStoredImportCostFromOrderLine(
                 $item->cost_price,
@@ -2374,7 +2375,7 @@ class OrderController extends Controller
 
         if ($this->orderSupplementItemsTableExists()) {
             foreach ($order->supplementItems as $item) {
-                $quantity = (int) ($item->quantity ?? 0);
+                $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
                 $linePrice = $item->total_price !== null && $item->total_price !== ''
                     ? round((float) $item->total_price, 2)
                     : round((float) ($item->price ?? 0) * $quantity, 2);
@@ -2929,7 +2930,7 @@ class OrderController extends Controller
         $order->loadMissing(['items.product:id,sku,name,price']);
 
         $invalidItem = $order->items->first(function (OrderItem $item) {
-            return (int) ($item->quantity ?? 0) > 0 && (int) ($item->product_id ?? 0) <= 0;
+            return InventoryQuantity::positive($item->quantity ?? 0) && (int) ($item->product_id ?? 0) <= 0;
         });
 
         if ($invalidItem instanceof OrderItem) {
@@ -2942,15 +2943,15 @@ class OrderController extends Controller
 
         $items = $order->items
             ->filter(function (OrderItem $item) {
-                return (int) ($item->product_id ?? 0) > 0 && (int) ($item->quantity ?? 0) > 0;
+                return (int) ($item->product_id ?? 0) > 0 && InventoryQuantity::positive($item->quantity ?? 0);
             })
             ->groupBy(fn (OrderItem $item) => (int) $item->product_id)
             ->map(function (Collection $groupedItems, int $productId) {
                 /** @var OrderItem|null $firstItem */
                 $firstItem = $groupedItems->first();
-                $quantity = (int) $groupedItems->sum(fn (OrderItem $item) => (int) ($item->quantity ?? 0));
+                $quantity = InventoryQuantity::normalize($groupedItems->sum(fn (OrderItem $item) => InventoryQuantity::normalize($item->quantity ?? 0)));
                 $lineTotal = (float) $groupedItems->sum(function (OrderItem $item) {
-                    return round((float) ($item->price ?? 0) * (int) ($item->quantity ?? 0), 2);
+                    return round((float) ($item->price ?? 0) * InventoryQuantity::normalize($item->quantity ?? 0), 2);
                 });
                 $fallbackPrice = (float) ($firstItem?->price ?? $firstItem?->product?->price ?? 0);
                 $unitPrice = $quantity > 0
@@ -2963,7 +2964,7 @@ class OrderController extends Controller
                     'unit_price' => $unitPrice,
                 ];
             })
-            ->filter(fn (array $item) => (int) ($item['quantity'] ?? 0) > 0)
+            ->filter(fn (array $item) => InventoryQuantity::positive($item['quantity'] ?? 0))
             ->values()
             ->all();
 
@@ -3703,7 +3704,7 @@ class OrderController extends Controller
                         ->map(function (OrderItem $item) {
                             $productName = trim((string) ($item->product_name_snapshot ?: $item->product?->name ?: ('Sản phẩm #' . $item->product_id)));
                             $productSku = trim((string) ($item->product_sku_snapshot ?: $item->product?->sku ?: ''));
-                            $quantity = (int) $item->quantity;
+                            $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
                             $unitPrice = (float) $item->price;
 
                             return [
@@ -4322,7 +4323,7 @@ class OrderController extends Controller
             'notes' => 'nullable|string|max:5000',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
-            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.quantity' => 'nullable|numeric|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
         ]);
 
@@ -4371,7 +4372,7 @@ class OrderController extends Controller
             'notes' => 'nullable|string|max:5000',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.quantity' => 'nullable|numeric|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
             'items.*.product_name' => 'nullable|string|max:255',
             'items.*.product_sku' => 'nullable|string|max:120',
@@ -4410,7 +4411,7 @@ class OrderController extends Controller
             'notes' => 'nullable|string|max:5000',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'nullable|integer|min:0',
+            'items.*.quantity' => 'nullable|numeric|min:0',
             'items.*.notes' => 'nullable|string|max:1000',
             'items.*.product_name' => 'nullable|string|max:255',
             'items.*.product_sku' => 'nullable|string|max:120',
@@ -4435,7 +4436,7 @@ class OrderController extends Controller
             'return_status' => 'nullable|string|in:not_returned,returned',
             'supplement_items' => 'nullable|array',
             'supplement_items.*.product_id' => 'nullable|integer',
-            'supplement_items.*.quantity' => 'nullable|integer|min:0',
+            'supplement_items.*.quantity' => 'nullable|numeric|min:0',
             'supplement_items.*.price' => 'nullable|numeric',
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',
@@ -4446,7 +4447,7 @@ class OrderController extends Controller
         $orderType = $this->normalizeOrderType($validated['order_type'] ?? null);
         $regionType = (string) ($validated['region_type'] ?? 'new');
         $hasSupplementItems = collect((array) $request->input('supplement_items', []))
-            ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
+            ->contains(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0) && !empty($item['product_id']));
 
         $this->ensureRequestedOrderSchemaSupport($orderKind, $orderType, $hasSupplementItems);
 
@@ -4723,7 +4724,7 @@ class OrderController extends Controller
         $requestedOrderType = $this->normalizeOrderType($request->input('order_type', $order->order_type));
         $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
         $hasSupplementItems = collect((array) $request->input('supplement_items', []))
-            ->contains(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']));
+            ->contains(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0) && !empty($item['product_id']));
 
         $this->ensureRequestedOrderSchemaSupport($requestedKind, $requestedOrderType, $hasSupplementItems);
 
@@ -4870,7 +4871,7 @@ class OrderController extends Controller
             'return_status' => 'nullable|string|in:not_returned,returned',
             'supplement_items' => 'nullable|array',
             'supplement_items.*.product_id' => 'nullable|integer',
-            'supplement_items.*.quantity' => 'nullable|integer|min:0',
+            'supplement_items.*.quantity' => 'nullable|numeric|min:0',
             'supplement_items.*.price' => 'nullable|numeric',
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',

@@ -1159,6 +1159,48 @@ const parseQuantityNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const normalizeQuantityInputValue = (value) => {
+    const rawValue = String(value ?? '').trimStart().replace(/,/g, '.');
+    const numericValue = rawValue.replace(/[^0-9.]/g, '');
+    if (!numericValue) {
+        return '';
+    }
+
+    const [integerPartRaw, ...decimalParts] = numericValue.split('.');
+    const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '') || (decimalParts.length ? '0' : '');
+    const decimalPart = decimalParts.join('').slice(0, 3);
+
+    if (decimalParts.length > 0) {
+        return `${integerPart || '0'}.${decimalPart}`;
+    }
+
+    return integerPart;
+};
+const parseQuantityInputValue = (value, fallback = 0) => {
+    const normalizedValue = normalizeQuantityInputValue(value);
+    if (!normalizedValue || normalizedValue === '.') {
+        return fallback;
+    }
+
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+const nudgeQuantityInputValue = (value, delta, min = 1) => {
+    const fallbackValue = delta > 0 ? min - 1 : min + 1;
+    const currentValue = parseQuantityInputValue(value, fallbackValue);
+    const nextValue = delta > 0
+        ? Math.floor(currentValue) + 1
+        : Math.ceil(currentValue) - 1;
+    return normalizeQuantityInputValue(String(Math.max(min, nextValue)));
+};
+const handleQuantityInputKeyDown = (event, value, onCommit) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+        return;
+    }
+
+    event.preventDefault();
+    onCommit(nudgeQuantityInputValue(value, event.key === 'ArrowUp' ? 1 : -1));
+};
 const resolveMoneyValue = (...candidates) => {
     for (const candidate of candidates) {
         const normalizedValue = parseMoneyNumber(candidate);
@@ -1392,7 +1434,7 @@ const hasInventorySnapshot = (source) => {
         && snapshot.pending_export_quantity !== null
         && snapshot.available_to_sell !== null;
 };
-const formatOrderFormQuantity = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value) || 0);
+const formatOrderFormQuantity = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(Number(value) || 0);
 const buildAvailableToSellCellTitle = (source) => {
     const snapshot = resolveInventorySnapshot(source);
 
@@ -3208,19 +3250,33 @@ const OrderForm = () => {
             return refreshedMap;
         }
 
-        setFormData((prev) => ({
-            ...prev,
-            items: prev.items.map((item) => {
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => {
                 const latest = refreshedMap.get(getOrderItemEffectiveInventoryProductId(item));
                 if (!latest) return item;
+                const currentCostPrice = resolveRoundedImportCostValue(item.cost_price, 0);
+                const shouldHydrateCostPrice = currentCostPrice <= 0 && hasProductCostSnapshot(latest);
+                const nextCostPrice = shouldHydrateCostPrice
+                    ? resolveProductCostPrice(latest, currentCostPrice)
+                    : item.cost_price;
 
                 return {
                     ...item,
                     unit_name: resolveOrderUnitLabel(latest, item),
+                    cost_price: nextCostPrice,
+                    base_cost_price: shouldHydrateCostPrice
+                        ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
+                        : item.base_cost_price,
                     ...resolveInventorySnapshot(latest, item),
                 };
-            }),
-        }));
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
 
         setProducts((prev) => prev.map((product) => {
             const latest = refreshedMap.get(Number(product.id));
@@ -5786,10 +5842,15 @@ const OrderForm = () => {
                 product_id: item.product_id,
                 name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
                 sku: item.sku || item.product_sku || 'N/A',
-                unit_name: resolveOrderUnitLabel(item),
+                unit_name: resolveOrderUnitLabel(item, item?.product),
                 quantity: Number(item.quantity) || 1,
                 price: Number(item.price) || 0,
                 cost_price: resolveProductCostPrice(item),
+                base_cost_price: resolveProductCostPrice(item),
+                computed_stock: item.computed_stock,
+                pending_export_quantity: item.pending_export_quantity,
+                available_to_sell: item.available_to_sell,
+                category_id: item.category_id || item.product?.category_id,
                 options: item.options || {},
                 main_image: item.main_image || item.product_image || '',
                 notes: item.notes || '',
@@ -7826,7 +7887,7 @@ const OrderForm = () => {
                 </div>
             </div>
 
-            <form id="order-form" onSubmit={handleSubmit} className="grid grid-cols-1 gap-[10px] xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)] xl:items-start">
+            <form id="order-form" onSubmit={handleSubmit} noValidate className="grid grid-cols-1 gap-[10px] xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,0.95fr)] xl:items-start">
                 {/* Left Section: Product Management & Custom Attributes */}
                 <div className="flex max-w-full min-w-0 flex-col gap-[10px]">
                     <div className="bg-white border border-primary/10 p-4 shadow-sm rounded-sm">
@@ -8602,21 +8663,28 @@ const OrderForm = () => {
                                                             <div className="flex items-center gap-1">
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 1) - 1))}
+                                                                    onClick={() => updateItem(index, 'quantity', nudgeQuantityInputValue(item.quantity, -1))}
                                                                     className="inline-flex size-[30px] items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                                                                 >
                                                                     <span className="material-symbols-outlined text-[15px]">remove</span>
                                                                 </button>
                                                                 <input
                                                                     type="number"
-                                                                    inputMode="numeric"
+                                                                    inputMode="decimal"
+                                                                    min="1"
+                                                                    step="1"
                                                                     value={item.quantity}
-                                                                    onChange={(event) => updateItem(index, 'quantity', Math.max(1, parseInt(event.target.value, 10) || 1))}
+                                                                    onChange={(event) => updateItem(index, 'quantity', normalizeQuantityInputValue(event.target.value))}
+                                                                    onKeyDown={(event) => handleQuantityInputKeyDown(
+                                                                        event,
+                                                                        item.quantity,
+                                                                        (nextValue) => updateItem(index, 'quantity', nextValue)
+                                                                    )}
                                                                     className="h-[30px] w-full rounded-[11px] border border-primary/10 bg-white px-1.5 text-center text-[13px] font-black text-primary focus:border-primary/25 focus:outline-none"
                                                                 />
                                                                 <button
                                                                     type="button"
-                                                                    onClick={() => updateItem(index, 'quantity', Math.max(1, Number(item.quantity || 0) + 1))}
+                                                                    onClick={() => updateItem(index, 'quantity', nudgeQuantityInputValue(item.quantity, 1))}
                                                                     className="inline-flex size-[30px] items-center justify-center rounded-full border border-primary/10 bg-white text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
                                                                 >
                                                                     <span className="material-symbols-outlined text-[15px]">add</span>
@@ -9015,8 +9083,16 @@ const OrderForm = () => {
                                                                 <td key={colId} className="order-form-cell order-form-cell-tight border border-primary/10 text-center">
                                                                     <input
                                                                         type="number"
+                                                                        inputMode="decimal"
+                                                                        min="1"
+                                                                        step="1"
                                                                         value={item.quantity}
-                                                                        onChange={(e) => updateItem(index, 'quantity', parseInt(e.target.value) || 0)}
+                                                                        onChange={(e) => updateItem(index, 'quantity', normalizeQuantityInputValue(e.target.value))}
+                                                                        onKeyDown={(e) => handleQuantityInputKeyDown(
+                                                                            e,
+                                                                            item.quantity,
+                                                                            (nextValue) => updateItem(index, 'quantity', nextValue)
+                                                                        )}
                                                                         className="order-form-quantity-input w-full min-w-0 text-center bg-blue-50/50 border-none focus:bg-white focus:ring-1 focus:ring-blue-200 focus:outline-none font-bold rounded-sm shadow-inner text-slate-900"
                                                                     />
                                                                 </td>

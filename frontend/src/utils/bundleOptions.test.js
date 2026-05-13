@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import {
     cloneBundleOptionForCopy,
-    copyBundleOptionToTop,
+    copyBundleOptionBelowSource,
 } from './bundleOptions.js';
 
 const createSourceOption = () => ({
@@ -10,6 +10,9 @@ const createSourceOption = () => ({
     title: 'Bộ men lam',
     post_id: 88,
     post_title: 'Bài viết đi kèm',
+    image_url: 'https://example.com/option.jpg',
+    video_url: 'https://example.com/option.mp4',
+    video_source: 'custom',
     items: [
         {
             entry_id: 'entry-1',
@@ -76,12 +79,18 @@ runTest('cloneBundleOptionForCopy clones full option data but regenerates IDs', 
     const clonedOption = cloneBundleOptionForCopy(sourceOption, {
         createOptionId: () => `copied-option-${++optionIdCounter}`,
         createEntryId: () => `copied-entry-${++entryIdCounter}`,
+        createOptionUid: () => 'copied-option-uid',
     });
 
     assert.equal(clonedOption.id, 'copied-option-1');
-    assert.equal(clonedOption.title, sourceOption.title);
+    assert.equal(clonedOption.uid, 'copied-option-uid');
+    assert.equal(clonedOption.bundle_option_uid, 'copied-option-uid');
+    assert.equal(clonedOption.title, `Copy ${sourceOption.title}`);
     assert.equal(clonedOption.post_id, sourceOption.post_id);
     assert.equal(clonedOption.post_title, sourceOption.post_title);
+    assert.equal(clonedOption.image_url, sourceOption.image_url);
+    assert.equal(clonedOption.video_url, sourceOption.video_url);
+    assert.equal(clonedOption.video_source, sourceOption.video_source);
     assert.equal(clonedOption.items.length, 2);
 
     assert.deepEqual(
@@ -110,7 +119,7 @@ runTest('cloneBundleOptionForCopy clones full option data but regenerates IDs', 
     assert.deepEqual(clonedOption.items[0].metadata, sourceOption.items[0].metadata);
 });
 
-runTest('copyBundleOptionToTop inserts the copied option at the beginning and keeps source untouched', () => {
+runTest('copyBundleOptionBelowSource inserts the copied option below the source and keeps source untouched', () => {
     const sourceOption = createSourceOption();
     const options = [
         { id: 'existing-top', title: 'Tùy chọn hiện tại', items: [] },
@@ -120,24 +129,27 @@ runTest('copyBundleOptionToTop inserts the copied option at the beginning and ke
 
     let optionIdCounter = 0;
     let entryIdCounter = 0;
-    const { copiedOption, nextOptions } = copyBundleOptionToTop(options, 'source-option', {
+    const { copiedOption, nextOptions } = copyBundleOptionBelowSource(options, 'source-option', {
         createOptionId: () => `copy-${++optionIdCounter}`,
         createEntryId: () => `entry-copy-${++entryIdCounter}`,
+        createOptionUid: () => 'copy-uid-1',
     });
 
     assert.ok(copiedOption);
     assert.equal(nextOptions.length, 4);
-    assert.equal(nextOptions[0].id, 'copy-1');
-    assert.equal(nextOptions[1].id, 'existing-top');
-    assert.equal(nextOptions[2].id, 'source-option');
+    assert.equal(nextOptions[0].id, 'existing-top');
+    assert.equal(nextOptions[1].id, 'source-option');
+    assert.equal(nextOptions[2].id, 'copy-1');
     assert.equal(nextOptions[3].id, 'existing-bottom');
-    assert.deepEqual(nextOptions[0].items.map((item) => item.entry_id), ['entry-copy-1', 'entry-copy-2']);
+    assert.equal(nextOptions[2].title, `Copy ${sourceOption.title}`);
+    assert.equal(nextOptions[2].bundle_option_uid, 'copy-uid-1');
+    assert.deepEqual(nextOptions[2].items.map((item) => item.entry_id), ['entry-copy-1', 'entry-copy-2']);
     assert.deepEqual(sourceOption.items.map((item) => item.entry_id), ['entry-1', 'entry-2']);
 });
 
-runTest('copyBundleOptionToTop returns a safe no-op when source option does not exist', () => {
+runTest('copyBundleOptionBelowSource returns a safe no-op when source option does not exist', () => {
     const options = [{ id: 'only-option', title: 'Only', items: [] }];
-    const { copiedOption, nextOptions } = copyBundleOptionToTop(options, 'missing-option');
+    const { copiedOption, nextOptions } = copyBundleOptionBelowSource(options, 'missing-option');
 
     assert.equal(copiedOption, null);
     assert.deepEqual(nextOptions, options);
@@ -155,11 +167,13 @@ runTest('cloneBundleOptionForCopy tolerates missing items and still returns a va
         {
             createOptionId: () => 'empty-copy',
             createEntryId: () => 'unused-entry',
+            createOptionUid: () => 'empty-copy-uid',
         },
     );
 
     assert.equal(clonedOption.id, 'empty-copy');
-    assert.equal(clonedOption.title, 'Không sản phẩm');
+    assert.equal(clonedOption.uid, 'empty-copy-uid');
+    assert.equal(clonedOption.title, 'Copy Không sản phẩm');
     assert.deepEqual(clonedOption.items, []);
 });
 

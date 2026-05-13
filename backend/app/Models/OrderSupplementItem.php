@@ -24,6 +24,7 @@ class OrderSupplementItem extends Model
     ];
 
     protected $casts = [
+        'quantity' => 'decimal:3',
         'price' => 'decimal:2',
         'cost_price' => 'decimal:2',
         'total_price' => 'decimal:2',

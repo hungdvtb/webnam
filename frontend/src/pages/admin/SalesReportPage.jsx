@@ -24,7 +24,9 @@ const INVENTORY_SLIP_FILTERS = [
 ];
 
 const numberFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
+const quantityFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 });
 const formatWholeNumber = (value) => numberFormatter.format(Math.round(Number(value || 0)));
+const formatQuantityNumber = (value) => quantityFormatter.format(Number(value || 0));
 const clampNumber = (value, min, max) => Math.min(max, Math.max(min, value));
 const estimateTextWidth = (text, fontSizePx) => Math.ceil(String(text || '').length * (fontSizePx * 0.62));
 
@@ -32,7 +34,7 @@ const estimateMetricWidth = (metric, minWidth, maxWidth) => {
     const { quantity, costAmount, revenueAmount } = getMetricValues(metric);
     if (!quantity && !costAmount && !revenueAmount) return minWidth;
 
-    const quantityWidth = estimateTextWidth(formatWholeNumber(quantity), 16);
+    const quantityWidth = estimateTextWidth(formatQuantityNumber(quantity), 16);
     const amountWidth = estimateTextWidth(`${formatWholeNumber(costAmount)}-${formatWholeNumber(revenueAmount)}`, 14);
 
     return clampNumber(Math.max(quantityWidth, amountWidth) + 28, minWidth, maxWidth);
@@ -242,7 +244,7 @@ const MetricCellContent = React.memo(function MetricCellContent({ metric, invers
 
     return (
         <div className="space-y-1 leading-none tabular-nums">
-            <div className={`text-[16px] font-black tracking-tight whitespace-nowrap ${quantityClass}`}>{formatWholeNumber(quantity)}</div>
+            <div className={`text-[16px] font-black tracking-tight whitespace-nowrap ${quantityClass}`}>{formatQuantityNumber(quantity)}</div>
             <div className={`text-[14px] font-semibold tracking-tight whitespace-nowrap ${amountClass}`}>{formatWholeNumber(costAmount)}-{formatWholeNumber(revenueAmount)}</div>
         </div>
     );

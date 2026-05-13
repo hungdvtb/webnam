@@ -339,14 +339,15 @@ const buildItemFromProduct = (product) => ({
     notes: '',
 });
 
+const roundQuantity = (value) => Math.round(Number(value || 0) * 1000) / 1000;
 const clampQuantity = (value, min = 0, max = Number.POSITIVE_INFINITY) => {
-    const numericValue = Math.trunc(toNumber(value, min));
-    const normalizedMin = Math.max(0, Math.trunc(toNumber(min, 0)));
+    const numericValue = roundQuantity(toNumber(value, min));
+    const normalizedMin = Math.max(0, roundQuantity(toNumber(min, 0)));
     const normalizedMax = Number.isFinite(Number(max))
-        ? Math.max(normalizedMin, Math.trunc(Number(max)))
+        ? Math.max(normalizedMin, roundQuantity(Number(max)))
         : Number.POSITIVE_INFINITY;
 
-    return Math.min(Math.max(numericValue, normalizedMin), normalizedMax);
+    return roundQuantity(Math.min(Math.max(numericValue, normalizedMin), normalizedMax));
 };
 
 const resolveSentProductId = (item) => {
@@ -437,7 +438,7 @@ const buildItemFromSentProduct = (row, quantity = 1) => ({
     product_id: Number(row?.product_id) || 0,
     name: row?.name || '',
     sku: row?.sku || '',
-    quantity: clampQuantity(quantity, 1, row?.sent_quantity || 1),
+    quantity: clampQuantity(quantity, 0.001, row?.sent_quantity || 1),
     price: Math.max(0, toNumber(row?.price, 0)),
     cost_price: normalizeRoundedImportCostNumber(row?.cost_price) ?? 0,
     notes: '',
@@ -706,8 +707,8 @@ const OrderSupplementItemsSection = ({
                     ? {
                         ...item,
                         quantity: clampQuantity(
-                            Math.max(1, toNumber(item.quantity, 1)) + 1,
-                            1,
+                            Math.max(0.001, toNumber(item.quantity, 1)) + 1,
+                            0.001,
                             maxQuantity || Number.POSITIVE_INFINITY
                         ),
                     }
@@ -737,7 +738,7 @@ const OrderSupplementItemsSection = ({
         if (existingIndex >= 0) {
             updateItems(normalizedItems.map((item, index) => (
                 index === existingIndex
-                    ? { ...item, quantity: clampQuantity(item?.quantity || 1, 1, row.sent_quantity) }
+                    ? { ...item, quantity: clampQuantity(item?.quantity || row.sent_quantity || 1, 0.001, row.sent_quantity) }
                     : item
             )));
             return;
@@ -907,7 +908,7 @@ const OrderSupplementItemsSection = ({
                                                                     const productId = Number(row.product_id);
                                                                     const existingItem = normalizedItems.find((item) => Number(item?.product_id) === productId);
                                                                     const returnQuantity = clampQuantity(existingItem?.quantity, 0, row.sent_quantity);
-                                                                    const customerKeepQuantity = Math.max(0, row.sent_quantity - returnQuantity);
+                                                                    const customerKeepQuantity = clampQuantity(row.sent_quantity - returnQuantity, 0, row.sent_quantity);
                                                                     const checked = selectedProductIds.has(productId);
 
                                                                     return (
@@ -940,6 +941,8 @@ const OrderSupplementItemsSection = ({
                                                                             <td className="border-b border-primary/10 px-3 py-2">
                                                                                 <input
                                                                                     type="number"
+                                                                                    inputMode="decimal"
+                                                                                    step="0.001"
                                                                                     min="0"
                                                                                     max={row.sent_quantity}
                                                                                     value={returnQuantity}
@@ -1127,7 +1130,7 @@ const OrderSupplementItemsSection = ({
                                                 const maxReturnQuantity = sourceRow?.sent_quantity || Number.POSITIVE_INFINITY;
                                                 const quantity = clampQuantity(item?.quantity, 0, maxReturnQuantity);
                                                 const customerKeepQuantity = sourceRow
-                                                    ? Math.max(0, sourceRow.sent_quantity - quantity)
+                                                    ? clampQuantity(sourceRow.sent_quantity - quantity, 0, sourceRow.sent_quantity)
                                                     : null;
                                                 const lineTotal = quantity * toNumber(item?.price, 0);
 
@@ -1154,6 +1157,8 @@ const OrderSupplementItemsSection = ({
                                                         <td className="border-b border-r border-primary/10 px-3 py-3">
                                                             <input
                                                                 type="number"
+                                                                inputMode="decimal"
+                                                                step="0.001"
                                                                 min="0"
                                                                 max={sourceRow ? sourceRow.sent_quantity : undefined}
                                                                 value={quantity}

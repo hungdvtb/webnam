@@ -4,6 +4,7 @@ namespace App\Services\Reports;
 
 use App\Models\Order;
 use App\Models\OrderStatus;
+use App\Support\InventoryQuantity;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -95,7 +96,7 @@ class SalesProductReportService
             ->get()
             ->map(fn ($row) => [
                 'date' => $row->report_date,
-                'quantity' => (int) $row->total_quantity,
+                'quantity' => InventoryQuantity::normalize($row->total_quantity),
                 'net_revenue' => round((float) $row->total_net_revenue, 2),
                 'cost_amount' => round((float) $row->total_cost_amount, 2),
             ])
@@ -112,7 +113,7 @@ class SalesProductReportService
                         $row->product_sku_snapshot
                     ),
                     'date' => $row->report_date,
-                    'quantity' => (int) $row->total_quantity,
+                    'quantity' => InventoryQuantity::normalize($row->total_quantity),
                     'net_revenue' => round((float) $row->total_net_revenue, 2),
                     'cost_amount' => round((float) $row->total_cost_amount, 2),
                 ]);
@@ -129,7 +130,7 @@ class SalesProductReportService
 
                     return [
                         $date['date'] => [
-                            'quantity' => (int) ($row['quantity'] ?? 0),
+                            'quantity' => InventoryQuantity::normalize($row['quantity'] ?? 0),
                             'net_revenue' => round((float) ($row['net_revenue'] ?? 0), 2),
                             'cost_amount' => round((float) ($row['cost_amount'] ?? 0), 2),
                         ],
@@ -140,7 +141,7 @@ class SalesProductReportService
 
         $summary = [
             'total_products' => $summaryRows->count(),
-            'total_quantity' => (int) $summaryRows->sum('total_quantity'),
+            'total_quantity' => InventoryQuantity::normalize($summaryRows->sum('total_quantity')),
             'total_net_revenue' => round((float) $summaryRows->sum('total_net_revenue'), 2),
             'total_cost_amount' => round((float) $summaryRows->sum('total_cost_amount'), 2),
             'range_days' => count($dates),
@@ -181,7 +182,7 @@ class SalesProductReportService
 
                     return [
                         $date['date'] => [
-                            'quantity' => (int) ($row['quantity'] ?? 0),
+                            'quantity' => InventoryQuantity::normalize($row['quantity'] ?? 0),
                             'net_revenue' => round((float) ($row['net_revenue'] ?? 0), 2),
                             'cost_amount' => round((float) ($row['cost_amount'] ?? 0), 2),
                         ],
@@ -356,11 +357,11 @@ class SalesProductReportService
             'product_name_snapshot' => (string) ($row->product_name_snapshot ?? ''),
             'product_sku_snapshot' => (string) ($row->product_sku_snapshot ?? ''),
             'totals' => [
-                'quantity' => (int) $row->total_quantity,
+                'quantity' => InventoryQuantity::normalize($row->total_quantity),
                 'net_revenue' => round((float) $row->total_net_revenue, 2),
                 'cost_amount' => round((float) $row->total_cost_amount, 2),
             ],
-            'total_quantity' => (int) $row->total_quantity,
+            'total_quantity' => InventoryQuantity::normalize($row->total_quantity),
             'total_net_revenue' => round((float) $row->total_net_revenue, 2),
             'total_cost_amount' => round((float) $row->total_cost_amount, 2),
         ];

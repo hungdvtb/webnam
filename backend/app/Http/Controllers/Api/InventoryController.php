@@ -20,6 +20,7 @@ use App\Services\Inventory\InventoryService;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
+use App\Support\InventoryQuantity;
 use App\Support\OrderStatusCatalog;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
@@ -71,8 +72,8 @@ class InventoryController extends Controller
 
         $activeProducts = Product::query()->count();
         $trashedProducts = Product::onlyTrashed()->count();
-        $totalUnits = (int) Product::query()->sum('stock_quantity');
-        $damagedUnits = (int) Product::query()->sum('damaged_quantity');
+        $totalUnits = InventoryQuantity::normalize(Product::query()->sum('stock_quantity'));
+        $damagedUnits = InventoryQuantity::normalize(Product::query()->sum('damaged_quantity'));
         $supplierCount = Supplier::query()->count();
         $stockValue = (float) Product::query()
             ->selectRaw('COALESCE(SUM(stock_quantity * COALESCE(cost_price, expected_cost, 0)), 0) AS total_value')
@@ -463,7 +464,7 @@ class InventoryController extends Controller
         $paginated['summary'] = [
             'total_suppliers' => (int) ($summary->total_suppliers ?? 0),
             'total_import_slips' => (int) ($summary->total_import_slips ?? 0),
-            'total_imported_quantity' => (int) round((float) ($summary->total_imported_quantity ?? 0)),
+            'total_imported_quantity' => InventoryQuantity::normalize($summary->total_imported_quantity ?? 0),
             'total_imported_amount' => round((float) ($summary->total_imported_amount ?? 0), 2),
         ];
 
@@ -1732,7 +1733,7 @@ class InventoryController extends Controller
             'supplier_id' => 'nullable|integer|exists:suppliers,id',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.quantity' => 'required|numeric|min:0.001',
             'items.*.notes' => 'nullable|string|max:1000',
         ];
 
@@ -1746,7 +1747,7 @@ class InventoryController extends Controller
         }
 
         if ($type === 'adjustment') {
-            $rules['items.*.quantity'] = ['required', 'integer', Rule::notIn([0])];
+            $rules['items.*.quantity'] = ['required', 'numeric', Rule::notIn([0])];
             $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
             $rules['items.*.direction'] = ['sometimes', Rule::in(['in', 'out'])];
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
@@ -1805,7 +1806,7 @@ class InventoryController extends Controller
             'supplier_id' => 'nullable|integer|exists:suppliers,id',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.quantity' => 'required|numeric|min:0.001',
             'items.*.notes' => 'nullable|string|max:1000',
         ];
 
@@ -1819,7 +1820,7 @@ class InventoryController extends Controller
         }
 
         if ($type === 'adjustment') {
-            $rules['items.*.quantity'] = ['required', 'integer', Rule::notIn([0])];
+            $rules['items.*.quantity'] = ['required', 'numeric', Rule::notIn([0])];
             $rules['items.*.stock_bucket'] = ['sometimes', Rule::in(['sellable', 'damaged'])];
             $rules['items.*.direction'] = ['sometimes', Rule::in(['in', 'out'])];
             $rules['items.*.unit_cost'] = 'nullable|numeric|min:0';
@@ -2220,8 +2221,8 @@ class InventoryController extends Controller
                 'id' => $batch->id,
                 'batch_number' => $batch->batch_number,
                 'received_at' => $batch->received_at,
-                'quantity' => (int) $batch->quantity,
-                'remaining_quantity' => (int) $batch->remaining_quantity,
+                'quantity' => InventoryQuantity::normalize($batch->quantity),
+                'remaining_quantity' => InventoryQuantity::normalize($batch->remaining_quantity),
                 'unit_cost' => (float) $batch->unit_cost,
                 'status' => $batch->status,
                 'source_type' => $batch->source_type,
@@ -3740,17 +3741,17 @@ class InventoryController extends Controller
 
         return [
             'total_products' => (int) ($summary->total_products ?? 0),
-            'total_imported' => (int) round((float) ($summary->total_imported ?? 0)),
-            'total_exported' => (int) round((float) ($summary->total_exported ?? 0)),
-            'total_returned' => (int) round((float) ($summary->total_returned ?? 0)),
-            'total_damaged' => (int) round((float) ($summary->total_damaged ?? 0)),
-            'total_adjusted' => (int) round((float) ($summary->total_adjusted ?? 0)),
-            'total_stock' => (int) round((float) ($summary->total_stock ?? 0)),
-            'total_pending_export' => (int) round((float) ($summary->total_pending_export ?? 0)),
-            'total_pending_return' => (int) round((float) ($summary->total_pending_return ?? 0)),
-            'total_actual_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
-            'total_sellable_stock' => (int) round((float) ($summary->total_actual_stock ?? 0)),
-            'total_damaged_stock' => (int) round((float) ($summary->total_damaged_stock ?? 0)),
+            'total_imported' => InventoryQuantity::normalize($summary->total_imported ?? 0),
+            'total_exported' => InventoryQuantity::normalize($summary->total_exported ?? 0),
+            'total_returned' => InventoryQuantity::normalize($summary->total_returned ?? 0),
+            'total_damaged' => InventoryQuantity::normalize($summary->total_damaged ?? 0),
+            'total_adjusted' => InventoryQuantity::normalize($summary->total_adjusted ?? 0),
+            'total_stock' => InventoryQuantity::normalize($summary->total_stock ?? 0),
+            'total_pending_export' => InventoryQuantity::normalize($summary->total_pending_export ?? 0),
+            'total_pending_return' => InventoryQuantity::normalize($summary->total_pending_return ?? 0),
+            'total_actual_stock' => InventoryQuantity::normalize($summary->total_actual_stock ?? 0),
+            'total_sellable_stock' => InventoryQuantity::normalize($summary->total_actual_stock ?? 0),
+            'total_damaged_stock' => InventoryQuantity::normalize($summary->total_damaged_stock ?? 0),
             'total_inventory_value' => round((float) ($summary->total_inventory_value ?? 0), 2),
         ];
     }
@@ -3877,8 +3878,8 @@ class InventoryController extends Controller
             'attachments.*.invoice_analysis_log_id' => 'nullable|integer|exists:inventory_invoice_analysis_logs,id',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer|distinct|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
-            'items.*.received_quantity' => 'nullable|integer|min:0',
+            'items.*.quantity' => 'required|numeric|min:0.001',
+            'items.*.received_quantity' => 'nullable|numeric|min:0',
             'items.*.unit_cost' => 'required|numeric|min:0',
             'items.*.supplier_product_code' => 'nullable|string|max:255',
             'items.*.unit_name' => 'nullable|string|max:80',
@@ -4071,7 +4072,7 @@ class InventoryController extends Controller
                 'name' => $document->supplier->name,
             ] : null,
             'notes' => $document->notes,
-            'total_quantity' => (int) ($document->total_quantity ?? 0),
+            'total_quantity' => InventoryQuantity::normalize($document->total_quantity ?? 0),
             'total_amount' => round((float) ($document->total_amount ?? 0), 2),
             'items_count' => (int) ($document->items_count ?? $document->items->count()),
             'adjustment_kind' => $adjustmentKind,
@@ -4094,11 +4095,11 @@ class InventoryController extends Controller
     {
         $meta = is_array($item->meta) ? $item->meta : [];
         $differenceQuantity = array_key_exists('difference_quantity', $meta)
-            ? (int) $meta['difference_quantity']
+            ? InventoryQuantity::normalize($meta['difference_quantity'])
             : $this->signedAdjustmentDocumentLineQuantity($item);
-        $oldQuantity = array_key_exists('old_quantity', $meta) ? (int) $meta['old_quantity'] : null;
+        $oldQuantity = array_key_exists('old_quantity', $meta) ? InventoryQuantity::normalize($meta['old_quantity']) : null;
         $newQuantity = array_key_exists('new_quantity', $meta)
-            ? (int) $meta['new_quantity']
+            ? InventoryQuantity::normalize($meta['new_quantity'])
             : ($oldQuantity !== null ? $oldQuantity + $differenceQuantity : null);
         $quantityScope = $meta['quantity_scope']
             ?? ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT
@@ -4127,9 +4128,9 @@ class InventoryController extends Controller
         ];
     }
 
-    private function signedAdjustmentDocumentLineQuantity($item): int
+    private function signedAdjustmentDocumentLineQuantity($item): float
     {
-        $quantity = abs((int) ($item->quantity ?? 0));
+        $quantity = abs(InventoryQuantity::normalize($item->quantity ?? 0));
 
         return (string) ($item->direction ?? 'in') === 'out'
             ? -$quantity
@@ -4155,18 +4156,18 @@ class InventoryController extends Controller
         $supplierComparisons = $compact ? [] : $this->productSupplierComparisons($product);
         $supplierPayload = $compact ? [] : $this->productSupplierPayload($product);
         $supplierIds = $compact ? [] : $this->productSupplierIds($product);
-        $totalImported = (int) round((float) ($product->total_imported ?? 0));
-        $totalExported = (int) round((float) ($product->total_exported ?? 0));
-        $totalReturned = (int) round((float) ($product->total_returned ?? 0));
-        $totalDamaged = (int) round((float) ($product->total_damaged ?? 0));
-        $totalAdjusted = (int) round((float) ($product->total_adjusted ?? 0));
+        $totalImported = InventoryQuantity::normalize($product->total_imported ?? 0);
+        $totalExported = InventoryQuantity::normalize($product->total_exported ?? 0);
+        $totalReturned = InventoryQuantity::normalize($product->total_returned ?? 0);
+        $totalDamaged = InventoryQuantity::normalize($product->total_damaged ?? 0);
+        $totalAdjusted = InventoryQuantity::normalize($product->total_adjusted ?? 0);
         $computedStock = $product->computed_stock !== null
-            ? (int) round((float) $product->computed_stock)
+            ? InventoryQuantity::normalize($product->computed_stock)
             : ($totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted);
-        $pendingExportQuantity = (int) round((float) ($product->pending_export_quantity ?? 0));
-        $pendingReturnQuantity = (int) round((float) ($product->pending_return_quantity ?? 0));
+        $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
+        $pendingReturnQuantity = InventoryQuantity::normalize($product->pending_return_quantity ?? 0);
         $actualStock = $product->actual_stock !== null
-            ? (int) round((float) $product->actual_stock)
+            ? InventoryQuantity::normalize($product->actual_stock)
             : ($computedStock - $pendingExportQuantity);
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
         $inventoryValue = $product->inventory_value !== null
@@ -4185,8 +4186,8 @@ class InventoryController extends Controller
             'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
             'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
-            'stock_quantity' => (int) ($product->stock_quantity ?? 0),
-            'damaged_quantity' => (int) ($product->damaged_quantity ?? 0),
+            'stock_quantity' => InventoryQuantity::normalize($product->stock_quantity ?? 0),
+            'damaged_quantity' => InventoryQuantity::normalize($product->damaged_quantity ?? 0),
             'status' => (bool) $product->status,
             'type' => $product->type,
             'type_label' => match ($product->type) {
@@ -4269,8 +4270,8 @@ class InventoryController extends Controller
             'inventory_import_starred' => (bool) ($product->inventory_import_starred ?? false),
             'unit_name' => $product->relationLoaded('unit') ? $product->unit?->name : null,
             'price' => (float) ($product->price ?? 0),
-            'stock_quantity' => (int) ($product->stock_quantity ?? 0),
-            'damaged_quantity' => (int) ($product->damaged_quantity ?? 0),
+            'stock_quantity' => InventoryQuantity::normalize($product->stock_quantity ?? 0),
+            'damaged_quantity' => InventoryQuantity::normalize($product->damaged_quantity ?? 0),
             'status' => (bool) $product->status,
             'current_cost' => $currentCost,
             'expected_cost' => $expectedCost,

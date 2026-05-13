@@ -185,7 +185,7 @@ class OrderCodAdjustmentSystemNote
     {
         $normalizedItems = collect($returnedItems)
             ->map(function ($item) {
-                $quantity = (int) ($item['quantity'] ?? $item->quantity ?? 0);
+                $quantity = InventoryQuantity::normalize($item['quantity'] ?? $item->quantity ?? 0);
                 $name = trim((string) (
                     $item['product_name_snapshot']
                     ?? $item['snapshot_name']
@@ -213,7 +213,7 @@ class OrderCodAdjustmentSystemNote
 
                 return [
                     'name' => $first['name'],
-                    'quantity' => (int) $rows->sum('quantity'),
+                    'quantity' => InventoryQuantity::normalize($rows->sum('quantity')),
                 ];
             })
             ->values();

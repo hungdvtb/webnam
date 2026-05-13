@@ -6,6 +6,11 @@ import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { leadApi } from '../../services/api';
 import { consumeLeadListReturnHint, readLeadListViewState, writeLeadListViewState } from '../../utils/leadListViewState';
+import {
+    dispatchLeadNotificationSettingsEvent,
+    LEAD_REALTIME_EVENT,
+    normalizeRealtimeCursor,
+} from '../../utils/leadRealtimeNotifications';
 
 const inputClassName = 'w-full h-10 rounded-sm border border-primary/10 bg-white px-3 text-[13px] text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none';
 const textareaClassName = 'w-full min-h-[132px] rounded-sm border border-primary/10 bg-white px-3 py-2 text-[13px] text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none resize-none';
@@ -185,7 +190,7 @@ const leadMatchesFilters = (lead, filters, quickSearch) => {
 
 const mergeLeadCollections = (incoming, current, perPage = 20) => {
     const map = new Map();
-    [...incoming, ...current].forEach((lead) => {
+    [...current, ...incoming].forEach((lead) => {
         if (lead?.id) map.set(lead.id, lead);
     });
 
@@ -847,13 +852,13 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                         {loading && leads.length === 0 ? (
                             <tr>
                                 <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                    Äang táº£i danh sÃ¡ch lead...
+                                    Đang tải danh sách lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
                                 <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                    KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
+                                    Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                                 </td>
                             </tr>
                         ) : leads.map((lead) => {
@@ -1661,6 +1666,7 @@ const LeadList = () => {
     const [leads, setLeads] = useState(() => initialLeadListViewState?.leads || []);
     const [pagination, setPagination] = useState(() => initialLeadListViewState?.pagination || { current_page: 1, last_page: 1, per_page: 20, total: 0 });
     const [latestId, setLatestId] = useState(() => Number(initialLeadListViewState?.latestId || 0));
+    const [realtimeCursor, setRealtimeCursor] = useState(() => initialLeadListViewState?.realtimeCursor || { changedAt: '', id: Number(initialLeadListViewState?.latestId || 0) });
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [columnPanelOpen, setColumnPanelOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1707,6 +1713,7 @@ const LeadList = () => {
 
     const notificationPanelRef = useRef(null);
     const latestIdRef = useRef(0);
+    const realtimeCursorRef = useRef(realtimeCursor);
     const pageRef = useRef(page);
     const filtersRef = useRef(filters);
     const searchRef = useRef(debouncedQuickSearch);
@@ -1775,6 +1782,7 @@ const LeadList = () => {
     useEffect(() => { leadsRef.current = leads; }, [leads]);
     useEffect(() => { notificationItemsRef.current = notificationItems; }, [notificationItems]);
     useEffect(() => { latestIdRef.current = latestId; }, [latestId]);
+    useEffect(() => { realtimeCursorRef.current = realtimeCursor; }, [realtimeCursor]);
 
     useEffect(() => {
         if (loading && leads.length === 0) return;
@@ -1785,8 +1793,9 @@ const LeadList = () => {
             statuses,
             tags,
             latestId,
+            realtimeCursor,
         });
-    }, [leadListViewKey, latestId, leads, loading, pagination, statuses, tags]);
+    }, [leadListViewKey, latestId, leads, loading, pagination, realtimeCursor, statuses, tags]);
 
     useEffect(() => {
         const returnHint = consumeLeadListReturnHint(leadListViewKey);
@@ -2234,6 +2243,7 @@ const LeadList = () => {
             const response = await leadApi.updateNotificationSettings(data);
             const nextSettings = normalizeNotificationSettings(response.data?.settings || createDefaultNotificationSettings());
             setSoundSettings(nextSettings);
+            dispatchLeadNotificationSettingsEvent(nextSettings);
 
             if (successMessage) {
                 showToast({ message: successMessage, type: 'success', duration: 1800 });
@@ -2288,6 +2298,7 @@ const LeadList = () => {
             setStatuses(payload.statuses || []);
             setTags(payload.tags || []);
             setLatestId(payload.latest_id || 0);
+            setRealtimeCursor(normalizeRealtimeCursor(payload));
             if (replaceData) setLeads(nextLeads);
 
             return payload;
@@ -2346,6 +2357,51 @@ const LeadList = () => {
     }, [notificationsOpen]);
 
     useEffect(() => {
+        const handleRealtimeEvent = (event) => {
+            const payload = event.detail || {};
+            const incoming = Array.isArray(payload.items)
+                ? payload.items.map(normalizeNotificationItem)
+                : [];
+            const nextLatestId = Number(payload.latest_id || 0);
+            const nextRealtimeCursor = normalizeRealtimeCursor(payload);
+
+            if (nextLatestId > latestIdRef.current) {
+                setLatestId(nextLatestId);
+            }
+
+            if (nextRealtimeCursor.changedAt || nextRealtimeCursor.id) {
+                setRealtimeCursor((prev) => (
+                    prev.changedAt === nextRealtimeCursor.changedAt && Number(prev.id || 0) === Number(nextRealtimeCursor.id || 0)
+                        ? prev
+                        : nextRealtimeCursor
+                ));
+            }
+
+            if (typeof payload.unread_count !== 'undefined') {
+                setNotificationUnreadCount(Math.max(0, Number(payload.unread_count || 0)));
+            }
+
+            if (!incoming.length) return;
+
+            setNotificationItems((prev) => mergeNotificationItems(incoming, prev));
+
+            if (isTrashViewRef.current) return;
+
+            const activePage = pageRef.current;
+            const matchedIncoming = incoming.filter((lead) => leadMatchesFilters(lead, filtersRef.current, searchRef.current));
+
+            if (activePage === 1 && matchedIncoming.length > 0) {
+                setLeads((prev) => mergeLeadCollections(matchedIncoming, prev, paginationRef.current.per_page || 20));
+            }
+
+            fetchLeads(activePage, { silent: true, replaceData: activePage === 1 && matchedIncoming.length === 0 });
+        };
+
+        window.addEventListener(LEAD_REALTIME_EVENT, handleRealtimeEvent);
+        return () => window.removeEventListener(LEAD_REALTIME_EVENT, handleRealtimeEvent);
+    }, [fetchLeads]);
+
+    useEffect(() => {
         if (!realtimeReady) return undefined;
 
         let isDisposed = false;
@@ -2366,7 +2422,12 @@ const LeadList = () => {
             let nextDelay = 2000;
 
             try {
-                const response = await leadApi.realtime({ after_id: latestIdRef.current || 0 });
+                const currentCursor = realtimeCursorRef.current || {};
+                const response = await leadApi.realtime(
+                    currentCursor.changedAt
+                        ? { after_changed_at: currentCursor.changedAt, after_id: currentCursor.id || latestIdRef.current || 0 }
+                        : { after_id: latestIdRef.current || 0 }
+                );
                 if (isDisposed) return;
 
                 const payload = response.data || {};
@@ -2374,42 +2435,27 @@ const LeadList = () => {
                     ? payload.items.map(normalizeNotificationItem)
                     : [];
                 const nextLatestId = payload.latest_id || latestIdRef.current || 0;
+                const nextRealtimeCursor = normalizeRealtimeCursor(payload);
                 const hasMore = payload.has_more === true;
 
                 if (typeof payload.unread_count !== 'undefined') {
                     setNotificationUnreadCount(Math.max(0, Number(payload.unread_count || 0)));
                 }
 
-                if (latestIdRef.current === 0) {
-                    if (nextLatestId > 0) setLatestId(nextLatestId);
-                    return;
-                }
-
                 if (nextLatestId > latestIdRef.current) setLatestId(nextLatestId);
+                if (nextRealtimeCursor.changedAt || nextRealtimeCursor.id) {
+                    setRealtimeCursor((prev) => (
+                        prev.changedAt === nextRealtimeCursor.changedAt && Number(prev.id || 0) === Number(nextRealtimeCursor.id || 0)
+                            ? prev
+                            : nextRealtimeCursor
+                    ));
+                }
                 if (hasMore) nextDelay = 350;
                 if (!incoming.length) return;
 
-                let newlyQueued = [];
-                setNotificationItems((prev) => {
-                    const prevIds = new Set(prev.map((lead) => lead.id));
-                    newlyQueued = incoming.filter((lead) => !prevIds.has(lead.id));
-                    return mergeNotificationItems(incoming, prev);
-                });
+                setNotificationItems((prev) => mergeNotificationItems(incoming, prev));
 
-                if (newlyQueued.length === 0) {
-                    return;
-                }
-
-                playLeadNotificationSound();
-                showBrowserLeadNotifications(newlyQueued);
-                showToast({
-                    message: newlyQueued.length === 1
-                        ? 'Có 1 lead mới vừa vào bảng xử lý.'
-                        : `Có ${newlyQueued.length} lead mới vừa vào bảng xử lý.`,
-                    type: 'info',
-                    duration: 2500,
-                });
-
+                showBrowserLeadNotifications(incoming.filter((lead) => lead?.is_draft !== true));
                 if (isTrashViewRef.current) {
                     return;
                 }
@@ -2417,7 +2463,7 @@ const LeadList = () => {
                 const activePage = pageRef.current;
                 const activeFilters = filtersRef.current;
                 const activeSearch = searchRef.current;
-                const matchedIncoming = newlyQueued.filter((lead) => leadMatchesFilters(lead, activeFilters, activeSearch));
+                const matchedIncoming = incoming.filter((lead) => leadMatchesFilters(lead, activeFilters, activeSearch));
 
                 if (activePage === 1 && matchedIncoming.length > 0) {
                     setLeads((prev) => mergeLeadCollections(matchedIncoming, prev, paginationRef.current.per_page || 20));
@@ -2439,7 +2485,7 @@ const LeadList = () => {
             realtimeRequestInFlightRef.current = false;
             if (timeoutId) window.clearTimeout(timeoutId);
         };
-    }, [fetchLeads, playLeadNotificationSound, realtimeReady, showBrowserLeadNotifications, showToast]);
+    }, [fetchLeads, realtimeReady, showBrowserLeadNotifications]);
 
     useEffect(() => {
         if (!pendingFocusLeadId) return;
@@ -2710,6 +2756,28 @@ const LeadList = () => {
 
         await saveNotificationSettings(formData, { successMessage: 'Đã lưu file âm thanh thông báo.' });
         event.target.value = '';
+    };
+
+    const handleEnableLeadNotificationAudio = async () => {
+        await requestBrowserNotificationPermission(true);
+
+        if (!soundSettings.enabled) {
+            await handleNotificationSoundToggle(true);
+        }
+
+        const played = await playLeadNotificationSound({
+            allowQueue: false,
+            userInitiated: true,
+            force: true,
+        });
+
+        showToast({
+            message: played
+                ? 'Đã bật âm báo đơn mới.'
+                : 'Trình duyệt đang chặn âm thanh. Hãy bấm lại nút bật âm báo.',
+            type: played ? 'success' : 'warning',
+            duration: 2200,
+        });
     };
 
     const handlePreviewNotificationSound = async () => {
@@ -3040,13 +3108,13 @@ const LeadList = () => {
                         {loading && leads.length === 0 ? (
                             <tr>
                                 <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                    Äang táº£i danh sÃ¡ch lead...
+                                    Đang tải danh sách lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
                                 <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
-                                    KhÃ´ng tÃ¬m tháº¥y lead phÃ¹ há»£p vá»›i bá»™ lá»c hiá»‡n táº¡i.
+                                    Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                                 </td>
                             </tr>
                         ) : leads.map((lead) => {
@@ -3351,6 +3419,15 @@ const LeadList = () => {
                                                     <div className="flex flex-wrap gap-2">
                                                         <button
                                                             type="button"
+                                                            onClick={handleEnableLeadNotificationAudio}
+                                                            disabled={notificationActionBusy}
+                                                            className={buttonClassName}
+                                                        >
+                                                            Bật âm báo đơn mới
+                                                        </button>
+
+                                                        <button
+                                                            type="button"
                                                             onClick={handleUseDefaultNotificationSound}
                                                             disabled={notificationActionBusy}
                                                             className={buttonClassName}
@@ -3394,7 +3471,7 @@ const LeadList = () => {
                                                         <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Chọn file âm thanh</span>
                                                         <input
                                                             type="file"
-                                                            accept="audio/*"
+                                                            accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
                                                             className={`${inputClassName} h-auto py-2`}
                                                             disabled={notificationActionBusy}
                                                             onChange={handleUploadNotificationSound}
@@ -3515,7 +3592,7 @@ const LeadList = () => {
                                                         <span className="mb-1 block text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Chọn file âm thanh</span>
                                                         <input
                                                             type="file"
-                                                            accept="audio/*"
+                                                            accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
                                                             className={`${inputClassName} h-auto py-2`}
                                                             onChange={(event) => {
                                                                 const file = event.target.files?.[0];

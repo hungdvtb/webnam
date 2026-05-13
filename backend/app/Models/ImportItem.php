@@ -28,8 +28,8 @@ class ImportItem extends Model
     ];
 
     protected $casts = [
-        'quantity' => 'integer',
-        'received_quantity' => 'integer',
+        'quantity' => 'decimal:3',
+        'received_quantity' => 'decimal:3',
         'unit_cost' => 'decimal:2',
         'supplier_price_snapshot' => 'decimal:2',
         'line_total' => 'decimal:2',

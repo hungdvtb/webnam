@@ -37,6 +37,7 @@ class InventoryDocument extends Model
 
     protected $casts = [
         'document_date' => 'date',
+        'total_quantity' => 'decimal:3',
         'total_amount' => 'decimal:2',
         'meta' => 'array',
     ];

@@ -19,6 +19,7 @@ class OrderItem extends Model
         'options' => 'array',
         'actual_product_id' => 'integer',
         'sort_order' => 'integer',
+        'quantity' => 'decimal:3',
         'cost_price' => 'decimal:2',
         'cost_total' => 'decimal:2',
         'profit_total' => 'decimal:2',

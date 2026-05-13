@@ -33,7 +33,9 @@ class Product extends Model
 
     protected $casts = [
         'inventory_import_starred' => 'boolean',
-        'imported_quantity_total' => 'integer',
+        'stock_quantity' => 'decimal:3',
+        'damaged_quantity' => 'decimal:3',
+        'imported_quantity_total' => 'decimal:3',
         'imported_value_total' => 'decimal:2',
         'video_urls' => 'array',
         'sort_order' => 'integer',

@@ -5,6 +5,7 @@ namespace App\Services\Reports;
 use App\Models\Order;
 use App\Models\OrderStatus;
 use App\Services\OrderInventorySlipService;
+use App\Support\InventoryQuantity;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
@@ -67,7 +68,7 @@ class ProductSalesByDayReportService
 
         foreach ($aggregatedRows as $row) {
             $metric = [
-                'quantity' => (int) ($row->total_quantity ?? 0),
+                'quantity' => InventoryQuantity::normalize($row->total_quantity ?? 0),
                 'cost_amount' => (float) ($row->total_cost_amount ?? 0),
                 'revenue_amount' => (float) ($row->total_revenue_amount ?? 0),
             ];
@@ -169,7 +170,7 @@ class ProductSalesByDayReportService
             'summary' => [
                 'top_level_count' => count($sortedTopLevelRows),
                 'leaf_count' => count($leafRows),
-                'total_quantity' => (int) $totalMetrics['quantity'],
+                'total_quantity' => InventoryQuantity::normalize($totalMetrics['quantity']),
                 'total_cost_amount' => round((float) $totalMetrics['cost_amount']),
                 'total_revenue_amount' => round((float) $totalMetrics['revenue_amount']),
             ],
@@ -750,7 +751,7 @@ class ProductSalesByDayReportService
 
     private function addMetric(array &$target, array $metric): void
     {
-        $target['quantity'] += (int) ($metric['quantity'] ?? 0);
+        $target['quantity'] += InventoryQuantity::normalize($metric['quantity'] ?? 0);
         $target['cost_amount'] += (float) ($metric['cost_amount'] ?? 0);
         $target['revenue_amount'] += (float) ($metric['revenue_amount'] ?? 0);
     }
@@ -769,7 +770,7 @@ class ProductSalesByDayReportService
     private function normalizeMetric(array $metric): array
     {
         return [
-            'quantity' => (int) ($metric['quantity'] ?? 0),
+            'quantity' => InventoryQuantity::normalize($metric['quantity'] ?? 0),
             'cost_amount' => round((float) ($metric['cost_amount'] ?? 0)),
             'revenue_amount' => round((float) ($metric['revenue_amount'] ?? 0)),
         ];

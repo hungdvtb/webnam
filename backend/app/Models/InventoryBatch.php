@@ -26,6 +26,8 @@ class InventoryBatch extends Model
 
     protected $casts = [
         'received_at' => 'datetime',
+        'quantity' => 'decimal:3',
+        'remaining_quantity' => 'decimal:3',
         'unit_cost' => 'decimal:2',
         'meta' => 'array',
     ];

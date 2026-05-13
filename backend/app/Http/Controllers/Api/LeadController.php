@@ -105,6 +105,73 @@ class LeadController extends Controller
         ];
     }
 
+    protected function hydrateOrderDraftItemsWithProductSnapshots(Collection $items): Collection
+    {
+        $productIds = $items
+            ->pluck('product_id')
+            ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return $items;
+        }
+
+        $products = Product::withTrashed()
+            ->with([
+                'unit:id,name',
+                'parentConfigurable' => fn ($query) => $query
+                    ->withTrashed()
+                    ->select('products.id', 'products.name', 'products.inventory_unit_id')
+                    ->with(['unit:id,name']),
+            ])
+            ->whereIn('id', $productIds->all())
+            ->get()
+            ->keyBy('id');
+
+        return $items->map(function (array $item) use ($products) {
+            $productId = is_numeric($item['product_id'] ?? null) ? (int) $item['product_id'] : 0;
+            /** @var Product|null $product */
+            $product = $productId > 0 ? $products->get($productId) : null;
+
+            if (!$product) {
+                return $item;
+            }
+
+            $parentProduct = $product->parentConfigurable->first();
+            $inventoryUnitId = $product->inventory_unit_id !== null
+                ? (int) $product->inventory_unit_id
+                : ($parentProduct?->inventory_unit_id !== null ? (int) $parentProduct->inventory_unit_id : null);
+            $unitName = $product->unit?->name ?? $parentProduct?->unit?->name;
+            $itemCostPrice = is_numeric($item['cost_price'] ?? null) ? (float) $item['cost_price'] : null;
+            $productCostPrice = $product->cost_price ?? $product->expected_cost;
+            $resolvedCostPrice = $itemCostPrice !== null && $itemCostPrice > 0
+                ? $itemCostPrice
+                : (float) ($productCostPrice ?? 0);
+
+            return array_merge($item, [
+                'name' => trim((string) ($item['name'] ?? '')) !== '' ? $item['name'] : $product->name,
+                'sku' => trim((string) ($item['sku'] ?? '')) !== '' ? $item['sku'] : $product->sku,
+                'inventory_unit_id' => $inventoryUnitId,
+                'unit_name' => trim((string) ($item['unit_name'] ?? '')) !== '' ? $item['unit_name'] : $unitName,
+                'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
+                'cost_price' => $resolvedCostPrice,
+                'stock_quantity' => (float) ($product->stock_quantity ?? 0),
+                'product' => [
+                    'id' => (int) $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'inventory_unit_id' => $inventoryUnitId,
+                    'unit_name' => $unitName,
+                    'expected_cost' => $product->expected_cost !== null ? (float) $product->expected_cost : null,
+                    'cost_price' => (float) ($productCostPrice ?? 0),
+                    'stock_quantity' => (float) ($product->stock_quantity ?? 0),
+                ],
+            ]);
+        });
+    }
+
     protected function persistNotificationSettings(int $accountId, int $userId, array $settings): array
     {
         $payload = [
@@ -167,6 +234,11 @@ class LeadController extends Controller
         return $this->localizeDateTime($dateTime)?->toIso8601String();
     }
 
+    protected function cursorDateTime(?Carbon $dateTime): ?string
+    {
+        return $dateTime?->copy()->utc()->toIso8601String();
+    }
+
     protected function dateLabel(?Carbon $dateTime): ?string
     {
         return $this->localizeDateTime($dateTime)?->format('Y-m-d');
@@ -180,6 +252,63 @@ class LeadController extends Controller
     protected function dateTimeLabel(?Carbon $dateTime): ?string
     {
         return $this->localizeDateTime($dateTime)?->format('Y-m-d H:i:s');
+    }
+
+    protected function realtimeCursorForLead(?Lead $lead): array
+    {
+        return [
+            'changed_at' => $this->cursorDateTime($lead?->updated_at),
+            'id' => (int) ($lead?->id ?? 0),
+        ];
+    }
+
+    protected function latestRealtimeCursor(int $accountId): array
+    {
+        if ($accountId <= 0) {
+            return $this->realtimeCursorForLead(null);
+        }
+
+        $lead = Lead::query()
+            ->where('account_id', $accountId)
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->first(['id', 'updated_at']);
+
+        return $this->realtimeCursorForLead($lead);
+    }
+
+    protected function parseRealtimeCursorDate(?string $value): ?Carbon
+    {
+        $trimmed = trim((string) $value);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($trimmed)->utc();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    protected function realtimeCursorIsAfter(array $left, array $right): bool
+    {
+        $leftChangedAt = $this->parseRealtimeCursorDate($left['changed_at'] ?? null);
+        $rightChangedAt = $this->parseRealtimeCursorDate($right['changed_at'] ?? null);
+
+        if ($leftChangedAt && $rightChangedAt && !$leftChangedAt->equalTo($rightChangedAt)) {
+            return $leftChangedAt->greaterThan($rightChangedAt);
+        }
+
+        if ($leftChangedAt && !$rightChangedAt) {
+            return true;
+        }
+
+        if (!$leftChangedAt && $rightChangedAt) {
+            return false;
+        }
+
+        return (int) ($left['id'] ?? 0) > (int) ($right['id'] ?? 0);
     }
 
     protected function draftStatusForAccount(int $accountId): ?LeadStatus
@@ -616,6 +745,9 @@ class LeadController extends Controller
             'link_url' => $lead->link_url,
             'status' => $status?->code ?? ($usesDraftStatus ? 'don-nhap' : $lead->status),
             'is_draft' => $usesDraftStatus,
+            'created_at' => $this->isoDateTime($lead->created_at),
+            'updated_at' => $this->isoDateTime($lead->updated_at),
+            'realtime_changed_at' => $this->cursorDateTime($lead->updated_at),
             'placed_at' => $this->isoDateTime($lead->placed_at),
             'placed_date' => $this->dateLabel($lead->placed_at),
             'placed_time' => $this->timeLabel($lead->placed_at),
@@ -687,6 +819,7 @@ class LeadController extends Controller
             ->orderBy('tag')
             ->pluck('tag')
             ->values();
+        $realtimeCursor = $this->latestRealtimeCursor($accountId);
 
         return response()->json([
             'data' => $leadItems->map(fn (Lead $lead) => $this->transformLead($lead, $draftStatus, $this->repeatMetaFor($repeatMetaMap, 'lead', (int) $lead->id)))->values(),
@@ -695,6 +828,8 @@ class LeadController extends Controller
             'per_page' => $paginator->perPage(),
             'total' => $paginator->total(),
             'latest_id' => Lead::query()->where('account_id', $accountId)->max('id') ?: 0,
+            'latest_changed_at' => $realtimeCursor['changed_at'],
+            'realtime_cursor' => $realtimeCursor,
             'statuses' => $statuses->map(fn ($status) => [
                 'id' => $status->id,
                 'code' => $status->code,
@@ -968,7 +1103,7 @@ class LeadController extends Controller
             'enabled' => 'nullable|boolean',
             'use_default' => 'nullable|boolean',
             'remove_custom_audio' => 'nullable|boolean',
-            'audio' => 'nullable|file|mimes:mp3,wav,m4a,aac,ogg,webm|max:10240',
+            'audio' => 'nullable|file|mimes:mp3,wav|max:10240',
         ]);
 
         $settings = $this->notificationSettings($accountId, $userId);
@@ -1020,19 +1155,45 @@ class LeadController extends Controller
         $accountId = $this->accountId($request);
         $userId = $this->userId($request);
         $afterId = max((int) $request->input('after_id', 0), 0);
-        $latestKnownId = Lead::query()->where('account_id', $accountId)->max('id') ?: $afterId;
+        $afterChangedAt = $this->parseRealtimeCursorDate($request->input('after_changed_at'));
+        $latestKnownCursor = $this->latestRealtimeCursor($accountId);
+
+        if ($request->boolean('init') || (!$afterChangedAt && $afterId <= 0)) {
+            return response()->json([
+                'latest_id' => (int) ($latestKnownCursor['id'] ?? 0),
+                'latest_changed_at' => $latestKnownCursor['changed_at'],
+                'realtime_cursor' => $latestKnownCursor,
+                'has_more' => false,
+                'unread_count' => $this->unreadNotificationCount($accountId, $userId),
+                'items' => [],
+            ]);
+        }
 
         $items = Lead::query()
             ->where('account_id', $accountId)
-            ->where('id', '>', $afterId)
+            ->when($afterChangedAt, function (Builder $query) use ($afterChangedAt, $afterId) {
+                $query->where(function (Builder $builder) use ($afterChangedAt, $afterId) {
+                    $builder->where('updated_at', '>', $afterChangedAt)
+                        ->orWhere(function (Builder $sameTimestampBuilder) use ($afterChangedAt, $afterId) {
+                            $sameTimestampBuilder->where('updated_at', $afterChangedAt)
+                                ->where('id', '>', $afterId);
+                        });
+                });
+            }, fn (Builder $query) => $query->where('id', '>', $afterId))
             ->with(['statusConfig', 'items.product', 'order:id,order_number'])
+            ->orderBy('updated_at')
             ->orderBy('id')
-            ->limit(20)
+            ->limit(30)
             ->get();
         $draftStatus = $this->draftStatusForAccount($accountId);
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildLeadMeta($items, $accountId);
 
-        $latestReturnedId = $items->last()?->id ?: $afterId;
+        $latestReturnedCursor = $items->isNotEmpty()
+            ? $this->realtimeCursorForLead($items->last())
+            : [
+                'changed_at' => $afterChangedAt?->toIso8601String(),
+                'id' => $afterId,
+            ];
         $readMap = $this->notificationReadMap(
             $accountId,
             $userId,
@@ -1040,8 +1201,10 @@ class LeadController extends Controller
         );
 
         return response()->json([
-            'latest_id' => $items->isNotEmpty() ? $latestReturnedId : $latestKnownId,
-            'has_more' => $latestKnownId > $latestReturnedId,
+            'latest_id' => (int) ($latestReturnedCursor['id'] ?: ($latestKnownCursor['id'] ?? $afterId)),
+            'latest_changed_at' => $latestReturnedCursor['changed_at'] ?: $latestKnownCursor['changed_at'],
+            'realtime_cursor' => $latestReturnedCursor['changed_at'] ? $latestReturnedCursor : $latestKnownCursor,
+            'has_more' => $this->realtimeCursorIsAfter($latestKnownCursor, $latestReturnedCursor),
             'unread_count' => $this->unreadNotificationCount($accountId, $userId),
             'items' => $items
                 ->map(fn (Lead $lead) => $this->transformNotificationLead($lead, $readMap[$lead->id] ?? null, $draftStatus, $repeatMetaMap))
@@ -1062,6 +1225,8 @@ class LeadController extends Controller
         $items = collect($lead->items)
             ->flatMap(fn ($item) => $this->bundleResolver->expandLeadItemForOrderDraft($item, $lead))
             ->values();
+
+        $items = $this->hydrateOrderDraftItemsWithProductSnapshots($items);
 
         return response()->json([
             'lead_id' => $lead->id,

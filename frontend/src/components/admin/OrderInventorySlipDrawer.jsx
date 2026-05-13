@@ -2,10 +2,35 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { orderApi } from '../../services/api';
 
-const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value || 0));
+const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(Number(value || 0));
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const todayValue = () => new Date().toISOString().slice(0, 10);
-const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const normalizeQuantityInputValue = (value) => {
+    const rawValue = String(value ?? '').trimStart().replace(/,/g, '.');
+    const numericValue = rawValue.replace(/[^0-9.]/g, '');
+    if (!numericValue) {
+        return '';
+    }
+
+    const [integerPartRaw, ...decimalParts] = numericValue.split('.');
+    const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '') || (decimalParts.length ? '0' : '');
+    const decimalPart = decimalParts.join('').slice(0, 3);
+
+    if (decimalParts.length > 0) {
+        return `${integerPart || '0'}.${decimalPart}`;
+    }
+
+    return integerPart;
+};
+const parseQuantityInputValue = (value, fallback = 0) => {
+    const normalizedValue = normalizeQuantityInputValue(value);
+    if (!normalizedValue || normalizedValue === '.') {
+        return fallback;
+    }
+
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
 
 const formatDateTime = (value) => {
     if (!value) return '-';
@@ -107,10 +132,10 @@ const MetricCard = ({ label, value, hint }) => (
 const QuantityInput = ({ value, onChange, disabled, max }) => (
     <input
         type="text"
-        inputMode="numeric"
+        inputMode="decimal"
         value={value}
         disabled={disabled}
-        onChange={(event) => onChange(stripNumericValue(event.target.value))}
+        onChange={(event) => onChange(normalizeQuantityInputValue(event.target.value))}
         placeholder="0"
         className={`h-9 w-20 rounded-sm border px-2 text-right text-[13px] font-black outline-none transition ${
             disabled
@@ -227,7 +252,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
     );
 
     const draftTotalQuantity = useMemo(
-        () => draftRows.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+        () => draftRows.reduce((sum, row) => sum + parseQuantityInputValue(row.quantity, 0), 0),
         [draftRows]
     );
 
@@ -267,7 +292,7 @@ const OrderInventorySlipDrawer = ({ open, orderId, refreshKey = 0, onClose, onUp
         const payloadItems = draftRows
             .map((row) => ({
                 product_id: row.product_id,
-                quantity: Number(row.quantity || 0),
+                quantity: parseQuantityInputValue(row.quantity, 0),
                 notes: row.notes || '',
             }))
             .filter((row) => row.quantity > 0);

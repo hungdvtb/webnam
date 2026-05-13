@@ -17,6 +17,7 @@ use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Support\ImportCostRounding;
+use App\Support\InventoryQuantity;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
@@ -90,8 +91,8 @@ class InventoryService
 
             foreach ($items as $index => $item) {
                 $product = $products->get((int) $item['product_id']);
-                $quantity = (int) $item['quantity'];
-                $receivedQuantity = max(0, min($quantity, (int) ($item['received_quantity'] ?? $quantity)));
+                $quantity = InventoryQuantity::normalize($item['quantity']);
+                $receivedQuantity = max(0, min($quantity, InventoryQuantity::normalize($item['received_quantity'] ?? $quantity)));
                 $unitCost = round((float) $item['unit_cost'], 2);
                 $lineTotal = round($quantity * $unitCost, 2);
                 $supplierPrice = $supplierPrices->get($product->id);
@@ -273,7 +274,7 @@ class InventoryService
             $touchedProductIds = [];
 
             foreach ($items as $index => $item) {
-                $receivedQuantity = max(0, (int) ($item->received_quantity ?? 0));
+                $receivedQuantity = max(0, InventoryQuantity::normalize($item->received_quantity ?? 0));
                 if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
                     InventoryBatch::create([
                         'account_id' => $import->account_id,
@@ -381,7 +382,7 @@ class InventoryService
     {
         $normalizedItems = collect($rawItems)
             ->map(fn ($item) => is_array($item) ? $item : [])
-            ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0 && !empty($item['product_id']))
+            ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0) && !empty($item['product_id']))
             ->values()
             ->map(function (array $item, int $index) {
                 $item['sort_order'] = $index + 1;
@@ -418,7 +419,7 @@ class InventoryService
             $actualProductId = (int) ($item['actual_product_id'] ?? 0);
             $actualProduct = $actualProductId > 0 ? $products->get($actualProductId) : null;
             $inventoryProduct = $actualProduct ?: $product;
-            $quantity = (int) $item['quantity'];
+            $quantity = InventoryQuantity::normalize($item['quantity']);
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($order->account_id, $inventoryProduct, $quantity);
             $avgUnitCost = $quantity > 0
@@ -476,7 +477,7 @@ class InventoryService
 
         return [
             'items' => $createdItems,
-            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * (int) $row->quantity), 2),
+            'total_price' => round(collect($createdItems)->sum(fn ($row) => (float) $row->price * InventoryQuantity::normalize($row->quantity)), 2),
             'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->cost_total), 2),
             'profit_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->profit_total), 2),
         ];
@@ -526,7 +527,7 @@ class InventoryService
 
         foreach ($items as $item) {
             $product = $products->get((int) ($item->actual_product_id ?: $item->product_id));
-            $quantity = (int) $item->quantity;
+            $quantity = InventoryQuantity::normalize($item->quantity);
             $sellingPrice = round((float) ($item->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
             $avgUnitCost = $quantity > 0
@@ -600,7 +601,7 @@ class InventoryService
             }
 
             if (!$this->isOversoldReservationBatch($batch)) {
-                $batch->remaining_quantity = (int) $batch->remaining_quantity + (int) $allocation->quantity;
+                $batch->remaining_quantity = InventoryQuantity::normalize($batch->remaining_quantity) + InventoryQuantity::normalize($allocation->quantity);
                 $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
                 $batch->save();
             }
@@ -651,10 +652,10 @@ class InventoryService
             ->get()
             ->each(function (Product $product) use ($batches, $oversoldReservedByProduct) {
                 $productBatches = $batches->get($product->id, collect());
-                $availableStock = (int) $productBatches->sum('remaining_quantity');
-                $oversoldReserved = (int) ($oversoldReservedByProduct->get($product->id) ?? 0);
+                $availableStock = InventoryQuantity::normalize($productBatches->sum('remaining_quantity'));
+                $oversoldReserved = InventoryQuantity::normalize($oversoldReservedByProduct->get($product->id) ?? 0);
                 $stock = $availableStock - $oversoldReserved;
-                $importedQuantityTotal = max(0, (int) ($product->imported_quantity_total ?? 0));
+                $importedQuantityTotal = max(0, InventoryQuantity::normalize($product->imported_quantity_total ?? 0));
                 $importedValueTotal = round((float) ($product->imported_value_total ?? 0), 2);
                 $currentCost = $importedQuantityTotal > 0
                     ? round($importedValueTotal / $importedQuantityTotal, 2)
@@ -717,7 +718,7 @@ class InventoryService
                     $payload = get_object_vars($item);
                 }
 
-                $receivedQuantity = max(0, (int) ($payload['received_quantity'] ?? $payload['quantity'] ?? 0));
+                $receivedQuantity = max(0, InventoryQuantity::normalize($payload['received_quantity'] ?? $payload['quantity'] ?? 0));
                 $unitCost = round((float) ($payload['unit_cost'] ?? 0), 2);
 
                 return [
@@ -759,7 +760,7 @@ class InventoryService
                 ];
             }
 
-            $aggregateMap[$productId]['quantity'] += (int) $row['received_quantity'];
+            $aggregateMap[$productId]['quantity'] += InventoryQuantity::normalize($row['received_quantity']);
             $aggregateMap[$productId]['value'] = round(
                 (float) $aggregateMap[$productId]['value'] + (float) $row['base_value'] + (float) $allocatedExtraCharge,
                 2
@@ -794,7 +795,7 @@ class InventoryService
 
                 $nextQuantity = max(
                     0,
-                    (int) ($product->imported_quantity_total ?? 0) + ($direction * (int) ($row['quantity'] ?? 0))
+                    InventoryQuantity::normalize($product->imported_quantity_total ?? 0) + ($direction * InventoryQuantity::normalize($row['quantity'] ?? 0))
                 );
                 $nextValue = round(
                     max(
@@ -823,9 +824,9 @@ class InventoryService
 
         $items = collect($payload['items'] ?? [])
             ->map(function ($item) {
-                $quantity = (int) ($item['quantity'] ?? 0);
+                $quantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
                 $receivedQuantity = isset($item['received_quantity'])
-                    ? (int) $item['received_quantity']
+                    ? InventoryQuantity::normalize($item['received_quantity'])
                     : 0;
 
                 if ($receivedQuantity < 0) {
@@ -856,7 +857,7 @@ class InventoryService
             ]);
         }
 
-        $allItemsCompleted = $items->every(fn ($item) => (int) $item['received_quantity'] >= (int) $item['quantity']);
+        $allItemsCompleted = $items->every(fn ($item) => InventoryQuantity::normalize($item['received_quantity']) >= InventoryQuantity::normalize($item['quantity']));
         if (!$statusWasManuallySelected && $allItemsCompleted) {
             $completedStatus = $this->resolveCompletedImportStatus($accountId);
             if ($completedStatus) {
@@ -934,8 +935,8 @@ class InventoryService
             'import_date' => $importDate,
             'status' => $status,
             'entry_mode' => $this->resolveImportEntryMode($payload),
-            'total_quantity' => (int) $items->sum('quantity'),
-            'total_received_quantity' => (int) $items->sum('received_quantity'),
+            'total_quantity' => InventoryQuantity::normalize($items->sum('quantity')),
+            'total_received_quantity' => InventoryQuantity::normalize($items->sum('received_quantity')),
             'subtotal_amount' => $subtotalAmount,
             'extra_charge_percent' => $extraCharge['percent'],
             'extra_charge_mode' => $extraCharge['mode'],
@@ -1123,8 +1124,8 @@ class InventoryService
                 continue;
             }
 
-            $quantity = (int) $item['quantity'];
-            $receivedQuantity = max(0, min($quantity, (int) ($item['received_quantity'] ?? $quantity)));
+            $quantity = InventoryQuantity::normalize($item['quantity']);
+            $receivedQuantity = max(0, min($quantity, InventoryQuantity::normalize($item['received_quantity'] ?? $quantity)));
             $unitCost = round((float) $item['unit_cost'], 2);
             $lineTotal = round($quantity * $unitCost, 2);
             $supplierPrice = $supplierPrices->get($product->id);
@@ -1323,7 +1324,7 @@ class InventoryService
             ->get();
 
         foreach ($batches as $batch) {
-            if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
+            if (abs(InventoryQuantity::normalize($batch->remaining_quantity) - InventoryQuantity::normalize($batch->quantity)) >= 0.0005 || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
                     'import' => 'Phiếu nhập đã phát sinh xuất hoặc điều chỉnh nên không thể sửa/xóa.',
                     ]);
@@ -1348,7 +1349,7 @@ class InventoryService
             ->get();
 
         foreach ($documentBatches as $batch) {
-            if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
+            if (abs(InventoryQuantity::normalize($batch->remaining_quantity) - InventoryQuantity::normalize($batch->quantity)) >= 0.0005 || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
                     'document' => 'Phiếu kho này đã phát sinh luồng kho tiếp theo nên không thể sửa/xóa.',
                 ]);
@@ -1379,7 +1380,7 @@ class InventoryService
             }
 
             $reverseDamagedDelta = -$this->storedItemDamagedQuantityDelta($document, $item);
-            if ($reverseDamagedDelta < 0 && (int) ($product->damaged_quantity ?? 0) < abs($reverseDamagedDelta)) {
+            if ($reverseDamagedDelta < 0 && InventoryQuantity::normalize($product->damaged_quantity ?? 0) < abs($reverseDamagedDelta)) {
                 throw ValidationException::withMessages([
                     'document' => ["Khong the xoa phieu kho vi {$product->sku} - {$product->name} da duoc xu ly tiep trong ton hong."],
                 ]);
@@ -1440,8 +1441,8 @@ class InventoryService
                         continue;
                     }
 
-                    $allocation->batch->remaining_quantity = (int) $allocation->batch->remaining_quantity + (int) $allocation->quantity;
-                    $allocation->batch->status = (int) $allocation->batch->remaining_quantity > 0 ? 'open' : 'depleted';
+                    $allocation->batch->remaining_quantity = InventoryQuantity::normalize($allocation->batch->remaining_quantity) + InventoryQuantity::normalize($allocation->quantity);
+                    $allocation->batch->status = InventoryQuantity::positive($allocation->batch->remaining_quantity) ? 'open' : 'depleted';
                     $allocation->batch->save();
                 }
 
@@ -1449,14 +1450,14 @@ class InventoryService
             } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'in') {
                 $this->applyDamagedQuantityDelta(
                     $product,
-                    -((int) $item->quantity),
+                    -InventoryQuantity::normalize($item->quantity),
                     'document',
                     "San pham {$product->sku} - {$product->name} khong du ton hong de hoan tac phieu kho."
                 );
             } elseif ($item->stock_bucket === 'damaged' && $inventoryDirection === 'out') {
                 $this->applyDamagedQuantityDelta(
                     $product,
-                    (int) $item->quantity,
+                    InventoryQuantity::normalize($item->quantity),
                     'document',
                     "San pham {$product->sku} - {$product->name} khong du ton hong de hoan tac phieu kho."
                 );
@@ -1521,7 +1522,7 @@ class InventoryService
                 continue;
             }
 
-            $quantity = max(0, (int) ($item->quantity ?? 0));
+            $quantity = max(0, InventoryQuantity::normalize($item->quantity ?? 0));
             if ($quantity <= 0) {
                 continue;
             }
@@ -1632,7 +1633,7 @@ class InventoryService
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
             $items = collect($payload['items'] ?? [])
-                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
+                ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0))
                 ->values();
 
             if ($items->isEmpty()) {
@@ -1660,7 +1661,7 @@ class InventoryService
 
             foreach ($items as $item) {
                 $product = $products->get((int) $item['product_id']);
-                $quantity = (int) $item['quantity'];
+                $quantity = InventoryQuantity::normalize($item['quantity']);
                 $allowOversold = (bool) ($item['allow_oversold'] ?? $payload['allow_oversold'] ?? false);
                 $allocation = $allowOversold
                     ? $this->allocateOrderSellableBatches($accountId, $product, $quantity)
@@ -1712,7 +1713,7 @@ class InventoryService
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
             $items = collect($payload['items'] ?? [])
-                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
+                ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0))
                 ->values();
 
             if ($items->isEmpty()) {
@@ -1740,7 +1741,7 @@ class InventoryService
 
             foreach ($items as $index => $item) {
                 $product = $products->get((int) $item['product_id']);
-                $quantity = (int) $item['quantity'];
+                $quantity = InventoryQuantity::normalize($item['quantity']);
                 $unitCost = round((float) ($item['unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
                 $totalCost = round($quantity * $unitCost, 2);
 
@@ -1789,7 +1790,7 @@ class InventoryService
     {
         return DB::transaction(function () use ($payload, $accountId, $userId) {
             $items = collect($payload['items'] ?? [])
-                ->filter(fn ($item) => (int) ($item['quantity'] ?? 0) > 0)
+                ->filter(fn ($item) => InventoryQuantity::positive($item['quantity'] ?? 0))
                 ->values();
 
             if ($items->isEmpty()) {
@@ -1817,8 +1818,8 @@ class InventoryService
 
             foreach ($items as $item) {
                 $product = $products->get((int) $item['product_id']);
-                $quantity = (int) $item['quantity'];
-                $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+                $quantity = InventoryQuantity::normalize($item['quantity']);
+                $currentDamaged = InventoryQuantity::normalize($product->damaged_quantity ?? 0);
                 $stockBucket = $this->resolveDamagedDocumentStockBucket($accountId, $product, $item, $quantity);
 
                 if ($stockBucket === 'damaged') {
@@ -1908,7 +1909,7 @@ class InventoryService
         });
     }
 
-    private function resolveDamagedDocumentStockBucket(int $accountId, Product $product, array $item, int $quantity): string
+    private function resolveDamagedDocumentStockBucket(int $accountId, Product $product, array $item, int|float $quantity): string
     {
         $explicitBucket = (string) ($item['stock_bucket'] ?? '');
         if (in_array($explicitBucket, ['sellable', 'damaged'], true)) {
@@ -1920,7 +1921,7 @@ class InventoryService
             return 'sellable';
         }
 
-        $damagedAvailable = (int) ($product->damaged_quantity ?? 0);
+        $damagedAvailable = InventoryQuantity::normalize($product->damaged_quantity ?? 0);
         if ($damagedAvailable >= $quantity) {
             return 'damaged';
         }
@@ -1930,9 +1931,9 @@ class InventoryService
         ]);
     }
 
-    private function availableSellableQuantity(int $accountId, Product $product): int
+    private function availableSellableQuantity(int $accountId, Product $product): float
     {
-        return (int) InventoryBatch::query()
+        return InventoryQuantity::normalize(InventoryBatch::query()
             ->where('account_id', $accountId)
             ->where('product_id', $product->id)
             ->where('remaining_quantity', '>', 0)
@@ -1943,7 +1944,7 @@ class InventoryService
             })
             ->lockForUpdate()
             ->get()
-            ->sum('remaining_quantity');
+            ->sum('remaining_quantity'));
     }
 
     private function resolveDamagedDocumentUnitCost(Product $product, array $item): float
@@ -1951,13 +1952,14 @@ class InventoryService
         return round((float) ($item['unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
     }
 
-    private function applyDamagedQuantityDelta(Product $product, int $delta, string $errorKey, string $errorMessage): void
+    private function applyDamagedQuantityDelta(Product $product, int|float $delta, string $errorKey, string $errorMessage): void
     {
-        if ($delta === 0) {
+        $delta = InventoryQuantity::normalize($delta);
+        if (InventoryQuantity::zero($delta)) {
             return;
         }
 
-        $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+        $currentDamaged = InventoryQuantity::normalize($product->damaged_quantity ?? 0);
         $nextDamaged = $currentDamaged + $delta;
 
         if ($nextDamaged < 0) {
@@ -1970,7 +1972,7 @@ class InventoryService
         $product->save();
     }
 
-    private function storedItemDamagedQuantityDelta(InventoryDocument $document, InventoryDocumentItem $item): int
+    private function storedItemDamagedQuantityDelta(InventoryDocument $document, InventoryDocumentItem $item): float
     {
         $delta = $this->storedItemTransferToDamagedDelta($document, $item);
         $stockBucket = (string) ($item->stock_bucket ?? 'sellable');
@@ -1979,23 +1981,23 @@ class InventoryService
             return $delta;
         }
 
-        $quantity = (int) ($item->quantity ?? 0);
+        $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
         $direction = $this->storedItemInventoryDirection($document, $item);
 
         return $delta + ($direction === 'in' ? $quantity : -$quantity);
     }
 
-    private function storedItemTransferToDamagedDelta(InventoryDocument $document, InventoryDocumentItem $item): int
+    private function storedItemTransferToDamagedDelta(InventoryDocument $document, InventoryDocumentItem $item): float
     {
         $metaDelta = data_get($item->meta, 'damaged_stock_delta');
         if (is_numeric($metaDelta)) {
-            return (int) $metaDelta;
+            return InventoryQuantity::normalize($metaDelta);
         }
 
         return (string) $document->type === 'damaged'
             && (string) ($item->stock_bucket ?? 'sellable') === 'sellable'
             && (string) ($item->direction ?? 'in') === 'out'
-            ? (int) ($item->quantity ?? 0)
+            ? InventoryQuantity::normalize($item->quantity ?? 0)
             : 0;
     }
 
@@ -2050,15 +2052,15 @@ class InventoryService
             $supplierId = isset($payload['supplier_id']) ? (int) $payload['supplier_id'] : null;
             $touchedProductIds = [];
             $sellableStockByProduct = $products->mapWithKeys(
-                fn (Product $product) => [(int) $product->id => (int) ($product->stock_quantity ?? 0)]
+                fn (Product $product) => [(int) $product->id => InventoryQuantity::normalize($product->stock_quantity ?? 0)]
             )->all();
             $damagedStockByProduct = $products->mapWithKeys(
-                fn (Product $product) => [(int) $product->id => (int) ($product->damaged_quantity ?? 0)]
+                fn (Product $product) => [(int) $product->id => InventoryQuantity::normalize($product->damaged_quantity ?? 0)]
             )->all();
 
             foreach ($items as $index => $item) {
                 $product = $products->get((int) $item['product_id']);
-                $quantity = (int) $item['quantity'];
+                $quantity = InventoryQuantity::normalize($item['quantity']);
                 $stockBucket = $item['stock_bucket'] ?? 'sellable';
                 $direction = $item['direction'] ?? 'in';
                 $effectiveStockDirection = $this->effectiveAdjustmentStockDirection($adjustmentKind, $direction);
@@ -2072,17 +2074,17 @@ class InventoryService
                 $itemMeta['adjustment_source'] = $adjustmentSource;
 
                 if ($adjustmentKind === InventoryDocument::ADJUSTMENT_KIND_EXPORT) {
-                    $oldQuantity = (int) ($item['old_quantity'] ?? ($itemMeta['old_quantity'] ?? 0));
-                    $newQuantity = (int) ($item['new_quantity'] ?? ($itemMeta['new_quantity'] ?? max(0, $oldQuantity + $signedQuantity)));
+                    $oldQuantity = InventoryQuantity::normalize($item['old_quantity'] ?? ($itemMeta['old_quantity'] ?? 0));
+                    $newQuantity = InventoryQuantity::normalize($item['new_quantity'] ?? ($itemMeta['new_quantity'] ?? max(0, $oldQuantity + $signedQuantity)));
                     $itemMeta['quantity_scope'] = $item['quantity_scope'] ?? ($itemMeta['quantity_scope'] ?? 'export_quantity');
                     $itemMeta['old_quantity'] = $oldQuantity;
                     $itemMeta['new_quantity'] = $newQuantity;
-                    $itemMeta['difference_quantity'] = (int) ($item['difference_quantity'] ?? ($itemMeta['difference_quantity'] ?? $signedQuantity));
+                    $itemMeta['difference_quantity'] = InventoryQuantity::normalize($item['difference_quantity'] ?? ($itemMeta['difference_quantity'] ?? $signedQuantity));
                     $itemMeta['affects_inventory_totals'] = false;
                     $itemMeta['affects_inventory_directly'] = false;
                 } else {
                     $stockMap = $stockBucket === 'damaged' ? $damagedStockByProduct : $sellableStockByProduct;
-                    $beforeQuantity = (int) ($stockMap[$product->id] ?? 0);
+                    $beforeQuantity = InventoryQuantity::normalize($stockMap[$product->id] ?? 0);
                     $afterQuantity = $beforeQuantity + $stockDelta;
 
                     if ($stockBucket === 'damaged') {
@@ -2174,7 +2176,7 @@ class InventoryService
                     $touchedProductIds[] = $product->id;
                     continue;
 
-                    $currentDamaged = (int) ($product->damaged_quantity ?? 0);
+                    $currentDamaged = InventoryQuantity::normalize($product->damaged_quantity ?? 0);
                     if ($currentDamaged < $quantity) {
                         throw ValidationException::withMessages([
                             'items' => "Sản phẩm {$product->sku} - {$product->name} không đủ tồn hỏng để điều chỉnh giảm.",
@@ -2240,7 +2242,7 @@ class InventoryService
             ->map(function (array $item) {
                 $signedQuantity = $this->resolveSignedAdjustmentQuantity($item);
 
-                if ($signedQuantity === 0 || empty($item['product_id'])) {
+                if (InventoryQuantity::zero($signedQuantity) || empty($item['product_id'])) {
                     return null;
                 }
 
@@ -2255,9 +2257,9 @@ class InventoryService
             ->values();
     }
 
-    private function resolveSignedAdjustmentQuantity(array $item): int
+    private function resolveSignedAdjustmentQuantity(array $item): float
     {
-        $quantity = (int) ($item['quantity'] ?? 0);
+        $quantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
         if ($quantity < 0) {
             return $quantity;
         }
@@ -2267,16 +2269,16 @@ class InventoryService
             : abs($quantity);
     }
 
-    private function signedAdjustmentQuantityFromAttributes(array $item): int
+    private function signedAdjustmentQuantityFromAttributes(array $item): float
     {
-        $quantity = abs((int) ($item['quantity'] ?? 0));
+        $quantity = abs(InventoryQuantity::normalize($item['quantity'] ?? 0));
 
         return (string) ($item['direction'] ?? 'in') === 'out'
             ? -$quantity
             : $quantity;
     }
 
-    private function signedStockDeltaForAdjustmentItem(array $item, string $adjustmentKind): int
+    private function signedStockDeltaForAdjustmentItem(array $item, string $adjustmentKind): float
     {
         $signedQuantity = $this->signedAdjustmentQuantityFromAttributes($item);
 
@@ -2360,10 +2362,10 @@ class InventoryService
         $document->loadMissing('items');
 
         if ((string) $document->type === 'adjustment') {
-            $totalQuantity = (int) $document->items->sum(fn (InventoryDocumentItem $item) => $this->signedAdjustmentDocumentQuantity($item));
+            $totalQuantity = InventoryQuantity::normalize($document->items->sum(fn (InventoryDocumentItem $item) => $this->signedAdjustmentDocumentQuantity($item)));
             $totalAmount = round((float) $document->items->sum(fn (InventoryDocumentItem $item) => $this->signedAdjustmentDocumentAmount($item)), 2);
         } else {
-            $totalQuantity = (int) $document->items()->sum('quantity');
+            $totalQuantity = InventoryQuantity::normalize($document->items()->sum('quantity'));
             $totalAmount = (string) $document->type === 'export'
                 ? round((float) $document->items()->selectRaw('COALESCE(SUM(COALESCE(total_price, total_cost)), 0) as aggregate')->value('aggregate'), 2)
                 : round((float) $document->items()->sum('total_cost'), 2);
@@ -2375,9 +2377,9 @@ class InventoryService
         ])->save();
     }
 
-    private function signedAdjustmentDocumentQuantity(InventoryDocumentItem $item): int
+    private function signedAdjustmentDocumentQuantity(InventoryDocumentItem $item): float
     {
-        $quantity = abs((int) ($item->quantity ?? 0));
+        $quantity = abs(InventoryQuantity::normalize($item->quantity ?? 0));
 
         return (string) ($item->direction ?? 'in') === 'out'
             ? -$quantity
@@ -2399,7 +2401,7 @@ class InventoryService
         string $referenceNumber,
         int $sourceId,
         Carbon $receivedAt,
-        int $quantity,
+        int|float $quantity,
         float $unitCost,
         int $lineNumber,
         array $meta = []
@@ -2466,8 +2468,9 @@ class InventoryService
         return round($value, 2);
     }
 
-    private function allocateSellableBatches(int $accountId, Product $product, int $requestedQty): array
+    private function allocateSellableBatches(int $accountId, Product $product, int|float $requestedQty): array
     {
+        $requestedQty = InventoryQuantity::normalize($requestedQty);
         $batches = InventoryBatch::query()
             ->where('account_id', $accountId)
             ->where('product_id', $product->id)
@@ -2482,7 +2485,7 @@ class InventoryService
             ->lockForUpdate()
             ->get();
 
-        $available = (int) $batches->sum('remaining_quantity');
+        $available = InventoryQuantity::normalize($batches->sum('remaining_quantity'));
         if ($available < $requestedQty) {
             throw ValidationException::withMessages([
                 'items' => "Sản phẩm {$product->sku} - {$product->name} không đủ tồn bán được. Còn {$available}, cần {$requestedQty}.",
@@ -2498,12 +2501,12 @@ class InventoryService
                 break;
             }
 
-            $takeQty = min($remaining, (int) $batch->remaining_quantity);
+            $takeQty = min($remaining, InventoryQuantity::normalize($batch->remaining_quantity));
             if ($takeQty <= 0) {
                 continue;
             }
 
-            $batch->remaining_quantity = (int) $batch->remaining_quantity - $takeQty;
+            $batch->remaining_quantity = InventoryQuantity::normalize($batch->remaining_quantity) - $takeQty;
             $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
             $batch->save();
 
@@ -2524,8 +2527,9 @@ class InventoryService
         ];
     }
 
-    private function allocateOrderSellableBatches(int $accountId, Product $product, int $requestedQty): array
+    private function allocateOrderSellableBatches(int $accountId, Product $product, int|float $requestedQty): array
     {
+        $requestedQty = InventoryQuantity::normalize($requestedQty);
         $batches = InventoryBatch::query()
             ->where('account_id', $accountId)
             ->where('product_id', $product->id)
@@ -2549,12 +2553,12 @@ class InventoryService
                 break;
             }
 
-            $takeQty = min($remaining, (int) $batch->remaining_quantity);
+            $takeQty = min($remaining, InventoryQuantity::normalize($batch->remaining_quantity));
             if ($takeQty <= 0) {
                 continue;
             }
 
-            $batch->remaining_quantity = (int) $batch->remaining_quantity - $takeQty;
+            $batch->remaining_quantity = InventoryQuantity::normalize($batch->remaining_quantity) - $takeQty;
             $batch->status = $batch->remaining_quantity > 0 ? 'open' : 'depleted';
             $batch->save();
 

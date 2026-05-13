@@ -20,6 +20,9 @@ class InventoryDocumentItemOrderLink extends Model
     ];
 
     protected $casts = [
+        'exported_quantity' => 'decimal:3',
+        'actual_quantity' => 'decimal:3',
+        'export_adjustment_quantity' => 'decimal:3',
         'meta' => 'array',
     ];
 

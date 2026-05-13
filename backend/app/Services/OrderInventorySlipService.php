@@ -12,6 +12,7 @@ use App\Models\OrderStatusLog;
 use App\Models\Product;
 use App\Models\Shipment;
 use App\Services\Inventory\InventoryService;
+use App\Support\InventoryQuantity;
 use App\Support\OrderStatusCatalog;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -129,7 +130,7 @@ class OrderInventorySlipService
                         'exported_at' => $this->normalizeExportOverviewTimestamp($primaryExport, $order),
                         'tracking_number' => trim((string) ($primaryExport['tracking_number'] ?? $order->shipping_tracking_code)) ?: null,
                         'carrier_name' => trim((string) ($primaryExport['carrier_name'] ?? $order->shipping_carrier_name)) ?: null,
-                        'exported_quantity' => (int) data_get($detail, 'summary.exported_quantity', 0),
+                        'exported_quantity' => InventoryQuantity::normalize(data_get($detail, 'summary.exported_quantity', 0)),
                         'export_slip_count' => (int) data_get($detail, 'summary.export_slip_count', 0),
                         'line_count' => max(
                             count((array) ($primaryExport['items'] ?? [])),
@@ -329,7 +330,7 @@ class OrderInventorySlipService
                     ] : null,
                     'product_name_snapshot' => $item->product_name_snapshot,
                     'product_sku_snapshot' => $item->product_sku_snapshot,
-                    'quantity' => (int) $item->quantity,
+                    'quantity' => InventoryQuantity::normalize($item->quantity),
                     'stock_bucket' => (string) ($item->stock_bucket ?? 'sellable'),
                     'direction' => (string) ($item->direction ?? 'in'),
                     'unit_cost' => (float) ($item->unit_cost ?? 0),
@@ -564,7 +565,7 @@ class OrderInventorySlipService
                 ->map(function (array $item) {
                     return [
                         'product_id' => (int) ($item['product_id'] ?? 0),
-                        'quantity' => (int) ($item['quantity'] ?? 0),
+                        'quantity' => InventoryQuantity::normalize($item['quantity'] ?? 0),
                         'notes' => $item['notes'] ?? null,
                     ];
                 })
@@ -573,7 +574,7 @@ class OrderInventorySlipService
                 ->map(function (Collection $groupedItems, $productId) {
                     return [
                         'product_id' => (int) $productId,
-                        'quantity' => (int) $groupedItems->sum('quantity'),
+                        'quantity' => InventoryQuantity::normalize($groupedItems->sum('quantity')),
                         'notes' => $groupedItems
                             ->pluck('notes')
                             ->filter()
@@ -611,8 +612,8 @@ class OrderInventorySlipService
             foreach ($items as $item) {
                 $progress = $progressMap->get($item['product_id']);
                 $availableQuantity = match ($type) {
-                    'export' => (int) ($progress['exportable_quantity'] ?? 0),
-                    'return', 'damaged' => (int) ($progress['reversible_quantity'] ?? 0),
+                    'export' => InventoryQuantity::normalize($progress['exportable_quantity'] ?? 0),
+                    'return', 'damaged' => InventoryQuantity::normalize($progress['reversible_quantity'] ?? 0),
                     default => 0,
                 };
 
@@ -655,7 +656,7 @@ class OrderInventorySlipService
 
             foreach ($items->values() as $index => $item) {
                 $productId = (int) $item['product_id'];
-                $quantity = (int) $item['quantity'];
+                $quantity = InventoryQuantity::normalize($item['quantity']);
                 $productMeta = $orderProducts->get($productId);
                 $product = $products->get($productId);
                 $unitCost = round((float) ($productMeta['ordered_unit_cost'] ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
@@ -703,7 +704,7 @@ class OrderInventorySlipService
                 }
 
                 if ($type === 'damaged') {
-                    $product->damaged_quantity = (int) ($product->damaged_quantity ?? 0) + $quantity;
+                    $product->damaged_quantity = InventoryQuantity::normalize($product->damaged_quantity ?? 0) + $quantity;
                     $product->save();
                     $touchedProductIds[] = $productId;
                 }
@@ -804,7 +805,7 @@ class OrderInventorySlipService
 
                     $product->damaged_quantity = max(
                         0,
-                        (int) ($product->damaged_quantity ?? 0) - (int) $item->quantity
+                        InventoryQuantity::normalize($product->damaged_quantity ?? 0) - InventoryQuantity::normalize($item->quantity)
                     );
                     $product->save();
                 }
@@ -978,8 +979,8 @@ class OrderInventorySlipService
                     continue;
                 }
 
-                $automaticExportCounters[$productId] = (int) ($automaticExportCounters[$productId] ?? 0)
-                    + (int) ($item['quantity'] ?? 0);
+                $automaticExportCounters[$productId] = InventoryQuantity::normalize($automaticExportCounters[$productId] ?? 0)
+                    + InventoryQuantity::normalize($item['quantity'] ?? 0);
             }
         }
 
@@ -1005,9 +1006,9 @@ class OrderInventorySlipService
                         ];
                     }
 
-                    $counters[$productId]['returned'] += (int) ($link->actual_quantity ?? 0);
-                    $effectiveExportAdjustments[$productId] = (int) ($effectiveExportAdjustments[$productId] ?? 0)
-                        + (int) ($link->export_adjustment_quantity ?? 0);
+                    $counters[$productId]['returned'] += InventoryQuantity::normalize($link->actual_quantity ?? 0);
+                    $effectiveExportAdjustments[$productId] = InventoryQuantity::normalize($effectiveExportAdjustments[$productId] ?? 0)
+                        + InventoryQuantity::normalize($link->export_adjustment_quantity ?? 0);
                 }
 
                 continue;
@@ -1024,11 +1025,11 @@ class OrderInventorySlipService
                 }
 
                 if ($document->type === 'export') {
-                    $counters[$productId]['exported'] += (int) $item->quantity;
+                    $counters[$productId]['exported'] += InventoryQuantity::normalize($item->quantity);
                 } elseif ($document->type === 'return') {
-                    $counters[$productId]['returned'] += (int) $item->quantity;
+                    $counters[$productId]['returned'] += InventoryQuantity::normalize($item->quantity);
                 } elseif ($document->type === 'damaged') {
-                    $counters[$productId]['damaged'] += (int) $item->quantity;
+                    $counters[$productId]['damaged'] += InventoryQuantity::normalize($item->quantity);
                 }
             }
         }
@@ -1042,14 +1043,14 @@ class OrderInventorySlipService
                     'damaged' => 0,
                 ];
 
-                $requiredQuantity = (int) $product['required_quantity'];
-                $manualExportedQuantity = (int) $counter['exported'];
-                $automaticExportedQuantity = (int) ($automaticExportCounters[$productId] ?? 0);
+                $requiredQuantity = InventoryQuantity::normalize($product['required_quantity']);
+                $manualExportedQuantity = InventoryQuantity::normalize($counter['exported']);
+                $automaticExportedQuantity = InventoryQuantity::normalize($automaticExportCounters[$productId] ?? 0);
                 $baseExportedQuantity = max($manualExportedQuantity, $automaticExportedQuantity);
-                $exportAdjustmentQuantity = (int) ($effectiveExportAdjustments[$productId] ?? 0);
+                $exportAdjustmentQuantity = InventoryQuantity::normalize($effectiveExportAdjustments[$productId] ?? 0);
                 $exportedQuantity = max(0, $baseExportedQuantity + $exportAdjustmentQuantity);
-                $returnedQuantity = (int) $counter['returned'];
-                $damagedQuantity = (int) $counter['damaged'];
+                $returnedQuantity = InventoryQuantity::normalize($counter['returned']);
+                $damagedQuantity = InventoryQuantity::normalize($counter['damaged']);
                 $remainingQuantity = max(0, $requiredQuantity - $exportedQuantity);
                 $reversibleQuantity = max(0, $exportedQuantity - $returnedQuantity - $damagedQuantity);
 
@@ -1074,12 +1075,12 @@ class OrderInventorySlipService
             })
             ->values();
 
-        $requiredQuantity = (int) $products->sum('required_quantity');
-        $exportedQuantity = (int) $products->sum('exported_quantity');
-        $returnedQuantity = (int) $products->sum('returned_quantity');
-        $damagedQuantity = (int) $products->sum('damaged_quantity');
+        $requiredQuantity = InventoryQuantity::normalize($products->sum('required_quantity'));
+        $exportedQuantity = InventoryQuantity::normalize($products->sum('exported_quantity'));
+        $returnedQuantity = InventoryQuantity::normalize($products->sum('returned_quantity'));
+        $damagedQuantity = InventoryQuantity::normalize($products->sum('damaged_quantity'));
         $remainingQuantity = max(0, $requiredQuantity - $exportedQuantity);
-        $discrepancyQuantity = (int) $products->sum('discrepancy_quantity');
+        $discrepancyQuantity = InventoryQuantity::normalize($products->sum('discrepancy_quantity'));
 
         $summary = $this->buildSummaryPayload(
             $requiredQuantity,
@@ -1198,7 +1199,7 @@ class OrderInventorySlipService
                     'sort_order' => $sortOrder++,
                 ]);
 
-                $quantity = (int) ($item->quantity ?? 0);
+                $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
                 $current['required_quantity'] += $quantity;
                 $current['ordered_revenue_total'] += round((float) ($item->price ?? 0) * $quantity, 2);
                 $current['ordered_cost_total'] += round(
@@ -1212,7 +1213,7 @@ class OrderInventorySlipService
             }, collect())
             ->sortBy('sort_order')
             ->map(function (array $item) {
-                $requiredQuantity = max(1, (int) $item['required_quantity']);
+                $requiredQuantity = max(0.001, InventoryQuantity::normalize($item['required_quantity']));
 
                 $item['ordered_unit_price'] = round((float) $item['ordered_revenue_total'] / $requiredQuantity, 2);
                 $item['ordered_unit_cost'] = round((float) $item['ordered_cost_total'] / $requiredQuantity, 2);
@@ -1362,7 +1363,7 @@ class OrderInventorySlipService
             'status_tone' => 'emerald',
             'notes' => $this->buildAutomaticExportNotes('Tu tao tu van chuyen', $trackingNumber, $carrierName),
             'created_by_name' => null,
-            'total_quantity' => (int) $items->sum('quantity'),
+            'total_quantity' => InventoryQuantity::normalize($items->sum('quantity')),
             'tracking_number' => $trackingNumber !== '' ? $trackingNumber : null,
             'carrier_name' => $carrierName !== '' ? $carrierName : null,
             'items' => $items->all(),
@@ -1407,7 +1408,7 @@ class OrderInventorySlipService
             'status_tone' => 'emerald',
             'notes' => $this->buildAutomaticExportNotes($sourceLabel, $trackingNumber, $carrierName),
             'created_by_name' => null,
-            'total_quantity' => (int) $items->sum('quantity'),
+            'total_quantity' => InventoryQuantity::normalize($items->sum('quantity')),
             'tracking_number' => $trackingNumber !== '' ? $trackingNumber : null,
             'carrier_name' => $carrierName !== '' ? $carrierName : null,
             'items' => $items->all(),
@@ -1469,7 +1470,7 @@ class OrderInventorySlipService
                 return $this->normalizeAutomaticExportItem(
                     'order-item-' . (int) $orderItem->id,
                     $orderItem,
-                    (int) ($orderItem->quantity ?? 0)
+                    InventoryQuantity::normalize($orderItem->quantity ?? 0)
                 );
             })
             ->filter()
@@ -1483,7 +1484,7 @@ class OrderInventorySlipService
         }
 
         $unitCost = $quantity > 0 && $orderItem->cost_total !== null
-            ? round((float) $orderItem->cost_total / max(1, (int) ($orderItem->quantity ?? 0)), 2)
+            ? round((float) $orderItem->cost_total / max(0.001, InventoryQuantity::normalize($orderItem->quantity ?? 0)), 2)
             : round((float) ($orderItem->cost_price ?? 0), 2);
         $unitPrice = $orderItem->price !== null ? round((float) $orderItem->price, 2) : null;
 
@@ -1703,7 +1704,7 @@ class OrderInventorySlipService
                     'product_id' => (int) $item->product_id,
                     'product_name' => $item->product_name_snapshot ?: $item->product?->name ?: "San pham #{$item->product_id}",
                     'product_sku' => $item->product_sku_snapshot ?: $item->product?->sku,
-                    'quantity' => (int) $item->quantity,
+                    'quantity' => InventoryQuantity::normalize($item->quantity),
                     'unit_cost' => (float) ($item->unit_cost ?? 0),
                     'total_cost' => (float) ($item->total_cost ?? 0),
                     'unit_price' => $item->unit_price !== null ? (float) $item->unit_price : null,
@@ -1731,7 +1732,7 @@ class OrderInventorySlipService
             'status_tone' => $statusTone,
             'notes' => $document->notes,
             'created_by_name' => $document->creator?->name,
-            'total_quantity' => (int) $items->sum('quantity'),
+            'total_quantity' => InventoryQuantity::normalize($items->sum('quantity')),
             'tracking_number' => trim((string) ($document->meta['tracking_number'] ?? '')) ?: null,
             'carrier_name' => trim((string) ($document->meta['carrier_name'] ?? '')) ?: null,
             'can_delete' => !$isManagedReturn,
@@ -1739,7 +1740,7 @@ class OrderInventorySlipService
             'is_batch_return' => $isManagedReturn,
             'batch_group_key' => $document->batch_group_key,
             'discrepancy_quantity' => $isManagedReturn
-                ? (int) $items->sum('discrepancy_quantity')
+                ? InventoryQuantity::normalize($items->sum('discrepancy_quantity'))
                 : 0,
             'adjustment_document_id' => $adjustmentDocument?->id,
             'adjustment_document_number' => $adjustmentDocument?->document_number,
@@ -1763,15 +1764,15 @@ class OrderInventorySlipService
                     ->filter(function (InventoryDocumentItemOrderLink $link) use ($orderId) {
                         return (int) $link->order_id === $orderId
                             && (
-                                (int) ($link->actual_quantity ?? 0) > 0
-                                || (int) ($link->exported_quantity ?? 0) > 0
-                                || (int) ($link->export_adjustment_quantity ?? 0) !== 0
+                                InventoryQuantity::positive($link->actual_quantity ?? 0)
+                                || InventoryQuantity::positive($link->exported_quantity ?? 0)
+                                || !InventoryQuantity::zero(InventoryQuantity::normalize($link->export_adjustment_quantity ?? 0))
                             );
                     })
                     ->map(function (InventoryDocumentItemOrderLink $link) use ($item) {
-                        $actualQuantity = (int) ($link->actual_quantity ?? 0);
-                        $exportedQuantity = (int) ($link->exported_quantity ?? 0);
-                        $discrepancyQuantity = (int) ($link->export_adjustment_quantity ?? 0);
+                        $actualQuantity = InventoryQuantity::normalize($link->actual_quantity ?? 0);
+                        $exportedQuantity = InventoryQuantity::normalize($link->exported_quantity ?? 0);
+                        $discrepancyQuantity = InventoryQuantity::normalize($link->export_adjustment_quantity ?? 0);
                         $unitCost = round((float) ($item->unit_cost ?? 0), 2);
                         $unitPrice = $item->unit_price !== null ? round((float) $item->unit_price, 2) : null;
 
@@ -1828,7 +1829,7 @@ class OrderInventorySlipService
             false
         );
         $invalidProduct = collect($detail['products'])->first(function (array $product) {
-            return ((int) $product['returned_quantity'] + (int) $product['damaged_quantity']) > (int) $product['exported_quantity'];
+            return (InventoryQuantity::normalize($product['returned_quantity']) + InventoryQuantity::normalize($product['damaged_quantity'])) > InventoryQuantity::normalize($product['exported_quantity']);
         });
 
         if ($invalidProduct) {
@@ -1848,7 +1849,7 @@ class OrderInventorySlipService
             ->get();
 
         foreach ($batches as $batch) {
-            if ((int) $batch->remaining_quantity !== (int) $batch->quantity || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
+            if (abs(InventoryQuantity::normalize($batch->remaining_quantity) - InventoryQuantity::normalize($batch->quantity)) >= 0.0005 || (int) $batch->allocations_count > 0 || (int) $batch->document_allocations_count > 0) {
                 throw ValidationException::withMessages([
                     'document' => ['Phiếu hoàn này đã phát sinh luồng kho tiếp theo nên không thể xóa hoặc sửa.'],
                 ]);
@@ -1878,7 +1879,7 @@ class OrderInventorySlipService
                 continue;
             }
 
-            if ((int) ($product->damaged_quantity ?? 0) < (int) $item->quantity) {
+            if (InventoryQuantity::normalize($product->damaged_quantity ?? 0) < InventoryQuantity::normalize($item->quantity)) {
                 throw ValidationException::withMessages([
                     'document' => ["Khong the xoa phieu hong vi {$product->sku} - {$product->name} da duoc xu ly tiep trong ton hong."],
                 ]);
@@ -1895,7 +1896,7 @@ class OrderInventorySlipService
             : round((float) $itemQuery->sum('total_cost'), 2);
 
         $document->forceFill([
-            'total_quantity' => (int) $itemQuery->sum('quantity'),
+            'total_quantity' => InventoryQuantity::normalize($itemQuery->sum('quantity')),
             'total_amount' => $totalAmount,
         ])->save();
     }
@@ -2046,8 +2047,8 @@ class OrderInventorySlipService
                     'product_id' => (int) $row['product_id'],
                     'product_name' => $row['product_name'],
                     'product_sku' => $row['product_sku'],
-                    'exported_quantity' => (int) $row['exported_quantity'],
-                    'actual_quantity' => (int) $row['exported_quantity'],
+                    'exported_quantity' => InventoryQuantity::normalize($row['exported_quantity']),
+                    'actual_quantity' => InventoryQuantity::normalize($row['exported_quantity']),
                     'discrepancy_quantity' => 0,
                     'notes' => '',
                     'is_extra_product' => false,
@@ -2071,8 +2072,8 @@ class OrderInventorySlipService
             'source_orders' => $sourceContext['orders'],
             'summary' => [
                 'order_count' => $orders->count(),
-                'exported_quantity' => (int) $products->sum('exported_quantity'),
-                'actual_quantity' => (int) $products->sum('actual_quantity'),
+                'exported_quantity' => InventoryQuantity::normalize($products->sum('exported_quantity')),
+                'actual_quantity' => InventoryQuantity::normalize($products->sum('actual_quantity')),
                 'discrepancy_quantity' => 0,
                 'discrepancy_abs_quantity' => 0,
             ],
@@ -2109,7 +2110,7 @@ class OrderInventorySlipService
 
             foreach ($detail['products'] as $product) {
                 $productId = (int) ($product['product_id'] ?? 0);
-                $exportedQuantity = (int) ($product['base_exported_quantity'] ?? $product['exported_quantity'] ?? 0);
+                $exportedQuantity = InventoryQuantity::normalize($product['base_exported_quantity'] ?? $product['exported_quantity'] ?? 0);
                 $orderProduct = $orderProducts->get($productId, []);
                 if ($productId <= 0 || $exportedQuantity <= 0) {
                     continue;
@@ -2261,12 +2262,12 @@ class OrderInventorySlipService
 
         foreach ($normalizedItems->values() as $index => $item) {
             $product = $products->get((int) $item['product_id']);
-            $actualQuantity = (int) $item['actual_quantity'];
+            $actualQuantity = InventoryQuantity::normalize($item['actual_quantity']);
             $unitCostDraft = (float) ($item['unit_cost'] ?? 0);
             $unitPriceDraft = (float) ($item['unit_price'] ?? 0);
             $unitCost = round($unitCostDraft > 0 ? $unitCostDraft : (float) ($product->cost_price ?? $product->expected_cost ?? 0), 2);
             $unitPrice = round($unitPriceDraft > 0 ? $unitPriceDraft : (float) ($product->price ?? 0), 2);
-            $discrepancyQuantity = (int) $item['discrepancy_quantity'];
+            $discrepancyQuantity = InventoryQuantity::normalize($item['discrepancy_quantity']);
             $isExtraProduct = (bool) ($item['is_extra_product'] ?? false);
             $orderBreakdown = collect($item['order_breakdown'] ?? []);
 
@@ -2285,7 +2286,7 @@ class OrderInventorySlipService
                 'total_price' => round($unitPrice * $actualQuantity, 2),
                 'notes' => $item['notes'] ?? null,
                 'meta' => [
-                    'exported_quantity_snapshot' => (int) $item['exported_quantity'],
+                    'exported_quantity_snapshot' => InventoryQuantity::normalize($item['exported_quantity']),
                     'actual_quantity' => $actualQuantity,
                     'discrepancy_quantity' => $discrepancyQuantity,
                     'is_extra_product' => $isExtraProduct,
@@ -2298,9 +2299,9 @@ class OrderInventorySlipService
                     'inventory_document_item_id' => (int) $documentItem->id,
                     'order_id' => (int) ($allocation['order_id'] ?? 0) ?: null,
                     'product_id' => (int) $product->id,
-                    'exported_quantity' => (int) ($allocation['exported_quantity'] ?? 0),
-                    'actual_quantity' => (int) ($allocation['actual_quantity'] ?? 0),
-                    'export_adjustment_quantity' => (int) ($allocation['discrepancy_quantity'] ?? 0),
+                    'exported_quantity' => InventoryQuantity::normalize($allocation['exported_quantity'] ?? 0),
+                    'actual_quantity' => InventoryQuantity::normalize($allocation['actual_quantity'] ?? 0),
+                    'export_adjustment_quantity' => InventoryQuantity::normalize($allocation['discrepancy_quantity'] ?? 0),
                     'meta' => [
                         'order_number' => $allocation['order_number'] ?? null,
                         'customer_name' => $allocation['customer_name'] ?? null,
@@ -2831,14 +2832,14 @@ class OrderInventorySlipService
 
         foreach ((array) ($payload['items'] ?? []) as $item) {
             $productId = (int) ($item['product_id'] ?? 0);
-            $actualQuantity = (int) ($item['quantity'] ?? 0);
+            $actualQuantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
 
             if ($productId <= 0 || $actualQuantity < 0) {
                 continue;
             }
 
             $source = $sourceMap->get($productId);
-            $exportedQuantity = (int) ($source['exported_quantity'] ?? 0);
+            $exportedQuantity = InventoryQuantity::normalize($source['exported_quantity'] ?? 0);
 
             if ($actualQuantity === 0 && $exportedQuantity === 0) {
                 continue;
@@ -2876,7 +2877,7 @@ class OrderInventorySlipService
                     'order_id' => (int) ($row['order_id'] ?? 0) ?: null,
                     'order_number' => $row['order_number'] ?? null,
                     'customer_name' => $row['customer_name'] ?? null,
-                    'exported_quantity' => (int) ($row['exported_quantity'] ?? 0),
+                    'exported_quantity' => InventoryQuantity::normalize($row['exported_quantity'] ?? 0),
                     'actual_quantity' => 0,
                     'discrepancy_quantity' => 0,
                     'unit_cost' => round((float) ($row['unit_cost'] ?? 0), 2),
@@ -2893,7 +2894,7 @@ class OrderInventorySlipService
                 break;
             }
 
-            $takeQuantity = min($remainingActual, (int) $row['exported_quantity']);
+            $takeQuantity = min($remainingActual, InventoryQuantity::normalize($row['exported_quantity']));
             $rows[$index]['actual_quantity'] = $takeQuantity;
             $remainingActual -= $takeQuantity;
         }
@@ -2910,13 +2911,13 @@ class OrderInventorySlipService
                 'unit_price' => 0.0,
             ];
         } elseif ($remainingActual > 0) {
-            $rows[0]['actual_quantity'] = (int) $rows[0]['actual_quantity'] + $remainingActual;
+            $rows[0]['actual_quantity'] = InventoryQuantity::normalize($rows[0]['actual_quantity']) + $remainingActual;
             $remainingActual = 0;
         }
 
         foreach ($rows as $index => $row) {
-            $rows[$index]['discrepancy_quantity'] = (int) ($rows[$index]['actual_quantity'] ?? 0)
-                - (int) ($rows[$index]['exported_quantity'] ?? 0);
+            $rows[$index]['discrepancy_quantity'] = InventoryQuantity::normalize($rows[$index]['actual_quantity'] ?? 0)
+                - InventoryQuantity::normalize($rows[$index]['exported_quantity'] ?? 0);
         }
 
         return collect($rows)->values();
@@ -2925,14 +2926,14 @@ class OrderInventorySlipService
     private function resolveManagedReturnWeightedUnitCost(Collection $allocation): float
     {
         $weightedQuantity = (float) $allocation
-            ->sum(fn (array $row) => max(0, (int) ($row['actual_quantity'] ?? 0)));
+            ->sum(fn (array $row) => max(0, InventoryQuantity::normalize($row['actual_quantity'] ?? 0)));
 
         if ($weightedQuantity <= 0) {
             return 0.0;
         }
 
         $weightedTotal = (float) $allocation->sum(function (array $row) {
-            $quantity = max(0, (int) ($row['actual_quantity'] ?? 0));
+            $quantity = max(0, InventoryQuantity::normalize($row['actual_quantity'] ?? 0));
             $unitCost = round((float) ($row['unit_cost'] ?? 0), 2);
 
             return $quantity * $unitCost;
@@ -2944,14 +2945,14 @@ class OrderInventorySlipService
     private function resolveManagedReturnWeightedUnitPrice(Collection $allocation): float
     {
         $weightedQuantity = (float) $allocation
-            ->sum(fn (array $row) => max(0, (int) ($row['actual_quantity'] ?? 0)));
+            ->sum(fn (array $row) => max(0, InventoryQuantity::normalize($row['actual_quantity'] ?? 0)));
 
         if ($weightedQuantity <= 0) {
             return 0.0;
         }
 
         $weightedTotal = (float) $allocation->sum(function (array $row) {
-            $quantity = max(0, (int) ($row['actual_quantity'] ?? 0));
+            $quantity = max(0, InventoryQuantity::normalize($row['actual_quantity'] ?? 0));
             $unitPrice = round((float) ($row['unit_price'] ?? 0), 2);
 
             return $quantity * $unitPrice;
@@ -2984,15 +2985,15 @@ class OrderInventorySlipService
         ?int $userId
     ): ?InventoryDocument {
         $adjustmentItems = $normalizedItems
-            ->filter(fn (array $item) => (int) ($item['discrepancy_quantity'] ?? 0) !== 0)
+            ->filter(fn (array $item) => !InventoryQuantity::zero(InventoryQuantity::normalize($item['discrepancy_quantity'] ?? 0)))
             ->map(function (array $item) {
-                $discrepancyQuantity = (int) $item['discrepancy_quantity'];
-                $oldQuantity = (int) ($item['exported_quantity'] ?? 0);
+                $discrepancyQuantity = InventoryQuantity::normalize($item['discrepancy_quantity']);
+                $oldQuantity = InventoryQuantity::normalize($item['exported_quantity'] ?? 0);
                 $newQuantity = max(0, $oldQuantity + $discrepancyQuantity);
                 $orderBreakdown = collect($item['order_breakdown'] ?? [])
                     ->map(function (array $allocation) {
-                        $exportedQuantity = (int) ($allocation['exported_quantity'] ?? 0);
-                        $differenceQuantity = (int) ($allocation['discrepancy_quantity'] ?? 0);
+                        $exportedQuantity = InventoryQuantity::normalize($allocation['exported_quantity'] ?? 0);
+                        $differenceQuantity = InventoryQuantity::normalize($allocation['discrepancy_quantity'] ?? 0);
 
                         return [
                             'order_id' => (int) ($allocation['order_id'] ?? 0) ?: null,
@@ -3003,7 +3004,7 @@ class OrderInventorySlipService
                             'difference_quantity' => $differenceQuantity,
                         ];
                     })
-                    ->filter(fn (array $row) => (int) ($row['difference_quantity'] ?? 0) !== 0)
+                    ->filter(fn (array $row) => !InventoryQuantity::zero(InventoryQuantity::normalize($row['difference_quantity'] ?? 0)))
                     ->values()
                     ->all();
 
@@ -3192,9 +3193,9 @@ class OrderInventorySlipService
 
         $products = $document->items
             ->map(function (InventoryDocumentItem $item) {
-                $exportedQuantity = (int) (($item->meta['exported_quantity_snapshot'] ?? null) ?? $item->orderLinks->sum('exported_quantity'));
-                $actualQuantity = (int) $item->quantity;
-                $discrepancyQuantity = (int) (($item->meta['discrepancy_quantity'] ?? null) ?? $item->orderLinks->sum('export_adjustment_quantity'));
+                $exportedQuantity = InventoryQuantity::normalize(($item->meta['exported_quantity_snapshot'] ?? null) ?? $item->orderLinks->sum('exported_quantity'));
+                $actualQuantity = InventoryQuantity::normalize($item->quantity);
+                $discrepancyQuantity = InventoryQuantity::normalize(($item->meta['discrepancy_quantity'] ?? null) ?? $item->orderLinks->sum('export_adjustment_quantity'));
                 $parentProduct = $item->product?->parentConfigurable?->first();
                 $optionLabel = $this->managedReturnAttributeSummary($item->product);
 
@@ -3225,15 +3226,15 @@ class OrderInventorySlipService
                                 'order_id' => $link->order_id ? (int) $link->order_id : null,
                                 'order_number' => $link->order?->order_number ?? ($link->meta['order_number'] ?? null),
                                 'customer_name' => $link->order?->customer_name ?? ($link->meta['customer_name'] ?? null),
-                                'exported_quantity' => (int) ($link->exported_quantity ?? 0),
-                                'actual_quantity' => (int) ($link->actual_quantity ?? 0),
-                                'discrepancy_quantity' => (int) ($link->export_adjustment_quantity ?? 0),
+                                'exported_quantity' => InventoryQuantity::normalize($link->exported_quantity ?? 0),
+                                'actual_quantity' => InventoryQuantity::normalize($link->actual_quantity ?? 0),
+                                'discrepancy_quantity' => InventoryQuantity::normalize($link->export_adjustment_quantity ?? 0),
                             ];
                         })
                         ->filter(function (array $row) {
-                            return (int) ($row['exported_quantity'] ?? 0) > 0
-                                || (int) ($row['actual_quantity'] ?? 0) > 0
-                                || (int) ($row['discrepancy_quantity'] ?? 0) !== 0;
+                            return InventoryQuantity::positive($row['exported_quantity'] ?? 0)
+                                || InventoryQuantity::positive($row['actual_quantity'] ?? 0)
+                                || !InventoryQuantity::zero(InventoryQuantity::normalize($row['discrepancy_quantity'] ?? 0));
                         })
                         ->values()
                         ->all(),
@@ -3257,10 +3258,10 @@ class OrderInventorySlipService
             'source_orders' => $orders->all(),
             'summary' => [
                 'order_count' => $orders->count(),
-                'exported_quantity' => (int) $products->sum('exported_quantity'),
-                'actual_quantity' => (int) $products->sum('actual_quantity'),
-                'discrepancy_quantity' => (int) $products->sum('discrepancy_quantity'),
-                'discrepancy_abs_quantity' => (int) $products->sum(fn (array $row) => abs((int) ($row['discrepancy_quantity'] ?? 0))),
+                'exported_quantity' => InventoryQuantity::normalize($products->sum('exported_quantity')),
+                'actual_quantity' => InventoryQuantity::normalize($products->sum('actual_quantity')),
+                'discrepancy_quantity' => InventoryQuantity::normalize($products->sum('discrepancy_quantity')),
+                'discrepancy_abs_quantity' => InventoryQuantity::normalize($products->sum(fn (array $row) => abs(InventoryQuantity::normalize($row['discrepancy_quantity'] ?? 0)))),
             ],
             'products' => $products->all(),
         ];

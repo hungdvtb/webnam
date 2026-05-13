@@ -205,7 +205,7 @@ class GoogleMerchantController extends Controller
             $count = 0;
             $query->chunkById(200, function ($products) use (&$count, $validated) {
                 foreach ($products as $product) {
-                    SyncGoogleMerchantProductJob::dispatch((int) $product->id, $validated['action'] ?? null);
+                    SyncGoogleMerchantProductJob::dispatch((int) $product->id, $validated['action'] ?? null)->afterResponse();
                     $count++;
                 }
             });
@@ -229,7 +229,7 @@ class GoogleMerchantController extends Controller
         }
 
         if (!empty($validated['queue'])) {
-            $ids->each(fn (int $id) => SyncGoogleMerchantProductJob::dispatch($id, $validated['action'] ?? null));
+            $ids->each(fn (int $id) => SyncGoogleMerchantProductJob::dispatch($id, $validated['action'] ?? null)->afterResponse());
 
             return response()->json([
                 'status' => 'queued',

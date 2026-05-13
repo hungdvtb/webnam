@@ -8,6 +8,7 @@ use App\Models\InventoryItem;
 use App\Models\SiteAnalyticsEvent;
 use App\Services\Reports\ProductSalesByDayReportService;
 use App\Services\Reports\SalesProductReportService;
+use App\Support\InventoryQuantity;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Builder;
@@ -557,7 +558,7 @@ class ReportController extends Controller
                 $productMetrics[$productId] = array_replace($productMetrics[$productId] ?? [], [
                     'product_id' => $productId,
                     'orders_count' => (int) ($row->orders_count ?? 0),
-                    'ordered_quantity' => (int) ($row->ordered_quantity ?? 0),
+                    'ordered_quantity' => InventoryQuantity::normalize($row->ordered_quantity ?? 0),
                     'ordered_revenue' => round((float) ($row->ordered_revenue ?? 0), 2),
                 ]);
             });
@@ -588,7 +589,7 @@ class ReportController extends Controller
                     'product_views' => $productViews,
                     'add_to_carts' => $addToCarts,
                     'orders_count' => $ordersCount,
-                    'ordered_quantity' => (int) ($row['ordered_quantity'] ?? 0),
+                    'ordered_quantity' => InventoryQuantity::normalize($row['ordered_quantity'] ?? 0),
                     'ordered_revenue' => round((float) ($row['ordered_revenue'] ?? 0), 2),
                     'add_to_cart_rate' => $this->percentage($addToCarts, $productViews),
                     'product_conversion_rate' => $this->percentage($ordersCount, $productViews),

@@ -7,6 +7,7 @@ use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Services\AI\GeminiService;
+use App\Support\InventoryQuantity;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
@@ -185,7 +186,7 @@ PROMPT;
         $mappedItems = $rawItems->map(function ($item, $index) use ($supplier) {
             $supplierCode = $this->normalizeSupplierCode($item['supplier_product_code'] ?? '');
             $product = $this->resolveProductFromSupplierCode($supplierCode, $supplier?->id);
-            $quantity = (int) round((float) ($item['quantity'] ?? 0));
+            $quantity = InventoryQuantity::normalize($item['quantity'] ?? 0);
             $unitCost = round((float) ($item['unit_cost'] ?? 0), 2);
             $lineTotal = round((float) ($item['line_total'] ?? ($quantity * $unitCost)), 2);
 

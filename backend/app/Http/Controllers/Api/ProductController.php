@@ -22,6 +22,7 @@ use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
+use App\Support\InventoryQuantity;
 use App\Support\OrderStatusCatalog;
 use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
@@ -2527,7 +2528,7 @@ class ProductController extends Controller
                     'sku' => $resolvedSku,
                     'price' => $variantData['price'] !== null ? (float) $variantData['price'] : $variant->price,
                     'expected_cost' => $variantData['expected_cost'] !== null ? (float) $variantData['expected_cost'] : $variant->expected_cost,
-                    'stock_quantity' => $variantData['stock_quantity'] !== null ? (int) round((float) $variantData['stock_quantity']) : $variant->stock_quantity,
+                    'stock_quantity' => $variantData['stock_quantity'] !== null ? InventoryQuantity::normalize($variantData['stock_quantity']) : $variant->stock_quantity,
                     'category_id' => $product->category_id,
                     'status' => $product->status,
                     'site_domain_id' => $product->site_domain_id,
@@ -2542,7 +2543,7 @@ class ProductController extends Controller
                     'slug' => $this->productSkuService->generateUniqueSlug($variantName !== '' ? $variantName : $resolvedSku),
                     'price' => $variantData['price'] !== null ? (float) $variantData['price'] : ($product->price ?? 0),
                     'expected_cost' => $variantData['expected_cost'] !== null ? (float) $variantData['expected_cost'] : null,
-                    'stock_quantity' => $variantData['stock_quantity'] !== null ? (int) round((float) $variantData['stock_quantity']) : 0,
+                    'stock_quantity' => $variantData['stock_quantity'] !== null ? InventoryQuantity::normalize($variantData['stock_quantity']) : 0,
                     'category_id' => $product->category_id,
                     'status' => $product->status,
                     'site_domain_id' => $product->site_domain_id,
@@ -3632,6 +3633,9 @@ class ProductController extends Controller
             }
 
             $variantData['sku'] = $normalizedSku;
+            if (array_key_exists('stock_quantity', $variantData) && $variantData['stock_quantity'] !== null && $variantData['stock_quantity'] !== '') {
+                $variantData['stock_quantity'] = InventoryQuantity::normalize($variantData['stock_quantity']);
+            }
             $preparedVariants[] = $variantData;
         }
 
@@ -3715,7 +3719,7 @@ class ProductController extends Controller
         }
 
         if (is_numeric($rawValue)) {
-            $payload[$payloadKey] = (int) $rawValue;
+            $payload[$payloadKey] = InventoryQuantity::normalize($rawValue);
         }
     }
 
@@ -4237,7 +4241,7 @@ class ProductController extends Controller
             ->selectRaw($stockContext['actual_stock_sql'] . ' AS actual_stock')
             ->get()
             ->mapWithKeys(function (Product $product) {
-                $actualStock = (int) round((float) ($product->actual_stock ?? 0));
+                $actualStock = InventoryQuantity::normalize($product->actual_stock ?? 0);
 
                 return [(int) $product->id => $actualStock];
             })
@@ -4267,8 +4271,8 @@ class ProductController extends Controller
             ->selectRaw($stockContext['pending_export_sql'] . ' AS pending_export_quantity')
             ->get()
             ->mapWithKeys(function (Product $product) {
-                $computedStock = (int) round((float) ($product->computed_stock ?? 0));
-                $pendingExportQuantity = (int) round((float) ($product->pending_export_quantity ?? 0));
+                $computedStock = InventoryQuantity::normalize($product->computed_stock ?? 0);
+                $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
                 // available_to_sell is allowed to be negative (pre-sales / back-orders)
                 $availableToSell = $computedStock - $pendingExportQuantity;
 
@@ -4340,8 +4344,8 @@ class ProductController extends Controller
             }
 
             $actualStock = array_key_exists($productId, $stockMap)
-                ? (int) $stockMap[$productId]
-                : (int) round((float) ($item->actual_stock ?? $item->stock_quantity ?? 0));
+                ? InventoryQuantity::normalize($stockMap[$productId])
+                : InventoryQuantity::normalize($item->actual_stock ?? $item->stock_quantity ?? 0);
             $item->setAttribute('actual_stock', $actualStock);
             $item->setAttribute('stock_quantity', $actualStock);
         };
@@ -6921,7 +6925,7 @@ class ProductController extends Controller
             'category' => $this->resolveProductExportCategory($product),
             'price' => $product['price'] ?? '',
             'cost_price' => $product['expected_cost'] ?? $product['cost_price'] ?? '',
-            'stock' => (int) round((float) ($product['actual_stock'] ?? $product['stock_quantity'] ?? 0)),
+            'stock' => InventoryQuantity::normalize($product['actual_stock'] ?? $product['stock_quantity'] ?? 0),
             'status' => !empty($product['status']) ? 1 : 0,
             'is_featured' => !empty($product['is_featured']) ? 1 : 0,
             'is_new' => !empty($product['is_new']) ? 1 : 0,
@@ -7112,8 +7116,8 @@ class ProductController extends Controller
             'special_price' => $product['special_price'] ?? '',
             'cost_price' => $product['expected_cost'] ?? $product['cost_price'] ?? '',
             'expected_cost' => $product['expected_cost'] ?? $product['cost_price'] ?? '',
-            'stock' => (int) round((float) ($product['actual_stock'] ?? $product['stock_quantity'] ?? 0)),
-            'stock_quantity' => (int) round((float) ($product['actual_stock'] ?? $product['stock_quantity'] ?? 0)),
+            'stock' => InventoryQuantity::normalize($product['actual_stock'] ?? $product['stock_quantity'] ?? 0),
+            'stock_quantity' => InventoryQuantity::normalize($product['actual_stock'] ?? $product['stock_quantity'] ?? 0),
             'status' => !empty($product['status']) ? 1 : 0,
             'is_featured' => !empty($product['is_featured']) ? 1 : 0,
             'is_new' => !empty($product['is_new']) ? 1 : 0,
@@ -7331,7 +7335,7 @@ class ProductController extends Controller
                     'name' => trim((string) ($variant['name'] ?? '')),
                     'price' => $variant['price'] ?? null,
                     'expected_cost' => $variant['expected_cost'] ?? $variant['cost_price'] ?? null,
-                    'stock_quantity' => (int) round((float) ($variant['actual_stock'] ?? $variant['stock_quantity'] ?? 0)),
+                    'stock_quantity' => InventoryQuantity::normalize($variant['actual_stock'] ?? $variant['stock_quantity'] ?? 0),
                     'attributes' => !empty($attributePayload) ? $attributePayload : null,
                     'primary_image_url' => $primaryImageUrl !== '' ? $primaryImageUrl : null,
                     'gallery_image_urls' => !empty($galleryImageUrls) ? $galleryImageUrls : null,
@@ -7380,7 +7384,7 @@ class ProductController extends Controller
                         'name' => trim((string) ($variant->name ?? '')),
                         'price' => $variant->price,
                         'expected_cost' => $variant->expected_cost ?? $variant->cost_price,
-                        'stock_quantity' => (int) round((float) ($variant->stock_quantity ?? 0)),
+                        'stock_quantity' => InventoryQuantity::normalize($variant->stock_quantity ?? 0),
                     ],
                 ];
             })
@@ -8329,12 +8333,19 @@ class ProductController extends Controller
             return [false, null];
         }
 
-        if (!preg_match('/^-?\d+$/', $trimmed)) {
-            $errors[] = $this->importError($rowNumber, $column, 'Giá trị phải là số nguyên hợp lệ.');
+        $normalized = str_replace(' ', '', $trimmed);
+        if (str_contains($normalized, ',') && !str_contains($normalized, '.')) {
+            $normalized = str_replace(',', '.', $normalized);
+        } else {
+            $normalized = str_replace(',', '', $normalized);
+        }
+
+        if (!is_numeric($normalized)) {
+            $errors[] = $this->importError($rowNumber, $column, 'Giá trị phải là số hợp lệ.');
             return [false, null];
         }
 
-        return [true, (int) $trimmed];
+        return [true, InventoryQuantity::normalize($normalized)];
     }
 
     private function parseImportedOptionalBoolean(string $value, int $rowNumber, string $column, array &$errors): array
@@ -9102,7 +9113,7 @@ class ProductController extends Controller
             'description' => 'nullable|string',
             'is_featured' => 'boolean',
             'is_new' => 'boolean',
-            'stock_quantity' => 'integer|min:0',
+            'stock_quantity' => 'numeric|min:0',
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|max:120',
@@ -9150,7 +9161,7 @@ class ProductController extends Controller
             'variants.*.expected_cost' => 'nullable|numeric|min:0',
             'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
-            'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.stock_quantity' => 'nullable|numeric|min:0',
             'variants.*.status' => 'nullable|boolean',
             'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
@@ -9161,12 +9172,13 @@ class ProductController extends Controller
             'type.required' => 'Vui lòng chọn loại sản phẩm.',
             'name.required' => 'Vui lòng nhập tên tác phẩm nghệ thuật.',
             'price.required' => 'Vui lòng nhập giá bán.',
-            'stock_quantity.integer' => 'Số lượng tồn kho phải là số nguyên.',
+            'stock_quantity.numeric' => 'Số lượng tồn kho phải là số hợp lệ.',
             'slug.unique' => 'Đường dẫn (slug) này đã tồn tại, vui lòng chọn tên khác.',
         ]);
         $this->applyLegacyExpectedCostAlias($request, $validated);
         $this->applyCompositeAutoPrice($request, $validated);
         $this->prepareAdditionalInfoForPersistence($request, $validated);
+        $this->prepareOptionalStockQuantityForPersistence($request, $validated);
 
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
@@ -9531,13 +9543,6 @@ class ProductController extends Controller
                 ];
             }
         }
-        collect($ids)
-            ->each(function ($productId) {
-                $product = Product::query()->find((int) $productId);
-                if ($product) {
-                    $this->queueGoogleMerchantProductSync($product, false);
-                }
-            });
 
         return response()->json([
             'items' => $items,
@@ -9781,7 +9786,7 @@ class ProductController extends Controller
             'description' => 'nullable|string',
             'is_featured' => 'boolean',
             'is_new' => 'boolean',
-            'stock_quantity' => 'sometimes|nullable|integer|min:0',
+            'stock_quantity' => 'sometimes|nullable|numeric|min:0',
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|max:120',
@@ -9834,7 +9839,7 @@ class ProductController extends Controller
             'variants.*.expected_cost' => 'nullable|numeric|min:0',
             'variants.*.weight' => 'nullable|string',
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
-            'variants.*.stock_quantity' => 'nullable|integer|min:0',
+            'variants.*.stock_quantity' => 'nullable|numeric|min:0',
             'variants.*.status' => 'nullable|boolean',
             'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
@@ -10670,7 +10675,7 @@ class ProductController extends Controller
             'basic_info' => 'nullable|array',
             'basic_info.cost_price' => 'nullable|numeric|min:0',
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
-            'basic_info.stock_quantity' => 'sometimes|nullable|integer|min:0',
+            'basic_info.stock_quantity' => 'sometimes|nullable|numeric|min:0',
             'basic_info.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'basic_info.specifications' => 'nullable|string',
             'basic_info.additional_info' => 'nullable',

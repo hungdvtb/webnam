@@ -20,14 +20,22 @@ export const createBundleItemEntryId = () => (
     `bundle-item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 );
 
+const buildCopiedBundleOptionTitle = (title) => {
+    const normalizedTitle = String(title ?? '').trim();
+    return normalizedTitle ? `Copy ${normalizedTitle}` : 'Copy';
+};
+
 export const cloneBundleOptionForCopy = (
     option,
     {
         createOptionId = createBundleOptionId,
         createEntryId = createBundleItemEntryId,
+        createOptionUid = createBundleOptionId,
     } = {},
 ) => {
     const clonedOption = cloneBundleValue(option || {});
+    const optionId = createOptionId();
+    const optionUid = createOptionUid();
     const clonedItems = Array.isArray(clonedOption.items)
         ? clonedOption.items.map((item) => ({
             ...item,
@@ -37,20 +45,22 @@ export const cloneBundleOptionForCopy = (
 
     return {
         ...clonedOption,
-        id: createOptionId(),
-        uid: '',
-        bundle_option_uid: '',
+        id: optionId,
+        uid: optionUid,
+        bundle_option_uid: optionUid,
+        title: buildCopiedBundleOptionTitle(clonedOption.title),
         items: clonedItems,
     };
 };
 
-export const copyBundleOptionToTop = (
+export const copyBundleOptionBelowSource = (
     options,
     sourceOptionId,
     factories = {},
 ) => {
     const currentOptions = Array.isArray(options) ? [...options] : [];
-    const sourceOption = currentOptions.find((option) => option?.id === sourceOptionId);
+    const sourceIndex = currentOptions.findIndex((option) => option?.id === sourceOptionId);
+    const sourceOption = sourceIndex >= 0 ? currentOptions[sourceIndex] : null;
 
     if (!sourceOption) {
         return {
@@ -63,6 +73,10 @@ export const copyBundleOptionToTop = (
 
     return {
         copiedOption,
-        nextOptions: [copiedOption, ...currentOptions],
+        nextOptions: [
+            ...currentOptions.slice(0, sourceIndex + 1),
+            copiedOption,
+            ...currentOptions.slice(sourceIndex + 1),
+        ],
     };
 };

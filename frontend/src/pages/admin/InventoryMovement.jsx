@@ -298,8 +298,30 @@ const nextSortConfig = (current, columnId) => {
 
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
-const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value ?? 0));
+const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(Number(value ?? 0));
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
+const normalizeQuantityDraft = (value, { signed = false } = {}) => {
+    const raw = String(value ?? '').trimStart().replace(/,/g, '.');
+    const sign = signed && raw.startsWith('-') ? '-' : '';
+    const unsigned = raw.replace(/^[+-]\s*/, '').replace(/[^0-9.]/g, '');
+    if (!unsigned) return sign;
+
+    const [integerPartRaw, ...decimalParts] = unsigned.split('.');
+    const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '') || (decimalParts.length ? '0' : '');
+    const decimalPart = decimalParts.join('').slice(0, 3);
+
+    if (decimalParts.length > 0) {
+        return `${sign}${integerPart || '0'}.${decimalPart}`;
+    }
+
+    return `${sign}${integerPart}`;
+};
+const parseQuantityDraft = (value, fallback = 0) => {
+    const normalized = normalizeQuantityDraft(value);
+    if (!normalized || normalized === '.') return fallback;
+    const numericValue = Number(normalized);
+    return Number.isFinite(numericValue) ? numericValue : fallback;
+};
 const getProductStockAlertMeta = (row) => {
     const stock = Number(row?.actual_stock ?? row?.computed_stock ?? 0);
     const normalizedAlert = String(row?.stock_alert || '').trim();
@@ -429,24 +451,17 @@ const parseWholeNumberInput = (value) => {
     return parseWholeMoneyValue(value);
 };
 const normalizeSignedWholeNumberInput = (value) => {
-    const raw = String(value ?? '').trimStart();
-    const sign = raw.startsWith('-') ? '-' : (raw.startsWith('+') ? '+' : '');
-    const digits = stripNumericValue(raw.replace(/^[+-]\s*/, ''));
-
-    if (!digits) return sign;
-
-    const normalizedDigits = digits.replace(/^0+(?=\d)/, '');
-    return `${sign}${normalizedDigits || '0'}`;
+    return normalizeQuantityDraft(value, { signed: true });
 };
 const parseSignedWholeNumberInput = (value) => {
     const raw = String(value ?? '').trim();
-    if (!raw || raw === '+' || raw === '-') return null;
+    if (!raw || raw === '+' || raw === '-' || raw === '.' || raw === '-.') return null;
 
     const sign = raw.startsWith('-') ? -1 : 1;
-    const digits = stripNumericValue(raw.replace(/^[+-]\s*/, ''));
-    if (!digits) return null;
+    const normalized = normalizeQuantityDraft(raw.replace(/^[+-]\s*/, ''));
+    if (!normalized || normalized === '.') return null;
 
-    return sign * Number(digits);
+    return sign * Number(normalized);
 };
 const nudgeSignedWholeNumberInput = (value, delta) => {
     const currentValue = parseSignedWholeNumberInput(value);
@@ -1770,9 +1785,7 @@ const buildImportPrintHtml = ({
 };
 
 const parseLineQuantity = (value, fallback = 0) => {
-    const cleaned = String(value ?? '').replace(/[^0-9]/g, '');
-    if (!cleaned) return fallback;
-    return Number(cleaned);
+    return parseQuantityDraft(value, fallback);
 };
 
 const clampReceivedQuantity = (receivedValue, quantityValue) => {
@@ -2902,7 +2915,7 @@ const QuantityStepperInput = ({ value, onChange, min = 0 }) => {
     const currentValue = parseLineQuantity(value, min);
 
     const commitValue = (nextValue) => {
-        onChange(String(Math.max(min, nextValue)));
+        onChange(normalizeQuantityDraft(String(Math.max(min, nextValue))));
     };
 
     return (
@@ -2912,7 +2925,8 @@ const QuantityStepperInput = ({ value, onChange, min = 0 }) => {
             </button>
             <input
                 value={value}
-                onChange={(event) => onChange(event.target.value.replace(/[^0-9]/g, ''))}
+                onChange={(event) => onChange(normalizeQuantityDraft(event.target.value))}
+                inputMode="decimal"
                 className="h-full w-full border-x border-primary/10 bg-transparent px-2 text-center text-[12px] font-semibold text-primary outline-none"
                 placeholder={String(min)}
             />
@@ -3112,7 +3126,7 @@ const ImportItemsEditorTable = ({
             if (readOnly) {
                 return <div className="text-right text-[12px] font-black text-primary">{formatNumber(row.quantity || 0)}</div>;
             }
-            return <QuantityStepperInput value={row.quantity} onChange={(value) => onUpdateLine(row._row_index, 'quantity', value)} min={1} />;
+            return <QuantityStepperInput value={row.quantity} onChange={(value) => onUpdateLine(row._row_index, 'quantity', value)} min={0.001} />;
         }
 
         if (columnId === 'received_quantity') {
@@ -4003,9 +4017,9 @@ const InventoryMovement = () => {
     );
 
     const normalizeImportItems = (items) => (items || []).map((item) => {
-        const quantityText = String(item.quantity ?? '').replace(/[^0-9]/g, '');
+        const quantityText = normalizeQuantityDraft(item.quantity);
         const quantity = quantityText ? Number(quantityText) : 0;
-        const receivedText = String(item.received_quantity ?? '').replace(/[^0-9]/g, '');
+        const receivedText = normalizeQuantityDraft(item.received_quantity);
         const receivedRaw = receivedText ? Number(receivedText) : 0;
 
         return {
@@ -9137,7 +9151,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                                         </div>
                                                     </td>
                                                     <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
-                                                        <input value={item.quantity} onChange={(event) => updateLine(setExportModal, index, 'quantity', event.target.value.replace(/[^0-9]/g, ''))} className={`w-full ${inputClass}`} />
+                                                        <input value={item.quantity} onChange={(event) => updateLine(setExportModal, index, 'quantity', normalizeQuantityDraft(event.target.value))} inputMode="decimal" className={`w-full ${inputClass}`} />
                                                     </td>
                                                     <td className="border-b border-r border-primary/10 px-3 py-2 align-top">
                                                         <input value={formatWholeNumberInput(item.unit_cost)} onChange={(event) => updateLine(setExportModal, index, 'unit_cost', normalizeWholeMoneyDraft(event.target.value))} className={`w-full text-right ${inputClass}`} />
@@ -9319,8 +9333,9 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                                         setDocumentModal,
                                                         index,
                                                         'quantity',
-                                                        event.target.value.replace(/[^0-9]/g, '')
+                                                        normalizeQuantityDraft(event.target.value)
                                                     )}
+                                                    inputMode="decimal"
                                                     className={`w-full text-right ${inputClass}`}
                                                 />
                                             )}

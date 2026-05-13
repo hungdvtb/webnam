@@ -34,6 +34,7 @@ class InventoryImport extends Model
 
     protected $casts = [
         'import_date' => 'date',
+        'total_quantity' => 'decimal:3',
         'subtotal_amount' => 'decimal:2',
         'extra_charge_percent' => 'decimal:2',
         'extra_charge_value' => 'decimal:2',

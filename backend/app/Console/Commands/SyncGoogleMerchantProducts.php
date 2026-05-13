@@ -49,8 +49,9 @@ class SyncGoogleMerchantProducts extends Command
 
                 try {
                     if ($this->option('dry-run')) {
-                        $payload = $syncService->buildProductInputPayload($product);
-                        $this->line(sprintf('[dry-run] #%d %s', $product->id, $payload['offerId'] ?? ''));
+                        foreach ($syncService->buildProductInputPayloads($product) as $payload) {
+                            $this->line(sprintf('[dry-run] #%d %s', $product->id, $payload['offerId'] ?? ''));
+                        }
                     } else {
                         $result = $syncService->syncProduct($product);
                         $this->line(sprintf('[synced] #%d %s', $product->id, $result['offer_id'] ?? ''));

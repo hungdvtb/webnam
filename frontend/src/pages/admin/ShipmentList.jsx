@@ -11,6 +11,7 @@ import { useTableColumns } from '../../hooks/useTableColumns';
 import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel';
 import SortIndicator from '../../components/SortIndicator';
 import { DEFAULT_STATUS_BADGE_COLOR } from '../../utils/statusBadge';
+import { normalizeWholeMoneyNumber } from '../../utils/money';
 
 const COPY_RESET_MS = 1800;
 
@@ -463,10 +464,8 @@ const mergeCarrierOptions = (...groups) => {
     return Array.from(carrierMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 };
 const parseEditableMoney = (value) => {
-    const normalized = String(value ?? '').replace(/[^\d.-]/g, '');
-    if (!normalized) return 0;
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+    const parsed = normalizeWholeMoneyNumber(value);
+    return parsed === null ? null : parsed;
 };
 const sanitizeOrderPayload = (order) => {
     if (!order || typeof order !== 'object') return null;

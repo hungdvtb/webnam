@@ -5657,6 +5657,22 @@ class OrderController extends Controller
 
     public function quickDispatch(Request $request, ShipmentStatusSyncService $syncService)
     {
+        $request->merge([
+            'shipments' => collect($request->input('shipments', []))
+                ->map(function ($item) {
+                    if (!is_array($item)) {
+                        return $item;
+                    }
+
+                    if (array_key_exists('shipping_cost', $item)) {
+                        $item['shipping_cost'] = $this->normalizeWholeMoneyInput($item['shipping_cost']);
+                    }
+
+                    return $item;
+                })
+                ->all(),
+        ]);
+
         $validated = $request->validate([
             'shipments' => 'required|array|min:1',
             'shipments.*.order_id' => 'required|integer',
@@ -5780,6 +5796,41 @@ class OrderController extends Controller
             'failed_count' => $failedCount,
             'results' => $results,
         ], $successCount > 0 && $failedCount === 0 ? 201 : 200);
+    }
+
+    private function normalizeWholeMoneyInput($value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_int($value)) {
+            return max(0, $value);
+        }
+
+        if (is_float($value)) {
+            return max(0, (int) $value);
+        }
+
+        $normalized = trim((string) $value);
+        $normalized = preg_replace('/[\s\x{00A0}\x{20AB}đĐ]+/u', '', $normalized) ?? '';
+
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (preg_match('/^-?\d+[.,]\d{1,2}$/', $normalized) === 1) {
+            return max(0, (int) ((float) str_replace(',', '.', $normalized)));
+        }
+
+        $sign = str_starts_with($normalized, '-') ? -1 : 1;
+        $digits = preg_replace('/\D+/u', '', $normalized) ?? '';
+
+        if ($digits === '') {
+            return null;
+        }
+
+        return max(0, $sign * (int) $digits);
     }
 
     public function shippingAlerts(Request $request, ShippingAlertService $shippingAlertService)

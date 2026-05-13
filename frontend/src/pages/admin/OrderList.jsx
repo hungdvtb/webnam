@@ -51,6 +51,10 @@ import {
     readOrderReportDrilldownScope,
     removeOrderReportDrilldownScope,
 } from '../../utils/orderReportDrilldown';
+import {
+    formatWholeMoneyInput,
+    normalizeWholeMoneyNumber,
+} from '../../utils/money';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -1141,6 +1145,8 @@ const resolveOrderInternalShippingFee = (order) => {
     return Math.max(...resolvedValues);
 };
 
+const parseWholeShippingCostInput = (value) => normalizeWholeMoneyNumber(value);
+
 const hasLegacyQuickDispatchMarker = (order) => Boolean(
     order?.shipping_tracking_code
     || order?.shipping_carrier_code
@@ -1173,8 +1179,8 @@ const buildQuickDispatchLockedMessage = (order) => {
 };
 
 const isQuickDispatchRowValid = (row) => {
-    const shippingCost = Number(row.shipping_cost);
-    if (row.shipping_cost === '' || Number.isNaN(shippingCost) || shippingCost < 0) {
+    const shippingCost = parseWholeShippingCostInput(row.shipping_cost);
+    if (String(row.shipping_cost ?? '').trim() === '' || shippingCost === null || shippingCost < 0) {
         return false;
     }
 
@@ -2299,9 +2305,9 @@ const QuickShipmentModal = ({
                                                         <div>
                                                             <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Phí ship</label>
                                                             <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="1000"
+                                                                type="text"
+                                                                inputMode="numeric"
+                                                                autoComplete="off"
                                                                 value={row.shipping_cost}
                                                                 onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
                                                                 placeholder="0"
@@ -2348,9 +2354,9 @@ const QuickShipmentModal = ({
                                                         <div>
                                                             <label className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/50 block mb-2">Tiền ship</label>
                                                             <input
-                                                                type="number"
-                                                                min="0"
-                                                                step="1000"
+                                                                type="text"
+                                                                inputMode="numeric"
+                                                                autoComplete="off"
                                                                 value={row.shipping_cost}
                                                                 onChange={(event) => onFieldChange(row.id, 'shipping_cost', event.target.value)}
                                                                 placeholder="0"
@@ -2768,7 +2774,8 @@ const OrderList = () => {
                 mode: normalizeQuickDispatchMode(previousRow.mode),
                 tracking_number: previousRow.tracking_number ?? '',
                 carrier_name: previousRow.carrier_name ?? order?.shipping_carrier_name ?? '',
-                shipping_cost: previousRow.shipping_cost ?? (resolveOrderInternalShippingFee(order) > 0 ? String(Math.round(resolveOrderInternalShippingFee(order))) : ''),
+                shipping_cost: previousRow.shipping_cost
+                    ?? (resolveOrderInternalShippingFee(order) > 0 ? formatWholeMoneyInput(resolveOrderInternalShippingFee(order)) : ''),
                 outside_delivery_type: previousRow.outside_delivery_type ?? outsideMeta?.delivery_type ?? '',
                 outside_contact_name: previousRow.outside_contact_name ?? outsideMeta?.contact_name ?? '',
                 outside_note: previousRow.outside_note ?? outsideMeta?.note ?? '',
@@ -3863,7 +3870,9 @@ const OrderList = () => {
             ...previous,
             [key]: {
                 ...(previous[key] || {}),
-                [field]: value,
+                [field]: field === 'shipping_cost'
+                    ? formatWholeMoneyInput(value)
+                    : value,
             },
         }));
     };
@@ -3902,7 +3911,7 @@ const OrderList = () => {
             dispatch_mode: normalizeQuickDispatchMode(row.mode),
             tracking_number: String(row.tracking_number || '').trim(),
             carrier_name: String(row.carrier_name || '').trim(),
-            shipping_cost: Number(row.shipping_cost),
+            shipping_cost: parseWholeShippingCostInput(row.shipping_cost) ?? 0,
             external_delivery_type: String(row.outside_delivery_type || '').trim(),
             external_delivery_contact: String(row.outside_contact_name || '').trim(),
             external_note: String(row.outside_note || '').trim(),

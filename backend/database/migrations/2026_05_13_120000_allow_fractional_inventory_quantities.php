@@ -14,6 +14,7 @@ return new class extends Migration
         'import_items' => ['quantity', 'received_quantity'],
         'inventory_batches' => ['quantity', 'remaining_quantity'],
         'inventory_batch_allocations' => ['quantity'],
+        'shipment_items' => ['qty'],
         'inventory_documents' => ['total_quantity'],
         'inventory_document_items' => ['quantity'],
         'inventory_document_allocations' => ['quantity'],

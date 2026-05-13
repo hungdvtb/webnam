@@ -14,6 +14,7 @@ use App\Models\ShippingIntegration;
 use App\Services\Shipping\ShipmentDispatchService;
 use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ShipmentTransitionGuard;
+use App\Support\InventoryQuantity;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -374,7 +375,7 @@ class ShipmentController extends Controller
                     ShipmentItem::create([
                         'shipment_id' => $shipment->id,
                         'order_item_id' => $item['order_item_id'],
-                        'qty' => $item['qty'],
+                        'qty' => InventoryQuantity::normalize($item['qty'] ?? 0),
                     ]);
                 }
             } else {
@@ -382,7 +383,7 @@ class ShipmentController extends Controller
                     ShipmentItem::create([
                         'shipment_id' => $shipment->id,
                         'order_item_id' => $orderItem->id,
-                        'qty' => $orderItem->quantity,
+                        'qty' => InventoryQuantity::normalize($orderItem->quantity ?? 0),
                     ]);
                 }
             }

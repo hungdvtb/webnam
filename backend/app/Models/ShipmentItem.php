@@ -15,6 +15,10 @@ class ShipmentItem extends Model
         'qty',
     ];
 
+    protected $casts = [
+        'qty' => 'decimal:3',
+    ];
+
     public function shipment()
     {
         return $this->belongsTo(Shipment::class);

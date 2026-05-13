@@ -1156,8 +1156,19 @@ const parseQuantityNumber = (value, fallback = null) => {
         return fallback;
     }
 
-    const numericValue = Number(value);
+    const numericValue = Number(typeof value === 'string' ? value.replace(',', '.') : value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+const MIN_ORDER_ITEM_QUANTITY = 0.001;
+const normalizeOrderLineQuantity = (value, fallback = 1) => {
+    const fallbackValue = Math.max(MIN_ORDER_ITEM_QUANTITY, parseQuantityNumber(fallback, 1) || 1);
+    const numericValue = parseQuantityNumber(value, fallbackValue);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return fallbackValue;
+    }
+
+    return Number(numericValue.toFixed(3));
 };
 const normalizeQuantityInputValue = (value) => {
     const rawValue = String(value ?? '').trimStart().replace(/,/g, '.');
@@ -1185,7 +1196,7 @@ const parseQuantityInputValue = (value, fallback = 0) => {
     const numericValue = Number(normalizedValue);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
-const nudgeQuantityInputValue = (value, delta, min = 1) => {
+const nudgeQuantityInputValue = (value, delta, min = MIN_ORDER_ITEM_QUANTITY) => {
     const fallbackValue = delta > 0 ? min - 1 : min + 1;
     const currentValue = parseQuantityInputValue(value, fallbackValue);
     const nextValue = delta > 0
@@ -1857,7 +1868,7 @@ const createOrderLineItem = (payload = {}) => {
         snapshot_sku: resolvedSnapshotSku,
         unit_name: resolveOrderUnitLabel(payload, { unit_name }),
         sort_order: Math.max(1, Number(sort_order) || 1),
-        quantity: Math.max(1, Number(quantity) || 1),
+        quantity: normalizeOrderLineQuantity(quantity),
         price: Number(price) || 0,
         cost_price: resolvedCostPrice,
         base_cost_price: resolveRoundedImportCostValue(payload.base_cost_price, resolvedCostPrice),
@@ -1947,7 +1958,9 @@ const appendOrderItemsWithMergeResult = (currentItems = [], additions = [], { in
                 }),
                 sku: incomingSku && incomingSku !== 'N/A' ? incomingSku : existingItem.sku,
                 unit_name: resolveOrderUnitLabel(normalizedAddition, existingItem),
-                quantity: Math.max(1, (Number(existingItem.quantity) || 0) + (Number(normalizedAddition.quantity) || 0)),
+                quantity: normalizeOrderLineQuantity(
+                    (Number(existingItem.quantity) || 0) + (Number(normalizedAddition.quantity) || 0)
+                ),
                 price: Number(normalizedAddition.price ?? existingItem.price ?? 0) || 0,
                 cost_price: resolveRoundedImportCostValue(
                     normalizedAddition.cost_price ?? existingItem.cost_price ?? 0,
@@ -2736,7 +2749,7 @@ const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
 const normalizeOrderAiPreviewItem = (item, index) => ({
     ...item,
     line_key: item?.line_key || `order-ai-preview-${index + 1}`,
-    quantity: Math.max(1, Number(item?.quantity ?? 1) || 1),
+    quantity: normalizeOrderLineQuantity(item?.quantity ?? 1),
     suggestions: Array.isArray(item?.suggestions) ? item.suggestions : [],
     selected_entry: item?.selected_entry || null,
 });
@@ -4376,7 +4389,7 @@ const OrderForm = () => {
             ...replacement,
             line_id: currentLine.line_id,
             sort_order: currentLine.sort_order,
-            quantity: Math.max(1, Number(currentLine.quantity) || 1),
+            quantity: normalizeOrderLineQuantity(currentLine.quantity),
             ai_meta: replacedLineWasAi
                 ? mergeOrderAiItemMeta(currentLine.ai_meta, {
                     review_state: currentLine?.ai_meta?.review_state || 'pending',
@@ -4564,7 +4577,7 @@ const OrderForm = () => {
                 buildOrderItemsFromSearchEntry(item.selected_entry).map((addition, additionIndex) => ({
                     ...addition,
                     line_id: addition?.line_id || `${sessionId}-${item.line_key}-${additionIndex + 1}`,
-                    quantity: Math.max(1, Number(addition?.quantity ?? 1) || 1) * Math.max(1, Number(item.quantity) || 1),
+                    quantity: normalizeOrderLineQuantity(addition?.quantity ?? 1) * normalizeOrderLineQuantity(item.quantity),
                     ai_meta: createOrderAiLineMeta(item, sessionId),
                 }))
             ));
@@ -4762,7 +4775,7 @@ const OrderForm = () => {
             const additions = readyItems.flatMap((item) => (
                 buildOrderItemsFromSearchEntry(item.selected_entry).map((addition) => ({
                     ...addition,
-                    quantity: Math.max(1, Number(addition?.quantity ?? 1) || 1) * Math.max(1, Number(item.quantity) || 1),
+                    quantity: normalizeOrderLineQuantity(addition?.quantity ?? 1) * normalizeOrderLineQuantity(item.quantity),
                 }))
             ));
 
@@ -5832,7 +5845,7 @@ const OrderForm = () => {
                 product_id: item.product_id,
                 name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
                 sku: item.sku || item.product_sku || 'N/A',
-                quantity: Number(item.quantity) || 1,
+                quantity: normalizeOrderLineQuantity(item.quantity),
                 price: Number(item.price) || 0,
                 cost_price: resolveProductCostPrice(item),
                 options: item.options || {}
@@ -5843,7 +5856,7 @@ const OrderForm = () => {
                 name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
                 sku: item.sku || item.product_sku || 'N/A',
                 unit_name: resolveOrderUnitLabel(item, item?.product),
-                quantity: Number(item.quantity) || 1,
+                quantity: normalizeOrderLineQuantity(item.quantity),
                 price: Number(item.price) || 0,
                 cost_price: resolveProductCostPrice(item),
                 base_cost_price: resolveProductCostPrice(item),
@@ -8671,8 +8684,8 @@ const OrderForm = () => {
                                                                 <input
                                                                     type="number"
                                                                     inputMode="decimal"
-                                                                    min="1"
-                                                                    step="1"
+                                                                    min={MIN_ORDER_ITEM_QUANTITY}
+                                                                    step={MIN_ORDER_ITEM_QUANTITY}
                                                                     value={item.quantity}
                                                                     onChange={(event) => updateItem(index, 'quantity', normalizeQuantityInputValue(event.target.value))}
                                                                     onKeyDown={(event) => handleQuantityInputKeyDown(
@@ -9084,8 +9097,8 @@ const OrderForm = () => {
                                                                     <input
                                                                         type="number"
                                                                         inputMode="decimal"
-                                                                        min="1"
-                                                                        step="1"
+                                                                        min={MIN_ORDER_ITEM_QUANTITY}
+                                                                        step={MIN_ORDER_ITEM_QUANTITY}
                                                                         value={item.quantity}
                                                                         onChange={(e) => updateItem(index, 'quantity', normalizeQuantityInputValue(e.target.value))}
                                                                         onKeyDown={(e) => handleQuantityInputKeyDown(

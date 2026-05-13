@@ -1454,7 +1454,7 @@ class OrderInventorySlipService
                 return $this->normalizeAutomaticExportItem(
                     'shipment-item-' . (int) $shipmentItem->id,
                     $orderItem,
-                    (int) ($shipmentItem->qty ?? 0)
+                    InventoryQuantity::normalize($shipmentItem->qty ?? 0)
                 );
             })
             ->filter()
@@ -1477,7 +1477,7 @@ class OrderInventorySlipService
             ->values();
     }
 
-    private function normalizeAutomaticExportItem(string $id, $orderItem, int $quantity): ?array
+    private function normalizeAutomaticExportItem(string $id, $orderItem, float $quantity): ?array
     {
         if ($quantity <= 0) {
             return null;

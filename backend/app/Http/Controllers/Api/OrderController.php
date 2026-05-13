@@ -3219,7 +3219,7 @@ class OrderController extends Controller
                     ShipmentItem::create([
                         'shipment_id' => $shipment->id,
                         'order_item_id' => $item->id,
-                        'qty' => $item->quantity,
+                        'qty' => InventoryQuantity::normalize($item->quantity ?? 0),
                     ]);
                 });
 

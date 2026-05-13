@@ -10,6 +10,7 @@ use App\Models\ShipmentItem;
 use App\Models\ShipmentStatusLog;
 use App\Models\ShippingIntegration;
 use App\Models\Warehouse;
+use App\Support\InventoryQuantity;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -273,7 +274,7 @@ class ShipmentDispatchService
                 ShipmentItem::create([
                     'shipment_id' => $shipment->id,
                     'order_item_id' => $item->id,
-                    'qty' => $item->quantity,
+                    'qty' => InventoryQuantity::normalize($item->quantity ?? 0),
                 ]);
             });
 

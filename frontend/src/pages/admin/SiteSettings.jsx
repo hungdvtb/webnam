@@ -22,10 +22,13 @@ const defaultSettings = {
     youtube_link: '',
     fb_pixel_id: '',
     fb_pixel_active: false,
+    fb_pixels: [],
     ga_id: '',
     ga_active: false,
+    ga_trackings: [],
     tt_pixel_id: '',
     tt_pixel_active: false,
+    tt_pixels: [],
     ai_gemini_api_key: '',
     ai_gemini_keys: [],
     ai_gemini_model: 'gemini-2.5-flash',
@@ -97,6 +100,134 @@ const createGeminiKey = () => ({
     is_active: true,
 });
 
+const trackingPlatforms = [
+    {
+        key: 'facebook',
+        icon: 'ads_click',
+        title: 'Facebook Pixel',
+        listName: 'fb_pixels',
+        legacyIdName: 'fb_pixel_id',
+        legacyActiveName: 'fb_pixel_active',
+        placeholder: 'VD: 123456789012345',
+    },
+    {
+        key: 'google',
+        icon: 'analytics',
+        title: 'Google Analytics',
+        listName: 'ga_trackings',
+        legacyIdName: 'ga_id',
+        legacyActiveName: 'ga_active',
+        placeholder: 'VD: G-ABCDEFG123',
+    },
+    {
+        key: 'tiktok',
+        icon: 'music_note',
+        title: 'TikTok Pixel',
+        listName: 'tt_pixels',
+        legacyIdName: 'tt_pixel_id',
+        legacyActiveName: 'tt_pixel_active',
+        placeholder: 'VD: C1234567890ABCDE',
+    },
+];
+
+const parseArraySetting = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value !== 'string' || !value.trim()) return [];
+
+    try {
+        const decoded = JSON.parse(value);
+        return Array.isArray(decoded) ? decoded : [];
+    } catch {
+        return [];
+    }
+};
+
+const isEnabledValue = (value) => {
+    if (value === true || value === 1 || value === '1') return true;
+    if (typeof value !== 'string') return false;
+
+    return ['true', 'yes', 'on'].includes(value.trim().toLowerCase());
+};
+
+const createTrackingItem = (platformKey) => ({
+    id: `${platformKey}-tracking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    name: '',
+    pixel_id: '',
+    is_active: true,
+});
+
+const normalizeTrackingItems = (value, legacyId = '', legacyActive = false, platformKey = 'tracking') => {
+    const parsed = parseArraySetting(value)
+        .filter((item) => item !== null && item !== undefined)
+        .map((item, index) => {
+            const source = typeof item === 'object' ? item : { pixel_id: item };
+            const pixelId = String(
+                source.pixel_id
+                ?? source.tracking_id
+                ?? source.measurement_id
+                ?? source.id_value
+                ?? source.value
+                ?? ''
+            ).trim();
+
+            return {
+                id: String(source.id || `${platformKey}-tracking-${index + 1}`),
+                name: String(source.name || source.label || '').trim(),
+                pixel_id: pixelId,
+                is_active: source.is_active === undefined ? isEnabledValue(source.active ?? true) : isEnabledValue(source.is_active),
+                order: Number(source.order ?? index + 1) || index + 1,
+            };
+        })
+        .sort((left, right) => left.order - right.order)
+        .map((item, index) => ({ ...item, order: index + 1 }));
+
+    if (parsed.length > 0) {
+        return parsed;
+    }
+
+    const legacyPixelId = String(legacyId || '').trim();
+    if (!legacyPixelId) {
+        return [];
+    }
+
+    return [{
+        id: `${platformKey}-legacy-1`,
+        name: '',
+        pixel_id: legacyPixelId,
+        is_active: isEnabledValue(legacyActive),
+        order: 1,
+    }];
+};
+
+const buildTrackingPayload = (settings) => {
+    const normalized = {};
+
+    trackingPlatforms.forEach((platform) => {
+        const items = normalizeTrackingItems(
+            settings[platform.listName],
+            settings[platform.legacyIdName],
+            settings[platform.legacyActiveName],
+            platform.key
+        )
+            .map((item, index) => ({
+                ...item,
+                pixel_id: String(item.pixel_id || '').trim(),
+                name: String(item.name || '').trim(),
+                is_active: Boolean(item.is_active),
+                order: index + 1,
+            }))
+            .filter((item) => item.pixel_id);
+
+        const firstItem = items[0] || null;
+
+        normalized[platform.listName] = items;
+        normalized[platform.legacyIdName] = firstItem?.pixel_id || '';
+        normalized[platform.legacyActiveName] = items.some((item) => item.is_active);
+    });
+
+    return normalized;
+};
+
 const normalizeGeminiKeys = (value) => {
     const parsed = Array.isArray(value)
         ? value
@@ -149,6 +280,15 @@ const normalizeIncomingSettings = (incomingSettings = {}) => {
             const value = incomingSettings[key] == null ? '' : String(incomingSettings[key]);
             normalized[key] = key === 'footer_address' ? normalizeMultilineText(value) : value;
         }
+    });
+
+    trackingPlatforms.forEach((platform) => {
+        normalized[platform.listName] = normalizeTrackingItems(
+            incomingSettings[platform.listName],
+            incomingSettings[platform.legacyIdName],
+            incomingSettings[platform.legacyActiveName],
+            platform.key
+        );
     });
 
     return normalized;
@@ -659,6 +799,54 @@ const SiteSettings = () => {
         setSettings((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
     };
 
+    const updateTrackingPlatformState = (platform, updater) => {
+        setSettings((prev) => {
+            const currentItems = normalizeTrackingItems(
+                prev[platform.listName],
+                prev[platform.legacyIdName],
+                prev[platform.legacyActiveName],
+                platform.key
+            );
+            const nextItems = updater(currentItems)
+                .map((item, index) => ({
+                    ...item,
+                    pixel_id: String(item.pixel_id || '').trim(),
+                    name: String(item.name || '').trim(),
+                    is_active: Boolean(item.is_active),
+                    order: index + 1,
+                }));
+            const firstItemWithId = nextItems.find((item) => item.pixel_id);
+
+            return {
+                ...prev,
+                [platform.listName]: nextItems,
+                [platform.legacyIdName]: firstItemWithId?.pixel_id || '',
+                [platform.legacyActiveName]: nextItems.some((item) => item.pixel_id && item.is_active),
+            };
+        });
+    };
+
+    const handleAddTrackingItem = (platform) => {
+        updateTrackingPlatformState(platform, (items) => [...items, createTrackingItem(platform.key)]);
+    };
+
+    const handleUpdateTrackingItem = (platform, itemId, patch) => {
+        updateTrackingPlatformState(platform, (items) => items.map((item) => (
+            item.id === itemId ? { ...item, ...patch } : item
+        )));
+    };
+
+    const handleRemoveTrackingItem = (platform, itemId) => {
+        updateTrackingPlatformState(platform, (items) => items.filter((item) => item.id !== itemId));
+    };
+
+    const handleToggleTrackingPlatform = (platform) => {
+        updateTrackingPlatformState(platform, (items) => {
+            const shouldEnable = !items.some((item) => item.pixel_id && item.is_active);
+            return items.map((item) => ({ ...item, is_active: shouldEnable }));
+        });
+    };
+
     const handleGoogleMerchantChange = (event) => {
         const { name, value, type, checked } = event.target;
         setGoogleMerchantSettings((prev) => ({
@@ -1123,6 +1311,7 @@ const SiteSettings = () => {
         const normalizedFooterMenuGroups = normalizeFooterMenuGroups(footerMenuGroups);
         const normalizedStoreLocations = normalizeStoreLocations(storeLocations);
         const normalizedOrderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
+        const normalizedTracking = buildTrackingPayload(settings);
         const storeValidationError = validateStoreLocations(normalizedStoreLocations);
 
         if (storeValidationError) {
@@ -1135,6 +1324,7 @@ const SiteSettings = () => {
         try {
             const payloadSettings = {
                 ...settings,
+                ...normalizedTracking,
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
@@ -1165,6 +1355,7 @@ const SiteSettings = () => {
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
                 order_quick_pick_groups: normalizedOrderQuickPickGroups,
+                ...normalizedTracking,
             }));
             showModal({ title: 'Thành công', content: 'Đã lưu cấu hình.', type: 'success' });
         } catch {
@@ -1878,6 +2069,115 @@ const SiteSettings = () => {
                     )}
 
                     {activeTab === 'pixel' && (
+                        <div className="space-y-6">
+                            {trackingPlatforms.map((platform) => {
+                                const trackingItems = normalizeTrackingItems(
+                                    settings[platform.listName],
+                                    settings[platform.legacyIdName],
+                                    settings[platform.legacyActiveName],
+                                    platform.key
+                                );
+                                const activeCount = trackingItems.filter((item) => item.pixel_id && item.is_active).length;
+
+                                return (
+                                    <SectionCard
+                                        key={platform.key}
+                                        icon={platform.icon}
+                                        title={platform.title}
+                                        rightSlot={(
+                                            <div className="flex items-center gap-3">
+                                                <span className={`text-[10px] font-black uppercase ${activeCount > 0 ? 'text-green-500' : 'text-primary/30'}`}>
+                                                    {activeCount}/{trackingItems.length} dang bat
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleToggleTrackingPlatform(platform)}
+                                                    className={`relative inline-flex h-5 w-10 rounded-full transition-colors ${activeCount > 0 ? 'bg-green-500' : 'bg-stone-300'}`}
+                                                >
+                                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 mt-0.5 ${activeCount > 0 ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleAddTrackingItem(platform)}
+                                                    className="h-9 px-4 rounded-sm bg-primary text-white text-[11px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all inline-flex items-center gap-1"
+                                                >
+                                                    <span className="material-symbols-outlined text-[16px]">add</span>
+                                                    Them ID
+                                                </button>
+                                            </div>
+                                        )}
+                                    >
+                                        <div className="space-y-3">
+                                            {trackingItems.length === 0 ? (
+                                                <div className="rounded-sm border border-dashed border-primary/15 bg-primary/[0.02] px-5 py-8 text-center">
+                                                    <span className="material-symbols-outlined text-[34px] text-primary/25">{platform.icon}</span>
+                                                    <p className="mt-2 text-[12px] font-black uppercase tracking-wider text-primary/45">Chua co ID nao</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleAddTrackingItem(platform)}
+                                                        className="mt-4 h-9 px-4 rounded-sm border border-primary/20 text-primary text-[11px] font-black uppercase tracking-wider hover:bg-primary/[0.04] transition-all inline-flex items-center gap-1"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[16px]">add</span>
+                                                        Them ID dau tien
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                trackingItems.map((trackingItem, index) => (
+                                                    <div
+                                                        key={trackingItem.id}
+                                                        className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(260px,1.8fr)_auto_auto] gap-3 items-end rounded-sm border border-primary/10 bg-white px-4 py-3"
+                                                    >
+                                                        <div>
+                                                            <label className={labelClasses}>Ten ghi chu</label>
+                                                            <input
+                                                                type="text"
+                                                                value={trackingItem.name}
+                                                                onChange={(event) => handleUpdateTrackingItem(platform, trackingItem.id, { name: event.target.value })}
+                                                                className={inputClasses}
+                                                                placeholder={`${platform.title} ${index + 1}`}
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className={labelClasses}>{platform.title} ID</label>
+                                                            <input
+                                                                type="text"
+                                                                value={trackingItem.pixel_id}
+                                                                onChange={(event) => handleUpdateTrackingItem(platform, trackingItem.id, { pixel_id: event.target.value })}
+                                                                className={inputClasses}
+                                                                placeholder={platform.placeholder}
+                                                            />
+                                                        </div>
+                                                        <div className="flex items-center gap-2 h-10">
+                                                            <span className={`text-[10px] font-black uppercase whitespace-nowrap ${trackingItem.is_active ? 'text-green-500' : 'text-primary/30'}`}>
+                                                                {trackingItem.is_active ? 'Dang bat' : 'Dang tat'}
+                                                            </span>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleUpdateTrackingItem(platform, trackingItem.id, { is_active: !trackingItem.is_active })}
+                                                                className={`relative inline-flex h-5 w-10 shrink-0 rounded-full transition-colors ${trackingItem.is_active ? 'bg-green-500' : 'bg-stone-300'}`}
+                                                            >
+                                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 mt-0.5 ${trackingItem.is_active ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                                            </button>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveTrackingItem(platform, trackingItem.id)}
+                                                            className="h-10 w-10 rounded-sm border border-brick/20 text-brick hover:bg-brick hover:text-white transition-all inline-flex items-center justify-center"
+                                                            aria-label="Xoa tracking ID"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </SectionCard>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {activeTab === '__legacy_pixel_disabled__' && (
                         <div className="space-y-6">
                             {[
                                 { key: 'fb', icon: 'ads_click', title: 'Facebook Pixel', idName: 'fb_pixel_id', activeName: 'fb_pixel_active', placeholder: 'VD: 123456789012345' },

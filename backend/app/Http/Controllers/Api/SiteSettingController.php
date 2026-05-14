@@ -19,6 +19,9 @@ class SiteSettingController extends Controller
         'store_locations',
         'inventory_import_print_templates',
         'order_quick_pick_groups',
+        'fb_pixels',
+        'ga_trackings',
+        'tt_pixels',
         GeminiService::SETTING_KEYS,
     ];
 

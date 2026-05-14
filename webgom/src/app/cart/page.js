@@ -10,7 +10,7 @@ import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api'
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import { resolveCartItemImageUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
-import { getAnalyticsIdentity, trackCheckoutStarted } from '@/lib/analytics';
+import { getAnalyticsIdentity, trackCheckoutStarted, trackPurchase } from '@/lib/analytics';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import ComponentSelectionModal from '@/components/product/common/ComponentSelectionModal';
 import styles from './cart.module.css';
@@ -1210,7 +1210,9 @@ export default function CartPage() {
       const orderData = buildCheckoutPayload();
       const response = await placeWebOrder(orderData);
       const createdAt = new Date().toISOString();
-      setOrderNumber(response.order_number);
+      const completedOrderNumber = response.order_number;
+      trackPurchase(completedOrderNumber, cartItems, totalAfterDiscount || cartTotal);
+      setOrderNumber(completedOrderNumber);
       // Cache details for thank you page
       setSuccessOrderData({
         cartItems: [...cartItems],

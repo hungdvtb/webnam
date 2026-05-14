@@ -11,7 +11,7 @@ import BuyButtons from './common/BuyButtons';
 import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
-import { Fragment, useState, useMemo, useEffect, useRef } from 'react';
+import { Fragment, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 import {
@@ -81,6 +81,7 @@ const normalizeGalleryVideoUrls = (items = [], fallbackUrl = '') => {
 
 const sentenceCaseButtonStyle = { textTransform: 'none' };
 const BUNDLE_WORKSPACE_STATE_KEY = '__webgomBundleWorkspace';
+const BUNDLE_DETAIL_SCROLL_REQUEST_EVENT = 'webgom:bundle-detail-scroll-request';
 
 
 const BUNDLE_ITEM_CHANGE_LABEL = 'Đổi mẫu, size';
@@ -319,7 +320,7 @@ export default function BundleProductView({
   const bundleWorkspaceRestoreTimersRef = useRef([]);
   const closeMobileHeroConfigMenu = () => setIsMobileHeroConfigMenuOpen(false);
   const closeMobileConfigMenu = () => setIsMobileConfigMenuOpen(false);
-  const clearBundleWorkspaceRestoreTimers = () => {
+  const clearBundleWorkspaceRestoreTimers = useCallback(() => {
     if (typeof window === 'undefined') {
       bundleWorkspaceRestoreTimersRef.current = [];
       return;
@@ -339,7 +340,11 @@ export default function BundleProductView({
     });
 
     bundleWorkspaceRestoreTimersRef.current = [];
-  };
+  }, []);
+  const cancelBundleWorkspaceRestore = useCallback(() => {
+    pendingBundleWorkspaceRestoreRef.current = null;
+    clearBundleWorkspaceRestoreTimers();
+  }, [clearBundleWorkspaceRestoreTimers]);
   const stopDropdownEventPropagation = (event) => {
     event.stopPropagation();
   };
@@ -733,7 +738,7 @@ export default function BundleProductView({
     return () => {
       clearBundleWorkspaceRestoreTimers();
     };
-  }, []);
+  }, [clearBundleWorkspaceRestoreTimers]);
 
   useEffect(() => {
     const pendingWorkspaceState = pendingBundleWorkspaceRestoreRef.current;
@@ -792,7 +797,7 @@ export default function BundleProductView({
     return () => {
       clearBundleWorkspaceRestoreTimers();
     };
-  }, [bundleItems.length, configurations, resolvedActiveTab, switchBundleConfiguration]);
+  }, [bundleItems.length, clearBundleWorkspaceRestoreTimers, configurations, resolvedActiveTab, switchBundleConfiguration]);
 
   useEffect(() => {
     if ((!isMobileHeroConfigMenuOpen && !isMobileConfigMenuOpen) || typeof document === 'undefined') {
@@ -1077,10 +1082,12 @@ export default function BundleProductView({
     setHoveredBundleConfig('');
   };
 
-  const scrollToBundleDetailControls = ({ behavior = 'smooth' } = {}) => {
+  const scrollToBundleDetailControls = useCallback(({ behavior = 'smooth' } = {}) => {
     if (typeof window === 'undefined') {
       return;
     }
+
+    cancelBundleWorkspaceRestore();
 
     const performScroll = () => {
       const detailSection = bundleListRef.current;
@@ -1107,7 +1114,26 @@ export default function BundleProductView({
     }
 
     performScroll();
-  };
+  }, [cancelBundleWorkspaceRestore, isMobileBundleViewport, showBundleDetailSection]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleBundleDetailScrollRequest = (event) => {
+      const respond = typeof event.detail?.respond === 'function' ? event.detail.respond : null;
+
+      scrollToBundleDetailControls({ behavior: 'smooth' });
+      respond?.({ handled: true });
+    };
+
+    window.addEventListener(BUNDLE_DETAIL_SCROLL_REQUEST_EVENT, handleBundleDetailScrollRequest);
+
+    return () => {
+      window.removeEventListener(BUNDLE_DETAIL_SCROLL_REQUEST_EVENT, handleBundleDetailScrollRequest);
+    };
+  }, [scrollToBundleDetailControls]);
 
   const scrollToBundleGallery = ({ mediaType = 'image', behavior = 'smooth' } = {}) => {
     if (typeof window === 'undefined') {

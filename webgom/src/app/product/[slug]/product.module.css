@@ -1153,6 +1153,17 @@
   color: rgba(27, 54, 93, 0.6);
 }
 
+.variantSelectionNotice {
+  border: 1px solid rgba(197, 160, 101, 0.32);
+  border-radius: 0.5rem;
+  background: rgba(197, 160, 101, 0.09);
+  color: #8e5229;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.45;
+  padding: 0.45rem 0.6rem;
+}
+
 .variantOptions {
   display: flex;
   flex-wrap: wrap;

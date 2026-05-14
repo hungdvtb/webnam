@@ -1196,7 +1196,7 @@ const parseQuantityInputValue = (value, fallback = 0) => {
     const numericValue = Number(normalizedValue);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
-const nudgeQuantityInputValue = (value, delta, min = MIN_ORDER_ITEM_QUANTITY) => {
+const nudgeQuantityInputValue = (value, delta, min = 1) => {
     const fallbackValue = delta > 0 ? min - 1 : min + 1;
     const currentValue = parseQuantityInputValue(value, fallbackValue);
     const nextValue = delta > 0
@@ -1211,6 +1211,24 @@ const handleQuantityInputKeyDown = (event, value, onCommit) => {
 
     event.preventDefault();
     onCommit(nudgeQuantityInputValue(value, event.key === 'ArrowUp' ? 1 : -1));
+};
+const handleQuantityInputPointerDown = (event, value, onCommit) => {
+    if (event.button !== undefined && event.button !== 0) {
+        return;
+    }
+
+    const input = event.currentTarget;
+    const rect = input.getBoundingClientRect();
+    const spinnerWidth = Math.min(22, rect.width * 0.36);
+
+    if (event.clientX < rect.right - spinnerWidth) {
+        return;
+    }
+
+    event.preventDefault();
+    const delta = event.clientY < rect.top + (rect.height / 2) ? 1 : -1;
+    onCommit(nudgeQuantityInputValue(value, delta));
+    requestAnimationFrame(() => input.focus());
 };
 const resolveMoneyValue = (...candidates) => {
     for (const candidate of candidates) {
@@ -8684,10 +8702,15 @@ const OrderForm = () => {
                                                                 <input
                                                                     type="number"
                                                                     inputMode="decimal"
-                                                                    min={MIN_ORDER_ITEM_QUANTITY}
-                                                                    step={MIN_ORDER_ITEM_QUANTITY}
+                                                                    min="1"
+                                                                    step="1"
                                                                     value={item.quantity}
                                                                     onChange={(event) => updateItem(index, 'quantity', normalizeQuantityInputValue(event.target.value))}
+                                                                    onPointerDown={(event) => handleQuantityInputPointerDown(
+                                                                        event,
+                                                                        item.quantity,
+                                                                        (nextValue) => updateItem(index, 'quantity', nextValue)
+                                                                    )}
                                                                     onKeyDown={(event) => handleQuantityInputKeyDown(
                                                                         event,
                                                                         item.quantity,
@@ -9097,10 +9120,15 @@ const OrderForm = () => {
                                                                     <input
                                                                         type="number"
                                                                         inputMode="decimal"
-                                                                        min={MIN_ORDER_ITEM_QUANTITY}
-                                                                        step={MIN_ORDER_ITEM_QUANTITY}
+                                                                        min="1"
+                                                                        step="1"
                                                                         value={item.quantity}
                                                                         onChange={(e) => updateItem(index, 'quantity', normalizeQuantityInputValue(e.target.value))}
+                                                                        onPointerDown={(e) => handleQuantityInputPointerDown(
+                                                                            e,
+                                                                            item.quantity,
+                                                                            (nextValue) => updateItem(index, 'quantity', nextValue)
+                                                                        )}
                                                                         onKeyDown={(e) => handleQuantityInputKeyDown(
                                                                             e,
                                                                             item.quantity,

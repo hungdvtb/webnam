@@ -7,6 +7,7 @@ use App\Models\FinDailyReportConfig;
 use App\Models\InventoryDocument;
 use App\Models\Order;
 use App\Services\FacebookAdsSyncService;
+use App\Services\GoogleAdsSyncService;
 use App\Support\OrderShippingFeeCalculator;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -39,6 +40,10 @@ class FinDailyProfitReportController extends Controller
         'packaging_fee',
         'ads_spend_raw',
         'ads_spend',
+        'fb_ads_spend_raw',
+        'fb_ads_spend',
+        'google_ads_spend_raw',
+        'google_ads_spend',
         'tax',
         'fixed_cost',
         'total_profit',
@@ -128,6 +133,13 @@ class FinDailyProfitReportController extends Controller
             'fb_ad_account_ids',
             'fb_tax_rate',
             'fb_tokens_configs',
+            'google_developer_token',
+            'google_client_id',
+            'google_client_secret',
+            'google_refresh_token',
+            'google_login_customer_id',
+            'google_customer_ids',
+            'google_tax_rate',
         ]);
 
         $config->fill($data);
@@ -140,18 +152,17 @@ class FinDailyProfitReportController extends Controller
         ]);
     }
 
-    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate): array
+    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds): array
     {
-        $config = FinDailyReportConfig::first();
-        $configuredAccountIds = app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config);
-
         $query = DailyAdsSpend::query()
+            ->where('platform', $platform)
             ->whereBetween('date', [$startDate, $endDate])
             ->select('date', DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
             ->groupBy('date');
 
         if ($configuredAccountIds !== []) {
             $hasConfiguredAccountRows = DailyAdsSpend::query()
+                ->where('platform', $platform)
                 ->whereBetween('date', [$startDate, $endDate])
                 ->whereIn('account_id', $configuredAccountIds)
                 ->exists();
@@ -380,7 +391,20 @@ class FinDailyProfitReportController extends Controller
             ->pluck('amount', 'date')
             ->toArray();
 
-        $adsSpends = $this->dailyAdsSpendTotalsByDate($startDate, $endDate);
+        $fbAdsSpends = $this->dailyAdsSpendTotalsByDate(
+            $startDate,
+            $endDate,
+            DailyAdsSpend::PLATFORM_FACEBOOK,
+            app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config)
+        );
+        $googleAdsSpends = $this->dailyAdsSpendTotalsByDate(
+            $startDate,
+            $endDate,
+            DailyAdsSpend::PLATFORM_GOOGLE,
+            app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config)
+        );
+        $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
+        $googleTaxRate = $config ? (float) ($config->google_tax_rate ?? 0) : 0;
 
         $report = [];
         $period = \Carbon\CarbonPeriod::create($startDate, $endDate);
@@ -410,9 +434,12 @@ class FinDailyProfitReportController extends Controller
             $tax = ($taxRate / 100) * ($revenueActual - $shippingFee);
             $fixedCostDaily = isset($fixedCosts[$dateStr]) ? (float) $fixedCosts[$dateStr] : 0;
 
-            $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
-            $adsSpendRawDaily = (float) ($adsSpends[$dateStr] ?? 0);
-            $adsSpendDaily = $adsSpendRawDaily * (1 + $fbTaxRate / 100);
+            $fbAdsSpendRawDaily = (float) ($fbAdsSpends[$dateStr] ?? 0);
+            $fbAdsSpendDaily = $fbAdsSpendRawDaily * (1 + $fbTaxRate / 100);
+            $googleAdsSpendRawDaily = (float) ($googleAdsSpends[$dateStr] ?? 0);
+            $googleAdsSpendDaily = $googleAdsSpendRawDaily * (1 + $googleTaxRate / 100);
+            $adsSpendRawDaily = $fbAdsSpendRawDaily + $googleAdsSpendRawDaily;
+            $adsSpendDaily = $fbAdsSpendDaily + $googleAdsSpendDaily;
 
             $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $adsSpendDaily;
             $specialProfit = $specialProfitByDate->get($dateStr);
@@ -437,6 +464,10 @@ class FinDailyProfitReportController extends Controller
                 'packaging_fee' => $packagingFee,
                 'tax' => $tax,
                 'fixed_cost' => $fixedCostDaily,
+                'fb_ads_spend_raw' => $fbAdsSpendRawDaily,
+                'fb_ads_spend' => $fbAdsSpendDaily,
+                'google_ads_spend_raw' => $googleAdsSpendRawDaily,
+                'google_ads_spend' => $googleAdsSpendDaily,
                 'ads_spend_raw' => $adsSpendRawDaily,
                 'ads_spend' => $adsSpendDaily,
                 'exchange_return_order_count' => $exchangeReturnOrderCount,
@@ -471,6 +502,12 @@ class FinDailyProfitReportController extends Controller
                 'exchange_profit_loss' => round((float) $reportCollection->sum('exchange_profit_loss'), 2),
                 'partial_delivery_profit_loss' => round((float) $reportCollection->sum('partial_delivery_profit_loss'), 2),
                 'total_extra_profit' => round((float) $reportCollection->sum('extra_profit'), 2),
+                'fb_ads_spend_raw' => round((float) $reportCollection->sum('fb_ads_spend_raw'), 2),
+                'fb_ads_spend' => round((float) $reportCollection->sum('fb_ads_spend'), 2),
+                'google_ads_spend_raw' => round((float) $reportCollection->sum('google_ads_spend_raw'), 2),
+                'google_ads_spend' => round((float) $reportCollection->sum('google_ads_spend'), 2),
+                'ads_spend_raw' => round((float) $reportCollection->sum('ads_spend_raw'), 2),
+                'ads_spend' => round((float) $reportCollection->sum('ads_spend'), 2),
             ],
         ];
     }
@@ -491,6 +528,10 @@ class FinDailyProfitReportController extends Controller
             'partial_delivery_profit_loss' => 0,
             'salary' => 0,
             'packaging_fee' => 0,
+            'fb_ads_spend_raw' => 0,
+            'fb_ads_spend' => 0,
+            'google_ads_spend_raw' => 0,
+            'google_ads_spend' => 0,
             'ads_spend_raw' => 0,
             'ads_spend' => 0,
             'tax' => 0,
@@ -627,6 +668,10 @@ class FinDailyProfitReportController extends Controller
             'partial_delivery_profit_loss' => round((float) $rows->sum('partial_delivery_profit_loss'), 2),
             'salary' => round((float) $rows->sum('salary'), 2),
             'packaging_fee' => round((float) $rows->sum('packaging_fee'), 2),
+            'fb_ads_spend_raw' => round((float) $rows->sum('fb_ads_spend_raw'), 2),
+            'fb_ads_spend' => round((float) $rows->sum('fb_ads_spend'), 2),
+            'google_ads_spend_raw' => round((float) $rows->sum('google_ads_spend_raw'), 2),
+            'google_ads_spend' => round((float) $rows->sum('google_ads_spend'), 2),
             'ads_spend_raw' => round((float) $rows->sum('ads_spend_raw'), 2),
             'ads_spend' => round((float) $rows->sum('ads_spend'), 2),
             'tax' => round((float) $rows->sum('tax'), 2),
@@ -650,6 +695,10 @@ class FinDailyProfitReportController extends Controller
             || (float) ($row['partial_delivery_profit_loss'] ?? 0) !== 0.0
             || (float) ($row['salary'] ?? 0) !== 0.0
             || (float) ($row['packaging_fee'] ?? 0) !== 0.0
+            || (float) ($row['fb_ads_spend_raw'] ?? 0) !== 0.0
+            || (float) ($row['fb_ads_spend'] ?? 0) !== 0.0
+            || (float) ($row['google_ads_spend_raw'] ?? 0) !== 0.0
+            || (float) ($row['google_ads_spend'] ?? 0) !== 0.0
             || (float) ($row['ads_spend_raw'] ?? 0) !== 0.0
             || (float) ($row['ads_spend'] ?? 0) !== 0.0
             || (float) ($row['tax'] ?? 0) !== 0.0
@@ -1052,6 +1101,7 @@ class FinDailyProfitReportController extends Controller
         $endDate = $request->end_date ?: date('Y-m-d');
 
         app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
+        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate, [
             'status' => $request->input('status'),
@@ -1071,6 +1121,7 @@ class FinDailyProfitReportController extends Controller
         $endDate = $request->end_date ?: date('Y-m-d');
 
         app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
+        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate);
         $config = FinDailyReportConfig::query()->first();
@@ -1085,6 +1136,10 @@ class FinDailyProfitReportController extends Controller
 
                 foreach ($rows as $row) {
                     $monthly['salary'] += (float) ($row['salary'] ?? 0);
+                    $monthly['fb_ads_spend_raw'] += (float) ($row['fb_ads_spend_raw'] ?? 0);
+                    $monthly['fb_ads_spend'] += (float) ($row['fb_ads_spend'] ?? 0);
+                    $monthly['google_ads_spend_raw'] += (float) ($row['google_ads_spend_raw'] ?? 0);
+                    $monthly['google_ads_spend'] += (float) ($row['google_ads_spend'] ?? 0);
                     $monthly['ads_spend_raw'] += (float) ($row['ads_spend_raw'] ?? 0);
                     $monthly['ads_spend'] += (float) ($row['ads_spend'] ?? 0);
                     $monthly['fixed_cost'] += (float) ($row['fixed_cost'] ?? 0);
@@ -1254,6 +1309,144 @@ class FinDailyProfitReportController extends Controller
             'status' => 'success',
             'message' => 'Đồng bộ dữ liệu Facebook Ads thành công',
             'data' => [],
+        ]);
+    }
+
+    public function getGoogleAdAccounts(Request $request)
+    {
+        try {
+            $accounts = app(GoogleAdsSyncService::class)->listAccessibleCustomers($request->only([
+                'google_developer_token',
+                'developer_token',
+                'google_client_id',
+                'client_id',
+                'google_client_secret',
+                'client_secret',
+                'google_refresh_token',
+                'refresh_token',
+                'google_login_customer_id',
+                'login_customer_id',
+            ]));
+
+            return response()->json([
+                'status' => 'success',
+                'data' => $accounts,
+            ]);
+        } catch (\Exception $exception) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    public function syncGoogleAds(Request $request)
+    {
+        $startDate = $request->start_date ?: date('Y-m-d');
+        $endDate = $request->end_date ?: date('Y-m-d');
+
+        $syncService = app(GoogleAdsSyncService::class);
+        $success = $syncService->syncRange($startDate, $endDate);
+
+        if (!$success) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Khong dong bo duoc du lieu Google Ads. Vui long kiem tra cau hinh va log he thong.',
+                'data' => [],
+            ], 422);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Dong bo du lieu Google Ads thanh cong',
+            'data' => [],
+        ]);
+    }
+
+    public function getGoogleAdSpendSplit(Request $request)
+    {
+        $startDate = $request->start_date ?: date('Y-m-d');
+        $endDate = $request->end_date ?: date('Y-m-d');
+
+        $config = FinDailyReportConfig::first();
+        if (!$config) {
+            return response()->json(['status' => 'error', 'message' => 'Chua cau hinh Google Ads']);
+        }
+
+        $configuredAccountIds = app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config);
+        if ($configuredAccountIds === []) {
+            return response()->json(['status' => 'error', 'message' => 'Chua cau hinh Google Ads Customer ID']);
+        }
+
+        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
+
+        $taxRate = (float) ($config->google_tax_rate ?: 0);
+
+        $dailyData = [];
+        $accountsInfo = [];
+        $totalRaw = 0;
+        $totalTaxed = 0;
+
+        $currentDate = strtotime($startDate);
+        $endDateTime = strtotime($endDate);
+        while ($currentDate <= $endDateTime) {
+            $dailyPivot = date('Y-m-d', $currentDate);
+            $dailyData[$dailyPivot] = [];
+            $currentDate = strtotime('+1 day', $currentDate);
+        }
+
+        foreach ($configuredAccountIds as $accountId) {
+            $accountKey = (string) $accountId;
+            $accountsInfo[$accountKey] = [
+                'account_id' => $accountKey,
+                'account_name' => $accountKey,
+                'total_raw' => 0,
+                'total_taxed' => 0,
+            ];
+        }
+
+        $rows = DailyAdsSpend::query()
+            ->where('platform', DailyAdsSpend::PLATFORM_GOOGLE)
+            ->whereBetween('date', [$startDate, $endDate])
+            ->whereIn('account_id', $configuredAccountIds)
+            ->get(['date', 'account_id', 'amount']);
+
+        foreach ($rows as $row) {
+            $dateStr = optional($row->date)->format('Y-m-d');
+            $accountKey = (string) $row->account_id;
+            if (!$dateStr || !isset($accountsInfo[$accountKey])) {
+                continue;
+            }
+
+            $spendRaw = (float) ($row->amount ?? 0);
+            $spendTaxed = $spendRaw * (1 + $taxRate / 100);
+
+            if (!isset($dailyData[$dateStr])) {
+                $dailyData[$dateStr] = [];
+            }
+
+            $dailyData[$dateStr][$accountKey] = [
+                'spend_raw' => $spendRaw,
+                'spend_taxed' => $spendTaxed,
+            ];
+
+            $accountsInfo[$accountKey]['total_raw'] += $spendRaw;
+            $accountsInfo[$accountKey]['total_taxed'] += $spendTaxed;
+            $totalRaw += $spendRaw;
+            $totalTaxed += $spendTaxed;
+        }
+
+        krsort($dailyData);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'accounts' => array_values($accountsInfo),
+                'daily_matrix' => $dailyData,
+                'total_raw' => $totalRaw,
+                'total_taxed' => $totalTaxed,
+                'tax_rate' => $taxRate,
+            ],
         ]);
     }
 

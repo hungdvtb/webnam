@@ -15,7 +15,14 @@ class FinDailyReportConfig extends Model
         'fb_access_token',
         'fb_ad_account_ids',
         'fb_tax_rate',
-        'fb_tokens_configs'
+        'fb_tokens_configs',
+        'google_developer_token',
+        'google_client_id',
+        'google_client_secret',
+        'google_refresh_token',
+        'google_login_customer_id',
+        'google_customer_ids',
+        'google_tax_rate',
     ];
 
     protected $casts = [

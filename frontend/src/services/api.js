@@ -840,6 +840,9 @@ export const financeApi = {
     getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),
     syncFbAdSpend: (params) => api.post('/finance/daily-pnl/sync-fb', params),
     getFbAdSpendSplit: (params) => api.get('/finance/daily-pnl/fb-split', { params }),
+    getGoogleAdAccounts: (params) => api.get('/finance/daily-pnl/google-accounts', { params }),
+    syncGoogleAdSpend: (params) => api.post('/finance/daily-pnl/sync-google', params),
+    getGoogleAdSpendSplit: (params) => api.get('/finance/daily-pnl/google-split', { params }),
 
     // Debt Management (Sổ nợ) endpoints
     getDebtSubjects: () => api.get('/finance/debts/subjects'),

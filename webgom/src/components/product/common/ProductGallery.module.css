@@ -91,8 +91,14 @@
 }
 
 .productMediaVisualFrameZoomable {
-  touch-action: none;
+  touch-action: pan-y;
+  overscroll-behavior-y: auto;
   will-change: transform;
+}
+
+.productMediaVisualFrameZoomActive {
+  touch-action: none;
+  overscroll-behavior: contain;
 }
 
 .productMediaImage {

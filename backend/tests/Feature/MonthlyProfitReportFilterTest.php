@@ -277,6 +277,7 @@ class MonthlyProfitReportFilterTest extends TestCase
             'shipping_estimate_rate' => 10,
             'tax_rate' => 1.5,
             'fb_tax_rate' => 10,
+            'google_tax_rate' => 5,
         ]);
 
         $headers = [
@@ -295,6 +296,12 @@ class MonthlyProfitReportFilterTest extends TestCase
         ]);
 
         DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
+            'date' => '2026-04-05',
+            'amount' => 20,
+        ]);
+
+        DailyAdsSpend::query()->create([
             'date' => '2026-04-06',
             'amount' => 25,
         ]);
@@ -304,8 +311,12 @@ class MonthlyProfitReportFilterTest extends TestCase
 
         $dailyRows = collect($dailyResponse->json('data'))->keyBy('date');
 
-        $this->assertSame(150.0, (float) $dailyRows['2026-04-05']['ads_spend_raw']);
-        $this->assertSame(165.0, (float) $dailyRows['2026-04-05']['ads_spend']);
+        $this->assertSame(150.0, (float) $dailyRows['2026-04-05']['fb_ads_spend_raw']);
+        $this->assertSame(165.0, (float) $dailyRows['2026-04-05']['fb_ads_spend']);
+        $this->assertSame(20.0, (float) $dailyRows['2026-04-05']['google_ads_spend_raw']);
+        $this->assertSame(21.0, (float) $dailyRows['2026-04-05']['google_ads_spend']);
+        $this->assertSame(170.0, (float) $dailyRows['2026-04-05']['ads_spend_raw']);
+        $this->assertSame(186.0, (float) $dailyRows['2026-04-05']['ads_spend']);
         $this->assertSame(25.0, (float) $dailyRows['2026-04-06']['ads_spend_raw']);
         $this->assertSame(27.5, (float) $dailyRows['2026-04-06']['ads_spend']);
 
@@ -315,8 +326,12 @@ class MonthlyProfitReportFilterTest extends TestCase
         $monthRow = collect($monthlyResponse->json('data'))->firstWhere('key', '2026-04');
 
         $this->assertNotNull($monthRow);
-        $this->assertSame(175.0, (float) ($monthRow['ads_spend_raw'] ?? 0));
-        $this->assertSame(192.5, (float) ($monthRow['ads_spend'] ?? 0));
+        $this->assertSame(175.0, (float) ($monthRow['fb_ads_spend_raw'] ?? 0));
+        $this->assertSame(192.5, (float) ($monthRow['fb_ads_spend'] ?? 0));
+        $this->assertSame(20.0, (float) ($monthRow['google_ads_spend_raw'] ?? 0));
+        $this->assertSame(21.0, (float) ($monthRow['google_ads_spend'] ?? 0));
+        $this->assertSame(195.0, (float) ($monthRow['ads_spend_raw'] ?? 0));
+        $this->assertSame(213.5, (float) ($monthRow['ads_spend'] ?? 0));
         $this->assertSame(
             round((float) collect($dailyResponse->json('data'))->sum('ads_spend_raw'), 2),
             round((float) ($monthRow['ads_spend_raw'] ?? 0), 2)
@@ -456,6 +471,7 @@ class MonthlyProfitReportFilterTest extends TestCase
             'shipping_estimate_rate' => 10,
             'tax_rate' => 1.5,
             'fb_tax_rate' => 10,
+            'google_tax_rate' => 5,
         ]);
 
         $headers = [
@@ -595,8 +611,20 @@ class MonthlyProfitReportFilterTest extends TestCase
         ]);
 
         DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
+            'date' => '2026-03-04',
+            'amount' => 30,
+        ]);
+
+        DailyAdsSpend::query()->create([
             'date' => '2026-04-08',
             'amount' => 20,
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
+            'date' => '2026-04-08',
+            'amount' => 10,
         ]);
 
         $response = $this->getJson('/api/finance/daily-pnl/monthly-report?start_date=2026-03-01&end_date=2026-04-30', $headers)
@@ -610,13 +638,17 @@ class MonthlyProfitReportFilterTest extends TestCase
         $this->assertSame(1000.0, (float) $rows['2026-03']['shipping_fee']);
         $this->assertSame(250.0, (float) $rows['2026-03']['damaged_goods']);
         $this->assertSame(1000.0, (float) $rows['2026-03']['packaging_fee']);
-        $this->assertSame(150.0, (float) $rows['2026-03']['ads_spend_raw']);
-        $this->assertSame(165.0, (float) $rows['2026-03']['ads_spend']);
+        $this->assertSame(150.0, (float) $rows['2026-03']['fb_ads_spend_raw']);
+        $this->assertSame(165.0, (float) $rows['2026-03']['fb_ads_spend']);
+        $this->assertSame(30.0, (float) $rows['2026-03']['google_ads_spend_raw']);
+        $this->assertSame(31.5, (float) $rows['2026-03']['google_ads_spend']);
+        $this->assertSame(180.0, (float) $rows['2026-03']['ads_spend_raw']);
+        $this->assertSame(196.5, (float) $rows['2026-03']['ads_spend']);
         $this->assertSame(165.0, (float) $rows['2026-03']['tax']);
         $this->assertSame(1000.0, (float) $rows['2026-03']['fixed_cost']);
         $this->assertSame(-300.0, (float) $rows['2026-03']['exchange_profit_loss']);
         $this->assertSame(200.0, (float) $rows['2026-03']['partial_delivery_profit_loss']);
-        $this->assertSame(3820.0, (float) $rows['2026-03']['total_profit']);
+        $this->assertSame(3788.5, (float) $rows['2026-03']['total_profit']);
 
         $this->assertSame(2, (int) $rows['2026-04']['order_count']);
         $this->assertSame(5000.0, (float) $rows['2026-04']['revenue']);
@@ -624,13 +656,17 @@ class MonthlyProfitReportFilterTest extends TestCase
         $this->assertSame(450.0, (float) $rows['2026-04']['shipping_fee']);
         $this->assertSame(100.0, (float) $rows['2026-04']['damaged_goods']);
         $this->assertSame(1000.0, (float) $rows['2026-04']['packaging_fee']);
-        $this->assertSame(20.0, (float) $rows['2026-04']['ads_spend_raw']);
-        $this->assertSame(22.0, (float) $rows['2026-04']['ads_spend']);
+        $this->assertSame(20.0, (float) $rows['2026-04']['fb_ads_spend_raw']);
+        $this->assertSame(22.0, (float) $rows['2026-04']['fb_ads_spend']);
+        $this->assertSame(10.0, (float) $rows['2026-04']['google_ads_spend_raw']);
+        $this->assertSame(10.5, (float) $rows['2026-04']['google_ads_spend']);
+        $this->assertSame(30.0, (float) $rows['2026-04']['ads_spend_raw']);
+        $this->assertSame(32.5, (float) $rows['2026-04']['ads_spend']);
         $this->assertSame(70.5, (float) $rows['2026-04']['tax']);
         $this->assertSame(500.0, (float) $rows['2026-04']['fixed_cost']);
         $this->assertSame(50.0, (float) $rows['2026-04']['exchange_profit_loss']);
         $this->assertSame(0.0, (float) $rows['2026-04']['partial_delivery_profit_loss']);
-        $this->assertSame(707.5, (float) $rows['2026-04']['total_profit']);
+        $this->assertSame(697.0, (float) $rows['2026-04']['total_profit']);
 
         $summary = $response->json('summary');
 
@@ -640,14 +676,18 @@ class MonthlyProfitReportFilterTest extends TestCase
         $this->assertSame(1450.0, (float) ($summary['shipping_fee'] ?? 0));
         $this->assertSame(350.0, (float) ($summary['damaged_goods'] ?? 0));
         $this->assertSame(2000.0, (float) ($summary['packaging_fee'] ?? 0));
-        $this->assertSame(170.0, (float) ($summary['ads_spend_raw'] ?? 0));
-        $this->assertSame(187.0, (float) ($summary['ads_spend'] ?? 0));
+        $this->assertSame(170.0, (float) ($summary['fb_ads_spend_raw'] ?? 0));
+        $this->assertSame(187.0, (float) ($summary['fb_ads_spend'] ?? 0));
+        $this->assertSame(40.0, (float) ($summary['google_ads_spend_raw'] ?? 0));
+        $this->assertSame(42.0, (float) ($summary['google_ads_spend'] ?? 0));
+        $this->assertSame(210.0, (float) ($summary['ads_spend_raw'] ?? 0));
+        $this->assertSame(229.0, (float) ($summary['ads_spend'] ?? 0));
         $this->assertSame(235.5, (float) ($summary['tax'] ?? 0));
         $this->assertSame(1500.0, (float) ($summary['fixed_cost'] ?? 0));
         $this->assertSame(-250.0, (float) ($summary['exchange_profit_loss'] ?? 0));
         $this->assertSame(200.0, (float) ($summary['partial_delivery_profit_loss'] ?? 0));
-        $this->assertSame(4527.5, (float) ($summary['total_profit'] ?? 0));
-        $this->assertSame(2263.75, (float) ($summary['profit_per_house'] ?? 0));
+        $this->assertSame(4485.5, (float) ($summary['total_profit'] ?? 0));
+        $this->assertSame(2242.75, (float) ($summary['profit_per_house'] ?? 0));
     }
 
     public function test_monthly_report_drilldown_returns_exact_scope_for_all_clickable_metrics(): void

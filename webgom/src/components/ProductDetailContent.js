@@ -27,6 +27,8 @@ import BundleProductView from './product/BundleProductView';
 
 const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
 const MOBILE_BOTTOM_ORDER_OFFSET = 96;
+const BUNDLE_DETAIL_SCROLL_REQUEST_EVENT = 'webgom:bundle-detail-scroll-request';
+const VARIANT_SELECTION_REQUIRED_MESSAGE = 'Vui lòng chọn mẫu/size trước khi đặt hàng';
 
 const getMobileScrollOffset = () => {
   if (typeof document === 'undefined') {
@@ -76,6 +78,22 @@ const isBundleSelectionAreaActive = (targetNode) => {
 const scrollToBundleSelectionArea = (targetNode) => {
   if (typeof window === 'undefined' || !targetNode) {
     return false;
+  }
+
+  let handledByBundleView = false;
+
+  window.dispatchEvent(
+    new CustomEvent(BUNDLE_DETAIL_SCROLL_REQUEST_EVENT, {
+      detail: {
+        respond: () => {
+          handledByBundleView = true;
+        },
+      },
+    })
+  );
+
+  if (handledByBundleView) {
+    return true;
   }
 
   const targetTop = Math.max(
@@ -324,6 +342,7 @@ export default function ProductDetailContent({
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
   const [hasCustomerSelectedVariantMedia, setHasCustomerSelectedVariantMedia] = useState(false);
+  const [variantSelectionNotice, setVariantSelectionNotice] = useState('');
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState(initialBundleSelectionState.bundleItems);
   const [activeBundleConfig, setActiveBundleConfig] = useState(initialBundleSelectionState.activeBundleConfig);
@@ -349,52 +368,32 @@ export default function ProductDetailContent({
 
     if (hasStructuredVariantAttributes) {
       const initialOptions = {};
-      // Preferred: honor a requested variant before falling back to the first valid choice.
-      const preferredVariant = requestedVariant || product.variations?.[0];
-      
-      product.super_attributes.forEach(attr => {
-        // Try to get value from the requested or first valid variant.
-        if (preferredVariant) {
-          const varVal = preferredVariant.attribute_values?.find(av =>
+      // Honor a requested variant from the URL, but do not preselect the first/default
+      // variant on normal page load. A valid selection must come from the customer.
+      if (requestedVariant) {
+        product.super_attributes.forEach(attr => {
+          const varVal = requestedVariant.attribute_values?.find(av =>
             (av.attribute?.code === attr.code || av.attribute_id === attr.id)
           )?.value;
           if (varVal) {
             initialOptions[attr.code] = varVal;
-            return;
           }
-        }
-
-        // Fallback to product default or first option
-        const val = product.attribute_values?.find(av => av.attribute_id === attr.id)?.value;
-        if (val) {
-          initialOptions[attr.code] = val;
-        } else if (attr.options?.length > 0) {
-          initialOptions[attr.code] = attr.options[0].value;
-        }
-      });
+        });
+      }
       setSelectedOptions(initialOptions);
     } else {
       setSelectedOptions({});
     }
 
     if (hasVariants) {
-      setSelectedVariantId((prev) => {
-        if (requestedVariant?.id) {
-          return requestedVariant.id;
-        }
-
-        if (prev && product.variations?.some((variant) => variant.id === prev)) {
-          return prev;
-        }
-
-        return product.variations?.[0]?.id ?? null;
-      });
+      setSelectedVariantId(requestedVariant?.id ?? null);
     } else {
       setSelectedVariantId(null);
     }
 
     setHasExplicitVariantSelection(Boolean(requestedVariant?.id));
     setHasCustomerSelectedVariantMedia(false);
+    setVariantSelectionNotice('');
 
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
@@ -457,7 +456,16 @@ export default function ProductDetailContent({
     if (!hasVariants) return null;
 
     if (!hasStructuredVariantAttributes) {
-      return product.variations.find((variant) => variant.id === selectedVariantId) || product.variations[0] || null;
+      if (!selectedVariantId) {
+        return null;
+      }
+
+      return product.variations.find((variant) => variant.id === selectedVariantId) || null;
+    }
+
+    const isSelectionComplete = (product.super_attributes || []).every((attr) => selectedOptions[attr.code]);
+    if (!isSelectionComplete) {
+      return null;
     }
 
     return product.variations.find(variant => {
@@ -855,7 +863,7 @@ export default function ProductDetailContent({
       const missingAttributes = (product.super_attributes || []).filter((attr) => !selectedOptions[attr.code]);
 
       if (missingAttributes.length > 0) {
-        return `Vui lòng chọn ${missingAttributes.map((attr) => attr.name).join(', ')} trước khi đặt hàng.`;
+        return VARIANT_SELECTION_REQUIRED_MESSAGE;
       }
 
       if (!matchingVariant || !currentProduct?.id) {
@@ -863,18 +871,18 @@ export default function ProductDetailContent({
       }
 
       if (hasConfigurableChoices && !hasExplicitVariantSelection) {
-        return 'Vui lòng chọn đầy đủ thuộc tính sản phẩm trước khi đặt hàng.';
+        return VARIANT_SELECTION_REQUIRED_MESSAGE;
       }
 
       return '';
     }
 
     if (!currentProduct?.id || !selectedVariantId) {
-      return 'Vui lòng chọn phân loại sản phẩm trước khi đặt hàng.';
+      return VARIANT_SELECTION_REQUIRED_MESSAGE;
     }
 
     if (hasConfigurableChoices && !hasExplicitVariantSelection) {
-      return 'Vui lòng chọn phân loại sản phẩm trước khi đặt hàng.';
+      return VARIANT_SELECTION_REQUIRED_MESSAGE;
     }
 
     return '';
@@ -883,6 +891,7 @@ export default function ProductDetailContent({
   const handleOptionSelect = (attrCode, value) => {
     setHasExplicitVariantSelection(true);
     setHasCustomerSelectedVariantMedia(true);
+    setVariantSelectionNotice('');
     setSelectedOptions(prev => {
       const next = { ...prev, [attrCode]: value };
       
@@ -891,6 +900,7 @@ export default function ProductDetailContent({
         if (attr.code === attrCode) return;
 
         const currentVal = next[attr.code];
+        if (!currentVal) return;
         const isPossible = product.variations?.some(variant => {
           const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
             if (oCode === attr.code) return true;
@@ -934,16 +944,19 @@ export default function ProductDetailContent({
   const handleVariantSelect = (variantId) => {
     setHasExplicitVariantSelection(true);
     setHasCustomerSelectedVariantMedia(true);
+    setVariantSelectionNotice('');
     setSelectedVariantId(variantId);
     setActiveIndex(0);
   };
 
   const checkAndScrollToOptions = () => {
     let needsSelection = false;
+    let needsVariantSelection = false;
     if (hasVariants) {
       const isStructuredIncomplete = hasStructuredVariantAttributes && (product.super_attributes || []).some((attr) => !selectedOptions[attr.code]);
       if (isStructuredIncomplete || !matchingVariant || !currentProduct?.id || (hasConfigurableChoices && !hasExplicitVariantSelection)) {
          needsSelection = true;
+         needsVariantSelection = true;
       }
     } else if (product?.type === 'bundle') {
       const { itemsToCart } = buildBundleCartPayload(resolvedActiveBundleConfig);
@@ -953,6 +966,9 @@ export default function ProductDetailContent({
     }
 
     if (needsSelection) {
+      if (needsVariantSelection) {
+        setVariantSelectionNotice(VARIANT_SELECTION_REQUIRED_MESSAGE);
+      }
       // Find the selection section
       const targetNode = document.querySelector('#bundle-list, #variants-selection');
       if (targetNode) {
@@ -1085,6 +1101,7 @@ export default function ProductDetailContent({
     setQuantity,
     handleAddToCart,
     handleBuyNow,
+    variantSelectionNotice,
     additionalInfo: (() => {
       try {
         if (!product.additional_info) return [];

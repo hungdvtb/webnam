@@ -155,6 +155,7 @@ class FacebookAdsSyncService
                     foreach ($dailyAmounts as $date => $amount) {
                         DailyAdsSpend::updateOrCreate(
                             [
+                                'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
                                 'date' => $date,
                                 'account_id' => $storageAccountId,
                             ],
@@ -178,12 +179,17 @@ class FacebookAdsSyncService
         $configuredAccountIds = collect($configuredAccounts)->pluck('storage_account_id')->unique()->values()->all();
         foreach ($datesToFetch as $date) {
             $perAccountTotal = DailyAdsSpend::query()
+                ->where('platform', DailyAdsSpend::PLATFORM_FACEBOOK)
                 ->whereDate('date', $date)
                 ->whereIn('account_id', $configuredAccountIds)
                 ->sum('amount');
 
             DailyAdsSpend::updateOrCreate(
-                ['date' => $date, 'account_id' => null],
+                [
+                    'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+                    'date' => $date,
+                    'account_id' => null,
+                ],
                 ['amount' => (float) $perAccountTotal]
             );
         }
@@ -196,6 +202,7 @@ class FacebookAdsSyncService
         $this->syncRange($date, $date);
 
         return DailyAdsSpend::query()
+            ->where('platform', DailyAdsSpend::PLATFORM_FACEBOOK)
             ->whereDate('date', $date)
             ->whereNull('account_id')
             ->value('amount');

@@ -143,6 +143,7 @@ function scaleTransformAroundPoint(currentTransform, nextScale, point, rect) {
 
 function useTouchImageZoom({ enabled, onSwipe = null, onDoubleTap = null }) {
   const containerNodeRef = useRef(null);
+  const [containerNode, setContainerNodeState] = useState(null);
   const gestureRef = useRef({
     lastPoint: null,
     lastCenter: null,
@@ -166,6 +167,7 @@ function useTouchImageZoom({ enabled, onSwipe = null, onDoubleTap = null }) {
 
   const setContainerNode = useCallback((node) => {
     containerNodeRef.current = node;
+    setContainerNodeState(node);
   }, []);
 
   const resetTransform = useCallback(() => {
@@ -379,17 +381,33 @@ function useTouchImageZoom({ enabled, onSwipe = null, onDoubleTap = null }) {
     gesture.tapMoved = false;
   }, [enabled, onDoubleTap, onSwipe]);
 
+  useEffect(() => {
+    if (!enabled || !containerNode || typeof containerNode.addEventListener !== 'function') {
+      return undefined;
+    }
+
+    const passiveOptions = { passive: true };
+    const activeOptions = { passive: false };
+
+    containerNode.addEventListener('touchstart', handleTouchStart, passiveOptions);
+    containerNode.addEventListener('touchmove', handleTouchMove, activeOptions);
+    containerNode.addEventListener('touchend', handleTouchEnd, passiveOptions);
+    containerNode.addEventListener('touchcancel', handleTouchEnd, passiveOptions);
+
+    return () => {
+      containerNode.removeEventListener('touchstart', handleTouchStart, passiveOptions);
+      containerNode.removeEventListener('touchmove', handleTouchMove, activeOptions);
+      containerNode.removeEventListener('touchend', handleTouchEnd, passiveOptions);
+      containerNode.removeEventListener('touchcancel', handleTouchEnd, passiveOptions);
+    };
+  }, [containerNode, enabled, handleTouchEnd, handleTouchMove, handleTouchStart]);
+
   return {
     setContainerNode,
     transform,
     isZoomed: transform.scale > MIN_ZOOM_SCALE + 0.01,
     resetTransform,
-    touchHandlers: enabled ? {
-      onTouchStart: handleTouchStart,
-      onTouchMove: handleTouchMove,
-      onTouchEnd: handleTouchEnd,
-      onTouchCancel: handleTouchEnd,
-    } : {},
+    touchHandlers: {},
   };
 }
 
@@ -1003,7 +1021,11 @@ export default function ProductGallery({
       {image ? (
         <div
           ref={options.containerRef}
-          className={`${styles.productMediaVisualFrame} ${options.zoomable ? styles.productMediaVisualFrameZoomable : ''}`.trim()}
+          className={[
+            styles.productMediaVisualFrame,
+            options.zoomable ? styles.productMediaVisualFrameZoomable : '',
+            options.zoomed ? styles.productMediaVisualFrameZoomActive : '',
+          ].filter(Boolean).join(' ')}
           style={options.style}
           onDoubleClick={options.onDoubleClick}
         >
@@ -1071,6 +1093,7 @@ export default function ProductGallery({
                 containerRef: setInlineZoomContainerNode,
                 style: inlineZoomStyle,
                 zoomable: isMobileViewport,
+                zoomed: isInlineZoomed,
                 onDoubleClick: () => setIsFullscreenOpen(true),
               })}
               {renderImageSlide(nextImage, `next-${currentImageIndex + 1}`, true)}

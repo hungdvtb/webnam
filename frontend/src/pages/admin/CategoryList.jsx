@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { categoryApi, attributeApi, productApi, STORAGE_BASE_URL } from '../../services/api';
+import { categoryApi, attributeApi, productApi, cmsApi, STORAGE_BASE_URL } from '../../services/api';
 import { DndProvider, useDrag, useDrop } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { Tree, getDescendants, isAncestor } from '@minoru/react-dnd-treeview';
@@ -186,6 +186,7 @@ const INITIAL_FORM_DATA = {
     id: null,
     name: '',
     slug: '',
+    site_domain_id: '',
     description: '',
     meta_title: '',
     meta_description: '',
@@ -215,6 +216,7 @@ const buildCategoryFormData = (category = {}, categoryItems = []) => {
         id: category.id ?? null,
         name: category.name || '',
         slug: category.slug || '',
+        site_domain_id: category.site_domain_id ? String(category.site_domain_id) : '',
         description: category.description || '',
         meta_title: category.meta_title || '',
         meta_description: category.meta_description || '',
@@ -798,6 +800,10 @@ const CategoryList = () => {
     const [selectedChildOrderDrafts, setSelectedChildOrderDrafts] = useState({});
     const [selectedChildOrderSaving, setSelectedChildOrderSaving] = useState(false);
     const [formData, setFormData] = useState(createInitialFormData);
+    const [domains, setDomains] = useState([]);
+    const [showCategoryLinkModal, setShowCategoryLinkModal] = useState(false);
+    const [tempSlug, setTempSlug] = useState('');
+    const [slugError, setSlugError] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
     const [isTrashView, setIsTrashView] = useState(false);
     const [trashCount, setTrashCount] = useState(0);
@@ -840,6 +846,117 @@ const CategoryList = () => {
     });
     const isSelectiveImport = importMode === 'update_selected_fields';
     const canReorderTree = !isTrashView && !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
+    const selectedDomain = React.useMemo(() => (
+        domains.find((domain) => String(domain.id) === String(formData.site_domain_id))
+        || domains.find((domain) => domain.is_default)
+        || domains[0]
+        || { domain: 'di-san.com' }
+    ), [domains, formData.site_domain_id]);
+    const previewCategorySlug = React.useMemo(() => (
+        String(
+            (showCategoryLinkModal ? tempSlug : formData.slug)
+            || formData.slug
+            || buildCategorySlugPreview(formData.name)
+            || ''
+        ).trim()
+    ), [formData.name, formData.slug, showCategoryLinkModal, tempSlug]);
+    const baseCategoryLink = React.useMemo(() => {
+        const domain = String(selectedDomain?.domain || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+
+        if (!previewCategorySlug || !domain) {
+            return '';
+        }
+
+        try {
+            return new URL(`/category/${encodeURIComponent(previewCategorySlug)}`, `https://${domain}`).toString();
+        } catch (error) {
+            return '';
+        }
+    }, [previewCategorySlug, selectedDomain]);
+    const hasValidCategoryLink = Boolean(baseCategoryLink);
+    const buildTrackingLink = React.useCallback((url, source) => {
+        if (!url) {
+            return '';
+        }
+
+        try {
+            const trackingUrl = new URL(url);
+            trackingUrl.searchParams.set('utm_source', source);
+            return trackingUrl.toString();
+        } catch (error) {
+            return `${url}${url.includes('?') ? '&' : '?'}utm_source=${encodeURIComponent(source)}`;
+        }
+    }, []);
+    const trackingLinks = React.useMemo(() => ([
+        {
+            key: 'facebook',
+            label: 'Link Facebook',
+            helper: 'utm_source=facebook',
+            url: buildTrackingLink(baseCategoryLink, 'facebook'),
+        },
+        {
+            key: 'google',
+            label: 'Link Google',
+            helper: 'utm_source=google',
+            url: buildTrackingLink(baseCategoryLink, 'google'),
+        },
+        {
+            key: 'tiktok',
+            label: 'Link TikTok',
+            helper: 'utm_source=tiktok',
+            url: buildTrackingLink(baseCategoryLink, 'tiktok'),
+        },
+    ]), [baseCategoryLink, buildTrackingLink]);
+
+    const copyTextToClipboard = React.useCallback((value, successMessage) => {
+        if (!value) {
+            showToast({ message: 'Danh mục chưa có link hợp lệ để sao chép.', type: 'warning' });
+            return;
+        }
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value)
+                .then(() => showToast({ message: successMessage, type: 'success' }))
+                .catch((error) => {
+                    console.error('Copy category link failed:', error);
+                    showToast({ message: 'Lỗi khi sao chép link.', type: 'error' });
+                });
+            return;
+        }
+
+        const textArea = document.createElement('textarea');
+        textArea.value = value;
+        document.body.appendChild(textArea);
+        textArea.select();
+
+        try {
+            document.execCommand('copy');
+            showToast({ message: successMessage, type: 'success' });
+        } catch (error) {
+            showToast({ message: 'Trình duyệt không hỗ trợ sao chép tự động.', type: 'error' });
+        }
+
+        document.body.removeChild(textArea);
+    }, [showToast]);
+
+    const handleCopyCategoryLink = React.useCallback(() => {
+        copyTextToClipboard(baseCategoryLink, 'Đã sao chép URL danh mục chính.');
+    }, [baseCategoryLink, copyTextToClipboard]);
+
+    const handleOpenCategoryLinkManager = React.useCallback(() => {
+        setTempSlug(formData.slug || buildCategorySlugPreview(formData.name) || '');
+        setSlugError('');
+        setShowCategoryLinkModal(true);
+    }, [formData.name, formData.slug]);
+
+    const handleOpenCategoryPage = React.useCallback(() => {
+        if (!hasValidCategoryLink) {
+            showToast({ message: 'Danh mục chưa có link hợp lệ để mở.', type: 'warning' });
+            return;
+        }
+
+        window.open(baseCategoryLink, '_blank', 'noopener,noreferrer');
+    }, [baseCategoryLink, hasValidCategoryLink, showToast]);
 
     // Close dropdowns on outside click
     useEffect(() => {
@@ -1105,6 +1222,8 @@ const CategoryList = () => {
         editCategoryRequestRef.current += 1;
         setIsCategoryFormLoading(false);
         setIsFormOpen(false);
+        setShowCategoryLinkModal(false);
+        setSlugError('');
         setFormData(createInitialFormData());
         resetCategoryMediaDraftState();
         closeCategoryItemPicker();
@@ -1143,6 +1262,8 @@ const CategoryList = () => {
 
         if (isTrashView) {
             setIsFormOpen(false);
+            setShowCategoryLinkModal(false);
+            setSlugError('');
             resetCategoryMediaDraftState();
             setFormData(createInitialFormData());
         }
@@ -1527,10 +1648,14 @@ const CategoryList = () => {
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [catRes, attrRes, trashRes] = await Promise.all([
+            const [catRes, attrRes, trashRes, domainRes] = await Promise.all([
                 categoryApi.getAll(isTrashView ? { is_trash: 1 } : undefined),
                 attributeApi.getAll(), // Fetch all to ensure names show even if inactive in this view
                 categoryApi.getAll({ is_trash: 1 }),
+                cmsApi.domains.getAll().catch((error) => {
+                    console.error('Error fetching site domains:', error);
+                    return { data: [] };
+                }),
             ]);
 
             const visibleCategories = Array.isArray(catRes.data) ? catRes.data : [];
@@ -1543,6 +1668,7 @@ const CategoryList = () => {
 
             // Set attributes for selection
             setAllAttributes(attrRes.data || []);
+            setDomains(Array.isArray(domainRes.data) ? domainRes.data : []);
             setTrashCount(trashedCategories.length);
             hasLoadedInitialDataRef.current = true;
         } catch (error) {
@@ -1781,6 +1907,12 @@ const CategoryList = () => {
             } else {
                 data.append('clear_attributes', 'true');
             }
+
+            const normalizedSlug = formData.slug || buildCategorySlugPreview(formData.name);
+            if (normalizedSlug) {
+                data.append('slug', normalizedSlug);
+            }
+            data.append('site_domain_id', formData.site_domain_id || '');
             
             if (formData.banner instanceof File) {
                 data.append('banner', formData.banner);
@@ -2900,6 +3032,26 @@ const CategoryList = () => {
                                             </p>
                                         </div>
                                         <div className="flex shrink-0 items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenCategoryLinkManager}
+                                            disabled={isCategoryFormLoading}
+                                            className="inline-flex items-center gap-2 rounded-sm border border-gold/20 bg-gold/10 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-primary transition-all hover:border-gold hover:bg-gold/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                            title="Quản lý đường dẫn hiển thị"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">link</span>
+                                            Link
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenCategoryPage}
+                                            disabled={isCategoryFormLoading || !hasValidCategoryLink}
+                                            className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition-all ${hasValidCategoryLink ? 'border-primary/15 bg-primary/5 text-primary hover:bg-primary hover:text-white' : 'cursor-not-allowed border-stone/10 bg-stone/5 text-stone/35'}`}
+                                            title={hasValidCategoryLink ? 'Mở trang danh mục ở website' : 'Danh mục chưa có link hợp lệ để mở'}
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+                                            Mở
+                                        </button>
                                         <button 
                                             type="submit" 
                                             form="category-form"
@@ -3569,6 +3721,175 @@ const CategoryList = () => {
                     </div>
                 </div>
             </div>
+            {showCategoryLinkModal && (
+                <div className="fixed inset-0 z-[140] flex items-center justify-center bg-primary/40 p-4 backdrop-blur-sm" onClick={() => setShowCategoryLinkModal(false)}>
+                    <div
+                        className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-sm bg-white shadow-2xl"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between border-b border-gold/10 bg-[#fcfaf7] px-6 py-4">
+                            <div className="flex items-center gap-3">
+                                <span className="material-symbols-outlined text-gold">link</span>
+                                <h3 className="font-sans text-[16px] font-bold uppercase tracking-tight text-primary">Quản lý đường dẫn hiển thị</h3>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowCategoryLinkModal(false)}
+                                className="text-stone/30 transition-colors hover:text-brick"
+                            >
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto p-6 custom-scrollbar">
+                            <div className="mb-6">
+                                <label className="mb-2 block text-[11px] font-black uppercase tracking-widest text-stone/40">URL danh mục chính</label>
+                                <div className="rounded-sm border border-gold/10 bg-stone/5 p-4">
+                                    <div className="mb-3 break-all text-[12px] font-bold text-primary" title={baseCategoryLink || 'Chưa có URL danh mục'}>
+                                        {baseCategoryLink || 'Danh mục cần có domain và slug để sinh URL.'}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleCopyCategoryLink}
+                                            disabled={!hasValidCategoryLink}
+                                            className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${hasValidCategoryLink ? 'border-gold/15 text-primary hover:border-gold hover:bg-gold/10' : 'cursor-not-allowed border-stone/10 text-stone/30'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                            Copy
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenCategoryPage}
+                                            disabled={!hasValidCategoryLink}
+                                            className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${hasValidCategoryLink ? 'border-primary/15 text-primary hover:bg-primary hover:text-white' : 'cursor-not-allowed border-stone/10 text-stone/30'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                                            Mở
+                                        </button>
+                                    </div>
+                                </div>
+                                <p className="mt-2 text-[10px] italic text-stone/40">Đây là đường dẫn tĩnh để khách truy cập trực tiếp vào danh mục.</p>
+                            </div>
+
+                            <div className="mb-6 rounded-sm border border-gold/10 bg-[#fcfaf7] p-4">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-[12px] font-black uppercase tracking-[0.14em] text-primary">Link tracking quảng cáo</h4>
+                                        <p className="mt-1 text-[11px] text-stone/50">Hệ thống tự sinh 3 link phụ từ URL danh mục theo UTM.</p>
+                                    </div>
+                                    <span className="rounded-full bg-primary/[0.06] px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
+                                        Tự động
+                                    </span>
+                                </div>
+
+                                <div className="space-y-3">
+                                    {trackingLinks.map((trackingLink) => (
+                                        <div key={trackingLink.key} className="rounded-sm border border-stone/10 bg-white p-3 shadow-sm">
+                                            <div className="mb-2 flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="text-[12px] font-bold text-primary">{trackingLink.label}</div>
+                                                    <div className="text-[10px] font-medium text-stone/45">{trackingLink.helper}</div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => copyTextToClipboard(trackingLink.url, `Đã sao chép ${trackingLink.label.toLowerCase()}.`)}
+                                                    disabled={!trackingLink.url}
+                                                    className={`inline-flex items-center gap-1.5 rounded-sm border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] transition-all ${trackingLink.url ? 'border-gold/15 text-primary hover:border-gold hover:bg-gold/10' : 'cursor-not-allowed border-stone/10 text-stone/30'}`}
+                                                >
+                                                    <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                    Copy
+                                                </button>
+                                            </div>
+                                            <div className="truncate text-[12px] text-stone/65" title={trackingLink.url || 'Chưa có link tracking'}>
+                                                {trackingLink.url || 'Danh mục cần có domain và slug để sinh link tracking.'}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="space-y-6">
+                                {domains.length > 0 ? (
+                                    <div className="relative flex min-h-[50px] flex-col justify-center rounded-sm border border-stone/30 bg-white px-3 transition-colors focus-within:border-primary/30">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black uppercase leading-none tracking-widest text-gold">
+                                            Chọn tên miền hiển thị
+                                        </label>
+                                        <select
+                                            name="site_domain_id"
+                                            value={formData.site_domain_id || ''}
+                                            onChange={(event) => setFormData((previous) => ({ ...previous, site_domain_id: event.target.value }))}
+                                            className="w-full border-none bg-transparent pt-1 text-[13px] font-bold text-primary focus:outline-none focus:ring-0"
+                                        >
+                                            <option value="">Sử dụng tên miền mặc định</option>
+                                            {domains.map((domain) => (
+                                                <option key={domain.id} value={domain.id}>
+                                                    {domain.domain} {domain.is_default ? '(Mặc định)' : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ) : null}
+
+                                <div className="relative flex min-h-[50px] flex-col justify-center rounded-sm border border-stone/30 bg-white px-3 transition-colors focus-within:border-primary/30">
+                                    <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black uppercase leading-none tracking-widest text-brick">
+                                        Chỉnh sửa slug danh mục
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={tempSlug}
+                                        onChange={(event) => {
+                                            const value = event.target.value
+                                                .toLowerCase()
+                                                .replace(/[^a-z0-9-]/g, '-')
+                                                .replace(/-+/g, '-')
+                                                .replace(/^-+/, '');
+                                            setTempSlug(value);
+                                            setSlugError('');
+                                        }}
+                                        className="w-full border-none bg-transparent pt-2 text-[15px] font-bold text-primary focus:outline-none focus:ring-0"
+                                        placeholder="vd: bo-do-tho-men-lam"
+                                    />
+                                </div>
+                                {slugError ? <p className="text-[11px] font-bold text-brick">{slugError}</p> : null}
+                                <div className="rounded-sm border border-amber-100 bg-amber-50 p-3">
+                                    <p className="text-[11px] leading-relaxed text-amber-700">
+                                        <span className="font-bold">Lưu ý:</span> Đổi slug sẽ đổi URL danh mục. Link cũ đã chia sẻ có thể không truy cập được nếu hệ thống chưa cấu hình redirect.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-3 border-t border-stone/10 bg-stone/5 p-4">
+                            <button
+                                type="button"
+                                onClick={() => setShowCategoryLinkModal(false)}
+                                className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone transition-all hover:text-primary"
+                            >
+                                Hủy bỏ
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const normalizedSlug = tempSlug.trim().replace(/-+$/g, '');
+
+                                    if (!normalizedSlug) {
+                                        setSlugError('Đường dẫn không được để trống.');
+                                        return;
+                                    }
+
+                                    setFormData((previous) => ({ ...previous, slug: normalizedSlug }));
+                                    setShowCategoryLinkModal(false);
+                                    showToast({ message: 'Đã cập nhật slug danh mục. Bấm Lưu lại để ghi vào hệ thống.', type: 'info' });
+                                }}
+                                className="rounded-sm bg-gold px-8 py-2 text-[11px] font-bold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-gold/80"
+                            >
+                                Xác nhận thay đổi
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <CategoryItemPickerModal
                 open={isCategoryItemPickerOpen}
                 onClose={closeCategoryItemPicker}

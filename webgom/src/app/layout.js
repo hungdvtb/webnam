@@ -1,4 +1,5 @@
 import "./globals.css";
+import { Suspense } from "react";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import FloatingContactButtons from "@/components/FloatingContactButtons";
@@ -193,7 +194,9 @@ export default async function RootLayout({ children }) {
       </head>
       <body>
         <TrackingScripts settings={settings} />
-        <LeadAttributionTracker />
+        <Suspense fallback={null}>
+          <LeadAttributionTracker />
+        </Suspense>
         <WebAnalyticsTracker />
         <CartProvider>
           <div className="mobile-sticky-header-shell">

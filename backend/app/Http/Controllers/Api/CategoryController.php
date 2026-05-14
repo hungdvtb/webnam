@@ -948,6 +948,7 @@ class CategoryController extends Controller
             ->with([
                 'bannerMediaAsset',
                 'logoMediaAsset',
+                'siteDomain:id,domain,is_active,is_default',
                 'parent' => static function ($parentQuery) use ($isTrashView) {
                     if ($isTrashView) {
                         $parentQuery->withTrashed();
@@ -973,6 +974,8 @@ class CategoryController extends Controller
         ]), [
             'name' => 'required|string|max:255',
             'code' => 'nullable|string|max:120',
+            'slug' => 'nullable|string|max:255',
+            'site_domain_id' => 'nullable|exists:site_domains,id',
             'parent_id' => 'nullable|integer',
             'description' => 'nullable|string',
             'meta_title' => 'nullable|string|max:255',
@@ -991,6 +994,7 @@ class CategoryController extends Controller
 
         $parentId = $this->resolveValidatedParentId($request->input('parent_id'));
         $normalizedName = $this->normalizeRequiredString($request->input('name'));
+        $slugSource = $this->normalizeRequiredString($request->input('slug') ?: $normalizedName) ?: $normalizedName;
 
         $normalizedCode = Category::normalizeCode($request->input('code'));
 
@@ -1011,7 +1015,8 @@ class CategoryController extends Controller
             $category = Category::create([
                 'name' => $normalizedName,
                 'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($normalizedName),
-                'slug' => Category::buildUniqueSlug($normalizedName),
+                'site_domain_id' => $request->filled('site_domain_id') ? (int) $request->input('site_domain_id') : null,
+                'slug' => Category::buildUniqueSlug($slugSource),
                 'parent_id' => $parentId,
                 'description' => $this->normalizeNullableString($request->input('description')),
                 'meta_title' => $this->normalizeNullableString($request->input('meta_title')),
@@ -1039,12 +1044,12 @@ class CategoryController extends Controller
             return response()->json(['error' => $exception->getMessage()], 500);
         }
 
-        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset']), 201);
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']), 201);
     }
 
     public function show($id)
     {
-        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset'])->findOrFail($id);
+        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])->findOrFail($id);
 
         return response()->json($category);
     }
@@ -1069,6 +1074,8 @@ class CategoryController extends Controller
         ]), [
             'name' => 'sometimes|required|string|max:255',
             'code' => 'nullable|string|max:120',
+            'slug' => 'nullable|string|max:255',
+            'site_domain_id' => 'nullable|exists:site_domains,id',
             'parent_id' => 'sometimes|nullable|integer',
             'description' => 'nullable|string',
             'meta_title' => 'nullable|string|max:255',
@@ -1089,7 +1096,17 @@ class CategoryController extends Controller
         if ($request->has('name')) {
             $normalizedName = $this->normalizeRequiredString($request->input('name'));
             $category->name = $normalizedName;
-            $category->slug = Category::buildUniqueSlug($normalizedName, (int) $category->id);
+        }
+
+        if ($request->has('slug') || $request->has('name')) {
+            $slugSource = $request->has('slug')
+                ? $this->normalizeRequiredString($request->input('slug'))
+                : $this->normalizeRequiredString($category->name);
+            $category->slug = Category::buildUniqueSlug($slugSource ?: $category->name, (int) $category->id);
+        }
+
+        if ($request->has('site_domain_id')) {
+            $category->site_domain_id = $request->filled('site_domain_id') ? (int) $request->input('site_domain_id') : null;
         }
 
         if ($request->filled('code')) {
@@ -1170,7 +1187,7 @@ class CategoryController extends Controller
             $this->mediaService->deleteAsset($previousLogoAssetId);
         }
 
-        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset']));
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']));
     }
 
     public function destroy($id)
@@ -1229,7 +1246,7 @@ class CategoryController extends Controller
             return response()->json([
                 'message' => 'Tree reordered successfully',
                 'categories' => $this->orderedCategoriesForTree(
-                    Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+                    Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])
                         ->withCount('products')
                         ->get()
                 ),
@@ -1302,7 +1319,7 @@ class CategoryController extends Controller
         return response()->json([
             'message' => 'Tree reordered successfully',
             'categories' => $this->orderedCategoriesForTree(
-                Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+                Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])
                     ->withCount('products')
                     ->get()
             ),
@@ -1576,7 +1593,7 @@ class CategoryController extends Controller
 
     protected function buildCategoryProductPayload(Category $category): array
     {
-        $category->loadMissing(['bannerMediaAsset', 'logoMediaAsset']);
+        $category->loadMissing(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']);
         $assignmentRows = $this->normalizeCategoryAssignmentRowsForDisplay(
             $this->loadCategoryAssignmentRows((int) $category->id)
         );
@@ -1805,6 +1822,13 @@ class CategoryController extends Controller
             'id' => (int) $category->id,
             'name' => $category->name,
             'slug' => $category->slug,
+            'site_domain_id' => $category->site_domain_id ? (int) $category->site_domain_id : null,
+            'site_domain' => $category->relationLoaded('siteDomain') && $category->siteDomain ? [
+                'id' => (int) $category->siteDomain->id,
+                'domain' => $category->siteDomain->domain,
+                'is_active' => (bool) $category->siteDomain->is_active,
+                'is_default' => (bool) $category->siteDomain->is_default,
+            ] : null,
             'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
             'description' => $category->description,
             'meta_title' => $category->meta_title,
@@ -2210,7 +2234,10 @@ class CategoryController extends Controller
         }
 
         $path = '/category/' . rawurlencode($slug);
-        $baseUrl = $domainsByAccountId[(int) ($category->account_id ?? 0)] ?? null;
+        $categoryDomain = $category->relationLoaded('siteDomain') && $category->siteDomain
+            ? $this->normalizeCategoryBaseUrl($category->siteDomain->domain)
+            : null;
+        $baseUrl = $categoryDomain ?: ($domainsByAccountId[(int) ($category->account_id ?? 0)] ?? null);
 
         return $baseUrl ? rtrim($baseUrl, '/') . $path : $path;
     }

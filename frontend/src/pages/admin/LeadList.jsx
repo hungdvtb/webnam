@@ -1518,11 +1518,11 @@ const LeadSettingsModal = ({ open, onClose, statuses, staffs, tagRules, onReload
             setBusy(true);
             await leadApi.createTagRule(tagRuleForm);
             setTagRuleForm({ tag: '', match_type: 'contains', pattern: '', priority: 0, notes: '', is_active: true });
-            showToast({ message: 'Đã thêm quy tắc tag.', type: 'success' });
+            showToast({ message: 'Đã thêm quy tắc nguồn đơn.', type: 'success' });
             await onReload?.();
         } catch (error) {
             console.error('Failed to create tag rule', error);
-            showModal({ title: 'Lỗi', content: 'Không thể thêm quy tắc tag.', type: 'error' });
+            showModal({ title: 'Lỗi', content: 'Không thể thêm quy tắc nguồn đơn.', type: 'error' });
         } finally {
             setBusy(false);
         }
@@ -1534,7 +1534,7 @@ const LeadSettingsModal = ({ open, onClose, statuses, staffs, tagRules, onReload
                 <div className="flex items-center justify-between gap-4 border-b border-primary/10 px-6 py-5">
                     <div>
                         <h2 className="text-[24px] font-black uppercase tracking-[0.06em] text-primary">Cài đặt lead</h2>
-                        <p className="mt-1 text-[13px] text-primary/55">Quản lý trạng thái, nhân viên và quy tắc gắn tag.</p>
+                        <p className="mt-1 text-[13px] text-primary/55">Quản lý trạng thái, nhân viên và quy tắc nguồn đơn.</p>
                     </div>
                     <button type="button" onClick={onClose} className={iconButtonClassName} title="Đóng">
                         <span className="material-symbols-outlined text-[20px]">close</span>
@@ -1545,7 +1545,7 @@ const LeadSettingsModal = ({ open, onClose, statuses, staffs, tagRules, onReload
                     {[
                         { key: 'status', label: 'Trạng thái' },
                         { key: 'staff', label: 'Nhân viên' },
-                        { key: 'tag-rule', label: 'Quy tắc tag' },
+                        { key: 'tag-rule', label: 'Quy tắc nguồn đơn' },
                     ].map((item) => (
                         <button
                             key={item.key}
@@ -1609,7 +1609,7 @@ const LeadSettingsModal = ({ open, onClose, statuses, staffs, tagRules, onReload
                         {tab === 'tag-rule' ? (
                             <form onSubmit={handleCreateTagRule} className="space-y-4">
                                 <div className="space-y-1.5">
-                                    <label className="text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Tag</label>
+                                    <label className="text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Nguồn đơn</label>
                                     <input value={tagRuleForm.tag} onChange={(event) => setTagRuleForm((prev) => ({ ...prev, tag: event.target.value }))} className={inputClassName} />
                                 </div>
                                 <div className="space-y-1.5">

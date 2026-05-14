@@ -18,6 +18,7 @@ class Category extends Model
     protected $fillable = [
         'name',
         'code',
+        'site_domain_id',
         'slug',
         'parent_id',
         'description',
@@ -39,6 +40,7 @@ class Category extends Model
         'banner_media_asset_id' => 'integer',
         'logo_media_asset_id' => 'integer',
         'filterable_attribute_ids' => 'array',
+        'site_domain_id' => 'integer',
         'status' => 'integer',
         'order' => 'integer',
         'deleted_at' => 'datetime',
@@ -133,6 +135,11 @@ class Category extends Model
     public function parent()
     {
         return $this->belongsTo(Category::class, 'parent_id');
+    }
+
+    public function siteDomain()
+    {
+        return $this->belongsTo(SiteDomain::class);
     }
 
     public function children()

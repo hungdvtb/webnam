@@ -129,7 +129,9 @@ const DailyProfitReport = () => {
         { id: 'cost_actual', label: 'Giá vốn thực' },
         { id: 'shipping_fee', label: 'Chi phí vận chuyển' },
         { id: 'packaging_fee', label: 'Chi phí gói hàng' },
-        { id: 'ads_spend', label: 'QC FB' },
+        { id: 'fb_ads_spend', label: 'QC FB' },
+        { id: 'google_ads_spend', label: 'QC Google' },
+        { id: 'ads_spend', label: 'Tổng Ads' },
         { id: 'tax', label: 'Thuế tạm tính' },
         { id: 'fixed_cost', label: 'Chi phí cố định' },
         { id: 'extra_profit', label: 'Lãi/lỗ Đổi trả' },
@@ -158,7 +160,17 @@ const DailyProfitReport = () => {
     const [columnConfig, setColumnConfig] = useState(() => {
         try {
             const saved = localStorage.getItem('dailyProfitCols2');
-            if (saved) return JSON.parse(saved);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                const knownIds = defaultCols.map(c => c.id);
+                const merged = Array.isArray(parsed)
+                    ? parsed.filter(id => knownIds.includes(id))
+                    : [];
+                defaultCols.forEach(col => {
+                    if (!merged.includes(col.id)) merged.push(col.id);
+                });
+                return merged;
+            }
         } catch(e) {}
         return defaultCols.map(c => c.id);
     });
@@ -237,7 +249,7 @@ const DailyProfitReport = () => {
             case 'packaging_fee': return renderTH("px-3 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
                 <>Chi phí<br/>gói hàng</>
             );
-            case 'ads_spend': return renderTH("px-1 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
+            case 'fb_ads_spend': return renderTH("px-1 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
                 <div className="flex flex-col items-center">
                     <div className="flex items-center gap-1 justify-center">
                         <span>QC FB</span>
@@ -257,6 +269,30 @@ const DailyProfitReport = () => {
                         {fetchingSplit ? <RefreshCw size={10} className="animate-spin" /> : "Chi tiết"}
                     </button>
                 </div>
+            );
+            case 'google_ads_spend': return renderTH("px-1 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
+                <div className="flex flex-col items-center">
+                    <div className="flex items-center gap-1 justify-center">
+                        <span>QC Google</span>
+                        <button
+                            onClick={(e) => { e.stopPropagation(); handleSyncGoogle(); }}
+                            title="Đồng bộ thủ công từ Google Ads"
+                            className={`p-1 rounded-full hover:bg-gray-100 transition-colors text-emerald-600 ${loading ? 'animate-spin' : ''}`}
+                        >
+                            <RefreshCw size={13} />
+                        </button>
+                    </div>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); handleFetchGoogleSplit(); }}
+                        title="Xem chi tiết từng tài khoản Google Ads"
+                        className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded flex items-center gap-1 hover:bg-emerald-100 transition-colors mt-1"
+                    >
+                        {fetchingGoogleSplit ? <RefreshCw size={10} className="animate-spin" /> : "Chi tiết"}
+                    </button>
+                </div>
+            );
+            case 'ads_spend': return renderTH("px-1 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
+                <>Tổng<br/>Ads</>
             );
             case 'tax': return renderTH("px-3 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
                 <>Thuế<br/>tạm tính</>
@@ -314,6 +350,46 @@ const DailyProfitReport = () => {
         </div>
     );
 
+    const renderAdTotalCell = (id, valueField, rawField, textClassName = '') => {
+        const taxed = aggregatedTotal[valueField] || 0;
+        const raw = aggregatedTotal[rawField] || 0;
+        return (
+            <td key={id} className={`px-3 py-3 text-[13px] font-bold text-center ${textClassName}`}>
+                <div className="flex flex-col items-center">
+                    <span>{formatNumber(taxed)}</span>
+                    {Math.abs(taxed - raw) > 1 && (
+                        <span className="text-[13px] text-white/70 font-normal mt-0.5">
+                            ({formatNumber(raw)})
+                        </span>
+                    )}
+                </div>
+                <span className="text-[13px] font-normal opacity-80 mt-0.5 inline-block">
+                    {(aggregatedTotal.revenue_raw > 0 ? (taxed / aggregatedTotal.revenue_raw * 100) : 0).toFixed(1)}%
+                </span>
+            </td>
+        );
+    };
+
+    const renderAdRowCell = (id, row, valueField, rawField, textClassName = 'text-blue-600') => {
+        const taxed = row[valueField] || 0;
+        const raw = row[rawField] || 0;
+        return (
+            <td key={id} className={`px-3 py-3 text-[13px] ${textClassName} text-center`}>
+                <div className="flex flex-col items-center">
+                    <span className="font-bold">{formatNumber(taxed)}</span>
+                    {Math.abs(taxed - raw) > 1 && (
+                        <span className="text-[13px] text-gray-400/80 font-normal mt-0.5">
+                            ({formatNumber(raw)})
+                        </span>
+                    )}
+                </div>
+                <span className="text-[13px] text-gray-400 font-normal mt-0.5 inline-block">
+                    {(row.revenue_raw > 0 ? (taxed / row.revenue_raw * 100) : 0).toFixed(1)}%
+                </span>
+            </td>
+        );
+    };
+
     const renderTotal = (id) => {
         switch(id) {
             case 'date': return (
@@ -355,6 +431,10 @@ const DailyProfitReport = () => {
                                      <span className="text-[13px] font-normal opacity-80">{(aggregatedTotal.revenue_raw > 0 ? (aggregatedTotal.packaging_fee / aggregatedTotal.revenue_raw * 100) : 0).toFixed(1)}%</span>
                                  </td>
 );
+            case 'fb_ads_spend':
+                return renderAdTotalCell('fb_ads_spend', 'fb_ads_spend', 'fb_ads_spend_raw');
+            case 'google_ads_spend':
+                return renderAdTotalCell('google_ads_spend', 'google_ads_spend', 'google_ads_spend_raw');
             case 'ads_spend': return (
 <td  key='ads_spend' className="px-3 py-3 text-[13px] font-bold text-center">
                                      <div className="flex flex-col items-center">
@@ -454,6 +534,10 @@ const DailyProfitReport = () => {
                                              <span className="text-[13px] text-gray-400 font-normal">{(row.percent_pack || 0).toFixed(1)}%</span>
                                          </td>
 );
+            case 'fb_ads_spend':
+                return renderAdRowCell('fb_ads_spend', row, 'fb_ads_spend', 'fb_ads_spend_raw', 'text-blue-600');
+            case 'google_ads_spend':
+                return renderAdRowCell('google_ads_spend', row, 'google_ads_spend', 'google_ads_spend_raw', 'text-emerald-600');
             case 'ads_spend': return (
 <td  key='ads_spend' className="px-3 py-3 text-[13px] text-blue-600 text-center">
                                              <div className="flex flex-col items-center">
@@ -515,7 +599,14 @@ const DailyProfitReport = () => {
         tax_rate: 1.5,
         fb_access_token: '',
         fb_ad_account_ids: '',
-        fb_tax_rate: 0
+        fb_tax_rate: 0,
+        google_developer_token: '',
+        google_client_id: '',
+        google_client_secret: '',
+        google_refresh_token: '',
+        google_login_customer_id: '',
+        google_customer_ids: '',
+        google_tax_rate: 0
     });
 
     const [filters, setFilters] = useState({
@@ -529,6 +620,13 @@ const DailyProfitReport = () => {
     const [fbSplitData, setFbSplitData] = useState(null);
     const [fetchingSplit, setFetchingSplit] = useState(false);
     const [hideZeroFbSpend, setHideZeroFbSpend] = useState(false);
+    const [googleAccounts, setGoogleAccounts] = useState([]);
+    const [fetchingGoogleAccounts, setFetchingGoogleAccounts] = useState(false);
+    const [showGoogleAccounts, setShowGoogleAccounts] = useState(false);
+    const [showGoogleSplit, setShowGoogleSplit] = useState(false);
+    const [googleSplitData, setGoogleSplitData] = useState(null);
+    const [fetchingGoogleSplit, setFetchingGoogleSplit] = useState(false);
+    const [hideZeroGoogleSpend, setHideZeroGoogleSpend] = useState(false);
 
     const addTokenGroup = () => {
         setTokenGroups([...tokenGroups, { token: '', account_ids: '', accounts: [], fetching: false, showList: false }]);
@@ -667,6 +765,108 @@ const DailyProfitReport = () => {
         }
     };
 
+    const handleFetchGoogleAccounts = async () => {
+        if (!config.google_developer_token || !config.google_client_id || !config.google_client_secret || !config.google_refresh_token) {
+            alert("Vui lòng nhập đủ Developer Token, Client ID, Client Secret và Refresh Token của Google Ads.");
+            return;
+        }
+
+        setFetchingGoogleAccounts(true);
+        try {
+            const res = await financeApi.getGoogleAdAccounts({
+                google_developer_token: config.google_developer_token,
+                google_client_id: config.google_client_id,
+                google_client_secret: config.google_client_secret,
+                google_refresh_token: config.google_refresh_token,
+                google_login_customer_id: config.google_login_customer_id,
+            });
+
+            if (res.data.status === 'success') {
+                setGoogleAccounts(res.data.data || []);
+                setShowGoogleAccounts(true);
+                if ((res.data.data || []).length === 0) {
+                    alert("Không tìm thấy tài khoản Google Ads nào với bộ thông tin này.");
+                }
+            } else {
+                alert(res.data.message || "Lỗi lấy danh sách tài khoản Google Ads");
+            }
+        } catch (error) {
+            console.error(error);
+            alert("Không thể kết nối Google Ads API. Vui lòng kiểm tra lại cấu hình.");
+        } finally {
+            setFetchingGoogleAccounts(false);
+        }
+    };
+
+    const toggleGoogleCustomer = (customerId) => {
+        if (!customerId) return;
+        const currentIds = config.google_customer_ids
+            ? config.google_customer_ids.split(',').map(id => id.trim()).filter(Boolean)
+            : [];
+        const normalized = String(customerId).replace(/\D+/g, '');
+        const nextIds = currentIds.includes(normalized)
+            ? currentIds.filter(id => id !== normalized)
+            : [...currentIds, normalized];
+
+        setConfig({...config, google_customer_ids: nextIds.join(', ')});
+    };
+
+    const handleSaveGoogleConfig = async () => {
+        setLoading(true);
+        try {
+            await financeApi.updateDailyPnlConfig(config);
+            await loadData();
+            alert("Đã lưu cấu hình Google Ads thành công!");
+        } catch (error) {
+            console.error(error);
+            alert("Lỗi lưu cấu hình Google Ads");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleSyncGoogle = async () => {
+        setLoading(true);
+        try {
+            const res = await financeApi.syncGoogleAdSpend({
+                start_date: filters.start_date,
+                end_date: filters.end_date
+            });
+            if (res.data.status !== 'success') {
+                alert(res.data.message || "Lỗi khi đồng bộ dữ liệu Google Ads.");
+                return;
+            }
+            await loadData();
+            alert("Đã đồng bộ xong tiền quảng cáo Google Ads!");
+        } catch (error) {
+            console.error(error);
+            alert(error?.response?.data?.message || "Lỗi khi đồng bộ dữ liệu Google Ads.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleFetchGoogleSplit = async () => {
+        setFetchingGoogleSplit(true);
+        try {
+            const res = await financeApi.getGoogleAdSpendSplit({
+                start_date: filters.start_date,
+                end_date: filters.end_date
+            });
+            if (res.data.status === 'success') {
+                setGoogleSplitData(res.data.data);
+                setShowGoogleSplit(true);
+            } else {
+                alert(res.data.message || "Lỗi lấy dữ liệu Google Ads");
+            }
+        } catch (error) {
+            console.error(error);
+            alert(error?.response?.data?.message || "Lỗi khi kết nối đến Google Ads API.");
+        } finally {
+            setFetchingGoogleSplit(false);
+        }
+    };
+
     const getQuickFilterRange = (type) => {
         const now = new Date();
         let start;
@@ -802,6 +1002,10 @@ const DailyProfitReport = () => {
         cost_actual: acc.cost_actual + (row.cost_actual || 0),
         shipping_fee: acc.shipping_fee + (row.shipping_fee || 0),
         packaging_fee: acc.packaging_fee + (row.packaging_fee || 0),
+        fb_ads_spend: acc.fb_ads_spend + (row.fb_ads_spend || 0),
+        fb_ads_spend_raw: acc.fb_ads_spend_raw + (row.fb_ads_spend_raw || 0),
+        google_ads_spend: acc.google_ads_spend + (row.google_ads_spend || 0),
+        google_ads_spend_raw: acc.google_ads_spend_raw + (row.google_ads_spend_raw || 0),
         ads_spend: acc.ads_spend + (row.ads_spend || 0),
         ads_spend_raw: (acc.ads_spend_raw || 0) + (row.ads_spend_raw || 0),
         tax: acc.tax + (row.tax || 0),
@@ -813,7 +1017,9 @@ const DailyProfitReport = () => {
         profit: acc.profit + (row.profit || 0),
     }), {
         order_count: 0, revenue_raw: 0, revenue_actual: 0, cost_raw: 0, cost_actual: 0,
-        shipping_fee: 0, packaging_fee: 0, ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0,
+        shipping_fee: 0, packaging_fee: 0,
+        fb_ads_spend: 0, fb_ads_spend_raw: 0, google_ads_spend: 0, google_ads_spend_raw: 0,
+        ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0,
         exchange_return_order_count: 0, partial_delivery_order_count: 0, extra_profit_order_count: 0, extra_profit: 0, profit: 0
     });
 
@@ -963,7 +1169,7 @@ const DailyProfitReport = () => {
                             Cài đặt tham số kinh nghiệm
                         </h3>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-gray-600">Tỉ lệ hoàn hàng (%)</label>
                             <div className="relative">
@@ -1019,6 +1225,20 @@ const DailyProfitReport = () => {
                                     className="w-full border border-blue-200 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none pr-8 bg-blue-50/50"
                                 />
                                 <span className="absolute right-3 top-2.5 text-blue-400 font-bold">%</span>
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-emerald-600 flex items-center justify-between">Thuế Google (%)</label>
+                            <div className="relative">
+                                <input
+                                    type="number"
+                                    value={config.google_tax_rate || ''}
+                                    onChange={(e) => setConfig({...config, google_tax_rate: e.target.value})}
+                                    title="Thuế/phí cộng thêm cho chi phí Google Ads khi tính lãi lỗ."
+                                    placeholder="0"
+                                    className="w-full border border-emerald-200 rounded-lg p-2.5 focus:ring-2 focus:ring-emerald-500 outline-none pr-8 bg-emerald-50/50"
+                                />
+                                <span className="absolute right-3 top-2.5 text-emerald-500 font-bold">%</span>
                             </div>
                         </div>
                     </div>
@@ -1154,6 +1374,135 @@ const DailyProfitReport = () => {
                         </div>
                     </div>
 
+                    <div className="mt-4 bg-emerald-50/50 rounded-xl p-5 border border-emerald-100 space-y-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <h4 className="flex items-center gap-2 text-emerald-700 font-bold">
+                                <span className="bg-emerald-600 text-white rounded-full p-1.5 flex items-center justify-center">
+                                    <BarChart3 size={14} />
+                                </span>
+                                Kết nối Google Ads tự động
+                            </h4>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleFetchGoogleAccounts}
+                                    disabled={fetchingGoogleAccounts}
+                                    className="flex items-center gap-1.5 text-[12px] font-bold text-white bg-emerald-600 px-3 py-1.5 rounded-lg hover:bg-emerald-700 transition disabled:opacity-60"
+                                >
+                                    <RefreshCw size={13} className={fetchingGoogleAccounts ? 'animate-spin' : ''} />
+                                    Kiểm tra & Lấy TK
+                                </button>
+                                <button
+                                    onClick={handleSaveGoogleConfig}
+                                    disabled={loading}
+                                    className="flex items-center gap-1.5 text-[12px] font-bold text-white bg-indigo-600 px-3 py-1.5 rounded-lg hover:bg-indigo-700 transition disabled:opacity-60"
+                                >
+                                    Lưu Google Ads
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-semibold text-gray-700">Developer Token</label>
+                                <input
+                                    type="text"
+                                    value={config.google_developer_token || ''}
+                                    onChange={(e) => setConfig({...config, google_developer_token: e.target.value})}
+                                    placeholder="Google Ads developer token"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-semibold text-gray-700">Login Customer ID (MCC nếu có)</label>
+                                <input
+                                    type="text"
+                                    value={config.google_login_customer_id || ''}
+                                    onChange={(e) => setConfig({...config, google_login_customer_id: e.target.value})}
+                                    placeholder="1234567890"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-semibold text-gray-700">OAuth Client ID</label>
+                                <input
+                                    type="text"
+                                    value={config.google_client_id || ''}
+                                    onChange={(e) => setConfig({...config, google_client_id: e.target.value})}
+                                    placeholder="xxx.apps.googleusercontent.com"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-semibold text-gray-700">OAuth Client Secret</label>
+                                <input
+                                    type="password"
+                                    value={config.google_client_secret || ''}
+                                    onChange={(e) => setConfig({...config, google_client_secret: e.target.value})}
+                                    placeholder="Client secret"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2 md:col-span-2">
+                                <label className="text-sm font-semibold text-gray-700">Refresh Token</label>
+                                <input
+                                    type="password"
+                                    value={config.google_refresh_token || ''}
+                                    onChange={(e) => setConfig({...config, google_refresh_token: e.target.value})}
+                                    placeholder="Refresh token có scope https://www.googleapis.com/auth/adwords"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                                />
+                            </div>
+                            <div className="space-y-2 md:col-span-2">
+                                <label className="text-sm font-semibold text-gray-700">Customer ID đang chọn</label>
+                                <textarea
+                                    rows="2"
+                                    value={config.google_customer_ids || ''}
+                                    onChange={(e) => setConfig({...config, google_customer_ids: e.target.value})}
+                                    placeholder="1234567890, 9876543210"
+                                    className="w-full border border-emerald-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
+                                />
+                            </div>
+                        </div>
+
+                        {showGoogleAccounts && googleAccounts.length > 0 && (
+                            <div className="bg-white border border-emerald-100 rounded-xl overflow-hidden shadow-sm">
+                                <div className="bg-emerald-50 px-3 py-2 border-b border-emerald-100 flex items-center justify-between">
+                                    <p className="text-[11px] font-bold text-emerald-700 tracking-wider">CHỌN TÀI KHOẢN GOOGLE ADS MUỐN THEO DÕI:</p>
+                                    <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded-md font-bold">
+                                        {googleAccounts.length} TK
+                                    </span>
+                                </div>
+                                <div className="max-h-56 overflow-y-auto divide-y divide-gray-50 bg-white">
+                                    {googleAccounts.map(acc => {
+                                        const normalizedId = String(acc.id || '').replace(/\D+/g, '');
+                                        const isChecked = (config.google_customer_ids || '').split(',').map(id => id.trim()).includes(normalizedId);
+                                        return (
+                                            <div
+                                                key={normalizedId}
+                                                onClick={() => toggleGoogleCustomer(normalizedId)}
+                                                className={`flex items-center gap-3 p-3 cursor-pointer transition-all ${isChecked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+                                            >
+                                                <div className={`w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all ${
+                                                    isChecked ? 'bg-emerald-600 border-emerald-600 shadow-sm' : 'bg-white border-gray-200'
+                                                }`}>
+                                                    {isChecked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><path d="M20 6L9 17l-5-5"/></svg>}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className={`text-[13px] font-bold truncate ${isChecked ? 'text-emerald-700' : 'text-gray-700'}`}>
+                                                        {acc.name || normalizedId}
+                                                    </p>
+                                                    <p className="text-[11px] text-gray-400 font-medium">
+                                                        ID: {normalizedId}{acc.currency_code ? ` · ${acc.currency_code}` : ''}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     <div className="mt-6 flex justify-end">
                         <button
                             onClick={handleUpdateConfig}
@@ -1181,7 +1530,7 @@ const DailyProfitReport = () => {
                          <tbody className="bg-white">
                              {reportData.filter(row => !hideZeroRevenue || row.revenue_raw > 0).length === 0 ? (
                                  <tr>
-                                     <td colSpan="11" className="py-20 text-center text-gray-400">
+                                     <td colSpan={columnConfig.length || 1} className="py-20 text-center text-gray-400">
                                          Không có dữ liệu trong khoảng thời gian này
                                      </td>
                                  </tr>
@@ -1321,6 +1670,126 @@ const DailyProfitReport = () => {
                                     </tfoot>
                                 </table>
                             </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showGoogleSplit && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-[90vw] lg:max-w-5xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                            <h3 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                                    <BarChart3 size={18} />
+                                </div>
+                                Thống kê chi tiêu Google Ads theo tài khoản
+                            </h3>
+                            <button onClick={() => setShowGoogleSplit(false)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                        <div className="p-5">
+                            <div className="mb-4 text-[13px] text-gray-500 bg-emerald-50 border border-emerald-100 p-3 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div>
+                                    <span className="font-medium">Thời gian lọc:</span> {filters.start_date} đến {filters.end_date}
+                                </div>
+                                <div className="flex items-center gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer select-none text-gray-700 bg-white border border-gray-200 px-3 py-1.5 rounded-lg shadow-sm hover:bg-gray-50 transition-colors">
+                                        <input
+                                            type="checkbox"
+                                            checked={hideZeroGoogleSpend}
+                                            onChange={(e) => setHideZeroGoogleSpend(e.target.checked)}
+                                            className="w-3.5 h-3.5 text-emerald-600 rounded bg-gray-100 border-gray-300 focus:ring-emerald-500 focus:ring-2"
+                                        />
+                                        <span className="text-[12px] font-medium">Ẩn TK 0đ</span>
+                                    </label>
+                                    <div className="font-bold text-emerald-700">
+                                        Thuế/phí áp dụng: +{googleSplitData?.tax_rate}%
+                                    </div>
+                                </div>
+                            </div>
+
+                            {(() => {
+                                const displayAccounts = (googleSplitData?.accounts || []).filter(acc => !hideZeroGoogleSpend || acc.total_taxed > 0);
+                                return (
+                                    <div className="overflow-x-auto border border-gray-200 rounded-xl shadow-sm custom-scrollbar max-h-[60vh]">
+                                        <table className="w-full text-left border-collapse [&_th]:border [&_th]:border-gray-200 [&_td]:border [&_td]:border-gray-200 relative">
+                                            <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
+                                                <tr>
+                                                    <th className="p-3 text-[12px] font-bold text-gray-500 uppercase sticky left-0 bg-gray-50 z-30 min-w-[100px] text-center border-r border-gray-200">
+                                                        Ngày
+                                                    </th>
+                                                    {(displayAccounts || []).map(acc => (
+                                                        <th key={acc.account_id} className="p-3 text-center bg-gray-50 min-w-[150px]">
+                                                            <div className="font-semibold text-emerald-700 text-[13px]">{acc.account_name}</div>
+                                                            <div className="text-[12px] text-emerald-600 font-bold mt-1">
+                                                                Tổng: {new Intl.NumberFormat('vi-VN').format(Math.round(acc.total_taxed))}đ
+                                                            </div>
+                                                        </th>
+                                                    ))}
+                                                    <th className="p-3 text-[12px] font-bold text-emerald-700 uppercase bg-emerald-50 text-center min-w-[130px]">
+                                                        Cộng Ngày
+                                                    </th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100 bg-white">
+                                                {Object.entries(googleSplitData?.daily_matrix || {}).length === 0 ? (
+                                                    <tr>
+                                                        <td colSpan={(displayAccounts?.length || 0) + 2} className="py-10 text-center text-gray-400">
+                                                            Không có dữ liệu chi tiêu Google Ads trong khoảng thời gian này
+                                                        </td>
+                                                    </tr>
+                                                ) : (
+                                                    Object.entries(googleSplitData?.daily_matrix || {}).map(([dateStr, accData]) => {
+                                                        const totalTaxedInDay = Object.values(accData).reduce((sum, item) => sum + (item.spend_taxed || 0), 0);
+                                                        return (
+                                                            <tr key={dateStr} className="hover:bg-gray-50 transition-colors group">
+                                                                <td className="p-3 font-semibold text-gray-700 sticky left-0 bg-white z-10 text-[13px] text-center border-r border-gray-200 group-hover:bg-gray-50">
+                                                                    {dateStr}
+                                                                </td>
+                                                                {(displayAccounts || []).map(acc => {
+                                                                    const spendObj = accData[acc.account_id];
+                                                                    return (
+                                                                        <td key={acc.account_id} className="p-3 text-center align-middle">
+                                                                            {spendObj && spendObj.spend_raw > 0 ? (
+                                                                                <div className="font-medium text-[13px]">
+                                                                                    <div className="text-emerald-600 font-bold">{new Intl.NumberFormat('vi-VN').format(Math.round(spendObj.spend_taxed))}đ</div>
+                                                                                    <div className="text-[11px] text-gray-400 mt-0.5">({new Intl.NumberFormat('vi-VN').format(Math.round(spendObj.spend_raw))}đ)</div>
+                                                                                </div>
+                                                                            ) : (
+                                                                                <div className="font-medium text-[13px] text-gray-400">0đ</div>
+                                                                            )}
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                                <td className="p-3 text-center bg-emerald-50/30 font-bold text-emerald-700 text-[13px]">
+                                                                    {new Intl.NumberFormat('vi-VN').format(Math.round(totalTaxedInDay))}đ
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })
+                                                )}
+                                            </tbody>
+                                            <tfoot className="bg-emerald-50 border-t-2 border-emerald-200 sticky bottom-0 z-20 shadow-[0_-2px_4px_rgba(0,0,0,0.05)]">
+                                                <tr>
+                                                    <td className="p-3 font-bold text-emerald-800 sticky left-0 bg-emerald-50 border-r border-emerald-100 text-[12px] text-center uppercase z-30">
+                                                        TỔNG:
+                                                    </td>
+                                                    {(displayAccounts || []).map(acc => (
+                                                        <td key={acc.account_id} className="p-3 text-center font-bold text-emerald-600 text-[14px]">
+                                                            {new Intl.NumberFormat('vi-VN').format(Math.round(acc.total_taxed))}đ
+                                                        </td>
+                                                    ))}
+                                                    <td className="p-3 text-center font-black text-emerald-700 text-[15px] bg-emerald-100/50">
+                                                        {new Intl.NumberFormat('vi-VN').format(Math.round(googleSplitData?.total_taxed || 0))}đ
+                                                    </td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
                                 );
                             })()}
                         </div>

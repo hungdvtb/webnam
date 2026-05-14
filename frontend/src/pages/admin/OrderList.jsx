@@ -392,10 +392,11 @@ const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(val
 const formatOrderItemQuantity = (value) => {
     const numericValue = Number(typeof value === 'string' ? value.replace(',', '.') : value);
     if (!Number.isFinite(numericValue)) {
-        return String(value ?? '').trim() || '0';
+        return (String(value ?? '').trim().replace(',', '.').replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '') || '0');
     }
 
-    return numericValue.toFixed(3).replace(/\.?0+$/, '');
+    const roundedValue = Math.round((numericValue + Number.EPSILON) * 1000) / 1000;
+    return String(roundedValue);
 };
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
 const getOrderCostTotalValue = (order) => {

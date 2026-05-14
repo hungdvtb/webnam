@@ -59,6 +59,7 @@ export default function ConfigurableProductView({
   setQuantity,
   handleAddToCart,
   handleBuyNow,
+  variantSelectionNotice,
   additionalInfo
 }) {
   const [variantActionId, setVariantActionId] = useState(null);
@@ -295,6 +296,11 @@ export default function ConfigurableProductView({
             {/* Variants Selection */}
             {hasStructuredVariantAttributes ? (
               <div id="variants-selection" className={styles.variantsCard}>
+                {variantSelectionNotice ? (
+                  <div className={styles.variantSelectionNotice} role="status" aria-live="polite">
+                    {variantSelectionNotice}
+                  </div>
+                ) : null}
                 {product.super_attributes.map((attr) => {
                   // Filter options that are possible with current selections of OTHER attributes
                   const validOptions = (attr.options || []).filter(opt => {
@@ -397,6 +403,11 @@ export default function ConfigurableProductView({
               </div>
             ) : (
               <div id="variants-selection" className={styles.variantsCard}>
+                {variantSelectionNotice ? (
+                  <div className={styles.variantSelectionNotice} role="status" aria-live="polite">
+                    {variantSelectionNotice}
+                  </div>
+                ) : null}
                 <div className={styles.variantGroup}>
                   <h4 className={styles.variantLabel}>Chọn phân loại</h4>
                   <div className={styles.variantList}>

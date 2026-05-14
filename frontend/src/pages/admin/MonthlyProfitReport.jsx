@@ -151,6 +151,8 @@ const MonthlyProfitReport = () => {
         'damaged_goods',
         'salary',
         'packaging_fee',
+        'fb_ads_spend',
+        'google_ads_spend',
         'ads_spend',
         'tax',
         'fixed_cost',
@@ -171,7 +173,9 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: 'Tổng lãi/lỗ giao hàng 1 phần trong tháng.',
         salary: 'Chi phí lương. Hiện chỉ cộng được khi backend trả riêng trường này.',
         packaging_fee: 'Tổng số đơn của tháng x Phí đóng gói/đơn lấy từ phần cấu hình của báo cáo lãi lỗ ngày.',
-        ads_spend: 'Tổng QC thực tế trong tháng, cộng trực tiếp từ cột QC FB của từng ngày. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
+        fb_ads_spend: 'Tổng QC Facebook trong tháng. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
+        google_ads_spend: 'Tổng QC Google trong tháng. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
+        ads_spend: 'Tổng QC thực tế trong tháng, bằng QC FB + QC GG. Số này được dùng để tính lãi lỗ.',
         tax: 'Tổng thuế tạm tính trong tháng.',
         fixed_cost: 'Tổng chi phí cố định trong tháng.',
         total_profit: 'Lợi nhuận tổng = Doanh thu - Tiền hàng thực tế - Tiền ship hàng - Hàng hỏng - Chi phí lương - Chi phí gói hàng - QC - Thuế - Chi phí cố định + Lãi lỗ đổi trả + Lãi lỗ giao 1 phần.',
@@ -231,6 +235,10 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: acc.partial_delivery_profit_loss + Number(row.partial_delivery_profit_loss || 0),
         salary: acc.salary + Number(row.salary || 0),
         packaging_fee: acc.packaging_fee + Number(row.packaging_fee || 0),
+        fb_ads_spend_raw: acc.fb_ads_spend_raw + Number(row.fb_ads_spend_raw || 0),
+        fb_ads_spend: acc.fb_ads_spend + Number(row.fb_ads_spend || 0),
+        google_ads_spend_raw: acc.google_ads_spend_raw + Number(row.google_ads_spend_raw || 0),
+        google_ads_spend: acc.google_ads_spend + Number(row.google_ads_spend || 0),
         ads_spend_raw: acc.ads_spend_raw + Number(row.ads_spend_raw || 0),
         ads_spend: acc.ads_spend + Number(row.ads_spend || 0),
         tax: acc.tax + Number(row.tax || 0),
@@ -246,6 +254,10 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: 0,
         salary: 0,
         packaging_fee: 0,
+        fb_ads_spend_raw: 0,
+        fb_ads_spend: 0,
+        google_ads_spend_raw: 0,
+        google_ads_spend: 0,
         ads_spend_raw: 0,
         ads_spend: 0,
         tax: 0,
@@ -275,6 +287,10 @@ const MonthlyProfitReport = () => {
         partial_delivery_profit_loss: roundMoney(totalValue('partial_delivery_profit_loss')),
         salary: roundMoney(totalValue('salary')),
         packaging_fee: roundMoney(totalValue('packaging_fee')),
+        fb_ads_spend_raw: roundMoney(totalValue('fb_ads_spend_raw')),
+        fb_ads_spend: roundMoney(totalValue('fb_ads_spend')),
+        google_ads_spend_raw: roundMoney(totalValue('google_ads_spend_raw')),
+        google_ads_spend: roundMoney(totalValue('google_ads_spend')),
         ads_spend_raw: roundMoney(totalValue('ads_spend_raw')),
         ads_spend: roundMoney(totalValue('ads_spend')),
         tax: roundMoney(totalValue('tax', 'total_tax')),
@@ -392,8 +408,12 @@ const MonthlyProfitReport = () => {
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />lương</>);
             case 'packaging_fee':
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />gói hàng</>);
+            case 'fb_ads_spend':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>QC FB</>);
+            case 'google_ads_spend':
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>QC GG</>);
             case 'ads_spend':
-                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>QC</>);
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Tổng QC</>);
             case 'tax':
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Thuế</>);
             case 'fixed_cost':
@@ -429,6 +449,18 @@ const MonthlyProfitReport = () => {
                 return <td key="salary" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.salary)}</td>;
             case 'packaging_fee':
                 return <td key="packaging_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.packaging_fee)}</td>;
+            case 'fb_ads_spend':
+                return (
+                    <td key="fb_ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderAdsSpendBreakdown(totalRow.fb_ads_spend, totalRow.fb_ads_spend_raw, 'text-white/70')}
+                    </td>
+                );
+            case 'google_ads_spend':
+                return (
+                    <td key="google_ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderAdsSpendBreakdown(totalRow.google_ads_spend, totalRow.google_ads_spend_raw, 'text-white/70')}
+                    </td>
+                );
             case 'ads_spend':
                 return (
                     <td key="ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
@@ -500,6 +532,22 @@ const MonthlyProfitReport = () => {
                 return <td key="salary" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.salary !== 0 ? formatNumber(row.salary) : '-'}</td>;
             case 'packaging_fee':
                 return <td key="packaging_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.packaging_fee !== 0 ? formatNumber(row.packaging_fee) : '-'}</td>;
+            case 'fb_ads_spend':
+                return (
+                    <td key="fb_ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {Number(row.fb_ads_spend || 0) !== 0
+                            ? renderAdsSpendBreakdown(row.fb_ads_spend, row.fb_ads_spend_raw, 'text-gray-400')
+                            : '-'}
+                    </td>
+                );
+            case 'google_ads_spend':
+                return (
+                    <td key="google_ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {Number(row.google_ads_spend || 0) !== 0
+                            ? renderAdsSpendBreakdown(row.google_ads_spend, row.google_ads_spend_raw, 'text-gray-400')
+                            : '-'}
+                    </td>
+                );
             case 'ads_spend':
                 return (
                     <td key="ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
@@ -614,7 +662,7 @@ const MonthlyProfitReport = () => {
 
             <div className="min-h-[460px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:min-h-[560px]">
                 <div className="min-h-[460px] max-h-[75vh] overflow-auto md:min-h-[560px]">
-                    <table className="min-w-[1240px] w-full border-collapse text-left [&_td]:border [&_td]:border-gray-200 [&_th]:border [&_th]:border-gray-200">
+                    <table className="min-w-[1420px] w-full border-collapse text-left [&_td]:border [&_td]:border-gray-200 [&_th]:border [&_th]:border-gray-200">
                         <thead className="sticky top-0 z-20 bg-gray-100 shadow-sm">
                             <tr>
                                 {defaultCols.map((id) => renderHeader(id))}

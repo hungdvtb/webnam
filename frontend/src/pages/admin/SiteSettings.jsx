@@ -26,6 +26,7 @@ const defaultSettings = {
     ga_id: '',
     ga_active: false,
     ga_trackings: [],
+    google_ads_conversions: [],
     tt_pixel_id: '',
     tt_pixel_active: false,
     tt_pixels: [],
@@ -120,6 +121,23 @@ const trackingPlatforms = [
         placeholder: 'VD: G-ABCDEFG123',
     },
     {
+        key: 'google_ads',
+        icon: 'add_chart',
+        title: 'Google Ads Conversion Tracking',
+        listName: 'google_ads_conversions',
+        legacyIdName: null,
+        legacyActiveName: null,
+        idLabel: 'Google Ads Conversion ID',
+        placeholder: 'VD: AW-1234567890',
+        extraFields: [
+            {
+                name: 'conversion_label',
+                label: 'Conversion Label',
+                placeholder: 'VD: AbCdEfGhIjKlMnOpQrSt',
+            },
+        ],
+    },
+    {
         key: 'tiktok',
         icon: 'music_note',
         title: 'TikTok Pixel',
@@ -149,26 +167,44 @@ const isEnabledValue = (value) => {
     return ['true', 'yes', 'on'].includes(value.trim().toLowerCase());
 };
 
-const createTrackingItem = (platformKey) => ({
-    id: `${platformKey}-tracking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    name: '',
-    pixel_id: '',
-    is_active: true,
-});
+const getTrackingExtraFields = (platformKey) => (
+    trackingPlatforms.find((platform) => platform.key === platformKey)?.extraFields || []
+);
+
+const createTrackingItem = (platform) => {
+    const platformKey = typeof platform === 'object' ? platform.key : platform;
+    const extraFields = getTrackingExtraFields(platformKey);
+    const extraDefaults = Object.fromEntries(extraFields.map((field) => [field.name, '']));
+
+    return {
+        id: `${platformKey}-tracking-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        name: '',
+        pixel_id: '',
+        is_active: true,
+        ...extraDefaults,
+    };
+};
 
 const normalizeTrackingItems = (value, legacyId = '', legacyActive = false, platformKey = 'tracking') => {
+    const extraFields = getTrackingExtraFields(platformKey);
     const parsed = parseArraySetting(value)
         .filter((item) => item !== null && item !== undefined)
         .map((item, index) => {
             const source = typeof item === 'object' ? item : { pixel_id: item };
             const pixelId = String(
                 source.pixel_id
+                ?? source.conversion_id
+                ?? source.google_ads_conversion_id
                 ?? source.tracking_id
                 ?? source.measurement_id
                 ?? source.id_value
                 ?? source.value
                 ?? ''
             ).trim();
+            const extraValues = Object.fromEntries(extraFields.map((field) => [
+                field.name,
+                String(source[field.name] ?? '').trim(),
+            ]));
 
             return {
                 id: String(source.id || `${platformKey}-tracking-${index + 1}`),
@@ -176,6 +212,7 @@ const normalizeTrackingItems = (value, legacyId = '', legacyActive = false, plat
                 pixel_id: pixelId,
                 is_active: source.is_active === undefined ? isEnabledValue(source.active ?? true) : isEnabledValue(source.is_active),
                 order: Number(source.order ?? index + 1) || index + 1,
+                ...extraValues,
             };
         })
         .sort((left, right) => left.order - right.order)
@@ -196,6 +233,7 @@ const normalizeTrackingItems = (value, legacyId = '', legacyActive = false, plat
         pixel_id: legacyPixelId,
         is_active: isEnabledValue(legacyActive),
         order: 1,
+        ...Object.fromEntries(extraFields.map((field) => [field.name, ''])),
     }];
 };
 
@@ -203,6 +241,7 @@ const buildTrackingPayload = (settings) => {
     const normalized = {};
 
     trackingPlatforms.forEach((platform) => {
+        const extraFields = platform.extraFields || [];
         const items = normalizeTrackingItems(
             settings[platform.listName],
             settings[platform.legacyIdName],
@@ -215,14 +254,22 @@ const buildTrackingPayload = (settings) => {
                 name: String(item.name || '').trim(),
                 is_active: Boolean(item.is_active),
                 order: index + 1,
+                ...Object.fromEntries(extraFields.map((field) => [
+                    field.name,
+                    String(item[field.name] || '').trim(),
+                ])),
             }))
             .filter((item) => item.pixel_id);
 
         const firstItem = items[0] || null;
 
         normalized[platform.listName] = items;
-        normalized[platform.legacyIdName] = firstItem?.pixel_id || '';
-        normalized[platform.legacyActiveName] = items.some((item) => item.is_active);
+        if (platform.legacyIdName) {
+            normalized[platform.legacyIdName] = firstItem?.pixel_id || '';
+        }
+        if (platform.legacyActiveName) {
+            normalized[platform.legacyActiveName] = items.some((item) => item.is_active);
+        }
     });
 
     return normalized;
@@ -801,6 +848,7 @@ const SiteSettings = () => {
 
     const updateTrackingPlatformState = (platform, updater) => {
         setSettings((prev) => {
+            const extraFields = platform.extraFields || [];
             const currentItems = normalizeTrackingItems(
                 prev[platform.listName],
                 prev[platform.legacyIdName],
@@ -814,20 +862,32 @@ const SiteSettings = () => {
                     name: String(item.name || '').trim(),
                     is_active: Boolean(item.is_active),
                     order: index + 1,
+                    ...Object.fromEntries(extraFields.map((field) => [
+                        field.name,
+                        String(item[field.name] || '').trim(),
+                    ])),
                 }));
             const firstItemWithId = nextItems.find((item) => item.pixel_id);
 
-            return {
+            const nextState = {
                 ...prev,
                 [platform.listName]: nextItems,
-                [platform.legacyIdName]: firstItemWithId?.pixel_id || '',
-                [platform.legacyActiveName]: nextItems.some((item) => item.pixel_id && item.is_active),
             };
+
+            if (platform.legacyIdName) {
+                nextState[platform.legacyIdName] = firstItemWithId?.pixel_id || '';
+            }
+
+            if (platform.legacyActiveName) {
+                nextState[platform.legacyActiveName] = nextItems.some((item) => item.pixel_id && item.is_active);
+            }
+
+            return nextState;
         });
     };
 
     const handleAddTrackingItem = (platform) => {
-        updateTrackingPlatformState(platform, (items) => [...items, createTrackingItem(platform.key)]);
+        updateTrackingPlatformState(platform, (items) => [...items, createTrackingItem(platform)]);
     };
 
     const handleUpdateTrackingItem = (platform, itemId, patch) => {
@@ -2077,7 +2137,11 @@ const SiteSettings = () => {
                                     settings[platform.legacyActiveName],
                                     platform.key
                                 );
+                                const extraFields = platform.extraFields || [];
                                 const activeCount = trackingItems.filter((item) => item.pixel_id && item.is_active).length;
+                                const trackingRowClassName = extraFields.length > 0
+                                    ? 'grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(220px,1.35fr)_minmax(220px,1.35fr)_auto_auto] gap-3 items-end rounded-sm border border-primary/10 bg-white px-4 py-3'
+                                    : 'grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(260px,1.8fr)_auto_auto] gap-3 items-end rounded-sm border border-primary/10 bg-white px-4 py-3';
 
                                 return (
                                     <SectionCard
@@ -2125,7 +2189,7 @@ const SiteSettings = () => {
                                                 trackingItems.map((trackingItem, index) => (
                                                     <div
                                                         key={trackingItem.id}
-                                                        className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(260px,1.8fr)_auto_auto] gap-3 items-end rounded-sm border border-primary/10 bg-white px-4 py-3"
+                                                        className={trackingRowClassName}
                                                     >
                                                         <div>
                                                             <label className={labelClasses}>Ten ghi chu</label>
@@ -2138,7 +2202,7 @@ const SiteSettings = () => {
                                                             />
                                                         </div>
                                                         <div>
-                                                            <label className={labelClasses}>{platform.title} ID</label>
+                                                            <label className={labelClasses}>{platform.idLabel || `${platform.title} ID`}</label>
                                                             <input
                                                                 type="text"
                                                                 value={trackingItem.pixel_id}
@@ -2147,6 +2211,18 @@ const SiteSettings = () => {
                                                                 placeholder={platform.placeholder}
                                                             />
                                                         </div>
+                                                        {extraFields.map((field) => (
+                                                            <div key={field.name}>
+                                                                <label className={labelClasses}>{field.label}</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={trackingItem[field.name] || ''}
+                                                                    onChange={(event) => handleUpdateTrackingItem(platform, trackingItem.id, { [field.name]: event.target.value })}
+                                                                    className={inputClasses}
+                                                                    placeholder={field.placeholder}
+                                                                />
+                                                            </div>
+                                                        ))}
                                                         <div className="flex items-center gap-2 h-10">
                                                             <span className={`text-[10px] font-black uppercase whitespace-nowrap ${trackingItem.is_active ? 'text-green-500' : 'text-primary/30'}`}>
                                                                 {trackingItem.is_active ? 'Dang bat' : 'Dang tat'}

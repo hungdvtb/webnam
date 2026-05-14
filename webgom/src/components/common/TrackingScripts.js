@@ -53,6 +53,45 @@ const getActiveTrackingIds = (items, legacyId, legacyActive) => {
     return isTrackingEnabled(legacyActive) ? uniqueTrackingIds([legacyId]) : [];
 };
 
+const getActiveGoogleAdsConversions = (items) => {
+    const parsedItems = parseTrackingList(items);
+    const seen = new Set();
+
+    return parsedItems
+        .filter((item) => item && typeof item === "object")
+        .filter((item) => (
+            item.is_active === undefined
+                ? isTrackingEnabled(item.active ?? true)
+                : isTrackingEnabled(item.is_active)
+        ))
+        .map((item, index) => ({
+            id: String(item.id || `google-ads-conversion-${index + 1}`),
+            name: String(item.name || "").trim(),
+            conversion_id: normalizeTrackingId(
+                item.conversion_id
+                ?? item.google_ads_conversion_id
+                ?? item.pixel_id
+                ?? item.tracking_id
+                ?? item.id_value
+                ?? item.value
+                ?? ""
+            ),
+            conversion_label: String(
+                item.conversion_label
+                ?? item.google_ads_conversion_label
+                ?? item.label_id
+                ?? ""
+            ).trim(),
+        }))
+        .filter((item) => item.conversion_id)
+        .filter((item) => {
+            const key = `${item.conversion_id}/${item.conversion_label}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+};
+
 const TrackingScripts = ({ settings }) => {
     if (!settings) return null;
 
@@ -60,11 +99,14 @@ const TrackingScripts = ({ settings }) => {
         fb_pixel_id, fb_pixel_active,
         ga_id, ga_active,
         tt_pixel_id, tt_pixel_active,
-        fb_pixels, ga_trackings, tt_pixels
+        fb_pixels, ga_trackings, google_ads_conversions, tt_pixels
     } = settings;
 
     const fbPixelIds = getActiveTrackingIds(fb_pixels, fb_pixel_id, fb_pixel_active);
     const gaTrackingIds = getActiveTrackingIds(ga_trackings, ga_id, ga_active);
+    const googleAdsConversions = getActiveGoogleAdsConversions(google_ads_conversions);
+    const googleAdsConversionIds = uniqueTrackingIds(googleAdsConversions.map((item) => item.conversion_id));
+    const gtagBootstrapId = gaTrackingIds[0] || googleAdsConversionIds[0] || "";
     const ttPixelIds = getActiveTrackingIds(tt_pixels, tt_pixel_id, tt_pixel_active);
 
     return (
@@ -98,15 +140,17 @@ const TrackingScripts = ({ settings }) => {
                 </>
             )}
 
-            {/* Google Analytics */}
-            {gaTrackingIds.length > 0 && (
+            {/* Google Analytics / Google Ads */}
+            {gtagBootstrapId && (
                 <>
-                    <script async src={`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaTrackingIds[0])}`}></script>
+                    <script async src={`https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gtagBootstrapId)}`}></script>
                     <script dangerouslySetInnerHTML={{ __html: `
                         window.dataLayer = window.dataLayer || [];
                         function gtag(){dataLayer.push(arguments);}
                         gtag('js', new Date());
                         ${gaTrackingIds.map((id) => `gtag('config', ${JSON.stringify(id)});`).join("\n                        ")}
+                        ${googleAdsConversionIds.map((id) => `gtag('config', ${JSON.stringify(id)});`).join("\n                        ")}
+                        window.__WEBGOM_GOOGLE_ADS_CONVERSIONS__ = ${JSON.stringify(googleAdsConversions)};
                     `}} />
                 </>
             )}

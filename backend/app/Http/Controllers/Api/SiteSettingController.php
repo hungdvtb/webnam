@@ -21,6 +21,7 @@ class SiteSettingController extends Controller
         'order_quick_pick_groups',
         'fb_pixels',
         'ga_trackings',
+        'google_ads_conversions',
         'tt_pixels',
         GeminiService::SETTING_KEYS,
     ];

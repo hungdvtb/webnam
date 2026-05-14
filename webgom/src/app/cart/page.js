@@ -1211,7 +1211,11 @@ export default function CartPage() {
       const response = await placeWebOrder(orderData);
       const createdAt = new Date().toISOString();
       const completedOrderNumber = response.order_number;
-      trackPurchase(completedOrderNumber, cartItems, totalAfterDiscount || cartTotal);
+      const completedOrderTotal = Number(totalAfterDiscount);
+      const orderTotalForTracking = Number.isFinite(completedOrderTotal)
+        ? Math.max(completedOrderTotal, 0)
+        : Math.max(Number(cartTotal || 0) || 0, 0);
+      trackPurchase(completedOrderNumber, cartItems, orderTotalForTracking);
       setOrderNumber(completedOrderNumber);
       // Cache details for thank you page
       setSuccessOrderData({

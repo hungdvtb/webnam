@@ -155,6 +155,64 @@ const trackGoogleEvent = (eventName, payload = {}) => {
   }
 };
 
+const getGoogleAdsConversions = () => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  const rawConversions = window.__WEBGOM_GOOGLE_ADS_CONVERSIONS__;
+  const conversions = Array.isArray(rawConversions) ? rawConversions : [];
+  const seen = new Set();
+
+  return conversions
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      conversion_id: String(
+        item.conversion_id
+        ?? item.google_ads_conversion_id
+        ?? item.pixel_id
+        ?? ''
+      ).trim(),
+      conversion_label: String(
+        item.conversion_label
+        ?? item.google_ads_conversion_label
+        ?? item.label_id
+        ?? ''
+      ).trim(),
+    }))
+    .filter((item) => item.conversion_id && item.conversion_label)
+    .filter((item) => {
+      const key = `${item.conversion_id}/${item.conversion_label}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const trackGoogleAdsPurchase = (transactionId, value) => {
+  if (typeof window === 'undefined' || typeof window.gtag !== 'function') {
+    return;
+  }
+
+  const conversions = getGoogleAdsConversions();
+  if (conversions.length === 0 || !transactionId) {
+    return;
+  }
+
+  conversions.forEach((conversion) => {
+    try {
+      window.gtag('event', 'conversion', {
+        send_to: `${conversion.conversion_id}/${conversion.conversion_label}`,
+        value,
+        currency: 'VND',
+        transaction_id: transactionId,
+      });
+    } catch {
+      // Google Ads conversions must never block storefront UX.
+    }
+  });
+};
+
 const trackTikTokEvent = (eventName, payload = {}) => {
   if (typeof window === 'undefined' || !window.ttq || typeof window.ttq.track !== 'function') {
     return;
@@ -335,6 +393,8 @@ export const trackPurchase = (orderNumber, cartItems = [], totalValue = 0) => {
   const normalizedValue = normalizeMoneyValue(totalValue);
   const totalQuantity = commerceItems.reduce((sum, item) => sum + item.quantity, 0);
   const transactionId = String(orderNumber || '').trim();
+
+  trackGoogleAdsPurchase(transactionId, normalizedValue);
 
   if (commerceItems.length > 0) {
     const metaPayload = {

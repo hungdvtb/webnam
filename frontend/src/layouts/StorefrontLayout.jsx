@@ -409,6 +409,7 @@ const StorefrontLayout = () => {
     const [headerConfig, setHeaderConfig] = useState(buildHeaderConfig({}));
     const [footerConfig, setFooterConfig] = useState(buildFooterConfig({}));
     const [storeLocations, setStoreLocations] = useState([]);
+    const [trackingSettings, setTrackingSettings] = useState(null);
     const location = useLocation();
 
     useEffect(() => {
@@ -429,6 +430,7 @@ const StorefrontLayout = () => {
                 setHeaderConfig(buildHeaderConfig(settings));
                 setFooterConfig(buildFooterConfig(settings));
                 setStoreLocations(normalizedStoreLocations);
+                setTrackingSettings(settings);
                 setSiteInfo({
                     name: settings.site_name || settings.header_brand_text || '',
                     phone: settings.contact_phone || primaryStore?.hotline || '',
@@ -446,7 +448,7 @@ const StorefrontLayout = () => {
 
     return (
         <div className="mobile-type-scope min-h-screen bg-white text-stone-900 antialiased selection:bg-primary/20 selection:text-primary">
-            <TrackingScripts />
+            <TrackingScripts settings={trackingSettings} />
             <StorefrontHeader siteInfo={siteInfo} headerConfig={headerConfig} />
             <main className={`flex min-h-screen flex-col pb-[82px] ${hasTopNotice ? 'pt-[88px] md:pt-[96px] md:pb-0' : 'pt-[60px] md:pt-[68px] md:pb-0'}`}>
                 <Outlet context={{ categories, siteInfo, headerConfig, footerConfig, storeLocations }} />

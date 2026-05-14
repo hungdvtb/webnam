@@ -16,6 +16,10 @@ const resolveProductItemType = (product = {}) => (
   normalizeText(product?.item_type || product?.itemType).toLowerCase()
 );
 
+const resolveProductType = (product = {}) => (
+  normalizeText(product?.type || product?.productType).toLowerCase()
+);
+
 const resolveProductSlugOrId = (product = {}) => (
   normalizeText(product?.slug || product?.id)
 );
@@ -42,9 +46,12 @@ export function buildProductDetailHref(product = {}) {
   const bundleOptionKey = resolveBundleOptionKey(product);
   const bundleOptionTitle = resolveBundleOptionTitle(product);
   const itemType = resolveProductItemType(product);
+  const productType = resolveProductType(product);
 
   if (itemType !== 'bundle_option' && !bundleOptionUid && !bundleOptionKey && !bundleOptionTitle) {
-    return pathname;
+    return productType === 'bundle'
+      ? { pathname, query: { bundle_preview: '1' } }
+      : pathname;
   }
 
   const query = {};

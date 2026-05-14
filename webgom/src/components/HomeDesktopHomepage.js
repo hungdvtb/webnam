@@ -2,10 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useState } from "react";
 import styles from "@/app/page.module.css";
 import { resolveImageObjectUrl } from "@/lib/media";
 import { buildProductCardKey, buildProductDetailHref } from "@/lib/productLinks";
+import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from "@/lib/productPrefetch";
+import { markProductNavigationClick } from "@/lib/productPerformance";
 
 const BANNER_ROTATE_MS = 10000;
 const BANNER_SLOT_COUNT = 3;
@@ -168,9 +171,27 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
 }
 
 export function HomeDesktopCatalog({ categorySections = [] }) {
+  const router = useRouter();
+
   if (!categorySections.length) {
     return null;
   }
+
+  const handleProductIntent = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    prefetchBundleOptionDetail(product, href);
+
+    try {
+      router.prefetch(href);
+    } catch {
+      // Prefetch is opportunistic.
+    }
+  };
+
+  const handleProductClick = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    markProductNavigationClick(product, href);
+  };
 
   return (
     <section className={`container ${styles.productsSection} ${styles.desktopOnly}`}>
@@ -201,6 +222,10 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                         href={productHref}
                         key={`${section.slug}-${productCardKey}`}
                         className={styles.productCard}
+                        onPointerEnter={() => handleProductIntent(product, productHref)}
+                        onFocus={() => handleProductIntent(product, productHref)}
+                        onTouchStart={() => handleProductIntent(product, productHref)}
+                        onClick={() => handleProductClick(product, productHref)}
                       >
                         <div className={styles.productImage}>
                           <Image

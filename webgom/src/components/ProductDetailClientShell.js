@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
-import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
+import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
+import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
 import {
@@ -57,13 +58,23 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
 
   const primaryImage = snapshot.primary_image
     || (snapshot.main_image ? { url: snapshot.main_image, path: snapshot.main_image } : null);
+  const hasRequestedOption = Boolean(
+    requestedBundleOptionUid
+    || requestedBundleOptionKey
+    || requestedBundleOptionTitle
+    || snapshot.bundle_option_uid
+    || snapshot.bundle_option_key
+    || snapshot.bundle_option_title
+  );
 
   return {
     id: snapshot.id,
     slug: snapshot.slug,
     type: 'bundle',
-    item_type: 'bundle_option',
-    name: snapshot.bundle_option_title || snapshot.name || snapshot.bundle_parent_name || '',
+    item_type: hasRequestedOption ? 'bundle_option' : (snapshot.item_type || 'product'),
+    name: hasRequestedOption
+      ? (snapshot.bundle_option_title || snapshot.name || snapshot.bundle_parent_name || '')
+      : (snapshot.name || snapshot.bundle_parent_name || ''),
     sku: snapshot.sku || '',
     price: snapshot.bundle_option_total_price ?? snapshot.price ?? 0,
     current_price: snapshot.bundle_option_discounted_price ?? snapshot.current_price ?? snapshot.price ?? 0,
@@ -89,6 +100,7 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
     additional_info: [],
     video_urls: [],
     is_bundle_option_lite: true,
+    is_bundle_shell: !hasRequestedOption,
   };
 };
 
@@ -148,6 +160,8 @@ export default function ProductDetailClientShell({
   initialRelatedViewAllHref = '/products',
   deferFullProduct = false,
   requestedBundleOptionUid = '',
+  stripBundlePreviewParam = false,
+  enableDeferredProductAnalytics = false,
 }) {
   const [product, setProduct] = useState(initialProduct || null);
   const [relatedProducts, setRelatedProducts] = useState(initialRelatedProducts);
@@ -162,6 +176,21 @@ export default function ProductDetailClientShell({
       isLite: Boolean(initialProduct?.is_bundle_option_lite),
     });
   }, [initialProduct?.id, initialProduct?.is_bundle_option_lite, slug]);
+
+  useEffect(() => {
+    if (!stripBundlePreviewParam || typeof window === 'undefined') {
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('bundle_preview')) {
+      return;
+    }
+
+    url.searchParams.delete('bundle_preview');
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }, [stripBundlePreviewParam]);
 
   useEffect(() => {
     if (product || typeof window === 'undefined') {
@@ -218,8 +247,18 @@ export default function ProductDetailClientShell({
       return undefined;
     }
 
-    return scheduleAfterFirstPaint(() => {
-      setDeferredSectionsReady(true);
+    let cancelled = false;
+    let fullFetchTimer = null;
+    const hasRequestedBundleOption = Boolean(
+      requestedBundleOptionUid
+      || requestedBundleOptionKey
+      || requestedBundleOptionTitle
+    );
+    const fetchFullProduct = () => {
+      if (cancelled) {
+        return;
+      }
+
       logProductTiming('api-start', {
         endpoint: `/web-api/products/${slug}`,
         mode: 'deferred-full-bundle',
@@ -229,6 +268,10 @@ export default function ProductDetailClientShell({
         getWebProductDetail(slug),
         getWebRelatedProducts(slug),
       ]).then(([productResult, relatedResult]) => {
+        if (cancelled) {
+          return;
+        }
+
         if (productResult.status === 'fulfilled') {
           setProduct(productResult.value);
           setFullProductReady(true);
@@ -254,8 +297,63 @@ export default function ProductDetailClientShell({
           console.error('Failed to fetch deferred related products:', relatedResult.reason);
         }
       });
+    };
+
+    const cancelScheduledStart = scheduleAfterFirstPaint(() => {
+      setDeferredSectionsReady(true);
+
+      if (!hasRequestedBundleOption) {
+        fetchFullProduct();
+        return;
+      }
+
+      const params = {
+        bundle_option_uid: requestedBundleOptionUid,
+        bundle_option_key: requestedBundleOptionKey,
+        bundle_option: requestedBundleOptionTitle,
+      };
+      const query = new URLSearchParams();
+      Object.entries(params).forEach(([key, value]) => {
+        if (value) query.set(key, value);
+      });
+
+      logProductTiming('api-start', {
+        endpoint: `/web-api/products/${slug}/bundle-option-detail?${query.toString()}`,
+        mode: 'deferred-lite-bundle-option',
+      });
+
+      getWebProductBundleOptionDetail(slug, params)
+        .then((liteProduct) => {
+          if (!cancelled && liteProduct) {
+            setProduct(liteProduct);
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to fetch deferred bundle option detail:', error);
+        })
+        .finally(() => {
+          if (cancelled || typeof window === 'undefined') {
+            return;
+          }
+
+          fullFetchTimer = window.setTimeout(fetchFullProduct, 900);
+        });
     });
-  }, [deferFullProduct, slug]);
+
+    return () => {
+      cancelled = true;
+      cancelScheduledStart();
+      if (fullFetchTimer !== null && typeof window !== 'undefined') {
+        window.clearTimeout(fullFetchTimer);
+      }
+    };
+  }, [
+    deferFullProduct,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+    requestedBundleOptionUid,
+    slug,
+  ]);
 
   if (!product) {
     return (
@@ -274,6 +372,8 @@ export default function ProductDetailClientShell({
 
   return (
     <>
+      {enableDeferredProductAnalytics && fullProductReady ? <ProductAnalyticsTracker product={product} /> : null}
+
       <ProductDetailContent
         key={productContentKey}
         product={product}

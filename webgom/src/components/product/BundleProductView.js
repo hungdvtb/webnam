@@ -664,6 +664,23 @@ export default function BundleProductView({
   }, [activeBundleConfig, configurations, manualActiveTab]);
 
   useEffect(() => {
+    if (configurations.length === 0) {
+      return;
+    }
+
+    logProductTimingOnce(
+      `render-option:${product?.id || ''}:${configurations.length}`,
+      'render-option',
+      {
+        productId: product?.id,
+        optionCount: configurations.length,
+        activeConfig: resolvedActiveTab,
+        isLite: Boolean(product?.is_bundle_option_lite),
+      }
+    );
+  }, [configurations.length, product?.id, product?.is_bundle_option_lite, resolvedActiveTab]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
     const mediaQuery = window.matchMedia('(max-width: 768px)');
@@ -874,7 +891,7 @@ export default function BundleProductView({
 
     logProductTimingOnce(
       `render-bundle-config:${product?.id || ''}:${resolvedActiveTab || ''}:${tabItems.length}`,
-      'render-bundle-config',
+      'render-bundle-components',
       {
         productId: product?.id,
         activeConfig: resolvedActiveTab,

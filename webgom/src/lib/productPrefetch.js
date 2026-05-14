@@ -15,6 +15,11 @@ const isBundleOptionProduct = (product = {}) => (
   || normalizeText(product?.bundle_option_title || product?.bundleOptionTitle) !== ''
 );
 
+const isBundleNavigationProduct = (product = {}) => (
+  isBundleOptionProduct(product)
+  || normalizeText(product?.type || product?.productType).toLowerCase() === 'bundle'
+);
+
 const getOptionKey = (product = {}) => normalizeText(product?.bundle_option_key || product?.bundleOptionKey);
 const getOptionUid = (product = {}) => normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid);
 const getOptionTitle = (product = {}) => normalizeText(product?.bundle_option_title || product?.bundleOptionTitle);
@@ -50,7 +55,7 @@ const pickBundleOptionSnapshot = (product = {}, href = '') => ({
 });
 
 export function cacheBundleOptionSnapshot(product = {}, href = '') {
-  if (typeof window === 'undefined' || !isBundleOptionProduct(product) || !product?.slug) {
+  if (typeof window === 'undefined' || !isBundleNavigationProduct(product) || !product?.slug) {
     return;
   }
 

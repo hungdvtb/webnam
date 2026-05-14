@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
+import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import config from '@/lib/config';
 import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
@@ -32,6 +32,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
   const requestedBundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
   const requestedBundleOptionKey = String(resolvedSearchParams?.bundle_option_key || '').trim();
   const requestedBundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const isBundlePreviewRequest = String(resolvedSearchParams?.bundle_preview || '').trim() === '1';
   const requestedVariantId = Number.parseInt(
     String(resolvedSearchParams?.variant_id || '').trim(),
     10,
@@ -42,46 +43,21 @@ export default async function ProductDetailPage({ params, searchParams }) {
   let relatedProducts = [];
   let relatedMeta = null;
 
-  if (isBundleOptionRequest) {
-    try {
-      product = await getWebProductBundleOptionDetail(slug, {
-        bundle_option_uid: requestedBundleOptionUid,
-        bundle_option_key: requestedBundleOptionKey,
-        bundle_option: requestedBundleOptionTitle,
-      });
-    } catch (error) {
-      console.error('Failed to fetch lightweight bundle option detail:', error);
-      product = null;
-    }
-
-    if (!product) {
-      return (
-        <div className="container py-20 text-center">
-          <h2 className="text-2xl font-bold">Sản phẩm không tồn tại</h2>
-          <p className="mt-4">Rất tiếc, chúng tôi không tìm thấy sản phẩm bạn yêu cầu.</p>
-          <Link href="/products" className="btn-primary mt-8 inline-block">
-            Quay lại cửa hàng
-          </Link>
-        </div>
-      );
-    }
-
-    const productPageGapClass =
-      product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
-
+  if (isBundleOptionRequest || isBundlePreviewRequest) {
     return (
       <div className={styles.productDetail}>
-        <ProductAnalyticsTracker product={product} />
-        <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
+        <main className={`container py-10 ${styles.productPageMain} ${styles.productPageMainCompact}`}>
           <div className={styles.productPageSections}>
             <ProductDetailClientShell
-              initialProduct={product}
+              initialProduct={null}
               slug={slug}
               requestedBundleOptionUid={requestedBundleOptionUid}
               requestedBundleOptionKey={requestedBundleOptionKey}
               requestedBundleOptionTitle={requestedBundleOptionTitle}
               requestedVariantId={requestedVariantId}
-              deferFullProduct={Boolean(product?.is_bundle_option_lite)}
+              deferFullProduct
+              stripBundlePreviewParam={isBundlePreviewRequest}
+              enableDeferredProductAnalytics
             />
           </div>
         </main>
@@ -183,11 +159,18 @@ export async function generateMetadata({ params, searchParams }) {
   const { slug } = resolvedParams;
   const bundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
   const bundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const isBundlePreviewRequest = String(resolvedSearchParams?.bundle_preview || '').trim() === '1';
   const hasBundleOptionRequest = Boolean(
     bundleOptionUid
     || String(resolvedSearchParams?.bundle_option_key || '').trim()
     || bundleOptionTitle
   );
+
+  if (isBundlePreviewRequest) {
+    return {
+      title: 'Sản phẩm bộ | GỐM ĐẠI THÀNH',
+    };
+  }
 
   if (hasBundleOptionRequest) {
     return {

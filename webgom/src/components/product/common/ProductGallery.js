@@ -487,6 +487,18 @@ export default function ProductGallery({
   );
   const currentImageSrc = currentDisplayImage ? resolveGalleryImageSrc(currentDisplayImage) : '';
 
+  useEffect(() => {
+    logProductTimingOnce(
+      `render-gallery:${productName}:${totalMediaItems}:${hasVideo ? 'video' : 'image'}`,
+      'render-gallery',
+      {
+        productName,
+        imageCount: normalizedImages.length,
+        videoCount: normalizedVideoUrls.length,
+      }
+    );
+  }, [hasVideo, normalizedImages.length, normalizedVideoUrls.length, productName, totalMediaItems]);
+
   const clearDragAnimationFrame = () => {
     if (dragFrameRef.current !== null && typeof window !== 'undefined') {
       window.cancelAnimationFrame(dragFrameRef.current);

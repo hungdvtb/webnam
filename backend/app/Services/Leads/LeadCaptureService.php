@@ -332,6 +332,9 @@ class LeadCaptureService
             'notes' => $request->input('notes') ?: $request->input('message'),
             'payment_method' => $request->input('payment_method') ?: $request->input('paymentMethod'),
             'source' => $request->input('source'),
+            'fbclid' => $request->input('fbclid'),
+            'gclid' => $request->input('gclid'),
+            'ttclid' => $request->input('ttclid'),
             'type' => $request->input('type'),
             'shipment_status' => $request->input('shipment_status'),
             'shipping_fee' => (float) ($request->input('shipping_fee') ?? 0),
@@ -356,6 +359,9 @@ class LeadCaptureService
             'utm_campaign' => $request->input('utm_campaign'),
             'utm_content' => $request->input('utm_content'),
             'utm_term' => $request->input('utm_term'),
+            'fbclid' => $request->input('fbclid'),
+            'gclid' => $request->input('gclid'),
+            'ttclid' => $request->input('ttclid'),
             'raw_query' => $request->input('raw_query'),
             'source_label' => $request->input('source'),
             'draft_token' => $this->normalizeDraftToken($request->input('draft_token')),
@@ -368,15 +374,21 @@ class LeadCaptureService
 
     public function resolveTag(?int $accountId, array $conversionData): string
     {
+        $source = $this->resolveTrackingSource($conversionData);
+
+        if ($source !== 'Website' || !$this->hasTrackingData($conversionData)) {
+            return $source;
+        }
+
         $haystacks = [
-            Str::lower((string) ($conversionData['landing_url'] ?? '')),
-            Str::lower((string) ($conversionData['current_url'] ?? '')),
-            Str::lower((string) ($conversionData['referrer'] ?? '')),
             Str::lower((string) ($conversionData['utm_source'] ?? '')),
             Str::lower((string) ($conversionData['utm_medium'] ?? '')),
             Str::lower((string) ($conversionData['utm_campaign'] ?? '')),
             Str::lower((string) ($conversionData['source_label'] ?? '')),
             Str::lower((string) ($conversionData['raw_query'] ?? '')),
+            Str::lower((string) ($conversionData['fbclid'] ?? '')),
+            Str::lower((string) ($conversionData['gclid'] ?? '')),
+            Str::lower((string) ($conversionData['ttclid'] ?? '')),
         ];
 
         if ($accountId) {
@@ -396,7 +408,7 @@ class LeadCaptureService
             }
         }
 
-        return $this->resolveTrackingSource($conversionData);
+        return $source;
     }
 
     private function resolveTrackingSource(array $conversionData): string
@@ -410,14 +422,14 @@ class LeadCaptureService
         }
 
         $haystacks = [
-            Str::lower((string) ($conversionData['landing_url'] ?? '')),
-            Str::lower((string) ($conversionData['current_url'] ?? '')),
-            Str::lower((string) ($conversionData['referrer'] ?? '')),
             Str::lower((string) ($conversionData['utm_source'] ?? '')),
             Str::lower((string) ($conversionData['utm_medium'] ?? '')),
             Str::lower((string) ($conversionData['utm_campaign'] ?? '')),
             Str::lower((string) ($conversionData['source_label'] ?? '')),
             Str::lower((string) ($conversionData['raw_query'] ?? '')),
+            Str::lower((string) ($conversionData['fbclid'] ?? '')),
+            Str::lower((string) ($conversionData['gclid'] ?? '')),
+            Str::lower((string) ($conversionData['ttclid'] ?? '')),
         ];
 
         $combined = implode(' ', array_filter($haystacks));
@@ -428,7 +440,7 @@ class LeadCaptureService
             || str_contains($combined, 'meta')
             || preg_match('/\bfb\b/', $combined)
         ) {
-            return 'Facebook';
+            return 'FB';
         }
 
         if (
@@ -436,19 +448,39 @@ class LeadCaptureService
             || str_contains($combined, 'gclid')
             || str_contains($combined, 'googleads')
         ) {
-            return 'Google';
+            return 'GG';
         }
 
         if (str_contains($combined, 'tiktok') || str_contains($combined, 'ttclid')) {
-            return 'TikTok';
-        }
-
-        $referrer = trim((string) ($conversionData['referrer'] ?? ''));
-        if ($referrer === '') {
-            return 'Direct';
+            return 'Tiktok';
         }
 
         return 'Website';
+    }
+
+    private function hasTrackingData(array $conversionData): bool
+    {
+        $trackingKeys = [
+            'utm_source',
+            'utm_medium',
+            'utm_campaign',
+            'utm_content',
+            'utm_term',
+            'raw_query',
+            'fbclid',
+            'gclid',
+            'ttclid',
+        ];
+
+        foreach ($trackingKeys as $key) {
+            if (trim((string) ($conversionData[$key] ?? '')) !== '') {
+                return true;
+            }
+        }
+
+        $sourceLabel = trim((string) ($conversionData['source_label'] ?? ''));
+
+        return $sourceLabel !== '' && $this->normalizeKnownSource($sourceLabel) !== 'Website';
     }
 
     private function normalizeKnownSource(?string $value): ?string
@@ -459,11 +491,10 @@ class LeadCaptureService
         }
 
         return match ($normalized) {
-            'facebook', 'fb', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads' => 'Facebook',
-            'google', 'google_ads', 'google-ad', 'google ads', 'ga', 'gg' => 'Google',
-            'tiktok', 'tt', 'tik_tok', 'tiktok_ads', 'tiktok-ad', 'tiktok ads' => 'TikTok',
-            'direct' => 'Direct',
-            'website', 'website_order', 'website_lead', 'web' => 'Website',
+            'facebook', 'fb', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads' => 'FB',
+            'google', 'google_ads', 'google-ad', 'google ads', 'googleads', 'ga', 'gg' => 'GG',
+            'tiktok', 'tik tok', 'tik_tok', 'tik-tok', 'tt', 'tiktok_ads', 'tiktok-ad', 'tiktok ads' => 'Tiktok',
+            'direct', 'website', 'website_order', 'website_lead', 'web' => 'Website',
             default => null,
         };
     }
@@ -471,10 +502,9 @@ class LeadCaptureService
     private function sourceStorageKey(?string $value): string
     {
         return match ($this->normalizeKnownSource($value) ?? 'Website') {
-            'Facebook' => 'facebook',
-            'Google' => 'google',
-            'TikTok' => 'tiktok',
-            'Direct' => 'direct',
+            'FB' => 'facebook',
+            'GG' => 'google',
+            'Tiktok' => 'tiktok',
             default => 'website',
         };
     }

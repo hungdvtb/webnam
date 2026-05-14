@@ -1072,6 +1072,9 @@ class StorefrontController extends Controller
             'utm_campaign' => 'nullable|string|max:255',
             'utm_content' => 'nullable|string|max:255',
             'utm_term' => 'nullable|string|max:255',
+            'fbclid' => 'nullable|string|max:255',
+            'gclid' => 'nullable|string|max:255',
+            'ttclid' => 'nullable|string|max:255',
             'raw_query' => 'nullable|string|max:2000',
         ]);
 
@@ -1124,6 +1127,9 @@ class StorefrontController extends Controller
             'utm_campaign' => 'nullable|string|max:255',
             'utm_content' => 'nullable|string|max:255',
             'utm_term' => 'nullable|string|max:255',
+            'fbclid' => 'nullable|string|max:255',
+            'gclid' => 'nullable|string|max:255',
+            'ttclid' => 'nullable|string|max:255',
             'raw_query' => 'nullable|string|max:2000',
             'discount' => 'nullable|numeric',
             'total' => 'nullable|numeric',
@@ -1162,6 +1168,9 @@ class StorefrontController extends Controller
             'utm_campaign' => 'nullable|string|max:255',
             'utm_content' => 'nullable|string|max:255',
             'utm_term' => 'nullable|string|max:255',
+            'fbclid' => 'nullable|string|max:255',
+            'gclid' => 'nullable|string|max:255',
+            'ttclid' => 'nullable|string|max:255',
             'raw_query' => 'nullable|string|max:2000',
         ]);
 

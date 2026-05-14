@@ -2,6 +2,17 @@ const STORAGE_KEY = 'lead_attribution_snapshot';
 const SESSION_KEY = 'lead_attribution_snapshot_session';
 const COOKIE_KEY = 'lead_attribution_snapshot';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
+const TRACKING_KEYS = [
+    'utm_source',
+    'utm_medium',
+    'utm_campaign',
+    'utm_content',
+    'utm_term',
+    'fbclid',
+    'gclid',
+    'ttclid',
+    'source_label',
+];
 
 const parseQuery = (search) => {
     const params = new URLSearchParams(search || window.location.search || '');
@@ -19,51 +30,66 @@ const parseQuery = (search) => {
     };
 };
 
-const hasTrackingPayload = (payload = {}) => Boolean(
-    payload.utm_source
-    || payload.utm_medium
-    || payload.utm_campaign
-    || payload.utm_content
-    || payload.utm_term
-    || payload.fbclid
-    || payload.gclid
-    || payload.ttclid
-    || payload.source_label
+const hasTrackingPayload = (payload = {}) => (
+    TRACKING_KEYS.some((key) => Boolean(payload[key]))
 );
 
-const normalizeSource = (payload = {}) => {
-    const values = [
-        payload.utm_source,
-        payload.source,
-        payload.source_label,
-        payload.referrer,
-        payload.raw_query,
-        payload.fbclid,
-        payload.gclid,
-        payload.ttclid,
-    ]
-        .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
+const stripEmptyValues = (payload = {}) => Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined && value !== null && value !== '')
+);
 
-    const combined = values.join(' ');
+const normalizeKnownSource = (value = '') => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!normalized) return '';
 
-    if (combined.includes('facebook') || combined.includes('fbclid') || combined.includes('meta') || combined === 'fb') {
-        return 'Facebook';
+    if (['facebook', 'fb', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads'].includes(normalized)) {
+        return 'FB';
     }
-    if (combined.includes('google') || combined.includes('gclid') || combined.includes('googleads')) {
-        return 'Google';
+
+    if (['google', 'gg', 'ga', 'google_ads', 'google-ad', 'google ads', 'googleads'].includes(normalized)) {
+        return 'GG';
     }
-    if (combined.includes('tiktok') || combined.includes('ttclid')) {
-        return 'TikTok';
+
+    if (['tiktok', 'tik tok', 'tik_tok', 'tik-tok', 'tt', 'tiktok_ads', 'tiktok-ad', 'tiktok ads'].includes(normalized)) {
+        return 'Tiktok';
     }
-    if (combined.includes('direct')) {
-        return 'Direct';
-    }
-    if (combined.includes('website')) {
+
+    if (['website', 'web', 'direct', 'website_order', 'website_lead'].includes(normalized)) {
         return 'Website';
     }
 
-    return payload.referrer ? 'Website' : 'Direct';
+    return '';
+};
+
+const normalizeSource = (payload = {}) => {
+    const direct = normalizeKnownSource(payload.utm_source)
+        || normalizeKnownSource(payload.source)
+        || normalizeKnownSource(payload.source_label)
+        || normalizeKnownSource(payload.source_display);
+
+    if (direct) return direct;
+
+    const combined = [
+        payload.raw_query,
+        payload.fbclid ? 'fbclid' : '',
+        payload.gclid ? 'gclid' : '',
+        payload.ttclid ? 'ttclid' : '',
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    if (combined.includes('facebook') || combined.includes('fbclid') || combined.includes('meta')) {
+        return 'FB';
+    }
+    if (combined.includes('google') || combined.includes('gclid') || combined.includes('googleads')) {
+        return 'GG';
+    }
+    if (combined.includes('tiktok') || combined.includes('ttclid')) {
+        return 'Tiktok';
+    }
+
+    return 'Website';
 };
 
 const readCookie = () => {
@@ -105,12 +131,18 @@ const persistSnapshot = (snapshot) => {
     }
 };
 
-export const readLeadAttribution = () => {
+export const readLeadAttribution = (options = {}) => {
     if (typeof window === 'undefined') return {};
 
+    const includePersistent = options.includePersistent !== false;
+
     try {
-        const raw = window.localStorage.getItem(STORAGE_KEY)
-            || window.sessionStorage.getItem(SESSION_KEY);
+        const sessionRaw = window.sessionStorage.getItem(SESSION_KEY);
+        if (sessionRaw) {
+            return JSON.parse(sessionRaw);
+        }
+
+        const raw = includePersistent ? window.localStorage.getItem(STORAGE_KEY) : '';
 
         if (raw) {
             return JSON.parse(raw);
@@ -119,29 +151,33 @@ export const readLeadAttribution = () => {
         console.error('Unable to read lead attribution snapshot from storage', error);
     }
 
-    return readCookie();
+    return includePersistent ? readCookie() : {};
 };
 
 export const rememberLeadAttribution = (extra = {}) => {
     if (typeof window === 'undefined') return {};
 
-    const previous = readLeadAttribution();
     const queryData = parseQuery(window.location.search);
+    const isNewTrackingVisit = hasTrackingPayload(queryData);
+    const previous = readLeadAttribution({ includePersistent: isNewTrackingVisit });
     const incoming = {
         ...queryData,
         ...extra,
     };
-    const isNewTrackingVisit = hasTrackingPayload(queryData);
+    const snapshotPayload = isNewTrackingVisit ? incoming : {
+        ...stripEmptyValues(queryData),
+        ...extra,
+    };
     const referrer = isNewTrackingVisit
         ? (document.referrer || '')
-        : (incoming.referrer || previous.referrer || document.referrer || '');
+        : (snapshotPayload.referrer || previous.referrer || document.referrer || '');
 
     const next = {
         ...previous,
-        ...incoming,
+        ...snapshotPayload,
         first_url: isNewTrackingVisit ? window.location.href : (previous.first_url || window.location.href),
-        landing_url: isNewTrackingVisit ? window.location.href : (incoming.landing_url || previous.landing_url || window.location.href),
-        current_url: incoming.current_url || window.location.href,
+        landing_url: isNewTrackingVisit ? window.location.href : (snapshotPayload.landing_url || previous.landing_url || window.location.href),
+        current_url: snapshotPayload.current_url || window.location.href,
         referrer,
     };
 

@@ -307,7 +307,7 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                 ...form,
                 product_id: product?.id,
                 product_name: product?.name || '',
-                source: attribution.source || source,
+                source: attribution.source_display || attribution.source || source || 'Website',
                 landing_url: attribution.landing_url || attribution.first_url || window.location.href,
                 current_url: attribution.current_url || window.location.href,
                 referrer: attribution.referrer || document.referrer || '',
@@ -316,6 +316,9 @@ export const LeadFormModal = ({ show, onClose, product, source = 'website' }) =>
                 utm_campaign: attribution.utm_campaign || '',
                 utm_content: attribution.utm_content || '',
                 utm_term: attribution.utm_term || '',
+                fbclid: attribution.fbclid || '',
+                gclid: attribution.gclid || '',
+                ttclid: attribution.ttclid || '',
                 raw_query: attribution.raw_query || '',
             });
             trackLead(product ? 'Product Inquiry' : 'General Inquiry');

@@ -555,6 +555,47 @@ class LeadController extends Controller
         ];
     }
 
+    protected function normalizeLeadSourceLabel(?string $value): ?string
+    {
+        $normalized = Str::lower(trim((string) $value));
+
+        return match ($normalized) {
+            'facebook', 'fb', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads' => 'FB',
+            'google', 'google_ads', 'google-ad', 'google ads', 'googleads', 'ga', 'gg' => 'GG',
+            'tiktok', 'tik tok', 'tik_tok', 'tik-tok', 'tt', 'tiktok_ads', 'tiktok-ad', 'tiktok ads' => 'Tiktok',
+            'direct', 'website', 'website_order', 'website_lead', 'web' => 'Website',
+            default => null,
+        };
+    }
+
+    protected function leadSourceDisplay(Lead $lead): string
+    {
+        $conversionData = $lead->conversion_data ?: [];
+        $tag = trim((string) ($lead->tag ?? ''));
+        $tagLabel = $this->normalizeLeadSourceLabel($tag);
+
+        if ($tag !== '' && (!$tagLabel || $tagLabel !== 'Website')) {
+            return $tagLabel ?: $tag;
+        }
+
+        $candidates = [
+            $conversionData['source'] ?? null,
+            $lead->source,
+            $conversionData['utm_source'] ?? null,
+            $lead->utm_source,
+            $conversionData['source_label'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $label = $this->normalizeLeadSourceLabel($candidate);
+            if ($label) {
+                return $label;
+            }
+        }
+
+        return $tagLabel ?: 'Website';
+    }
+
     protected function transformNotificationLead(
         Lead $lead,
         ?LeadNotificationRead $notificationRead = null,
@@ -695,6 +736,7 @@ class LeadController extends Controller
     {
         $status = $this->resolvedLeadStatus($lead, $draftStatus);
         $usesDraftStatus = $this->leadUsesDraftStatus($lead, $draftStatus);
+        $sourceDisplay = $this->leadSourceDisplay($lead);
         $resolvedItems = $lead->items->map(function ($item) use ($lead) {
             $resolved = $this->bundleResolver->resolveStoredLeadItem($item, $lead);
 
@@ -741,6 +783,8 @@ class LeadController extends Controller
             'product_summary' => $resolvedProductSummary ?: $lead->product_summary,
             'product_summary_short' => $resolvedProductSummary ?: $lead->product_summary_short,
             'product_name' => $lead->product_name,
+            'source' => $lead->source ?: 'website',
+            'source_display' => $sourceDisplay,
             'tag' => $lead->tag,
             'link_url' => $lead->link_url,
             'status' => $status?->code ?? ($usesDraftStatus ? 'don-nhap' : $lead->status),

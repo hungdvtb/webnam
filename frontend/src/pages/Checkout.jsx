@@ -239,7 +239,7 @@ const Checkout = () => {
                 discount_amount: discountAmount,
                 discount: discountAmount,
                 total: finalTotal,
-                source: attribution.source || attribution.source_display || 'Direct',
+                source: attribution.source_display || attribution.source || 'Website',
                 landing_url: attribution.landing_url || attribution.first_url || window.location.href,
                 current_url: window.location.href,
                 referrer: attribution.referrer || document.referrer || '',
@@ -248,6 +248,9 @@ const Checkout = () => {
                 utm_campaign: attribution.utm_campaign || '',
                 utm_content: attribution.utm_content || '',
                 utm_term: attribution.utm_term || '',
+                fbclid: attribution.fbclid || '',
+                gclid: attribution.gclid || '',
+                ttclid: attribution.ttclid || '',
                 raw_query: attribution.raw_query || '',
                 items: cart.items.map((item) => ({
                     product_id: item.product_id,

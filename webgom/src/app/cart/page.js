@@ -757,7 +757,7 @@ export default function CartPage() {
       notes: String(state.formData?.notes || '').trim(),
       paymentMethod: state.formData?.paymentMethod || 'cod',
       payment_method: state.formData?.paymentMethod || 'cod',
-      source: 'Website',
+      source: attribution.source_display || attribution.source || 'Website',
       discount: state.discount || 0,
       total: state.totalAfterDiscount || 0,
       draft_token: draftToken,
@@ -772,6 +772,9 @@ export default function CartPage() {
       utm_campaign: attribution.utm_campaign || '',
       utm_content: attribution.utm_content || '',
       utm_term: attribution.utm_term || '',
+      fbclid: attribution.fbclid || '',
+      gclid: attribution.gclid || '',
+      ttclid: attribution.ttclid || '',
       raw_query: attribution.raw_query || '',
       items: (state.cartItems || []).map((item) => {
         const bundleState = item.groupedItems?.length > 0

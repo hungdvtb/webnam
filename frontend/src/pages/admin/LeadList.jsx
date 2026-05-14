@@ -27,7 +27,7 @@ const LEAD_COLUMNS = [
     { id: 'customer_name', label: 'Tên khách hàng', minWidth: '170px' },
     { id: 'phone', label: 'Số điện thoại', minWidth: '150px' },
     { id: 'address', label: 'Địa chỉ', minWidth: '220px' },
-    { id: 'tag', label: 'Tag', minWidth: '110px' },
+    { id: 'tag', label: 'Nguồn đơn', minWidth: '110px' },
     { id: 'status', label: 'Trạng thái đơn', minWidth: '190px' },
     { id: 'notes', label: 'Ghi chú', minWidth: '180px' },
     { id: 'link', label: 'Link', minWidth: '100px' },
@@ -41,6 +41,23 @@ const STATUS_LABEL_MAP = {
     'hen goi lai': 'Hẹn gọi lại',
     'da chot': 'Đã chốt',
     'tat ca': 'Tất cả',
+};
+
+const SOURCE_LABEL_MAP = {
+    facebook: 'FB',
+    fb: 'FB',
+    meta: 'FB',
+    google: 'GG',
+    gg: 'GG',
+    ga: 'GG',
+    tiktok: 'Tiktok',
+    'tik tok': 'Tiktok',
+    tik_tok: 'Tiktok',
+    'tik-tok': 'Tiktok',
+    tt: 'Tiktok',
+    website: 'Website',
+    web: 'Website',
+    direct: 'Website',
 };
 
 const formatMoney = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)} đ`;
@@ -63,6 +80,32 @@ const normalizeSearchTextSafe = (value) => String(value ?? '')
     .replace(/[đĐ]/g, 'd')
     .toLowerCase()
     .trim();
+
+const getSourceLabelFromValue = (value, fallback = '') => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return fallback;
+
+    const normalized = normalizeSearchTextSafe(raw);
+    return SOURCE_LABEL_MAP[normalized] || raw;
+};
+
+const getLeadSourceLabel = (lead) => {
+    const candidates = [
+        lead?.source_display,
+        lead?.tag,
+        lead?.source,
+        lead?.conversion_data?.source,
+        lead?.conversion_data?.utm_source,
+        lead?.payload_snapshot?.source,
+    ];
+
+    for (const candidate of candidates) {
+        const label = getSourceLabelFromValue(candidate);
+        if (label) return label;
+    }
+
+    return 'Website';
+};
 
 const getLeadProductSummary = (lead) => {
     if (Array.isArray(lead?.items) && lead.items.length > 0) {
@@ -158,6 +201,9 @@ const leadMatchesSearch = (lead, search) => {
         lead?.product_summary,
         lead?.latest_note_excerpt,
         lead?.order_number,
+        getLeadSourceLabel(lead),
+        lead?.source_display,
+        lead?.source,
         lead?.tag,
         lead?.link_url,
         ...(Array.isArray(lead?.items)
@@ -658,7 +704,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         case 'tag':
             return (
                 <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">
-                    {lead.tag || 'Website'}
+                    {getLeadSourceLabel(lead)}
                 </span>
             );
         case 'status':
@@ -744,7 +790,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
         case 'tag':
             return (
                 <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">
-                    {lead.tag || 'Website'}
+                    {getLeadSourceLabel(lead)}
                 </span>
             );
         case 'status':
@@ -1246,15 +1292,15 @@ const FilterPanel = ({ filters, draftFilters, statuses, tags, onDraftChange, onA
         </div>
 
         <div className="space-y-1.5">
-            <label className="text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Tag</label>
+            <label className="text-[11px] font-black uppercase tracking-[0.08em] text-primary/55">Nguồn đơn</label>
             <select
                 value={draftFilters.tag}
                 onChange={(event) => onDraftChange((prev) => ({ ...prev, tag: event.target.value }))}
                 className={inputClassName}
             >
-                <option value="">Tất cả tag</option>
+                <option value="">Tất cả nguồn</option>
                 {tags.map((tag) => (
-                    <option key={tag} value={tag}>{tag}</option>
+                    <option key={tag} value={tag}>{getSourceLabelFromValue(tag, 'Website')}</option>
                 ))}
             </select>
         </div>
@@ -2845,7 +2891,7 @@ const LeadList = () => {
         case 'address':
             return <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>;
         case 'tag':
-            return <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{lead.tag || 'Website'}</span>;
+            return <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{getLeadSourceLabel(lead)}</span>;
         case 'status':
             return (
                 <select
@@ -2959,13 +3005,13 @@ const LeadList = () => {
         case 'tag':
             return (
                 <LeadCopyableCell
-                    copyValue={lead.tag || 'Website'}
+                    copyValue={getLeadSourceLabel(lead)}
                     copyId={`${lead.id}-tag`}
-                    copyLabel="tag"
+                    copyLabel="nguồn đơn"
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{lead.tag || 'Website'}</span>
+                    <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-bold text-primary">{getLeadSourceLabel(lead)}</span>
                 </LeadCopyableCell>
             );
         case 'status':
@@ -3754,7 +3800,7 @@ const LeadList = () => {
                                     <th className="px-4 py-4">Tên khách hàng</th>
                                     <th className="px-4 py-4">Số điện thoại</th>
                                     <th className="px-4 py-4">Địa chỉ</th>
-                                    <th className="px-4 py-4">Tag</th>
+                                    <th className="px-4 py-4">Nguồn đơn</th>
                                     <th className="px-4 py-4">Trạng thái đơn</th>
                                     <th className="px-4 py-4">Ghi chú</th>
                                     <th className="px-4 py-4">Link</th>
@@ -3797,7 +3843,7 @@ const LeadList = () => {
                                         <td className="px-4 py-4 text-[13px] text-[#0F172A]">{lead.address || '-'}</td>
                                         <td className="px-4 py-4">
                                             <span className="inline-flex rounded-full border border-primary/10 bg-primary/[0.04] px-3 py-1 text-[11px] font-black uppercase tracking-[0.08em] text-primary">
-                                                {lead.tag || 'Website'}
+                                                {getLeadSourceLabel(lead)}
                                             </span>
                                         </td>
                                         <td className="px-4 py-4">

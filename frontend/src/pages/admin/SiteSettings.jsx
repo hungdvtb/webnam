@@ -434,7 +434,7 @@ const metaFeedLinks = [
         note: 'Dự phòng nếu Meta cần định dạng XML',
     },
 ];
-const metaFeedFields = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand'];
+const metaFeedFields = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand', 'product_type', 'custom_label_0'];
 
 const HEADER_ROUTE_REFERENCE_ROWS = [
     { page: 'Trang chủ', route: '/', note: 'Storefront chính (đã tạo)', scope: 'Public', exists: true },

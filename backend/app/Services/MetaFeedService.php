@@ -22,6 +22,8 @@ class MetaFeedService
         'link',
         'image_link',
         'brand',
+        'product_type',
+        'custom_label_0',
     ];
 
     private const BRAND = 'Gốm Đại Thành';
@@ -64,6 +66,7 @@ class MetaFeedService
                 'id',
                 'account_id',
                 'site_domain_id',
+                'category_id',
                 'sku',
                 'name',
                 'slug',
@@ -87,6 +90,8 @@ class MetaFeedService
                     ->orderBy('sort_order')
                     ->orderBy('id'),
                 'images.mediaAsset',
+                'category:id,name',
+                'categories:id,name',
             ])
             ->orderBy('sort_order')
             ->orderByDesc('id');
@@ -102,6 +107,7 @@ class MetaFeedService
     {
         $title = $this->cleanText((string) $product->name, 150);
         $description = $this->descriptionForProduct($product);
+        $categoryName = $this->categoryNameForProduct($product);
 
         return [
             'id' => $this->feedId($product),
@@ -113,7 +119,23 @@ class MetaFeedService
             'link' => $this->productUrl($product),
             'image_link' => $this->imageUrl($this->primaryImage($product)),
             'brand' => self::BRAND,
+            'product_type' => $categoryName,
+            'custom_label_0' => $categoryName,
         ];
+    }
+
+    private function categoryNameForProduct(Product $product): string
+    {
+        $category = $product->relationLoaded('category') ? $product->category : $product->category()->first();
+        $categoryName = $this->cleanText((string) ($category?->name ?? ''), 750);
+
+        if ($categoryName !== '') {
+            return $categoryName;
+        }
+
+        $categories = $product->relationLoaded('categories') ? $product->categories : $product->categories()->get();
+
+        return $this->cleanText((string) ($categories->first()?->name ?? ''), 750);
     }
 
     private function scopeToWebsiteDomain(Builder $query): void

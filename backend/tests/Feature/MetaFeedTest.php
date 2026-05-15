@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Category;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\SiteDomain;
@@ -32,10 +33,17 @@ class MetaFeedTest extends TestCase
             'is_active' => true,
             'is_default' => true,
         ]);
+        $category = Category::create([
+            'account_id' => $account->id,
+            'name' => 'Bộ đồ thờ men lam vẽ vàng Bát Tràng',
+            'slug' => 'bo-do-tho-men-lam-ve-vang-bat-trang',
+            'status' => true,
+        ]);
 
         $activeProduct = Product::create([
             'account_id' => $account->id,
             'site_domain_id' => $domain->id,
+            'category_id' => $category->id,
             'name' => 'Bộ đồ thờ men lam',
             'slug' => 'bo-do-tho-men-lam',
             'description' => '<p>Gốm sứ Bát Tràng.</p>',
@@ -70,7 +78,7 @@ class MetaFeedTest extends TestCase
         $response->assertHeader('Content-Type', 'text/csv; charset=UTF-8');
 
         $content = $response->streamedContent();
-        $this->assertStringContainsString('id,title,description,availability,condition,price,link,image_link,brand', $content);
+        $this->assertStringContainsString('id,title,description,availability,condition,price,link,image_link,brand,product_type,custom_label_0', $content);
         $this->assertStringContainsString('GDT-001', $content);
         $this->assertStringContainsString('Bộ đồ thờ men lam', $content);
         $this->assertStringContainsString('Gốm sứ Bát Tràng.', $content);
@@ -80,6 +88,7 @@ class MetaFeedTest extends TestCase
         $this->assertStringContainsString('https://gomdaithanh.com/product/bo-do-tho-men-lam', $content);
         $this->assertStringContainsString('https://api.gomdaithanh.com/storage/products/gdt-001.jpg', $content);
         $this->assertStringContainsString('Gốm Đại Thành', $content);
+        $this->assertStringContainsString('Bộ đồ thờ men lam vẽ vàng Bát Tràng', $content);
         $this->assertStringNotContainsString('OFF-001', $content);
     }
 
@@ -88,8 +97,14 @@ class MetaFeedTest extends TestCase
         config([
             'app.frontend_url' => 'https://gomdaithanh.com',
         ]);
+        $category = Category::create([
+            'name' => 'Bát hương Bát Tràng',
+            'slug' => 'bat-huong-bat-trang',
+            'status' => true,
+        ]);
 
         $product = Product::create([
+            'category_id' => $category->id,
             'name' => 'Bát hương men rạn',
             'slug' => 'bat-huong-men-ran',
             'description' => 'Hết hàng nhưng vẫn đang bán.',
@@ -116,5 +131,7 @@ class MetaFeedTest extends TestCase
         $this->assertStringContainsString('<g:condition>new</g:condition>', $content);
         $this->assertStringContainsString('<g:price>450000 VND</g:price>', $content);
         $this->assertStringContainsString('<g:brand>Gốm Đại Thành</g:brand>', $content);
+        $this->assertStringContainsString('<g:product_type>Bát hương Bát Tràng</g:product_type>', $content);
+        $this->assertStringContainsString('<g:custom_label_0>Bát hương Bát Tràng</g:custom_label_0>', $content);
     }
 }

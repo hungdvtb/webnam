@@ -22,6 +22,8 @@ function deploy_backend() {
     chown -R www-data:www-data storage bootstrap/cache
     chmod -R 775 storage bootstrap/cache
     php artisan optimize:clear
+    php artisan config:clear
+    php artisan cache:clear
     echo -e "${GREEN}Backend deployment complete.${NC}"
 }
 

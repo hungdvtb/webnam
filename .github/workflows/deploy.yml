@@ -12,10 +12,18 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.HOST }}
+          host: 150.95.113.192
+          port: 22
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd /www/webname
             git pull origin master
+            if [ -f backend/.env ]; then
+              if grep -q '^META_TEST_EVENT_CODE=' backend/.env; then
+                sed -i 's/^META_TEST_EVENT_CODE=.*/META_TEST_EVENT_CODE=TEST77693/' backend/.env
+              else
+                printf '\nMETA_TEST_EVENT_CODE=TEST77693\n' >> backend/.env
+              fi
+            fi
             ./deploy.sh rebuild

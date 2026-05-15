@@ -104,33 +104,58 @@ class MetaCatalogController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         $settings = $this->settingsService->settingsFor($accountId);
-        $this->settingsService->applyToConfig($settings);
-
         $startedAt = now();
-        $startTime = microtime(true);
-
-        try {
-            $result = $this->syncService->sync([
-                'dry_run' => false,
+        $log = MetaCatalogSyncLog::query()->create([
+            'account_id' => $accountId,
+            'user_id' => $request->user()?->id,
+            'operation' => 'sync_live',
+            'status' => 'running',
+            'summary' => 'Sync live is running in background.',
+            'details' => [
+                'queued' => true,
                 'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
-            ]);
-            $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
-            $log = $this->recordLog($request, $accountId, 'sync_live', $status, $result, $startedAt, $startTime);
+            ],
+            'started_at' => $startedAt,
+        ]);
 
-            return response()->json([
-                'result' => $result,
-                'log' => $this->logPayload($log),
-                'settings' => $this->settingsService->publicSettingsFor($accountId),
-            ], $status === 'success' ? 200 : 422);
-        } catch (Throwable $exception) {
-            $log = $this->recordFailure($request, $accountId, 'sync_live', $exception, $startedAt, $startTime);
+        app()->terminating(function () use ($log, $accountId, $settings, $startedAt): void {
+            ignore_user_abort(true);
+            @set_time_limit(0);
 
-            return response()->json([
-                'message' => $exception->getMessage(),
-                'log' => $this->logPayload($log),
-                'settings' => $this->settingsService->publicSettingsFor($accountId),
-            ], 422);
-        }
+            $startTime = microtime(true);
+            try {
+                $this->settingsService->applyToConfig($settings);
+                $result = $this->syncService->sync([
+                    'dry_run' => false,
+                    'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
+                ]);
+                $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
+                $this->updateLogWithResult($log->id, $accountId, 'sync_live', $status, $result, $startedAt, $startTime);
+            } catch (Throwable $exception) {
+                $this->updateLogWithFailure($log->id, $accountId, 'sync_live', $exception, $startedAt, $startTime);
+            }
+        });
+
+        return response()->json([
+            'message' => 'Meta Catalog sync started in background.',
+            'queued' => true,
+            'result' => [
+                'dry_run' => false,
+                'feed_count' => 0,
+                'valid_count' => 0,
+                'skipped_count' => 0,
+                'invalid_count' => 0,
+                'create_count' => 0,
+                'update_count' => 0,
+                'delete_count' => 0,
+                'request_count' => 0,
+                'batch_count' => 0,
+                'skipped_entries' => [],
+                'invalid_entries' => [],
+            ],
+            'log' => $this->logPayload($log),
+            'settings' => $this->settingsService->publicSettingsFor($accountId),
+        ], 202);
     }
 
     public function checkFeed(Request $request, string $format)
@@ -270,6 +295,46 @@ class MetaCatalogController extends Controller
         ]);
     }
 
+    private function updateLogWithResult(int $logId, ?int $accountId, string $operation, string $status, array $result, $startedAt, float $startTime): void
+    {
+        $invalidEntries = (array) ($result['invalid_entries'] ?? []);
+        $skippedEntries = (array) ($result['skipped_entries'] ?? []);
+        $fallbackEntries = (array) ($result['fallback_entries'] ?? []);
+
+        $log = MetaCatalogSyncLog::query()->find($logId);
+        if (!$log) {
+            return;
+        }
+
+        $log->fill([
+            'account_id' => $accountId,
+            'operation' => $operation,
+            'status' => $status,
+            'total_products' => (int) ($result['feed_count'] ?? 0),
+            'valid_products' => (int) ($result['valid_count'] ?? 0),
+            'invalid_products' => (int) ($result['invalid_count'] ?? 0),
+            'success_count' => (int) ($result['request_count'] ?? $result['valid_count'] ?? 0),
+            'error_count' => (int) ($result['invalid_count'] ?? 0),
+            'create_count' => (int) ($result['create_count'] ?? 0),
+            'update_count' => (int) ($result['update_count'] ?? 0),
+            'delete_count' => (int) ($result['delete_count'] ?? 0),
+            'fallback_count' => count($fallbackEntries),
+            'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
+            'summary' => $this->summaryFor($operation, $status, $result),
+            'error_message' => null,
+            'details' => [
+                'invalid_entries' => $invalidEntries,
+                'skipped_entries' => $skippedEntries,
+                'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
+                'fallback_entries' => $fallbackEntries,
+                'batches' => $result['batches'] ?? [],
+                'details' => $result['details'] ?? null,
+            ],
+            'started_at' => $startedAt,
+            'finished_at' => now(),
+        ])->save();
+    }
+
     private function recordFailure(Request $request, ?int $accountId, string $operation, Throwable $exception, $startedAt, float $startTime): MetaCatalogSyncLog
     {
         return MetaCatalogSyncLog::query()->create([
@@ -289,6 +354,31 @@ class MetaCatalogController extends Controller
             'started_at' => $startedAt,
             'finished_at' => now(),
         ]);
+    }
+
+    private function updateLogWithFailure(int $logId, ?int $accountId, string $operation, Throwable $exception, $startedAt, float $startTime): void
+    {
+        $log = MetaCatalogSyncLog::query()->find($logId);
+        if (!$log) {
+            return;
+        }
+
+        $log->fill([
+            'account_id' => $accountId,
+            'operation' => $operation,
+            'status' => 'error',
+            'error_count' => 1,
+            'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
+            'summary' => $exception->getMessage(),
+            'error_message' => $exception->getMessage(),
+            'details' => [
+                'error' => $exception instanceof MetaCatalogProductSyncException
+                    ? $exception->getMessage()
+                    : Str::limit($exception->getMessage(), 2000, ''),
+            ],
+            'started_at' => $startedAt,
+            'finished_at' => now(),
+        ])->save();
     }
 
     private function summaryFor(string $operation, string $status, array $result): string

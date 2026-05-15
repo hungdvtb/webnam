@@ -38,6 +38,8 @@ const operationLabel = (operation) => ({
 const statusClasses = (status) => (
     status === 'success'
         ? 'border-green-200 bg-green-50 text-green-700'
+        : status === 'running'
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
         : status === 'skipped'
             ? 'border-stone-200 bg-stone-50 text-stone-600'
             : 'border-red-200 bg-red-50 text-red-700'
@@ -81,6 +83,7 @@ const resultFromLog = (log) => {
         fallback_entries: details.fallback_entries || [],
         batches: details.batches || [],
         recovered_from_log: true,
+        status: log.status || '',
     };
 };
 
@@ -205,6 +208,14 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
         }
     };
 
+    const refreshLogsLater = (delays = []) => {
+        delays.forEach((delay) => {
+            window.setTimeout(() => {
+                refreshLogs();
+            }, delay);
+        });
+    };
+
     const handleSave = async () => {
         setSaving(true);
         try {
@@ -319,19 +330,42 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
             return;
         }
 
+        const startedAtMs = Date.now();
         setSyncing(true);
         try {
             const response = await metaCatalogApi.syncNow();
-            setSyncResult(response.data?.result || null);
+            const queued = response.status === 202 || response.data?.queued;
+            const result = response.data?.log ? resultFromLog(response.data.log) : (response.data?.result || null);
+            setSyncResult(result);
             setSettings((prev) => ({ ...prev, ...(response.data?.settings || {}), access_token: '' }));
             await refreshLogs();
-            showModal({ title: 'Đồng bộ thành công', content: 'Đã gửi dữ liệu sản phẩm lên Meta Catalog.', type: 'success' });
+            if (queued) {
+                refreshLogsLater([3000, 10000, 30000]);
+                showModal({ title: 'Đã bắt đầu đồng bộ', content: 'Backend đang đồng bộ Meta Catalog ở nền. Bảng log sẽ tự cập nhật khi hoàn tất.', type: 'success' });
+            } else {
+                showModal({ title: 'Đồng bộ thành công', content: 'Đã gửi dữ liệu sản phẩm lên Meta Catalog.', type: 'success' });
+            }
         } catch (error) {
             const result = error.response?.data?.result || null;
             if (result) {
                 setSyncResult(result);
             }
-            await refreshLogs();
+            const latestLogs = await refreshLogs();
+            const recoveredLog = recentOperationLog(latestLogs, 'sync_live', startedAtMs);
+            const recoveredResult = resultFromLog(recoveredLog);
+            if (!result && recoveredResult && ['running', 'success'].includes(String(recoveredResult.status || ''))) {
+                setSyncResult(recoveredResult);
+                refreshLogsLater([3000, 10000, 30000]);
+                showModal({
+                    title: recoveredResult.status === 'success' ? 'Đồng bộ thành công' : 'Đã bắt đầu đồng bộ',
+                    content: recoveredResult.status === 'success'
+                        ? 'Backend đã đồng bộ Meta Catalog xong.'
+                        : 'Backend đang đồng bộ Meta Catalog ở nền. Bảng log sẽ tự cập nhật khi hoàn tất.',
+                    type: 'success',
+                });
+                return;
+            }
+
             showModal({
                 title: 'Đồng bộ thất bại',
                 content: error.response?.data?.message || 'Không thể đồng bộ lên Meta Catalog.',

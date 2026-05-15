@@ -43,7 +43,7 @@ class MetaFeedService
         echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
         echo '<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">' . "\n";
         echo "  <channel>\n";
-        echo '    <title>' . $this->xml(self::BRAND . ' Meta Feed') . "</title>\n";
+        echo '    <title>' . $this->xml($this->brand() . ' Meta Feed') . "</title>\n";
         echo '    <link>' . $this->xml($this->websiteBaseUrl()) . "</link>\n";
         echo '    <description>' . $this->xml('Product catalog feed for Meta') . "</description>\n";
 
@@ -113,15 +113,20 @@ class MetaFeedService
             'id' => $this->feedId($product),
             'title' => $title,
             'description' => $description !== '' ? $description : $title,
-            'availability' => ((float) ($product->stock_quantity ?? 0)) > 0 ? 'in stock' : 'out of stock',
+            'availability' => 'in stock',
             'condition' => 'new',
             'price' => $this->formatPrice((float) ($product->current_price ?: $product->price ?: 0)),
             'link' => $this->productUrl($product),
             'image_link' => $this->imageUrl($this->primaryImage($product)),
-            'brand' => self::BRAND,
+            'brand' => $this->brand(),
             'product_type' => $categoryName,
             'custom_label_0' => $categoryName,
         ];
+    }
+
+    private function brand(): string
+    {
+        return trim((string) config('meta_catalog.brand')) ?: self::BRAND;
     }
 
     private function categoryNameForProduct(Product $product): string
@@ -245,15 +250,44 @@ class MetaFeedService
     {
         $images = $product->relationLoaded('images') ? $product->images : $product->images()->get();
 
-        return $images->firstWhere('is_primary', true)
+        $image = $images->firstWhere('is_primary', true)
             ?: $images->sortBy('sort_order')->first();
+
+        return $image ?: $this->relatedProductImage($product);
+    }
+
+    private function relatedProductImage(Product $product): ?ProductImage
+    {
+        foreach (['variations', 'bundleItems', 'groupedItems'] as $relation) {
+            $items = $product->relationLoaded($relation)
+                ? $product->getRelation($relation)
+                : $product->{$relation}()->with('images')->get();
+
+            foreach ($items as $item) {
+                $images = $item->relationLoaded('images') ? $item->images : $item->images()->get();
+                $image = $images->firstWhere('is_primary', true)
+                    ?: $images->sortBy('sort_order')->first();
+
+                if ($image instanceof ProductImage) {
+                    return $image;
+                }
+            }
+        }
+
+        return null;
     }
 
     private function imageUrl(?ProductImage $image): string
     {
         $url = trim((string) ($image?->large_url ?: $image?->image_url ?: ''));
 
-        return $url !== '' ? $this->normalizeUrl($this->mediaBaseUrl(), $url) : '';
+        if ($url !== '') {
+            return $this->normalizeUrl($this->mediaBaseUrl(), $url);
+        }
+
+        $fallback = trim((string) config('meta_catalog.fallback_image_url'));
+
+        return $fallback !== '' ? $this->normalizeUrl($this->websiteBaseUrl(), $fallback) : '';
     }
 
     private function websiteBaseUrl(): string

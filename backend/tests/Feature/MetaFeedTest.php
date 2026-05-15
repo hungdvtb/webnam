@@ -127,7 +127,7 @@ class MetaFeedTest extends TestCase
         $content = $response->streamedContent();
 
         $this->assertStringContainsString('<g:id>BHM-001</g:id>', $content);
-        $this->assertStringContainsString('<g:availability>out of stock</g:availability>', $content);
+        $this->assertStringContainsString('<g:availability>in stock</g:availability>', $content);
         $this->assertStringContainsString('<g:condition>new</g:condition>', $content);
         $this->assertStringContainsString('<g:price>450000 VND</g:price>', $content);
         $this->assertStringContainsString('<g:brand>Gốm Đại Thành</g:brand>', $content);

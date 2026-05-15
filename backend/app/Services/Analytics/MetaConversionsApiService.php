@@ -25,12 +25,27 @@ class MetaConversionsApiService
     public function sendFromRequest(Request $request, string $siteEventName, array $overrides = []): bool
     {
         $eventName = $overrides['event_name'] ?? self::EVENT_MAP[$siteEventName] ?? null;
-        if (!$eventName || !$this->isConfigured()) {
+        if (!$eventName) {
+            Log::debug('Meta Conversions API event skipped: unsupported event.', [
+                'site_event_name' => $siteEventName,
+            ]);
+
+            return false;
+        }
+
+        if (!$this->isConfigured()) {
+            $this->logConfigurationIssue($eventName);
+
             return false;
         }
 
         $event = $this->buildEvent($request, $eventName, $overrides);
         if ($event === null) {
+            Log::warning('Meta Conversions API event skipped: missing event source URL.', [
+                'event_name' => $eventName,
+                'site_event_name' => $siteEventName,
+            ]);
+
             return false;
         }
 
@@ -39,10 +54,6 @@ class MetaConversionsApiService
 
     public function sendPurchaseFromLead(Request $request, Lead $lead): bool
     {
-        if (!$this->isConfigured()) {
-            return false;
-        }
-
         $lead->loadMissing('items');
         $items = $this->leadItems($lead);
         $contentIds = $items
@@ -72,10 +83,6 @@ class MetaConversionsApiService
 
     public function sendLeadFromLead(Request $request, Lead $lead): bool
     {
-        if (!$this->isConfigured()) {
-            return false;
-        }
-
         return $this->sendFromRequest($request, SiteAnalyticsEvent::EVENT_LEAD, [
             'event_id' => $this->firstFilled(
                 $request->input('meta_event_id'),
@@ -289,8 +296,12 @@ class MetaConversionsApiService
                 'events' => collect($payload['data'])
                     ->map(fn (array $event) => [
                         'event_name' => $event['event_name'] ?? null,
+                        'event_time' => $event['event_time'] ?? null,
+                        'action_source' => $event['action_source'] ?? null,
                         'event_id' => $event['event_id'] ?? null,
                         'event_source_url' => $event['event_source_url'] ?? null,
+                        'has_client_ip_address' => $this->isFilled(Arr::get($event, 'user_data.client_ip_address')),
+                        'has_client_user_agent' => $this->isFilled(Arr::get($event, 'user_data.client_user_agent')),
                     ])
                     ->values()
                     ->all(),
@@ -494,5 +505,21 @@ class MetaConversionsApiService
         return (bool) config('meta_conversions.enabled', true)
             && trim((string) config('meta_conversions.pixel_id')) !== ''
             && trim((string) config('meta_conversions.access_token')) !== '';
+    }
+
+    private function logConfigurationIssue(string $eventName): void
+    {
+        Log::warning('Meta Conversions API is not configured.', [
+            'event_name' => $eventName,
+            'enabled' => (bool) config('meta_conversions.enabled', true),
+            'has_pixel_id' => $this->isFilled(config('meta_conversions.pixel_id')),
+            'has_access_token' => $this->isFilled(config('meta_conversions.access_token')),
+            'has_test_event_code' => $this->isFilled(config('meta_conversions.test_event_code')),
+        ]);
+    }
+
+    private function isFilled(mixed $value): bool
+    {
+        return trim((string) $value) !== '';
     }
 }

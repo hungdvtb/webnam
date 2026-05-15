@@ -28,39 +28,67 @@ class MetaCatalogProductSyncService
         $batchSize = $this->batchSize((int) ($options['batch_size'] ?? config('meta_catalog.batch_size', 500)));
         $pollStatus = (bool) ($options['poll_status'] ?? config('meta_catalog.poll_status', true));
         $checkRemoteUrls = (bool) ($options['check_remote_urls'] ?? false);
+        $progress = is_callable($options['progress'] ?? null) ? $options['progress'] : null;
 
+        $this->reportProgress($progress, 'prepare_feed', 5, 'Dang doc du lieu san pham website...');
         $snapshot = $this->feedSnapshot();
         $entries = $snapshot['entries'];
         $skippedEntries = $snapshot['skipped_entries'];
         if ($checkRemoteUrls) {
-            [$entries, $remoteSkippedEntries] = $this->skipEntriesWithRemoteUrlErrors($entries);
+            $this->reportProgress($progress, 'remote_url_check', 12, 'Dang kiem tra link va anh san pham...');
+            [$entries, $remoteSkippedEntries] = $this->skipEntriesWithRemoteUrlErrors($entries, $progress);
             $skippedEntries = array_merge($skippedEntries, $remoteSkippedEntries);
         }
 
         $currentRetailerIds = $this->retailerIdSet($entries);
         $fallbackEntries = $this->fallbackEntries($entries);
         $validEntries = array_values($entries);
+        $this->reportProgress($progress, 'feed_ready', $dryRun ? 90 : 25, 'Da loc san pham du dieu kien sync.', [
+            'total_products' => (int) ($snapshot['total_count'] ?? count($validEntries) + count($skippedEntries)),
+            'valid_count' => count($validEntries),
+            'skipped_count' => count($skippedEntries),
+            'fallback_count' => count($fallbackEntries),
+        ]);
 
         if (!$dryRun && (int) ($snapshot['total_count'] ?? 0) === 0 && $deleteStale) {
             throw new MetaCatalogProductSyncException('Website feed has no products; refusing to delete every item from the Meta catalog.');
         }
 
-        $existingRetailerIds = $dryRun ? [] : $this->fetchCatalogRetailerIds();
+        if (!$dryRun) {
+            $this->reportProgress($progress, 'fetch_meta_existing', 35, 'Dang lay danh sach san pham hien co tren Meta...');
+        }
+        $existingRetailerIds = $dryRun ? [] : $this->fetchCatalogRetailerIds($progress);
         $upsertRequests = $this->buildUpsertRequests($validEntries, $existingRetailerIds);
         $deleteRequests = $deleteStale
             ? $this->buildDeleteRequests($existingRetailerIds, $currentRetailerIds)
             : [];
         $requests = array_merge($upsertRequests, $deleteRequests);
+        $this->reportProgress($progress, 'build_requests', $dryRun ? 95 : 50, 'Da chuan bi request gui sang Meta.', [
+            'existing_count' => count($existingRetailerIds),
+            'create_count' => $this->countByMethod($upsertRequests, 'CREATE'),
+            'update_count' => $this->countByMethod($upsertRequests, 'UPDATE'),
+            'delete_count' => count($deleteRequests),
+            'request_count' => count($requests),
+            'batch_count' => (int) ceil(count($requests) / max($batchSize, 1)),
+        ]);
 
         $batches = [];
         if (!$dryRun) {
-            foreach (array_chunk($requests, $batchSize) as $index => $chunk) {
-                $batches[] = $this->sendBatch($chunk, $index + 1, $pollStatus);
+            $chunks = array_chunk($requests, $batchSize);
+            $totalBatches = count($chunks);
+            foreach ($chunks as $index => $chunk) {
+                $batchNumber = $index + 1;
+                $this->reportProgress($progress, 'send_meta_batch', $this->batchProgressPercent($batchNumber - 1, $totalBatches), sprintf('Dang gui batch %d/%d sang Meta...', $batchNumber, $totalBatches), [
+                    'batch_number' => $batchNumber,
+                    'batch_count' => $totalBatches,
+                    'request_count' => count($chunk),
+                ]);
+                $batches[] = $this->sendBatch($chunk, $batchNumber, $pollStatus, $progress, $totalBatches);
             }
         }
         $batchErrorCount = $this->countBatchErrors($batches);
 
-        return [
+        $result = [
             'dry_run' => $dryRun,
             'catalog_id' => (string) config('meta_catalog.catalog_id'),
             'feed_count' => (int) ($snapshot['total_count'] ?? count($entries)),
@@ -80,6 +108,20 @@ class MetaCatalogProductSyncService
             'batches' => $batches,
             'batch_error_count' => $batchErrorCount,
         ];
+
+        $this->reportProgress($progress, 'complete', 100, $dryRun ? 'Dry-run hoan tat.' : 'Dong bo Meta hoan tat.', [
+            'total_products' => (int) ($result['feed_count'] ?? 0),
+            'valid_count' => (int) ($result['valid_count'] ?? 0),
+            'skipped_count' => (int) ($result['skipped_count'] ?? 0),
+            'invalid_count' => (int) ($result['invalid_count'] ?? 0),
+            'create_count' => (int) ($result['create_count'] ?? 0),
+            'update_count' => (int) ($result['update_count'] ?? 0),
+            'delete_count' => (int) ($result['delete_count'] ?? 0),
+            'request_count' => (int) ($result['request_count'] ?? 0),
+            'batch_count' => (int) ($result['batch_count'] ?? 0),
+        ]);
+
+        return $result;
     }
 
     public function buildUpsertRequests(iterable $entries, array $existingRetailerIds = []): array
@@ -185,12 +227,13 @@ class MetaCatalogProductSyncService
         ];
     }
 
-    private function skipEntriesWithRemoteUrlErrors(array $entries): array
+    private function skipEntriesWithRemoteUrlErrors(array $entries, ?callable $progress = null): array
     {
         $validEntries = [];
         $skippedEntries = [];
+        $totalEntries = max(count($entries), 1);
 
-        foreach ($entries as $entry) {
+        foreach ($entries as $index => $entry) {
             $errors = $this->remoteValidationErrors($entry);
             if (!empty($errors)) {
                 $skippedEntries[] = [
@@ -201,10 +244,19 @@ class MetaCatalogProductSyncService
                     'admin_edit_url' => (string) ($entry['_admin_edit_url'] ?? ''),
                     'errors' => $errors,
                 ];
-                continue;
+            } else {
+                $validEntries[] = $entry;
             }
 
-            $validEntries[] = $entry;
+            $current = $index + 1;
+            if ($current % 10 === 0 || $current === $totalEntries) {
+                $percent = 12 + (int) floor(($current / $totalEntries) * 10);
+                $this->reportProgress($progress, 'remote_url_check', min($percent, 22), sprintf('Dang kiem tra link/anh %d/%d...', $current, $totalEntries), [
+                    'checked_count' => $current,
+                    'total_to_check' => $totalEntries,
+                    'remote_skipped_count' => count($skippedEntries),
+                ]);
+            }
         }
 
         return [$validEntries, $skippedEntries];
@@ -319,7 +371,7 @@ class MetaCatalogProductSyncService
         return [(string) $minorUnits, $currency];
     }
 
-    private function fetchCatalogRetailerIds(): array
+    private function fetchCatalogRetailerIds(?callable $progress = null): array
     {
         $url = $this->endpoint('products');
         $query = [
@@ -347,12 +399,16 @@ class MetaCatalogProductSyncService
             $url = trim((string) data_get($body, 'paging.next', ''));
             $query = [];
             $page++;
+            $this->reportProgress($progress, 'fetch_meta_existing', min(45, 35 + $page), sprintf('Dang lay san pham Meta: trang %d, da co %d SKU...', $page, count($ids)), [
+                'page' => $page,
+                'existing_count' => count($ids),
+            ]);
         }
 
         return collect($ids)->unique()->values()->all();
     }
 
-    private function sendBatch(array $requests, int $batchNumber, bool $pollStatus): array
+    private function sendBatch(array $requests, int $batchNumber, bool $pollStatus, ?callable $progress = null, int $totalBatches = 1): array
     {
         if (empty($requests)) {
             return [
@@ -375,13 +431,19 @@ class MetaCatalogProductSyncService
 
         $body = $response->json() ?: [];
         $handles = $this->handlesFromBatchResponse($body);
+        $this->reportProgress($progress, 'meta_batch_submitted', $this->batchProgressPercent($batchNumber, $totalBatches), sprintf('Da gui batch %d/%d sang Meta.', $batchNumber, max($totalBatches, 1)), [
+            'batch_number' => $batchNumber,
+            'batch_count' => max($totalBatches, 1),
+            'request_count' => count($requests),
+            'handle_count' => count($handles),
+        ]);
 
         return [
             'batch_number' => $batchNumber,
             'request_count' => count($requests),
             'handles' => $handles,
             'response' => $body,
-            'statuses' => $pollStatus ? $this->pollBatchStatuses($handles) : [],
+            'statuses' => $pollStatus ? $this->pollBatchStatuses($handles, $progress, $batchNumber, $totalBatches) : [],
         ];
     }
 
@@ -399,17 +461,18 @@ class MetaCatalogProductSyncService
             ->all();
     }
 
-    private function pollBatchStatuses(array $handles): array
+    private function pollBatchStatuses(array $handles, ?callable $progress = null, int $batchNumber = 1, int $totalBatches = 1): array
     {
         $statuses = [];
-        foreach ($handles as $handle) {
-            $statuses[] = $this->pollBatchStatus($handle);
+        $totalHandles = max(count($handles), 1);
+        foreach ($handles as $index => $handle) {
+            $statuses[] = $this->pollBatchStatus($handle, $progress, $batchNumber, $totalBatches, $index + 1, $totalHandles);
         }
 
         return $statuses;
     }
 
-    private function pollBatchStatus(string $handle): array
+    private function pollBatchStatus(string $handle, ?callable $progress = null, int $batchNumber = 1, int $totalBatches = 1, int $handleNumber = 1, int $totalHandles = 1): array
     {
         $attempts = max((int) config('meta_catalog.status_poll_attempts', 8), 1);
         $delayMs = max((int) config('meta_catalog.status_poll_delay_ms', 1000), 0);
@@ -427,6 +490,15 @@ class MetaCatalogProductSyncService
 
             $lastBody = $response->json() ?: [];
             $status = Str::lower((string) (data_get($lastBody, 'data.0.status') ?: data_get($lastBody, 'status', '')));
+            $this->reportProgress($progress, 'meta_batch_status', min(95, $this->batchProgressPercent($batchNumber, $totalBatches) + 3), sprintf('Dang cho Meta xu ly batch %d/%d, handle %d/%d, lan %d/%d...', $batchNumber, max($totalBatches, 1), $handleNumber, $totalHandles, $attempt, $attempts), [
+                'batch_number' => $batchNumber,
+                'batch_count' => max($totalBatches, 1),
+                'handle_number' => $handleNumber,
+                'handle_count' => $totalHandles,
+                'attempt' => $attempt,
+                'attempts' => $attempts,
+                'meta_status' => $status ?: 'pending',
+            ]);
             if (in_array($status, ['finished', 'completed', 'complete', 'success'], true)) {
                 return [
                     'handle' => $handle,
@@ -493,6 +565,30 @@ class MetaCatalogProductSyncService
         return collect($requests)
             ->filter(fn (array $request) => ($request['method'] ?? null) === $method)
             ->count();
+    }
+
+    private function batchProgressPercent(int $batchNumber, int $totalBatches): int
+    {
+        if ($totalBatches <= 0) {
+            return 90;
+        }
+
+        return min(90, 50 + (int) floor(($batchNumber / $totalBatches) * 40));
+    }
+
+    private function reportProgress(?callable $progress, string $phase, int $percent, string $message, array $context = []): void
+    {
+        if (!$progress) {
+            return;
+        }
+
+        $progress([
+            'phase' => $phase,
+            'percent' => max(0, min(100, $percent)),
+            'message' => $message,
+            'context' => $context,
+            'updated_at' => now()->toIso8601String(),
+        ]);
     }
 
     private function responseErrorMessage(Response $response, string $fallback): string

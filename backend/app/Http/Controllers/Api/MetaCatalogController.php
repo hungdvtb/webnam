@@ -110,10 +110,17 @@ class MetaCatalogController extends Controller
             'user_id' => $request->user()?->id,
             'operation' => 'sync_live',
             'status' => 'running',
-            'summary' => 'Sync live is running in background.',
+            'summary' => 'Dang xep hang dong bo Meta... (0%)',
             'details' => [
                 'queued' => true,
                 'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
+                'progress' => [
+                    'phase' => 'queued',
+                    'percent' => 0,
+                    'message' => 'Dang xep hang dong bo Meta...',
+                    'context' => [],
+                    'updated_at' => now()->toIso8601String(),
+                ],
             ],
             'started_at' => $startedAt,
         ]);
@@ -125,9 +132,11 @@ class MetaCatalogController extends Controller
             $startTime = microtime(true);
             try {
                 $this->settingsService->applyToConfig($settings);
+                $progress = fn (array $progress) => $this->updateRunningLogProgress($log->id, $progress);
                 $result = $this->syncService->sync([
                     'dry_run' => false,
                     'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
+                    'progress' => $progress,
                 ]);
                 $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
                 $this->updateLogWithResult($log->id, $accountId, 'sync_live', $status, $result, $startedAt, $startTime);
@@ -152,6 +161,7 @@ class MetaCatalogController extends Controller
                 'batch_count' => 0,
                 'skipped_entries' => [],
                 'invalid_entries' => [],
+                'progress' => data_get($log->details, 'progress'),
             ],
             'log' => $this->logPayload($log),
             'settings' => $this->settingsService->publicSettingsFor($accountId),
@@ -237,6 +247,7 @@ class MetaCatalogController extends Controller
     public function logs(Request $request)
     {
         $accountId = $this->resolveAccountId($request);
+        $this->expireStaleRunningLogs($accountId);
 
         $logs = MetaCatalogSyncLog::query()
             ->with('user:id,name,email')
@@ -249,6 +260,8 @@ class MetaCatalogController extends Controller
 
     private function latestLogs(?int $accountId): array
     {
+        $this->expireStaleRunningLogs($accountId);
+
         return MetaCatalogSyncLog::query()
             ->with('user:id,name,email')
             ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
@@ -289,6 +302,19 @@ class MetaCatalogController extends Controller
                 'fallback_entries' => $fallbackEntries,
                 'batches' => $result['batches'] ?? [],
                 'details' => $result['details'] ?? null,
+                'progress' => [
+                    'phase' => 'complete',
+                    'percent' => 100,
+                    'message' => $status === 'success' ? 'Tac vu hoan tat.' : 'Tac vu hoan tat voi loi.',
+                    'context' => [
+                        'total_products' => (int) ($result['feed_count'] ?? 0),
+                        'valid_count' => (int) ($result['valid_count'] ?? 0),
+                        'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
+                        'invalid_count' => (int) ($result['invalid_count'] ?? 0),
+                        'request_count' => (int) ($result['request_count'] ?? $result['valid_count'] ?? 0),
+                    ],
+                    'updated_at' => now()->toIso8601String(),
+                ],
             ],
             'started_at' => $startedAt,
             'finished_at' => $finishedAt,
@@ -306,6 +332,32 @@ class MetaCatalogController extends Controller
             return;
         }
 
+        $details = is_array($log->details) ? $log->details : [];
+        $details['queued'] = false;
+        $details['invalid_entries'] = $invalidEntries;
+        $details['skipped_entries'] = $skippedEntries;
+        $details['skipped_count'] = (int) ($result['skipped_count'] ?? count($skippedEntries));
+        $details['fallback_entries'] = $fallbackEntries;
+        $details['batches'] = $result['batches'] ?? [];
+        $details['details'] = $result['details'] ?? null;
+        $details['progress'] = [
+            'phase' => $status === 'success' ? 'complete' : 'complete_with_errors',
+            'percent' => 100,
+            'message' => $status === 'success' ? 'Dong bo Meta hoan tat.' : 'Dong bo Meta hoan tat voi loi.',
+            'context' => [
+                'total_products' => (int) ($result['feed_count'] ?? 0),
+                'valid_count' => (int) ($result['valid_count'] ?? 0),
+                'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
+                'invalid_count' => (int) ($result['invalid_count'] ?? 0),
+                'create_count' => (int) ($result['create_count'] ?? 0),
+                'update_count' => (int) ($result['update_count'] ?? 0),
+                'delete_count' => (int) ($result['delete_count'] ?? 0),
+                'request_count' => (int) ($result['request_count'] ?? $result['valid_count'] ?? 0),
+                'batch_count' => (int) ($result['batch_count'] ?? 0),
+            ],
+            'updated_at' => now()->toIso8601String(),
+        ];
+
         $log->fill([
             'account_id' => $accountId,
             'operation' => $operation,
@@ -322,14 +374,7 @@ class MetaCatalogController extends Controller
             'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
             'summary' => $this->summaryFor($operation, $status, $result),
             'error_message' => null,
-            'details' => [
-                'invalid_entries' => $invalidEntries,
-                'skipped_entries' => $skippedEntries,
-                'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
-                'fallback_entries' => $fallbackEntries,
-                'batches' => $result['batches'] ?? [],
-                'details' => $result['details'] ?? null,
-            ],
+            'details' => $details,
             'started_at' => $startedAt,
             'finished_at' => now(),
         ])->save();
@@ -363,6 +408,21 @@ class MetaCatalogController extends Controller
             return;
         }
 
+        $message = $exception instanceof MetaCatalogProductSyncException
+            ? $exception->getMessage()
+            : Str::limit($exception->getMessage(), 2000, '');
+        $details = is_array($log->details) ? $log->details : [];
+        $previousProgress = is_array($details['progress'] ?? null) ? $details['progress'] : [];
+        $details['queued'] = false;
+        $details['error'] = $message;
+        $details['progress'] = [
+            'phase' => 'error',
+            'percent' => (int) ($previousProgress['percent'] ?? 0),
+            'message' => $message,
+            'context' => (array) ($previousProgress['context'] ?? []),
+            'updated_at' => now()->toIso8601String(),
+        ];
+
         $log->fill([
             'account_id' => $accountId,
             'operation' => $operation,
@@ -371,14 +431,108 @@ class MetaCatalogController extends Controller
             'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
             'summary' => $exception->getMessage(),
             'error_message' => $exception->getMessage(),
-            'details' => [
-                'error' => $exception instanceof MetaCatalogProductSyncException
-                    ? $exception->getMessage()
-                    : Str::limit($exception->getMessage(), 2000, ''),
-            ],
+            'details' => $details,
             'started_at' => $startedAt,
             'finished_at' => now(),
         ])->save();
+    }
+
+    private function updateRunningLogProgress(int $logId, array $progress): void
+    {
+        $log = MetaCatalogSyncLog::query()->find($logId);
+        if (!$log || $log->status !== 'running') {
+            return;
+        }
+
+        $details = is_array($log->details) ? $log->details : [];
+        $context = (array) ($progress['context'] ?? []);
+        $percent = max(0, min(100, (int) ($progress['percent'] ?? 0)));
+        $message = trim((string) ($progress['message'] ?? 'Meta sync is running.'));
+        $normalizedProgress = [
+            'phase' => (string) ($progress['phase'] ?? 'running'),
+            'percent' => $percent,
+            'message' => $message !== '' ? $message : 'Meta sync is running.',
+            'context' => $context,
+            'updated_at' => (string) ($progress['updated_at'] ?? now()->toIso8601String()),
+        ];
+
+        $details['queued'] = false;
+        $details['progress'] = $normalizedProgress;
+
+        if (array_key_exists('skipped_count', $context)) {
+            $details['skipped_count'] = (int) $context['skipped_count'];
+        }
+
+        $updates = [
+            'summary' => $normalizedProgress['message'] . ' (' . $percent . '%)',
+            'details' => $details,
+        ];
+
+        if (array_key_exists('total_products', $context)) {
+            $updates['total_products'] = (int) $context['total_products'];
+        }
+        if (array_key_exists('valid_count', $context)) {
+            $updates['valid_products'] = (int) $context['valid_count'];
+        }
+        if (array_key_exists('invalid_count', $context)) {
+            $updates['invalid_products'] = (int) $context['invalid_count'];
+            $updates['error_count'] = (int) $context['invalid_count'];
+        }
+        if (array_key_exists('request_count', $context)) {
+            $updates['success_count'] = (int) $context['request_count'];
+        }
+        if (array_key_exists('create_count', $context)) {
+            $updates['create_count'] = (int) $context['create_count'];
+        }
+        if (array_key_exists('update_count', $context)) {
+            $updates['update_count'] = (int) $context['update_count'];
+        }
+        if (array_key_exists('delete_count', $context)) {
+            $updates['delete_count'] = (int) $context['delete_count'];
+        }
+        if (array_key_exists('fallback_count', $context)) {
+            $updates['fallback_count'] = (int) $context['fallback_count'];
+        }
+
+        $log->fill($updates)->save();
+    }
+
+    private function expireStaleRunningLogs(?int $accountId): void
+    {
+        $logs = MetaCatalogSyncLog::query()
+            ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
+            ->where('status', 'running')
+            ->where('updated_at', '<=', now()->subMinutes(10))
+            ->limit(20)
+            ->get();
+
+        foreach ($logs as $log) {
+            $details = is_array($log->details) ? $log->details : [];
+            $previousProgress = is_array($details['progress'] ?? null) ? $details['progress'] : [];
+            $message = 'Sync live stopped updating for more than 10 minutes. Please start a new sync.';
+            $details['queued'] = false;
+            $details['error'] = $message;
+            $details['progress'] = [
+                'phase' => 'stale',
+                'percent' => (int) ($previousProgress['percent'] ?? 0),
+                'message' => $message,
+                'context' => (array) ($previousProgress['context'] ?? []),
+                'updated_at' => now()->toIso8601String(),
+            ];
+
+            $startedTimestamp = $log->started_at?->getTimestamp();
+            $durationMs = $startedTimestamp ? max(0, (now()->getTimestamp() - $startedTimestamp) * 1000) : $log->duration_ms;
+
+            $log->fill([
+                'status' => 'error',
+                'error_count' => max((int) $log->error_count, 1),
+                'duration_ms' => $durationMs,
+                'summary' => $message,
+                'error_message' => $message,
+                'details' => $details,
+                'finished_at' => now(),
+            ])->save();
+        }
     }
 
     private function summaryFor(string $operation, string $status, array $result): string
@@ -418,6 +572,7 @@ class MetaCatalogController extends Controller
             'summary' => $log->summary,
             'error_message' => $log->error_message,
             'details' => $log->details,
+            'progress' => data_get($log->details, 'progress'),
             'started_at' => $log->started_at?->toIso8601String(),
             'finished_at' => $log->finished_at?->toIso8601String(),
             'user' => $log->user ? [

@@ -45,6 +45,18 @@ const statusClasses = (status) => (
             : 'border-red-200 bg-red-50 text-red-700'
 );
 
+const progressFromLog = (log) => log?.progress || log?.details?.progress || null;
+const progressPercent = (progress) => Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+const isRunningLog = (log) => String(log?.status || '').toLowerCase() === 'running';
+const runningLogStaleMs = 10 * 60 * 1000;
+const isStaleRunningLog = (log) => {
+    if (!isRunningLog(log)) return false;
+    const progress = progressFromLog(log);
+    const lastUpdate = new Date(progress?.updated_at || log?.started_at || '').getTime();
+    return Number.isFinite(lastUpdate) && Date.now() - lastUpdate > runningLogStaleMs;
+};
+const isActiveRunningLog = (log) => isRunningLog(log) && !isStaleRunningLog(log);
+
 const StatBox = ({ label, value, tone = 'primary' }) => {
     const toneClasses = {
         primary: 'border-primary/10 bg-white text-primary',
@@ -82,6 +94,7 @@ const resultFromLog = (log) => {
         skipped_entries: details.skipped_entries || [],
         fallback_entries: details.fallback_entries || [],
         batches: details.batches || [],
+        progress: progressFromLog(log),
         recovered_from_log: true,
         status: log.status || '',
     };
@@ -196,7 +209,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
         }));
     };
 
-    const refreshLogs = async () => {
+    const refreshLogs = useCallback(async () => {
         try {
             const response = await metaCatalogApi.getLogs({ per_page: 10 });
             const nextLogs = response.data?.data || [];
@@ -206,7 +219,19 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
             // Log refresh is secondary to the action result.
             return [];
         }
-    };
+    }, []);
+
+    useEffect(() => {
+        if (!logs.some(isActiveRunningLog)) {
+            return undefined;
+        }
+
+        const timer = window.setInterval(() => {
+            refreshLogs();
+        }, 5000);
+
+        return () => window.clearInterval(timer);
+    }, [logs, refreshLogs]);
 
     const refreshLogsLater = (delays = []) => {
         delays.forEach((delay) => {
@@ -376,7 +401,10 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
         }
     };
 
-    const canSync = dryRunResult && Number(dryRunResult.invalid_count || 0) === 0 && !runningDryRun && !syncing;
+    const runningSyncLog = logs.find((log) => log.operation === 'sync_live' && isActiveRunningLog(log));
+    const runningProgress = progressFromLog(runningSyncLog);
+    const syncDisplayResult = runningSyncLog ? resultFromLog(runningSyncLog) : syncResult;
+    const canSync = dryRunResult && Number(dryRunResult.invalid_count || 0) === 0 && !runningDryRun && !syncing && !runningSyncLog;
     const latestRun = settings.last_run || null;
 
     if (loading) {
@@ -565,16 +593,28 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                 )}
             >
                 <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-                    <StatBox label="Tổng sản phẩm" value={syncResult?.feed_count || dryRunResult?.feed_count || 0} />
-                    <StatBox label="Đủ điều kiện" value={syncResult?.valid_count || dryRunResult?.valid_count || 0} tone="green" />
-                    <StatBox label="Tạo mới" value={syncResult?.create_count || 0} tone="green" />
-                    <StatBox label="Cập nhật" value={syncResult?.update_count || 0} />
-                    <StatBox label="Xóa khỏi Meta" value={syncResult?.delete_count || 0} tone="amber" />
-                    <StatBox label="Bị bỏ qua" value={syncResult?.skipped_count || dryRunResult?.skipped_count || 0} tone={Number(syncResult?.skipped_count || dryRunResult?.skipped_count || 0) > 0 ? 'amber' : 'green'} />
-                    <StatBox label="Lỗi thật sự" value={syncResult?.invalid_count || 0} tone={Number(syncResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
+                    <StatBox label="Tổng sản phẩm" value={syncDisplayResult?.feed_count || dryRunResult?.feed_count || 0} />
+                    <StatBox label="Đủ điều kiện" value={syncDisplayResult?.valid_count || dryRunResult?.valid_count || 0} tone="green" />
+                    <StatBox label="Tạo mới" value={syncDisplayResult?.create_count || 0} tone="green" />
+                    <StatBox label="Cập nhật" value={syncDisplayResult?.update_count || 0} />
+                    <StatBox label="Xóa khỏi Meta" value={syncDisplayResult?.delete_count || 0} tone="amber" />
+                    <StatBox label="Bị bỏ qua" value={syncDisplayResult?.skipped_count || dryRunResult?.skipped_count || 0} tone={Number(syncDisplayResult?.skipped_count || dryRunResult?.skipped_count || 0) > 0 ? 'amber' : 'green'} />
+                    <StatBox label="Lỗi thật sự" value={syncDisplayResult?.invalid_count || 0} tone={Number(syncDisplayResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
                 </div>
+                {runningSyncLog && (
+                    <div className="mt-4 rounded-sm border border-blue-100 bg-blue-50 px-4 py-3 text-primary">
+                        <div className="flex items-center justify-between gap-3">
+                            <p className="text-[12px] font-black uppercase tracking-wider text-blue-700">Đang đồng bộ Meta</p>
+                            <p className="text-[12px] font-black text-blue-700">{progressPercent(runningProgress)}%</p>
+                        </div>
+                        <div className="mt-2 h-2 rounded-sm bg-white">
+                            <div className="h-2 rounded-sm bg-blue-600 transition-all duration-300" style={{ width: `${progressPercent(runningProgress)}%` }} />
+                        </div>
+                        <p className="mt-2 text-[12px] font-bold text-blue-700">{runningProgress?.message || runningSyncLog.summary || 'Backend đang chạy đồng bộ Meta.'}</p>
+                    </div>
+                )}
                 <div className="mt-5">
-                    <SkippedProductsTable entries={syncResult?.skipped_entries || []} />
+                    <SkippedProductsTable entries={syncDisplayResult?.skipped_entries || []} />
                 </div>
                 {!canSync && (
                     <p className="mt-4 rounded-sm border border-primary/10 bg-stone-50 px-4 py-3 text-[13px] font-bold text-primary/50">
@@ -604,9 +644,17 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                                 <tr>
                                     <td colSpan="9" className="px-4 py-10 text-center text-primary/35">Chưa có log Meta Catalog.</td>
                                 </tr>
-                            ) : logs.map((log) => (
+                            ) : logs.map((log) => {
+                                const progress = progressFromLog(log);
+                                const detailText = isStaleRunningLog(log)
+                                    ? 'Job running qua 10 phut khong cap nhat, co the da bi dung. Co the bam dong bo lai.'
+                                    : isRunningLog(log) && progress
+                                        ? `${progress.message || log.summary || 'Backend dang chay'} (${progressPercent(progress)}%)`
+                                        : (log.summary || log.error_message || '-');
+
+                                return (
                                 <tr key={log.id}>
-                                    <td className="px-4 py-3 font-bold text-primary">{formatTime(log.finished_at)}</td>
+                                    <td className="px-4 py-3 font-bold text-primary">{formatTime(log.finished_at || log.started_at)}</td>
                                     <td className="px-4 py-3 font-black text-primary">{operationLabel(log.operation)}</td>
                                     <td className="px-4 py-3 text-primary/70">{log.user?.name || log.user?.email || 'Hệ thống'}</td>
                                     <td className="px-4 py-3 font-mono text-primary">{compactNumber(log.total_products)}</td>
@@ -616,11 +664,12 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                                     <td className="px-4 py-3">
                                         <span className={`rounded-sm border px-2 py-1 text-[10px] font-black uppercase ${statusClasses(log.status)}`}>{log.status}</span>
                                     </td>
-                                    <td className="px-4 py-3 max-w-[360px] truncate text-primary/60" title={log.summary || log.error_message || ''}>
-                                        {log.summary || log.error_message || '-'}
+                                    <td className="px-4 py-3 max-w-[360px] truncate text-primary/60" title={detailText}>
+                                        {detailText}
                                     </td>
                                 </tr>
-                            ))}
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>

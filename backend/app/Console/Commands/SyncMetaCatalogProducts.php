@@ -53,7 +53,7 @@ class SyncMetaCatalogProducts extends Command
 
         $mode = $result['dry_run'] ? 'Dry run' : 'Submitted';
         $this->info(sprintf(
-            '%s Meta catalog sync. Total: %d. Eligible: %d. Skipped: %d. Errors: %d. Create: %d. Update: %d. Delete: %d. Batches: %d.',
+            '%s Meta catalog sync. Total: %d. Eligible: %d. Skipped: %d. Errors: %d. Create: %d. Update: %d. Delete: %d. Batches: %d. Product sets: %d (%d created, %d updated).',
             $mode,
             $result['feed_count'],
             $result['valid_count'],
@@ -62,7 +62,10 @@ class SyncMetaCatalogProducts extends Command
             $result['create_count'],
             $result['update_count'],
             $result['delete_count'],
-            $result['batch_count']
+            $result['batch_count'],
+            (int) ($result['product_set_count'] ?? 0),
+            (int) ($result['product_set_create_count'] ?? 0),
+            (int) ($result['product_set_update_count'] ?? 0)
         ));
 
         $fallbackEntries = (array) ($result['fallback_entries'] ?? []);
@@ -83,10 +86,15 @@ class SyncMetaCatalogProducts extends Command
             $this->warn("Meta reported {$batchErrors} batch error sample(s). Check the command output or Laravel logs for details.");
         }
 
-        $status = $batchErrors > 0 ? 'error' : 'success';
+        $productSetErrors = (int) ($result['product_set_error_count'] ?? 0);
+        if ($productSetErrors > 0) {
+            $this->warn("Meta reported {$productSetErrors} product set error(s). Check the sync log for details.");
+        }
+
+        $status = ($batchErrors + $productSetErrors) > 0 ? 'error' : 'success';
         $this->recordResult($accountId, $this->operationName(), $status, $result, $startedAt, $startTime);
 
-        return $batchErrors > 0
+        return ($batchErrors + $productSetErrors) > 0
             ? self::FAILURE
             : self::SUCCESS;
     }
@@ -132,7 +140,7 @@ class SyncMetaCatalogProducts extends Command
             'fallback_count' => (int) ($result['fallback_count'] ?? count((array) ($result['fallback_entries'] ?? []))),
             'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
             'summary' => sprintf(
-                '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d.',
+                '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d, product_sets %d created/%d updated/%d errors.',
                 $operation,
                 $status,
                 (int) ($result['feed_count'] ?? 0),
@@ -141,7 +149,10 @@ class SyncMetaCatalogProducts extends Command
                 (int) ($result['invalid_count'] ?? 0),
                 (int) ($result['create_count'] ?? 0),
                 (int) ($result['update_count'] ?? 0),
-                (int) ($result['delete_count'] ?? 0)
+                (int) ($result['delete_count'] ?? 0),
+                (int) ($result['product_set_create_count'] ?? 0),
+                (int) ($result['product_set_update_count'] ?? 0),
+                (int) ($result['product_set_error_count'] ?? 0)
             ),
             'details' => [
                 'invalid_entries' => $result['invalid_entries'] ?? [],
@@ -149,6 +160,14 @@ class SyncMetaCatalogProducts extends Command
                 'skipped_count' => (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
                 'fallback_entries' => $result['fallback_entries'] ?? [],
                 'batches' => $result['batches'] ?? [],
+                'product_sets' => $result['product_sets'] ?? [],
+                'product_set_errors' => $result['product_set_errors'] ?? [],
+                'product_set_count' => (int) ($result['product_set_count'] ?? 0),
+                'product_set_create_count' => (int) ($result['product_set_create_count'] ?? 0),
+                'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
+                'product_set_unchanged_count' => (int) ($result['product_set_unchanged_count'] ?? 0),
+                'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
+                'product_set_sort_note' => $result['product_set_sort_note'] ?? null,
             ],
             'started_at' => $startedAt,
             'finished_at' => now(),

@@ -19,7 +19,7 @@ const defaultSettings = {
     },
 };
 
-const feedFields = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand', 'product_type', 'custom_label_0'];
+const feedFields = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand', 'product_type', 'custom_label_0', 'custom_label_1', 'custom_label_2', 'custom_label_3', 'custom_label_4'];
 const compactNumber = (value) => Number(value || 0).toLocaleString('vi-VN');
 const formatTime = (value) => {
     if (!value) return 'Chưa có';
@@ -100,6 +100,7 @@ const resultFromLog = (log) => {
         fallback_entries: details.fallback_entries || [],
         product_sets: details.product_sets || [],
         product_set_errors: details.product_set_errors || [],
+        product_set_sort_note: details.product_set_sort_note || '',
         batches: details.batches || [],
         progress: progressFromLog(log),
         recovered_from_log: true,
@@ -196,6 +197,8 @@ const ProductSetsTable = ({ sets = [], errors = [] }) => {
                 <thead className="bg-primary/[0.02] text-primary/50">
                     <tr>
                         <th className="px-4 py-3 font-black uppercase">Danh mục website</th>
+                        <th className="px-4 py-3 font-black uppercase">Loại</th>
+                        <th className="px-4 py-3 font-black uppercase">Số sản phẩm</th>
                         <th className="px-4 py-3 font-black uppercase">Product Set ID</th>
                         <th className="px-4 py-3 font-black uppercase">Trạng thái</th>
                         <th className="px-4 py-3 font-black uppercase">Bộ lọc</th>
@@ -205,11 +208,15 @@ const ProductSetsTable = ({ sets = [], errors = [] }) => {
                 <tbody className="divide-y divide-primary/5 bg-white">
                     {rows.map((set, index) => {
                         const filterText = set.filter
-                            ? `custom_label_0/product_type = ${set.name || '-'}`
+                            ? (set.type === 'child'
+                                ? `custom_label_0 = ${set.name || '-'}`
+                                : `custom_label_1 hoặc custom_label_0 = ${set.name || '-'}`)
                             : '-';
                         return (
                             <tr key={`${set.id || set.name || index}-${index}`}>
                                 <td className="px-4 py-3 font-bold text-primary">{set.name || '-'}</td>
+                                <td className="px-4 py-3 font-bold text-primary/70">{set.type === 'child' ? 'Danh mục con' : 'Danh mục cha'}</td>
+                                <td className="px-4 py-3 font-mono text-primary">{compactNumber(set.product_count || 0)}</td>
                                 <td className="px-4 py-3 font-mono text-primary/70">{set.id || '-'}</td>
                                 <td className="px-4 py-3 font-black text-primary">{actionLabel(set.action)}</td>
                                 <td className="px-4 py-3 text-primary/60">{filterText}</td>
@@ -658,7 +665,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                     </button>
                 )}
             >
-                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-10 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-11 gap-3">
                     <StatBox label="Tổng sản phẩm" value={syncDisplayResult?.feed_count || dryRunResult?.feed_count || 0} />
                     <StatBox label="Đủ điều kiện" value={syncDisplayResult?.valid_count || dryRunResult?.valid_count || 0} tone="green" />
                     <StatBox label="Tạo mới" value={syncDisplayResult?.create_count || 0} tone="green" />
@@ -669,6 +676,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                     <StatBox label="Nhóm sản phẩm" value={syncDisplayResult?.product_set_count || 0} />
                     <StatBox label="Nhóm tạo mới" value={syncDisplayResult?.product_set_create_count || 0} tone="green" />
                     <StatBox label="Nhóm cập nhật" value={syncDisplayResult?.product_set_update_count || 0} />
+                    <StatBox label="Nhóm lỗi" value={syncDisplayResult?.product_set_error_count || 0} tone={Number(syncDisplayResult?.product_set_error_count || 0) > 0 ? 'red' : 'green'} />
                 </div>
                 {runningSyncLog && (
                     <div className="mt-4 rounded-sm border border-blue-100 bg-blue-50 px-4 py-3 text-primary">
@@ -688,6 +696,11 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                 <div className="mt-5">
                     <ProductSetsTable sets={syncDisplayResult?.product_sets || []} errors={syncDisplayResult?.product_set_errors || []} />
                 </div>
+                {syncDisplayResult?.product_set_sort_note && (
+                    <p className="mt-4 rounded-sm border border-primary/10 bg-stone-50 px-4 py-3 text-[13px] font-bold text-primary/50">
+                        {syncDisplayResult.product_set_sort_note}
+                    </p>
+                )}
                 {!canSync && (
                     <p className="mt-4 rounded-sm border border-primary/10 bg-stone-50 px-4 py-3 text-[13px] font-bold text-primary/50">
                         Nút sync live mở sau khi dry-run hoàn tất. Sản phẩm thiếu ảnh/danh mục hoặc đang OFF sẽ tự bị bỏ qua.

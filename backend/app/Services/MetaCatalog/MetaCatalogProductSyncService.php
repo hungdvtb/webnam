@@ -119,6 +119,7 @@ class MetaCatalogProductSyncService
             'product_set_error_count' => $productSetErrorCount,
             'product_sets' => (array) ($productSetResult['sets'] ?? []),
             'product_set_errors' => (array) ($productSetResult['errors'] ?? []),
+            'product_set_sort_note' => 'Meta khong dam bao hien thi dung thu tu thu cong trong Product Set; sort_order da duoc gui trong custom_label_3/custom_label_4 de kiem tra.',
         ];
 
         $this->reportProgress($progress, 'complete', 100, $dryRun ? 'Dry-run hoan tat.' : 'Dong bo Meta hoan tat.', [
@@ -186,7 +187,15 @@ class MetaCatalogProductSyncService
         $snapshot = $this->feedService->catalogSnapshot();
         $entries = [];
         foreach ((array) ($snapshot['entries'] ?? []) as $entry) {
-            $entry = array_map(fn ($value) => is_scalar($value) ? trim((string) $value) : '', $entry);
+            $entry = collect($entry)
+                ->mapWithKeys(function ($value, $key) {
+                    if (is_scalar($value)) {
+                        return [$key => trim((string) $value)];
+                    }
+
+                    return [((string) $key) => str_starts_with((string) $key, '_') ? $value : ''];
+                })
+                ->all();
             if (($entry['id'] ?? '') !== '') {
                 $entries[] = $entry;
             }
@@ -329,7 +338,8 @@ class MetaCatalogProductSyncService
     private function catalogData(array $entry): array
     {
         [$price, $currency] = $this->parsePrice((string) $entry['price']);
-        $categoryName = trim((string) ($entry['product_type'] ?? $entry['custom_label_0'] ?? ''));
+        $productType = trim((string) ($entry['product_type'] ?? ''));
+        $directCategoryName = trim((string) ($entry['custom_label_0'] ?? $productType));
         $brand = trim((string) config('meta_catalog.brand', 'Gốm Đại Thành'));
 
         $data = [
@@ -344,9 +354,19 @@ class MetaCatalogProductSyncService
             'brand' => $brand !== '' ? $brand : 'Gốm Đại Thành',
         ];
 
-        if ($categoryName !== '') {
-            $data['product_type'] = $categoryName;
-            $data['custom_label_0'] = $categoryName;
+        if ($productType !== '') {
+            $data['product_type'] = $productType;
+        }
+
+        if ($directCategoryName !== '') {
+            $data['custom_label_0'] = $directCategoryName;
+        }
+
+        foreach (['custom_label_1', 'custom_label_2', 'custom_label_3', 'custom_label_4'] as $labelField) {
+            $labelValue = trim((string) ($entry[$labelField] ?? ''));
+            if ($labelValue !== '') {
+                $data[$labelField] = Str::limit($labelValue, 100, '');
+            }
         }
 
         return $data;
@@ -369,12 +389,16 @@ class MetaCatalogProductSyncService
 
     private function dryRunProductSets(array $entries): array
     {
-        $sets = collect($this->categoryNamesFromEntries($entries))
-            ->map(fn (string $category) => [
+        $sets = collect($this->productSetDescriptorsFromEntries($entries))
+            ->map(fn (array $descriptor) => [
                 'id' => '',
-                'name' => $category,
+                'name' => $descriptor['name'],
+                'type' => $descriptor['type'],
+                'path' => $descriptor['path'],
+                'product_count' => (int) $descriptor['product_count'],
                 'action' => 'planned',
-                'filter' => $this->productSetFilter($category),
+                'filter' => $this->productSetFilter($descriptor),
+                'sort_orders' => $descriptor['sort_orders'],
             ])
             ->values()
             ->all();
@@ -392,9 +416,9 @@ class MetaCatalogProductSyncService
 
     private function syncProductSets(array $entries, ?callable $progress = null): array
     {
-        $categories = $this->categoryNamesFromEntries($entries);
+        $descriptors = $this->productSetDescriptorsFromEntries($entries);
         $result = [
-            'total_count' => count($categories),
+            'total_count' => count($descriptors),
             'created_count' => 0,
             'updated_count' => 0,
             'unchanged_count' => 0,
@@ -403,12 +427,12 @@ class MetaCatalogProductSyncService
             'errors' => [],
         ];
 
-        if (empty($categories)) {
+        if (empty($descriptors)) {
             return $result;
         }
 
         $this->reportProgress($progress, 'product_sets_fetch', 92, 'Dang lay danh sach Product Set hien co tren Meta...', [
-            'product_set_count' => count($categories),
+            'product_set_count' => count($descriptors),
         ]);
 
         try {
@@ -419,9 +443,10 @@ class MetaCatalogProductSyncService
                 : Str::limit($exception->getMessage(), 1000, '');
 
             return array_merge($result, [
-                'error_count' => count($categories),
-                'errors' => collect($categories)->map(fn (string $category) => [
-                    'name' => $category,
+                'error_count' => count($descriptors),
+                'errors' => collect($descriptors)->map(fn (array $descriptor) => [
+                    'name' => $descriptor['name'],
+                    'type' => $descriptor['type'],
                     'error' => $message,
                 ])->values()->all(),
             ]);
@@ -436,14 +461,14 @@ class MetaCatalogProductSyncService
             }
         }
 
-        $totalCategories = max(count($categories), 1);
-        foreach ($categories as $index => $category) {
-            $filter = $this->productSetFilter($category);
-            $key = $this->normalizeProductSetName($category);
+        $totalCategories = max(count($descriptors), 1);
+        foreach ($descriptors as $index => $descriptor) {
+            $filter = $this->productSetFilter($descriptor);
+            $key = $this->normalizeProductSetName((string) $descriptor['name']);
             $existingSet = $existingByName[$key] ?? null;
             $percent = 93 + (int) floor((($index + 1) / $totalCategories) * 5);
-            $this->reportProgress($progress, 'product_sets_sync', min(98, $percent), sprintf('Dang dong bo Product Set %d/%d...', $index + 1, count($categories)), [
-                'product_set_count' => count($categories),
+            $this->reportProgress($progress, 'product_sets_sync', min(98, $percent), sprintf('Dang dong bo Product Set %d/%d...', $index + 1, count($descriptors)), [
+                'product_set_count' => count($descriptors),
                 'product_set_create_count' => (int) $result['created_count'],
                 'product_set_update_count' => (int) $result['updated_count'],
                 'product_set_error_count' => (int) $result['error_count'],
@@ -451,9 +476,9 @@ class MetaCatalogProductSyncService
 
             try {
                 if ($existingSet) {
-                    $entry = $this->updateProductSetIfNeeded($existingSet, $category, $filter);
+                    $entry = $this->updateProductSetIfNeeded($existingSet, $descriptor, $filter);
                 } else {
-                    $entry = $this->createProductSet($category, $filter);
+                    $entry = $this->createProductSet($descriptor, $filter);
                 }
 
                 $action = (string) ($entry['action'] ?? 'unchanged');
@@ -472,14 +497,19 @@ class MetaCatalogProductSyncService
                     : Str::limit($exception->getMessage(), 1000, '');
                 $result['error_count']++;
                 $result['errors'][] = [
-                    'name' => $category,
+                    'name' => $descriptor['name'],
+                    'type' => $descriptor['type'],
                     'error' => $message,
                 ];
                 $result['sets'][] = [
                     'id' => (string) ($existingSet['id'] ?? ''),
-                    'name' => $category,
+                    'name' => $descriptor['name'],
+                    'type' => $descriptor['type'],
+                    'path' => $descriptor['path'],
+                    'product_count' => (int) $descriptor['product_count'],
                     'action' => 'error',
                     'filter' => $filter,
+                    'sort_orders' => $descriptor['sort_orders'],
                     'error' => $message,
                 ];
             }
@@ -526,8 +556,9 @@ class MetaCatalogProductSyncService
         return $sets;
     }
 
-    private function updateProductSetIfNeeded(array $existingSet, string $category, array $filter): array
+    private function updateProductSetIfNeeded(array $existingSet, array $descriptor, array $filter): array
     {
+        $category = (string) $descriptor['name'];
         $existingFilter = $this->normalizeProductSetFilter($existingSet['filter'] ?? []);
         $needsUpdate = $this->canonicalFilter($existingFilter) !== $this->canonicalFilter($filter)
             || trim((string) ($existingSet['name'] ?? '')) !== $category;
@@ -536,9 +567,13 @@ class MetaCatalogProductSyncService
             return [
                 'id' => (string) ($existingSet['id'] ?? ''),
                 'name' => $category,
+                'type' => $descriptor['type'],
+                'path' => $descriptor['path'],
                 'action' => 'unchanged',
                 'filter' => $filter,
-                'product_count' => (int) ($existingSet['product_count'] ?? 0),
+                'product_count' => (int) $descriptor['product_count'],
+                'meta_product_count' => (int) ($existingSet['product_count'] ?? 0),
+                'sort_orders' => $descriptor['sort_orders'],
             ];
         }
 
@@ -559,15 +594,20 @@ class MetaCatalogProductSyncService
         return [
             'id' => $productSetId,
             'name' => $category,
+            'type' => $descriptor['type'],
+            'path' => $descriptor['path'],
             'action' => 'updated',
             'filter' => $filter,
-            'product_count' => (int) ($existingSet['product_count'] ?? 0),
+            'product_count' => (int) $descriptor['product_count'],
+            'meta_product_count' => (int) ($existingSet['product_count'] ?? 0),
+            'sort_orders' => $descriptor['sort_orders'],
             'response' => $response->json() ?: [],
         ];
     }
 
-    private function createProductSet(string $category, array $filter): array
+    private function createProductSet(array $descriptor, array $filter): array
     {
+        $category = (string) $descriptor['name'];
         $response = $this->metaPostForm($this->endpoint('product_sets'), [
             'name' => $category,
             'filter' => json_encode($filter, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
@@ -582,39 +622,117 @@ class MetaCatalogProductSyncService
         return [
             'id' => (string) ($body['id'] ?? ''),
             'name' => $category,
+            'type' => $descriptor['type'],
+            'path' => $descriptor['path'],
             'action' => 'created',
             'filter' => $filter,
+            'product_count' => (int) $descriptor['product_count'],
+            'sort_orders' => $descriptor['sort_orders'],
             'response' => $body,
         ];
     }
 
-    private function categoryNamesFromEntries(array $entries): array
+    private function productSetDescriptorsFromEntries(array $entries): array
     {
-        $categories = [];
+        $descriptors = [];
         foreach ($entries as $entry) {
-            $category = trim((string) ($entry['custom_label_0'] ?? $entry['product_type'] ?? ''));
-            if ($category === '') {
-                $category = trim((string) ($entry['product_type'] ?? ''));
+            $productId = trim((string) ($entry['id'] ?? ''));
+            $sortOrder = (int) ($entry['_meta_sort_order'] ?? $entry['custom_label_3'] ?? 0);
+            $entrySets = (array) ($entry['_meta_product_sets'] ?? []);
+
+            if (empty($entrySets)) {
+                $directCategory = trim((string) ($entry['custom_label_0'] ?? ''));
+                $parentCategory = trim((string) ($entry['custom_label_1'] ?? ''));
+                $path = trim((string) ($entry['custom_label_2'] ?? $entry['product_type'] ?? $directCategory));
+                if ($parentCategory !== '') {
+                    $entrySets[] = [
+                        'name' => $parentCategory,
+                        'type' => 'parent',
+                        'path' => $parentCategory,
+                        'filter_field' => 'custom_label_1',
+                        'filter_value' => $parentCategory,
+                    ];
+                }
+                if ($directCategory !== '') {
+                    $entrySets[] = [
+                        'name' => $directCategory,
+                        'type' => $parentCategory !== '' && $parentCategory !== $directCategory ? 'child' : 'parent',
+                        'path' => $path,
+                        'filter_field' => $parentCategory !== '' && $parentCategory !== $directCategory ? 'custom_label_0' : 'custom_label_1',
+                        'filter_value' => $directCategory,
+                    ];
+                }
             }
 
-            $key = $this->normalizeProductSetName($category);
-            if ($key === '' || isset($categories[$key])) {
-                continue;
-            }
+            foreach ($entrySets as $entrySet) {
+                $name = trim((string) ($entrySet['name'] ?? ''));
+                $key = $this->normalizeProductSetName($name);
+                if ($key === '') {
+                    continue;
+                }
 
-            $categories[$key] = Str::limit($category, 255, '');
+                if (!isset($descriptors[$key])) {
+                    $descriptors[$key] = [
+                        'id' => (int) ($entrySet['id'] ?? 0),
+                        'name' => Str::limit($name, 255, ''),
+                        'type' => in_array((string) ($entrySet['type'] ?? ''), ['parent', 'child'], true) ? (string) $entrySet['type'] : 'parent',
+                        'path' => trim((string) ($entrySet['path'] ?? $name)),
+                        'filter_field' => trim((string) ($entrySet['filter_field'] ?? 'custom_label_0')),
+                        'filter_value' => trim((string) ($entrySet['filter_value'] ?? $name)),
+                        'product_count' => 0,
+                        'product_ids' => [],
+                        'sort_orders' => [],
+                    ];
+                }
+
+                if ($productId !== '' && !isset($descriptors[$key]['product_ids'][$productId])) {
+                    $descriptors[$key]['product_ids'][$productId] = true;
+                    $descriptors[$key]['product_count']++;
+                }
+
+                if ($productId !== '' && $sortOrder > 0) {
+                    $descriptors[$key]['sort_orders'][] = [
+                        'id' => $productId,
+                        'sort_order' => $sortOrder,
+                    ];
+                }
+            }
         }
 
-        return array_values($categories);
+        return collect($descriptors)
+            ->map(function (array $descriptor) {
+                unset($descriptor['product_ids']);
+                $descriptor['sort_orders'] = collect($descriptor['sort_orders'])
+                    ->sortBy('sort_order')
+                    ->values()
+                    ->all();
+
+                return $descriptor;
+            })
+            ->sortBy([
+                ['type', 'desc'],
+                ['name', 'asc'],
+            ])
+            ->values()
+            ->all();
     }
 
-    private function productSetFilter(string $category): array
+    private function productSetFilter(array $descriptor): array
     {
+        $category = (string) ($descriptor['filter_value'] ?? $descriptor['name'] ?? '');
+        $field = (string) ($descriptor['filter_field'] ?? 'custom_label_0');
+
+        if (($descriptor['type'] ?? '') === 'parent') {
+            return [
+                'or' => [
+                    ['custom_label_1' => ['eq' => $category]],
+                    ['custom_label_0' => ['eq' => $category]],
+                ],
+            ];
+        }
+
         return [
-            'or' => [
-                ['custom_label_0' => ['eq' => $category]],
-                ['product_type' => ['eq' => $category]],
-            ],
+            $field => ['eq' => $category],
         ];
     }
 

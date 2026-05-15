@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Models\Account;
+use App\Models\Category;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\SiteDomain;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -24,10 +26,16 @@ class MetaFeedService
         'brand',
         'product_type',
         'custom_label_0',
+        'custom_label_1',
+        'custom_label_2',
+        'custom_label_3',
+        'custom_label_4',
     ];
 
     private const BRAND = 'Gốm Đại Thành';
     private const DEFAULT_WEBSITE_URL = 'https://gomdaithanh.com';
+
+    private ?array $categoryMap = null;
 
     public function writeCsv($stream): void
     {
@@ -113,6 +121,7 @@ class MetaFeedService
                 'special_price_to',
                 'stock_quantity',
                 'status',
+                'sort_order',
             ])
             ->whereDoesntHave('parentConfigurable')
             ->with([
@@ -122,8 +131,8 @@ class MetaFeedService
                     ->orderBy('sort_order')
                     ->orderBy('id'),
                 'images.mediaAsset',
-                'category:id,name',
-                'categories:id,name',
+                'category:id,name,parent_id,order,status',
+                'categories:id,name,parent_id,order,status',
             ])
             ->orderBy('sort_order')
             ->orderByDesc('id');
@@ -137,7 +146,11 @@ class MetaFeedService
     {
         $title = $this->cleanText((string) $product->name, 150);
         $description = $this->descriptionForProduct($product);
-        $categoryName = $this->categoryNameForProduct($product);
+        $categoryMeta = $this->categoryMetaForProduct($product);
+        $categoryName = (string) ($categoryMeta['direct_name'] ?? '');
+        $parentCategoryName = (string) ($categoryMeta['parent_name'] ?? '');
+        $categoryPath = (string) ($categoryMeta['path'] ?? $categoryName);
+        $sortOrder = (int) ($categoryMeta['sort_order'] ?? 0);
         $primaryImage = $this->primaryImage($product);
         $imageLink = $this->imageUrl($primaryImage);
 
@@ -154,8 +167,16 @@ class MetaFeedService
             'link' => $this->productUrl($product),
             'image_link' => $imageLink,
             'brand' => $this->brand(),
-            'product_type' => $categoryName,
+            'product_type' => $categoryPath,
             'custom_label_0' => $categoryName,
+            'custom_label_1' => $parentCategoryName,
+            'custom_label_2' => $categoryPath,
+            'custom_label_3' => $sortOrder > 0 ? (string) $sortOrder : '',
+            'custom_label_4' => $sortOrder > 0 ? 'meta_sort_order:' . $sortOrder : '',
+            '_meta_sort_order' => $sortOrder,
+            '_meta_category_id' => (int) ($categoryMeta['direct_id'] ?? 0),
+            '_meta_parent_category_id' => (int) ($categoryMeta['parent_id'] ?? 0),
+            '_meta_product_sets' => (array) ($categoryMeta['product_sets'] ?? []),
             '_used_fallback_image' => false,
         ];
     }
@@ -220,18 +241,145 @@ class MetaFeedService
         return trim((string) config('meta_catalog.brand')) ?: self::BRAND;
     }
 
-    private function categoryNameForProduct(Product $product): string
+    private function categoryMetaForProduct(Product $product): array
     {
-        $category = $product->relationLoaded('category') ? $product->category : $product->category()->first();
-        $categoryName = $this->cleanText((string) ($category?->name ?? ''), 750);
+        $category = $this->primaryCategoryForProduct($product);
 
-        if ($categoryName !== '') {
-            return $categoryName;
+        if (!$category instanceof Category) {
+            return [
+                'direct_id' => 0,
+                'direct_name' => '',
+                'parent_id' => 0,
+                'parent_name' => '',
+                'path' => '',
+                'sort_order' => 0,
+                'product_sets' => [],
+            ];
         }
 
-        $categories = $product->relationLoaded('categories') ? $product->categories : $product->categories()->get();
+        $pathCategories = $this->categoryPath($category);
+        $directName = $this->cleanText((string) $category->name, 750);
+        $rootCategory = $pathCategories[0] ?? $category;
+        $parentName = $this->cleanText((string) ($rootCategory->name ?? $category->name), 750);
+        $path = collect($pathCategories)
+            ->map(fn (Category $pathCategory) => $this->cleanText((string) $pathCategory->name, 250))
+            ->filter()
+            ->implode(' > ');
+        $sortOrder = $this->categorySortOrderForProduct($product, (int) $category->id);
+        $hasParent = (int) ($category->parent_id ?? 0) > 0;
+        $productSets = [];
 
-        return $this->cleanText((string) ($categories->first()?->name ?? ''), 750);
+        foreach ($pathCategories as $index => $pathCategory) {
+            $name = $this->cleanText((string) $pathCategory->name, 250);
+            if ($name === '') {
+                continue;
+            }
+
+            $isDirect = (int) $pathCategory->id === (int) $category->id;
+            $productSets[] = [
+                'id' => (int) $pathCategory->id,
+                'name' => $name,
+                'type' => $isDirect && $hasParent ? 'child' : 'parent',
+                'path' => collect(array_slice($pathCategories, 0, $index + 1))
+                    ->map(fn (Category $pathCategory) => $this->cleanText((string) $pathCategory->name, 250))
+                    ->filter()
+                    ->implode(' > '),
+                'filter_field' => $isDirect && $hasParent ? 'custom_label_0' : 'custom_label_1',
+                'filter_value' => $name,
+                'sort_order' => $sortOrder,
+            ];
+        }
+
+        return [
+            'direct_id' => (int) $category->id,
+            'direct_name' => $directName,
+            'parent_id' => (int) ($rootCategory->id ?? $category->id),
+            'parent_name' => $parentName,
+            'path' => $path !== '' ? $path : $directName,
+            'sort_order' => $sortOrder,
+            'product_sets' => $productSets,
+        ];
+    }
+
+    private function primaryCategoryForProduct(Product $product): ?Category
+    {
+        $categories = $product->relationLoaded('categories') ? $product->categories : $product->categories()->get();
+        $category = $categories->first();
+
+        if ($category instanceof Category) {
+            return $category;
+        }
+
+        $category = $product->relationLoaded('category') ? $product->category : $product->category()->first();
+
+        return $category instanceof Category ? $category : null;
+    }
+
+    /**
+     * @return array<int, Category>
+     */
+    private function categoryPath(Category $category): array
+    {
+        $map = $this->categoryMap();
+        $path = [];
+        $current = $category;
+        $guard = 0;
+
+        while ($current instanceof Category && $guard < 20) {
+            array_unshift($path, $current);
+            $parentId = (int) ($current->parent_id ?? 0);
+            if ($parentId <= 0 || !isset($map[$parentId])) {
+                break;
+            }
+
+            $current = $map[$parentId];
+            $guard++;
+        }
+
+        return $path;
+    }
+
+    private function categorySortOrderForProduct(Product $product, int $categoryId): int
+    {
+        $categories = $product->relationLoaded('categories') ? $product->categories : $product->categories()->get();
+        $category = $categories->firstWhere('id', $categoryId);
+        $pivotSortOrder = $category?->pivot?->sort_order;
+
+        if ($pivotSortOrder !== null && is_numeric($pivotSortOrder)) {
+            return max(1, (int) $pivotSortOrder + 1);
+        }
+
+        $productSortOrder = $product->sort_order;
+        if ($productSortOrder !== null && is_numeric($productSortOrder)) {
+            return max(1, (int) $productSortOrder + 1);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @return array<int, Category>
+     */
+    private function categoryMap(): array
+    {
+        if ($this->categoryMap !== null) {
+            return $this->categoryMap;
+        }
+
+        $columns = ['id', 'account_id', 'name', 'parent_id', 'order', 'status'];
+        if (Schema::hasColumn('categories', 'site_domain_id')) {
+            $columns[] = 'site_domain_id';
+        }
+
+        $query = Category::withoutGlobalScope('account_id')
+            ->select($columns);
+
+        $this->scopeCategoriesToWebsiteDomain($query);
+
+        return $this->categoryMap = $query
+            ->get()
+            ->keyBy(fn (Category $category) => (int) $category->id)
+            ->all();
     }
 
     private function scopeToWebsiteDomain(Builder $query): void
@@ -265,6 +413,42 @@ class MetaFeedService
 
         if ($account) {
             $query->where('products.account_id', (int) $account->id);
+        }
+    }
+
+    private function scopeCategoriesToWebsiteDomain(Builder $query): void
+    {
+        $domain = $this->websiteDomain();
+        if ($domain === '') {
+            return;
+        }
+
+        $siteDomain = SiteDomain::query()
+            ->where('domain', $domain)
+            ->where('is_active', true)
+            ->first();
+
+        if ($siteDomain) {
+            $query->where('categories.account_id', (int) $siteDomain->account_id);
+
+            if (Schema::hasColumn('categories', 'site_domain_id')) {
+                $query->where(function (Builder $domainQuery) use ($siteDomain) {
+                    $domainQuery
+                        ->whereNull('categories.site_domain_id')
+                        ->orWhere('categories.site_domain_id', (int) $siteDomain->id);
+                });
+            }
+
+            return;
+        }
+
+        $account = Account::query()
+            ->where('domain', $domain)
+            ->orWhere('subdomain', $domain)
+            ->first();
+
+        if ($account) {
+            $query->where('categories.account_id', (int) $account->id);
         }
     }
 

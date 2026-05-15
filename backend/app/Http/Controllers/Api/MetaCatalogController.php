@@ -194,7 +194,7 @@ class MetaCatalogController extends Controller
             }
 
             if ($format === 'csv') {
-                foreach (['id', 'title', 'price', 'link', 'image_link', 'product_type', 'custom_label_0'] as $field) {
+                foreach (['id', 'title', 'price', 'link', 'image_link', 'product_type', 'custom_label_0', 'custom_label_1', 'custom_label_2', 'custom_label_3', 'custom_label_4'] as $field) {
                     if (!Str::contains(Str::lower(substr($body, 0, 1000)), $field)) {
                         $errors[] = "CSV missing {$field}";
                     }
@@ -308,6 +308,7 @@ class MetaCatalogController extends Controller
                 'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
                 'product_set_unchanged_count' => (int) ($result['product_set_unchanged_count'] ?? 0),
                 'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
+                'product_set_sort_note' => $result['product_set_sort_note'] ?? null,
                 'details' => $result['details'] ?? null,
                 'progress' => [
                     'phase' => 'complete',
@@ -357,6 +358,7 @@ class MetaCatalogController extends Controller
         $details['product_set_update_count'] = (int) ($result['product_set_update_count'] ?? 0);
         $details['product_set_unchanged_count'] = (int) ($result['product_set_unchanged_count'] ?? 0);
         $details['product_set_error_count'] = (int) ($result['product_set_error_count'] ?? 0);
+        $details['product_set_sort_note'] = $result['product_set_sort_note'] ?? null;
         $details['details'] = $result['details'] ?? null;
         $details['progress'] = [
             'phase' => $status === 'success' ? 'complete' : 'complete_with_errors',

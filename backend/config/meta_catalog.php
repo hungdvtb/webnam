@@ -35,6 +35,7 @@ return [
 
     'batch_size' => (int) env('META_CATALOG_BATCH_SIZE', 500),
     'catalog_page_limit' => (int) env('META_CATALOG_PAGE_LIMIT', 1000),
+    'product_set_page_limit' => (int) env('META_CATALOG_PRODUCT_SET_PAGE_LIMIT', 1000),
     'max_catalog_pages' => (int) env('META_CATALOG_MAX_PAGES', 1000),
 
     'poll_status' => (bool) $pollStatus,

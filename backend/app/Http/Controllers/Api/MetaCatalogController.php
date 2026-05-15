@@ -301,6 +301,13 @@ class MetaCatalogController extends Controller
                 'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
                 'fallback_entries' => $fallbackEntries,
                 'batches' => $result['batches'] ?? [],
+                'product_sets' => $result['product_sets'] ?? [],
+                'product_set_errors' => $result['product_set_errors'] ?? [],
+                'product_set_count' => (int) ($result['product_set_count'] ?? 0),
+                'product_set_create_count' => (int) ($result['product_set_create_count'] ?? 0),
+                'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
+                'product_set_unchanged_count' => (int) ($result['product_set_unchanged_count'] ?? 0),
+                'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
                 'details' => $result['details'] ?? null,
                 'progress' => [
                     'phase' => 'complete',
@@ -312,6 +319,10 @@ class MetaCatalogController extends Controller
                         'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
                         'invalid_count' => (int) ($result['invalid_count'] ?? 0),
                         'request_count' => (int) ($result['request_count'] ?? $result['valid_count'] ?? 0),
+                        'product_set_count' => (int) ($result['product_set_count'] ?? 0),
+                        'product_set_create_count' => (int) ($result['product_set_create_count'] ?? 0),
+                        'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
+                        'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
                     ],
                     'updated_at' => now()->toIso8601String(),
                 ],
@@ -339,6 +350,13 @@ class MetaCatalogController extends Controller
         $details['skipped_count'] = (int) ($result['skipped_count'] ?? count($skippedEntries));
         $details['fallback_entries'] = $fallbackEntries;
         $details['batches'] = $result['batches'] ?? [];
+        $details['product_sets'] = $result['product_sets'] ?? [];
+        $details['product_set_errors'] = $result['product_set_errors'] ?? [];
+        $details['product_set_count'] = (int) ($result['product_set_count'] ?? 0);
+        $details['product_set_create_count'] = (int) ($result['product_set_create_count'] ?? 0);
+        $details['product_set_update_count'] = (int) ($result['product_set_update_count'] ?? 0);
+        $details['product_set_unchanged_count'] = (int) ($result['product_set_unchanged_count'] ?? 0);
+        $details['product_set_error_count'] = (int) ($result['product_set_error_count'] ?? 0);
         $details['details'] = $result['details'] ?? null;
         $details['progress'] = [
             'phase' => $status === 'success' ? 'complete' : 'complete_with_errors',
@@ -354,6 +372,10 @@ class MetaCatalogController extends Controller
                 'delete_count' => (int) ($result['delete_count'] ?? 0),
                 'request_count' => (int) ($result['request_count'] ?? $result['valid_count'] ?? 0),
                 'batch_count' => (int) ($result['batch_count'] ?? 0),
+                'product_set_count' => (int) ($result['product_set_count'] ?? 0),
+                'product_set_create_count' => (int) ($result['product_set_create_count'] ?? 0),
+                'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
+                'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
             ],
             'updated_at' => now()->toIso8601String(),
         ];
@@ -465,7 +487,6 @@ class MetaCatalogController extends Controller
 
         $updates = [
             'summary' => $normalizedProgress['message'] . ' (' . $percent . '%)',
-            'details' => $details,
         ];
 
         if (array_key_exists('total_products', $context)) {
@@ -493,6 +514,18 @@ class MetaCatalogController extends Controller
         if (array_key_exists('fallback_count', $context)) {
             $updates['fallback_count'] = (int) $context['fallback_count'];
         }
+        foreach ([
+            'product_set_count',
+            'product_set_create_count',
+            'product_set_update_count',
+            'product_set_unchanged_count',
+            'product_set_error_count',
+        ] as $key) {
+            if (array_key_exists($key, $context)) {
+                $details[$key] = (int) $context[$key];
+            }
+        }
+        $updates['details'] = $details;
 
         $log->fill($updates)->save();
     }
@@ -538,7 +571,7 @@ class MetaCatalogController extends Controller
     private function summaryFor(string $operation, string $status, array $result): string
     {
         return sprintf(
-            '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d, fallback %d.',
+            '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d, fallback %d, product_sets %d created/%d updated/%d errors.',
             $operation,
             $status,
             (int) ($result['feed_count'] ?? 0),
@@ -548,7 +581,10 @@ class MetaCatalogController extends Controller
             (int) ($result['create_count'] ?? 0),
             (int) ($result['update_count'] ?? 0),
             (int) ($result['delete_count'] ?? 0),
-            (int) ($result['fallback_count'] ?? count((array) ($result['fallback_entries'] ?? [])))
+            (int) ($result['fallback_count'] ?? count((array) ($result['fallback_entries'] ?? []))),
+            (int) ($result['product_set_create_count'] ?? 0),
+            (int) ($result['product_set_update_count'] ?? 0),
+            (int) ($result['product_set_error_count'] ?? 0)
         );
     }
 
@@ -568,6 +604,11 @@ class MetaCatalogController extends Controller
             'update_count' => $log->update_count,
             'delete_count' => $log->delete_count,
             'fallback_count' => $log->fallback_count,
+            'product_set_count' => (int) data_get($log->details, 'product_set_count', count((array) data_get($log->details, 'product_sets', []))),
+            'product_set_create_count' => (int) data_get($log->details, 'product_set_create_count', 0),
+            'product_set_update_count' => (int) data_get($log->details, 'product_set_update_count', 0),
+            'product_set_unchanged_count' => (int) data_get($log->details, 'product_set_unchanged_count', 0),
+            'product_set_error_count' => (int) data_get($log->details, 'product_set_error_count', count((array) data_get($log->details, 'product_set_errors', []))),
             'duration_ms' => $log->duration_ms,
             'summary' => $log->summary,
             'error_message' => $log->error_message,

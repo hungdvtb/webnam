@@ -88,6 +88,10 @@ class MetaCatalogProductSyncService
             }
         }
         $batchErrorCount = $this->countBatchErrors($batches);
+        $productSetResult = $dryRun
+            ? $this->dryRunProductSets($validEntries)
+            : $this->syncProductSets($validEntries, $progress);
+        $productSetErrorCount = (int) ($productSetResult['error_count'] ?? 0);
 
         $result = [
             'dry_run' => $dryRun,
@@ -95,7 +99,7 @@ class MetaCatalogProductSyncService
             'feed_count' => (int) ($snapshot['total_count'] ?? count($entries)),
             'valid_count' => count($validEntries),
             'skipped_count' => count($skippedEntries),
-            'invalid_count' => $batchErrorCount,
+            'invalid_count' => $batchErrorCount + $productSetErrorCount,
             'existing_count' => count($existingRetailerIds),
             'create_count' => $this->countByMethod($upsertRequests, 'CREATE'),
             'update_count' => $this->countByMethod($upsertRequests, 'UPDATE'),
@@ -108,6 +112,13 @@ class MetaCatalogProductSyncService
             'fallback_entries' => $fallbackEntries,
             'batches' => $batches,
             'batch_error_count' => $batchErrorCount,
+            'product_set_count' => (int) ($productSetResult['total_count'] ?? 0),
+            'product_set_create_count' => (int) ($productSetResult['created_count'] ?? 0),
+            'product_set_update_count' => (int) ($productSetResult['updated_count'] ?? 0),
+            'product_set_unchanged_count' => (int) ($productSetResult['unchanged_count'] ?? 0),
+            'product_set_error_count' => $productSetErrorCount,
+            'product_sets' => (array) ($productSetResult['sets'] ?? []),
+            'product_set_errors' => (array) ($productSetResult['errors'] ?? []),
         ];
 
         $this->reportProgress($progress, 'complete', 100, $dryRun ? 'Dry-run hoan tat.' : 'Dong bo Meta hoan tat.', [
@@ -120,6 +131,10 @@ class MetaCatalogProductSyncService
             'delete_count' => (int) ($result['delete_count'] ?? 0),
             'request_count' => (int) ($result['request_count'] ?? 0),
             'batch_count' => (int) ($result['batch_count'] ?? 0),
+            'product_set_count' => (int) ($result['product_set_count'] ?? 0),
+            'product_set_create_count' => (int) ($result['product_set_create_count'] ?? 0),
+            'product_set_update_count' => (int) ($result['product_set_update_count'] ?? 0),
+            'product_set_error_count' => (int) ($result['product_set_error_count'] ?? 0),
         ]);
 
         return $result;
@@ -352,6 +367,292 @@ class MetaCatalogProductSyncService
         return $count;
     }
 
+    private function dryRunProductSets(array $entries): array
+    {
+        $sets = collect($this->categoryNamesFromEntries($entries))
+            ->map(fn (string $category) => [
+                'id' => '',
+                'name' => $category,
+                'action' => 'planned',
+                'filter' => $this->productSetFilter($category),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'total_count' => count($sets),
+            'created_count' => 0,
+            'updated_count' => 0,
+            'unchanged_count' => 0,
+            'error_count' => 0,
+            'sets' => $sets,
+            'errors' => [],
+        ];
+    }
+
+    private function syncProductSets(array $entries, ?callable $progress = null): array
+    {
+        $categories = $this->categoryNamesFromEntries($entries);
+        $result = [
+            'total_count' => count($categories),
+            'created_count' => 0,
+            'updated_count' => 0,
+            'unchanged_count' => 0,
+            'error_count' => 0,
+            'sets' => [],
+            'errors' => [],
+        ];
+
+        if (empty($categories)) {
+            return $result;
+        }
+
+        $this->reportProgress($progress, 'product_sets_fetch', 92, 'Dang lay danh sach Product Set hien co tren Meta...', [
+            'product_set_count' => count($categories),
+        ]);
+
+        try {
+            $existingSets = $this->fetchProductSets($progress);
+        } catch (Throwable $exception) {
+            $message = $exception instanceof MetaCatalogProductSyncException
+                ? $exception->getMessage()
+                : Str::limit($exception->getMessage(), 1000, '');
+
+            return array_merge($result, [
+                'error_count' => count($categories),
+                'errors' => collect($categories)->map(fn (string $category) => [
+                    'name' => $category,
+                    'error' => $message,
+                ])->values()->all(),
+            ]);
+        }
+
+        $existingByName = [];
+        foreach ($existingSets as $existingSet) {
+            $name = trim((string) ($existingSet['name'] ?? ''));
+            $key = $this->normalizeProductSetName($name);
+            if ($key !== '' && !isset($existingByName[$key])) {
+                $existingByName[$key] = $existingSet;
+            }
+        }
+
+        $totalCategories = max(count($categories), 1);
+        foreach ($categories as $index => $category) {
+            $filter = $this->productSetFilter($category);
+            $key = $this->normalizeProductSetName($category);
+            $existingSet = $existingByName[$key] ?? null;
+            $percent = 93 + (int) floor((($index + 1) / $totalCategories) * 5);
+            $this->reportProgress($progress, 'product_sets_sync', min(98, $percent), sprintf('Dang dong bo Product Set %d/%d...', $index + 1, count($categories)), [
+                'product_set_count' => count($categories),
+                'product_set_create_count' => (int) $result['created_count'],
+                'product_set_update_count' => (int) $result['updated_count'],
+                'product_set_error_count' => (int) $result['error_count'],
+            ]);
+
+            try {
+                if ($existingSet) {
+                    $entry = $this->updateProductSetIfNeeded($existingSet, $category, $filter);
+                } else {
+                    $entry = $this->createProductSet($category, $filter);
+                }
+
+                $action = (string) ($entry['action'] ?? 'unchanged');
+                if ($action === 'created') {
+                    $result['created_count']++;
+                } elseif ($action === 'updated') {
+                    $result['updated_count']++;
+                } else {
+                    $result['unchanged_count']++;
+                }
+
+                $result['sets'][] = $entry;
+            } catch (Throwable $exception) {
+                $message = $exception instanceof MetaCatalogProductSyncException
+                    ? $exception->getMessage()
+                    : Str::limit($exception->getMessage(), 1000, '');
+                $result['error_count']++;
+                $result['errors'][] = [
+                    'name' => $category,
+                    'error' => $message,
+                ];
+                $result['sets'][] = [
+                    'id' => (string) ($existingSet['id'] ?? ''),
+                    'name' => $category,
+                    'action' => 'error',
+                    'filter' => $filter,
+                    'error' => $message,
+                ];
+            }
+        }
+
+        return $result;
+    }
+
+    private function fetchProductSets(?callable $progress = null): array
+    {
+        $url = $this->endpoint('product_sets');
+        $query = [
+            'fields' => 'id,name,filter,product_count',
+            'limit' => max(min((int) config('meta_catalog.product_set_page_limit', 1000), 5000), 1),
+        ];
+        $sets = [];
+        $page = 0;
+        $maxPages = max((int) config('meta_catalog.max_catalog_pages', 1000), 1);
+
+        while ($url !== '' && $page < $maxPages) {
+            $response = $this->metaGet($url, $query);
+            if ($response->failed()) {
+                throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the product set list request.'));
+            }
+
+            $body = $response->json() ?: [];
+            foreach ((array) ($body['data'] ?? []) as $item) {
+                $sets[] = [
+                    'id' => (string) ($item['id'] ?? ''),
+                    'name' => (string) ($item['name'] ?? ''),
+                    'filter' => $this->normalizeProductSetFilter($item['filter'] ?? []),
+                    'product_count' => (int) ($item['product_count'] ?? 0),
+                ];
+            }
+
+            $url = trim((string) data_get($body, 'paging.next', ''));
+            $query = [];
+            $page++;
+            $this->reportProgress($progress, 'product_sets_fetch', min(94, 92 + $page), sprintf('Dang lay Product Set Meta: trang %d, da co %d nhom...', $page, count($sets)), [
+                'existing_product_set_count' => count($sets),
+            ]);
+        }
+
+        return $sets;
+    }
+
+    private function updateProductSetIfNeeded(array $existingSet, string $category, array $filter): array
+    {
+        $existingFilter = $this->normalizeProductSetFilter($existingSet['filter'] ?? []);
+        $needsUpdate = $this->canonicalFilter($existingFilter) !== $this->canonicalFilter($filter)
+            || trim((string) ($existingSet['name'] ?? '')) !== $category;
+
+        if (!$needsUpdate) {
+            return [
+                'id' => (string) ($existingSet['id'] ?? ''),
+                'name' => $category,
+                'action' => 'unchanged',
+                'filter' => $filter,
+                'product_count' => (int) ($existingSet['product_count'] ?? 0),
+            ];
+        }
+
+        $productSetId = trim((string) ($existingSet['id'] ?? ''));
+        if ($productSetId === '') {
+            throw new MetaCatalogProductSyncException('Existing Product Set is missing id.');
+        }
+
+        $response = $this->metaPostForm($this->nodeEndpoint($productSetId), [
+            'name' => $category,
+            'filter' => json_encode($filter, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ]);
+
+        if ($response->failed()) {
+            throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the product set update request.'));
+        }
+
+        return [
+            'id' => $productSetId,
+            'name' => $category,
+            'action' => 'updated',
+            'filter' => $filter,
+            'product_count' => (int) ($existingSet['product_count'] ?? 0),
+            'response' => $response->json() ?: [],
+        ];
+    }
+
+    private function createProductSet(string $category, array $filter): array
+    {
+        $response = $this->metaPostForm($this->endpoint('product_sets'), [
+            'name' => $category,
+            'filter' => json_encode($filter, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ]);
+
+        if ($response->failed()) {
+            throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the product set create request.'));
+        }
+
+        $body = $response->json() ?: [];
+
+        return [
+            'id' => (string) ($body['id'] ?? ''),
+            'name' => $category,
+            'action' => 'created',
+            'filter' => $filter,
+            'response' => $body,
+        ];
+    }
+
+    private function categoryNamesFromEntries(array $entries): array
+    {
+        $categories = [];
+        foreach ($entries as $entry) {
+            $category = trim((string) ($entry['custom_label_0'] ?? $entry['product_type'] ?? ''));
+            if ($category === '') {
+                $category = trim((string) ($entry['product_type'] ?? ''));
+            }
+
+            $key = $this->normalizeProductSetName($category);
+            if ($key === '' || isset($categories[$key])) {
+                continue;
+            }
+
+            $categories[$key] = Str::limit($category, 255, '');
+        }
+
+        return array_values($categories);
+    }
+
+    private function productSetFilter(string $category): array
+    {
+        return [
+            'or' => [
+                ['custom_label_0' => ['eq' => $category]],
+                ['product_type' => ['eq' => $category]],
+            ],
+        ];
+    }
+
+    private function normalizeProductSetName(string $name): string
+    {
+        return Str::lower(trim(preg_replace('/\s+/u', ' ', $name) ?: ''));
+    }
+
+    private function normalizeProductSetFilter(mixed $filter): array
+    {
+        if (is_string($filter)) {
+            $decoded = json_decode($filter, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return is_array($filter) ? $filter : [];
+    }
+
+    private function canonicalFilter(array $filter): string
+    {
+        $this->sortFilterRecursive($filter);
+
+        return json_encode($filter, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '';
+    }
+
+    private function sortFilterRecursive(array &$value): void
+    {
+        foreach ($value as &$child) {
+            if (is_array($child)) {
+                $this->sortFilterRecursive($child);
+            }
+        }
+
+        if (!array_is_list($value)) {
+            ksort($value);
+        }
+    }
+
     private function parsePrice(string $value): array
     {
         $value = trim($value);
@@ -566,6 +867,16 @@ class MetaCatalogProductSyncService
         }
 
         return 'https://graph.facebook.com/' . trim($version, '/') . '/' . rawurlencode($catalogId) . '/' . ltrim($path, '/');
+    }
+
+    private function nodeEndpoint(string $id): string
+    {
+        $version = trim((string) config('meta_catalog.graph_api_version', 'v25.0')) ?: 'v25.0';
+        if (!str_starts_with($version, 'v')) {
+            $version = 'v' . $version;
+        }
+
+        return 'https://graph.facebook.com/' . trim($version, '/') . '/' . rawurlencode($id);
     }
 
     private function accessToken(): string

@@ -12,9 +12,9 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@master
         with:
-          host: 150.95.113.192
-          port: 22
-          username: hosting
+          host: ${{ secrets.HOST }}
+          port: 2266
+          username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd /www/webname

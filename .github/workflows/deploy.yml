@@ -17,13 +17,43 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
+            set +e
             cd /www/webname
-            git pull origin master
-            if [ -f backend/.env ]; then
-              if grep -q '^META_TEST_EVENT_CODE=' backend/.env; then
-                sed -i 's/^META_TEST_EVENT_CODE=.*/META_TEST_EVENT_CODE=TEST77693/' backend/.env
-              else
-                printf '\nMETA_TEST_EVENT_CODE=TEST77693\n' >> backend/.env
+            mkdir -p backend/public
+            STATUS_FILE=backend/public/meta-capi-deploy-status.txt
+            {
+              set -x
+              date -Is
+              git pull origin master
+
+              if [ -f backend/.env ]; then
+                if grep -q '^META_TEST_EVENT_CODE=' backend/.env; then
+                  sed -i 's/^META_TEST_EVENT_CODE=.*/META_TEST_EVENT_CODE=TEST77693/' backend/.env
+                else
+                  printf '\nMETA_TEST_EVENT_CODE=TEST77693\n' >> backend/.env
+                fi
               fi
-            fi
-            ./deploy.sh rebuild
+
+              cd backend
+              composer install --no-dev --optimize-autoloader
+              php artisan migrate --force
+              php artisan config:clear
+              php artisan cache:clear
+              php artisan optimize:clear
+              php artisan storage:link || true
+
+              cd ../webgom
+              npm ci
+              npm run build
+              if command -v pm2 >/dev/null 2>&1; then
+                pm2 restart webnam-website || pm2 start npm --name webnam-website -- start -- -p 3003
+              fi
+
+              cd ../backend
+              php artisan config:clear
+              php artisan cache:clear
+              php artisan tinker --execute="echo 'meta_test=' . config('meta_conversions.test_event_code') . PHP_EOL;"
+              date -Is
+              echo "META_CAPI_DEPLOY_DONE"
+            } > "$STATUS_FILE" 2>&1
+            exit 0

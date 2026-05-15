@@ -108,7 +108,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/settings', [\App\Http\Controllers\Api\MetaCatalogController::class, 'settings']);
         Route::put('/settings', [\App\Http\Controllers\Api\MetaCatalogController::class, 'updateSettings']);
         Route::post('/dry-run', [\App\Http\Controllers\Api\MetaCatalogController::class, 'dryRun']);
+        Route::post('/sync', [\App\Http\Controllers\Api\MetaCatalogController::class, 'syncNow']);
         Route::post('/sync-now', [\App\Http\Controllers\Api\MetaCatalogController::class, 'syncNow']);
+        Route::post('/feed-check', [\App\Http\Controllers\Api\MetaCatalogController::class, 'feedCheck']);
         Route::post('/feed/{format}/check', [\App\Http\Controllers\Api\MetaCatalogController::class, 'checkFeed'])->where('format', 'csv|xml');
         Route::get('/logs', [\App\Http\Controllers\Api\MetaCatalogController::class, 'logs']);
     });

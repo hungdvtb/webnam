@@ -204,6 +204,11 @@ class MetaCatalogController extends Controller
         }
     }
 
+    public function feedCheck(Request $request)
+    {
+        return $this->checkFeed($request, (string) $request->input('format', 'csv'));
+    }
+
     public function logs(Request $request)
     {
         $accountId = $this->resolveAccountId($request);

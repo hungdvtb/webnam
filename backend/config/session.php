@@ -2,6 +2,20 @@
 
 use Illuminate\Support\Str;
 
+$configuredSessionDomain = env('SESSION_DOMAIN');
+$sessionDomainHosts = array_filter(array_map(
+    static fn ($url) => parse_url((string) $url, PHP_URL_HOST) ?: (string) $url,
+    [
+        env('APP_URL'),
+        env('FRONTEND_URL'),
+        env('FRONTEND_WEBSITE_URL'),
+    ]
+));
+
+$defaultSessionDomain = collect($sessionDomainHosts)->contains(
+    static fn ($host) => Str::endsWith(Str::lower((string) $host), 'gomdaithanh.com')
+) ? '.gomdaithanh.com' : null;
+
 return [
 
     /*
@@ -156,7 +170,7 @@ return [
     |
     */
 
-    'domain' => env('SESSION_DOMAIN'),
+    'domain' => $configuredSessionDomain ?: $defaultSessionDomain,
 
     /*
     |--------------------------------------------------------------------------

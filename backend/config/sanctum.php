@@ -2,6 +2,16 @@
 
 use Laravel\Sanctum\Sanctum;
 
+$splitCsv = static function (?string $value): array {
+    return array_values(array_filter(
+        array_map(
+            static fn ($item) => trim((string) $item, " \t\n\r\0\x0B,"),
+            explode(',', (string) $value)
+        ),
+        static fn ($item) => $item !== ''
+    ));
+};
+
 return [
 
     /*
@@ -15,12 +25,29 @@ return [
     |
     */
 
-    'stateful' => explode(',', env('SANCTUM_STATEFUL_DOMAINS', sprintf(
-        '%s%s',
-        'localhost,localhost:3000,localhost:3003,127.0.0.1,127.0.0.1:3000,127.0.0.1:3003,127.0.0.1:8000,::1',
-        Sanctum::currentApplicationUrlWithPort(),
+    'stateful' => array_values(array_unique(array_filter(array_map(
+        static fn ($item) => trim((string) $item, " \t\n\r\0\x0B,"),
+        array_merge(
+        [
+            'admin.gomdaithanh.com',
+            'gomdaithanh.com',
+            'www.gomdaithanh.com',
+            'localhost',
+            'localhost:3000',
+            'localhost:3003',
+            'localhost:5173',
+            '127.0.0.1',
+            '127.0.0.1:3000',
+            '127.0.0.1:3003',
+            '127.0.0.1:5173',
+            '127.0.0.1:8000',
+            '::1',
+        ],
+        $splitCsv(env('SANCTUM_STATEFUL_DOMAINS', '')),
+        [Sanctum::currentApplicationUrlWithPort()]
         // Sanctum::currentRequestHost(),
-    ))),
+        )
+    )))),
 
     /*
     |--------------------------------------------------------------------------

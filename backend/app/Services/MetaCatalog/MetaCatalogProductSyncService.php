@@ -3,6 +3,7 @@
 namespace App\Services\MetaCatalog;
 
 use App\Services\MetaFeedService;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -383,7 +384,7 @@ class MetaCatalogProductSyncService
         $maxPages = max((int) config('meta_catalog.max_catalog_pages', 1000), 1);
 
         while ($url !== '' && $page < $maxPages) {
-            $response = $this->request()->get($url, $query);
+            $response = $this->metaGet($url, $query);
             if ($response->failed()) {
                 throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the product list request.'));
             }
@@ -419,11 +420,9 @@ class MetaCatalogProductSyncService
             ];
         }
 
-        $response = $this->request()
-            ->asForm()
-            ->post($this->endpoint('batch'), [
-                'requests' => json_encode($requests, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
-            ]);
+        $response = $this->metaPostForm($this->endpoint('batch'), [
+            'requests' => json_encode($requests, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ]);
 
         if ($response->failed()) {
             throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the batch request.'));
@@ -479,7 +478,7 @@ class MetaCatalogProductSyncService
         $lastBody = [];
 
         for ($attempt = 1; $attempt <= $attempts; $attempt++) {
-            $response = $this->request()->get($this->endpoint('check_batch_request_status'), [
+            $response = $this->metaGet($this->endpoint('check_batch_request_status'), [
                 'handle' => $handle,
                 'load_ids_of_invalid_requests' => true,
             ]);
@@ -523,11 +522,35 @@ class MetaCatalogProductSyncService
     {
         return Http::withToken($this->accessToken())
             ->acceptJson()
+            ->retry(
+                $this->retryTimes(),
+                max((int) config('meta_catalog.retry_sleep_ms', 2000), 0),
+                null,
+                false
+            )
             ->timeout(max((int) config('meta_catalog.timeout', 60), 1))
             ->connectTimeout(max((int) config('meta_catalog.connect_timeout', 15), 1))
             ->withOptions([
                 'verify' => (bool) config('meta_catalog.verify_ssl', true),
             ]);
+    }
+
+    private function metaGet(string $url, array $query = []): Response
+    {
+        try {
+            return $this->request()->get($url, $query);
+        } catch (ConnectionException $exception) {
+            throw new MetaCatalogProductSyncException($this->connectionErrorMessage($exception), previous: $exception);
+        }
+    }
+
+    private function metaPostForm(string $url, array $payload): Response
+    {
+        try {
+            return $this->request()->asForm()->post($url, $payload);
+        } catch (ConnectionException $exception) {
+            throw new MetaCatalogProductSyncException($this->connectionErrorMessage($exception), previous: $exception);
+        }
     }
 
     private function endpoint(string $path): string
@@ -598,5 +621,25 @@ class MetaCatalogProductSyncService
             ?: $response->json('error')
             ?: $response->body()
             ?: $fallback;
+    }
+
+    private function connectionErrorMessage(ConnectionException $exception): string
+    {
+        $connectTimeout = max((int) config('meta_catalog.connect_timeout', 15), 1);
+        $timeout = max((int) config('meta_catalog.timeout', 60), 1);
+        $attempts = $this->retryTimes();
+
+        return sprintf(
+            'Server khong ket noi duoc Meta Graph API (graph.facebook.com:443) sau %d lan thu. Kiem tra hosting/firewall/DNS outbound HTTPS. Timeout hien tai: connect %ds, request %ds. Chi tiet: %s',
+            $attempts,
+            $connectTimeout,
+            $timeout,
+            Str::limit($exception->getMessage(), 500, '')
+        );
+    }
+
+    private function retryTimes(): int
+    {
+        return max((int) config('meta_catalog.retry_times', 3), 1);
     }
 }

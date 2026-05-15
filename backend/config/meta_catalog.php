@@ -43,5 +43,7 @@ return [
 
     'timeout' => (int) env('META_CATALOG_TIMEOUT', 60),
     'connect_timeout' => (int) env('META_CATALOG_CONNECT_TIMEOUT', 15),
+    'retry_times' => (int) env('META_CATALOG_RETRY_TIMES', 3),
+    'retry_sleep_ms' => (int) env('META_CATALOG_RETRY_SLEEP_MS', 2000),
     'verify_ssl' => (bool) $verifySsl,
 ];

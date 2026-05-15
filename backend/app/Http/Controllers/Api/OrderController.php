@@ -12,6 +12,7 @@ use App\Models\OrderItem;
 use App\Models\Customer;
 use App\Models\InventoryDocument;
 use App\Models\Invoice;
+use App\Models\Lead;
 use App\Models\OrderStatus;
 use App\Models\Product;
 use App\Models\QuoteTemplate;
@@ -118,6 +119,41 @@ class OrderController extends Controller
         'khac' => 'Khác',
     ];
 
+    private const DEFAULT_MANUAL_ORDER_SOURCE = 'FB';
+    private const UNKNOWN_ORDER_SOURCE = 'Chua ro';
+    private const ORDER_SOURCE_ALIASES = [
+        'fb' => 'FB',
+        'facebook' => 'FB',
+        'facebook ads' => 'FB',
+        'facebook ad' => 'FB',
+        'fb ads' => 'FB',
+        'meta' => 'FB',
+        'messenger' => 'FB',
+        'gg' => 'GG',
+        'google' => 'GG',
+        'google ads' => 'GG',
+        'google ad' => 'GG',
+        'googleads' => 'GG',
+        'adwords' => 'GG',
+        'website' => 'Website',
+        'web' => 'Website',
+        'site' => 'Website',
+        'direct' => 'Website',
+        'website order' => 'Website',
+        'website lead' => 'Website',
+        'zalo' => 'Zalo',
+        'zalo oa' => 'Zalo',
+        'tiktok' => 'Tiktok',
+        'tik tok' => 'Tiktok',
+        'khach cu' => 'Khach cu',
+        'customer old' => 'Khach cu',
+        'old customer' => 'Khach cu',
+        'repeat customer' => 'Khach cu',
+        'chua ro' => 'Chua ro',
+        'unknown' => 'Chua ro',
+        'none' => 'Chua ro',
+    ];
+
     private const OUTSIDE_DELIVERY_TRACKING_PREFIX = 'shipngoai';
     private const OUTSIDE_DELIVERY_TRACKING_SEQUENCE_START = 100;
     private const QUICK_DISPATCH_EXPORT_NOTE_PREFIX = 'Tu tao tu van chuyen';
@@ -129,6 +165,51 @@ class OrderController extends Controller
         protected OrderInventorySlipService $orderInventorySlipService,
         protected ShipmentStatusSyncService $shipmentStatusSyncService,
     ) {
+    }
+
+    private function normalizeOrderSourceValue(mixed $source, ?string $fallback = self::UNKNOWN_ORDER_SOURCE): ?string
+    {
+        $rawValue = trim((string) ($source ?? ''));
+
+        if ($rawValue === '') {
+            return $fallback;
+        }
+
+        $sourceKey = strtolower(Str::ascii($rawValue));
+        $sourceKey = preg_replace('/[^a-z0-9]+/', ' ', $sourceKey) ?? $sourceKey;
+        $sourceKey = trim(preg_replace('/\s+/', ' ', $sourceKey) ?? $sourceKey);
+
+        return self::ORDER_SOURCE_ALIASES[$sourceKey] ?? $rawValue;
+    }
+
+    private function resolveOrderSourceForStore(Request $request, ?Lead $lead): string
+    {
+        if ($request->filled('source')) {
+            return $this->normalizeOrderSourceValue($request->input('source'), self::DEFAULT_MANUAL_ORDER_SOURCE)
+                ?? self::DEFAULT_MANUAL_ORDER_SOURCE;
+        }
+
+        if ($lead) {
+            $conversionData = is_array($lead->conversion_data) ? $lead->conversion_data : [];
+            $payloadSnapshot = is_array($lead->payload_snapshot) ? $lead->payload_snapshot : [];
+
+            foreach ([
+                data_get($conversionData, 'source'),
+                $lead->source,
+                $lead->tag,
+                data_get($payloadSnapshot, 'source'),
+            ] as $candidate) {
+                $resolvedSource = $this->normalizeOrderSourceValue($candidate, null);
+
+                if (filled($resolvedSource)) {
+                    return $resolvedSource;
+                }
+            }
+
+            return self::UNKNOWN_ORDER_SOURCE;
+        }
+
+        return self::DEFAULT_MANUAL_ORDER_SOURCE;
     }
 
     private function usesPostgresSearchDriver(): bool
@@ -1039,6 +1120,7 @@ class OrderController extends Controller
             'customer_name' => $order->customer_name,
             'customer_phone' => $order->customer_phone,
             'notes' => $order->notes,
+            'source' => $this->normalizeOrderSourceValue($order->source),
             'total_price' => (float) $order->total_price,
             'cost_total' => (float) ($order->cost_total ?? 0),
             'profit_total' => (float) ($order->profit_total ?? 0),
@@ -3549,6 +3631,7 @@ class OrderController extends Controller
         return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds, $phoneAttributeIds) {
             $this->attachResolvedInternalShippingFee($order);
             $payload = $order->toArray();
+            $payload['source'] = $this->normalizeOrderSourceValue($order->source);
             $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
             $payload['customer_phone'] = $this->resolveOrderDisplayCustomerPhone($order, $phoneAttributeIds);
 
@@ -3948,7 +4031,7 @@ class OrderController extends Controller
             ->where('account_id', $accountId)
             ->select($this->selectExistingOrderColumns([
                 'id', 'order_number', 'total_price', 'cost_total', 'shipping_fee', 'internal_shipping_fee', 'status', 'customer_name',
-                'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes',
+                'customer_phone', 'shipping_address', 'province', 'district', 'ward', 'created_at', 'notes', 'source',
                 'draft_created_at', 'officialized_at',
                 'print_count', 'last_printed_at',
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
@@ -4003,7 +4086,7 @@ class OrderController extends Controller
                 })
                 ->orderBy('order_statuses.sort_order', $sortOrder);
         } else {
-            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'cost_total', 'status', 'shipping_dispatched_at'];
+            $validSortFields = ['id', 'order_number', 'customer_name', 'created_at', 'total_price', 'cost_total', 'source', 'status', 'shipping_dispatched_at'];
             if ($this->orderTableHasColumn('shipping_fee')) {
                 $validSortFields[] = 'shipping_fee';
             }
@@ -4441,6 +4524,7 @@ class OrderController extends Controller
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',
             'manual_discount' => 'nullable|numeric',
+            'source' => 'nullable|string|max:80',
         ]);
 
         $orderKind = $this->normalizeOrderKind($validated['order_kind'] ?? null);
@@ -4464,7 +4548,7 @@ class OrderController extends Controller
                 $recordedAt = now();
                 $lead = null;
             if ($request->filled('lead_id')) {
-                $lead = \App\Models\Lead::query()
+                $lead = Lead::query()
                     ->where('account_id', $accountId)
                     ->with('statusConfig')
                     ->findOrFail((int) $request->lead_id);
@@ -4499,7 +4583,7 @@ class OrderController extends Controller
                 'district' => $request->district,
                 'ward' => $request->ward,
                 'notes' => $request->notes,
-                'source' => $request->source,
+                'source' => $this->resolveOrderSourceForStore($request, $lead),
                 'type' => $request->type,
                 'shipment_status' => $request->shipment_status,
                 'shipping_fee' => $request->shipping_fee ?? 0,
@@ -4648,6 +4732,7 @@ class OrderController extends Controller
 
         $this->appendCurrentCostMetrics($order);
         $this->attachResolvedInternalShippingFee($order);
+        $order->setAttribute('source', $this->normalizeOrderSourceValue($order->source));
         foreach ($this->discountAdjustmentPayload($order) as $key => $value) {
             $order->setAttribute($key, $value);
         }
@@ -4747,6 +4832,9 @@ class OrderController extends Controller
             'shipping_address', 'province', 'district', 'ward', 'notes', 'source',
             'type', 'shipment_status', 'shipping_fee', 'discount', 'status'
         ]));
+        if (array_key_exists('source', $data)) {
+            $data['source'] = $this->normalizeOrderSourceValue($data['source']);
+        }
         $data['order_type'] = $requestedOrderType;
         $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
             ? 0
@@ -4862,6 +4950,7 @@ class OrderController extends Controller
             'district' => 'nullable|string',
             'ward' => 'nullable|string',
             'notes' => 'nullable|string',
+            'source' => 'nullable|string|max:80',
             'custom_attributes' => 'nullable|array',
             'order_kind' => 'nullable|string|in:official,template,draft',
             'order_type' => 'nullable|string|in:standard,exchange_return,partial_delivery',
@@ -5405,6 +5494,9 @@ class OrderController extends Controller
         $data = $request->only([
             'status', 'notes', 'source', 'type', 'shipment_status'
         ]);
+        if (array_key_exists('source', $data)) {
+            $data['source'] = $this->normalizeOrderSourceValue($data['source']);
+        }
 
         $customAttributes = $request->input('custom_attributes', []);
 

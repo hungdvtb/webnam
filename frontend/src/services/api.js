@@ -616,7 +616,15 @@ export const orderApi = {
     bulkRestore: (ids) => api.post('/orders/bulk-restore', { ids }),
     bulkDuplicate: (ids, targetKind = null) => api.post('/orders/bulk-duplicate', targetKind ? { ids, target_kind: targetKind } : { ids }),
     bulkConvert: (ids, targetKind, data = {}) => api.post('/orders/bulk-convert', { ids, target_kind: targetKind, ...data }),
-    bulkUpdate: (data) => api.post('/orders/bulk-update', data),
+    bulkUpdate: (data) => api.post('/orders/bulk-update', data).then((response) => {
+        (Array.isArray(data?.ids) ? data.ids : []).forEach((id) => {
+            if (id) {
+                invalidateCachedResponse(requestCache.orderDetail, orderDetailCacheKey(id));
+            }
+        });
+
+        return response;
+    }),
     refreshImportCosts: (data) => api.post('/orders/refresh-import-costs', data).then((response) => {
         requestCache.orderDetail.clear();
         return response;

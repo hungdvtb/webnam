@@ -59,6 +59,11 @@ const MONTHLY_REPORT_DRILLDOWN_COLUMNS = new Set([
     'exchange_profit_loss',
     'partial_delivery_profit_loss',
 ]);
+const AD_CHANNEL_OPTIONS = [
+    { value: 'all', label: 'Tất cả kênh' },
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'google', label: 'Google' },
+];
 
 const getReportRange = (year) => {
     const today = new Date();
@@ -117,6 +122,7 @@ const MonthlyProfitReport = () => {
     const [reportSummary, setReportSummary] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
     const [drilldownCellKey, setDrilldownCellKey] = useState('');
+    const [adChannel, setAdChannel] = useState('all');
 
     const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
 
@@ -194,10 +200,14 @@ const MonthlyProfitReport = () => {
 
             try {
                 const range = getQueryRange();
+                const reportParams = {
+                    ...range,
+                    ad_channel: adChannel,
+                };
 
                 await financeApi.syncFbAdSpend(range).catch(() => null);
 
-                const response = await financeApi.getMonthlyPnlReport(range);
+                const response = await financeApi.getMonthlyPnlReport(reportParams);
                 if (ignore) return;
 
                 setReportData(response?.data?.data || []);
@@ -220,7 +230,7 @@ const MonthlyProfitReport = () => {
         return () => {
             ignore = true;
         };
-    }, [reloadKey, selectedYear, quickFilter, customRange]);
+    }, [reloadKey, selectedYear, quickFilter, customRange, adChannel]);
 
     const normalizedReportData = reportData.map((row) => normalizeMonthlyProfitRow(row));
     const normalizedReportSummary = reportSummary ? normalizeMonthlyProfitRow(reportSummary) : null;
@@ -322,6 +332,7 @@ const MonthlyProfitReport = () => {
                 metric,
                 month: row.key,
                 ...range,
+                ad_channel: adChannel,
             });
             const scope = response?.data?.data || null;
             const scopeKey = saveOrderReportDrilldownScope(scope);
@@ -336,7 +347,7 @@ const MonthlyProfitReport = () => {
         } finally {
             setDrilldownCellKey((current) => (current === cellKey ? '' : current));
         }
-    }, [customRange, navigate, quickFilter, selectedYear]);
+    }, [adChannel, customRange, navigate, quickFilter, selectedYear]);
 
     const renderMetricCellContent = (metric, row, content) => {
         const value = Number(row?.[metric] || 0);
@@ -638,6 +649,19 @@ const MonthlyProfitReport = () => {
                                 className="rounded-md border border-gray-200 p-1.5 text-[12px] focus:outline-none focus:ring-1 focus:ring-emerald-500"
                             />
                         </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                        <span className="text-[12px] font-bold uppercase tracking-wide text-gray-400">Kênh</span>
+                        <select
+                            value={adChannel}
+                            onChange={(e) => setAdChannel(e.target.value)}
+                            className="h-8 rounded-md border border-gray-200 bg-white px-2 text-[13px] font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        >
+                            {AD_CHANNEL_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
                     </div>
                 </div>
 

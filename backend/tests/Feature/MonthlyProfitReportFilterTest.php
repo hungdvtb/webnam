@@ -917,6 +917,161 @@ class MonthlyProfitReportFilterTest extends TestCase
         );
     }
 
+    public function test_daily_and_monthly_profit_reports_can_filter_orders_and_ad_spend_by_ad_channel(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'Ad Channel Profit Test Account',
+        ]);
+
+        $user = User::factory()->create();
+        $user->accounts()->attach($account->id, ['role' => 'owner']);
+
+        Sanctum::actingAs($user);
+
+        FinDailyReportConfig::query()->create([
+            'return_rate' => 0,
+            'packaging_fee' => 100,
+            'shipping_estimate_rate' => 10,
+            'tax_rate' => 0,
+            'fb_tax_rate' => 10,
+            'google_tax_rate' => 5,
+        ]);
+
+        $headers = [
+            'X-Account-Id' => (string) $account->id,
+        ];
+
+        $facebookOrder = $this->createOrder($account, [
+            'order_number' => 'CHANNEL-FB-STANDARD',
+            'source' => 'FB',
+            'officialized_at' => '2026-04-05 09:00:00',
+            'shipping_dispatched_at' => '2026-04-05 10:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 1000,
+            'cost_total' => 400,
+            'internal_shipping_fee' => 50,
+        ]);
+
+        $googleOrder = $this->createOrder($account, [
+            'order_number' => 'CHANNEL-GOOGLE-STANDARD',
+            'source' => 'google',
+            'officialized_at' => '2026-04-05 11:00:00',
+            'shipping_dispatched_at' => '2026-04-05 12:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 2000,
+            'cost_total' => 900,
+            'internal_shipping_fee' => 80,
+        ]);
+
+        $websiteOrder = $this->createOrder($account, [
+            'order_number' => 'CHANNEL-WEBSITE-STANDARD',
+            'source' => 'website',
+            'officialized_at' => '2026-04-05 13:00:00',
+            'shipping_dispatched_at' => '2026-04-05 14:00:00',
+            'status' => 'completed',
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'total_price' => 5000,
+            'cost_total' => 2000,
+            'internal_shipping_fee' => 100,
+        ]);
+
+        FixedCostDailySnapshot::query()->create([
+            'date' => '2026-04-05',
+            'amount' => 999,
+        ]);
+
+        InventoryDocument::query()->create([
+            'account_id' => $account->id,
+            'document_number' => 'DMG-CHANNEL-202604',
+            'type' => 'damaged',
+            'document_date' => '2026-04-05',
+            'status' => 'completed',
+            'total_quantity' => 1,
+            'total_amount' => 777,
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+            'date' => '2026-04-05',
+            'amount' => 100,
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
+            'date' => '2026-04-05',
+            'amount' => 50,
+        ]);
+
+        $facebookDailyResponse = $this
+            ->getJson('/api/finance/daily-pnl/report?start_date=2026-04-05&end_date=2026-04-05&ad_channel=facebook', $headers)
+            ->assertOk();
+        $facebookDailyRow = collect($facebookDailyResponse->json('data'))->firstWhere('date', '2026-04-05');
+
+        $this->assertSame('facebook', $facebookDailyResponse->json('meta.ad_channel'));
+        $this->assertFalse($facebookDailyResponse->json('meta.shared_costs_included'));
+        $this->assertSame(1, (int) $facebookDailyRow['order_count']);
+        $this->assertSame(1000.0, (float) $facebookDailyRow['revenue_raw']);
+        $this->assertSame(400.0, (float) $facebookDailyRow['cost_raw']);
+        $this->assertSame(50.0, (float) $facebookDailyRow['shipping_fee']);
+        $this->assertSame(0.0, (float) $facebookDailyRow['fixed_cost']);
+        $this->assertSame(100.0, (float) $facebookDailyRow['fb_ads_spend_raw']);
+        $this->assertSame(110.0, (float) $facebookDailyRow['fb_ads_spend']);
+        $this->assertSame(0.0, (float) $facebookDailyRow['google_ads_spend']);
+        $this->assertSame(340.0, (float) $facebookDailyRow['profit']);
+
+        $googleDailyResponse = $this
+            ->getJson('/api/finance/daily-pnl/report?start_date=2026-04-05&end_date=2026-04-05&ad_channel=google', $headers)
+            ->assertOk();
+        $googleDailyRow = collect($googleDailyResponse->json('data'))->firstWhere('date', '2026-04-05');
+
+        $this->assertSame('google', $googleDailyResponse->json('meta.ad_channel'));
+        $this->assertFalse($googleDailyResponse->json('meta.shared_costs_included'));
+        $this->assertSame(1, (int) $googleDailyRow['order_count']);
+        $this->assertSame(2000.0, (float) $googleDailyRow['revenue_raw']);
+        $this->assertSame(900.0, (float) $googleDailyRow['cost_raw']);
+        $this->assertSame(80.0, (float) $googleDailyRow['shipping_fee']);
+        $this->assertSame(0.0, (float) $googleDailyRow['fixed_cost']);
+        $this->assertSame(0.0, (float) $googleDailyRow['fb_ads_spend']);
+        $this->assertSame(50.0, (float) $googleDailyRow['google_ads_spend_raw']);
+        $this->assertSame(52.5, (float) $googleDailyRow['google_ads_spend']);
+        $this->assertSame(867.5, (float) $googleDailyRow['profit']);
+
+        $googleMonthlyResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report?start_date=2026-04-01&end_date=2026-04-30&ad_channel=google', $headers)
+            ->assertOk();
+        $googleMonthlyRow = collect($googleMonthlyResponse->json('data'))->firstWhere('key', '2026-04');
+
+        $this->assertSame('google', $googleMonthlyResponse->json('meta.ad_channel'));
+        $this->assertFalse($googleMonthlyResponse->json('meta.shared_costs_included'));
+        $this->assertSame(1, (int) $googleMonthlyRow['order_count']);
+        $this->assertSame(2000.0, (float) $googleMonthlyRow['revenue']);
+        $this->assertSame(900.0, (float) $googleMonthlyRow['cost_actual']);
+        $this->assertSame(80.0, (float) $googleMonthlyRow['shipping_fee']);
+        $this->assertSame(100.0, (float) $googleMonthlyRow['packaging_fee']);
+        $this->assertSame(0.0, (float) $googleMonthlyRow['damaged_goods']);
+        $this->assertSame(0.0, (float) $googleMonthlyRow['fixed_cost']);
+        $this->assertSame(0.0, (float) $googleMonthlyRow['fb_ads_spend']);
+        $this->assertSame(50.0, (float) $googleMonthlyRow['google_ads_spend_raw']);
+        $this->assertSame(52.5, (float) $googleMonthlyRow['google_ads_spend']);
+        $this->assertSame(28.8, (float) $googleMonthlyRow['tax']);
+        $this->assertSame(838.7, (float) $googleMonthlyRow['total_profit']);
+
+        $googleDrilldownResponse = $this
+            ->getJson('/api/finance/daily-pnl/monthly-report/drilldown?start_date=2026-04-01&end_date=2026-04-30&month=2026-04&metric=revenue&ad_channel=google', $headers)
+            ->assertOk();
+
+        $this->assertSame('google', $googleDrilldownResponse->json('data.ad_channel'));
+        $this->assertSame(2000.0, (float) $googleDrilldownResponse->json('data.value'));
+        $this->assertSame([$googleOrder->id], $googleDrilldownResponse->json('data.order_ids'));
+        $this->assertNotContains($facebookOrder->id, $googleDrilldownResponse->json('data.order_ids'));
+        $this->assertNotContains($websiteOrder->id, $googleDrilldownResponse->json('data.order_ids'));
+    }
+
     private function createOrder(Account $account, array $attributes): Order
     {
         $order = new Order(array_merge([

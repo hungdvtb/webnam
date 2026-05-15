@@ -16,6 +16,12 @@ import {
     getOrderTypeMeta,
     normalizeOrderType,
 } from '../../config/orderTypes';
+import {
+    ORDER_SOURCE_OPTIONS,
+    UNKNOWN_ORDER_SOURCE,
+    getOrderSourceMeta,
+    normalizeOrderSource,
+} from '../../config/orderSources';
 import SortIndicator from '../../components/SortIndicator';
 import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../components/admin/ShippingSettingsPanel';
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
@@ -59,6 +65,7 @@ import {
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
     { id: 'customer', label: 'Khách Hàng', minWidth: '180px' },
+    { id: 'source', label: 'Ngu\u1ed3n \u0111\u01a1n', minWidth: '126px' },
     { id: 'province', label: 'Thành phố', minWidth: '130px' },
     { id: 'ward', label: 'Phường', minWidth: '130px' },
     { id: 'shipping_address', label: 'Địa Chỉ', minWidth: '220px' },
@@ -82,6 +89,21 @@ const ORDER_LIST_STORAGE_KEY = 'order_list';
 const ORDER_LIST_VIEW_STATE_STORAGE_KEY = 'order_list_view_state_v1';
 const ORDER_COST_TOTAL_COLUMN_ID = 'cost_total';
 const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
+const ORDER_SOURCE_COLUMN_ID = 'source';
+const ORDER_SOURCE_BADGE_CLASSNAMES = {
+    FB: 'border-sky-200 bg-sky-50 text-sky-700',
+    GG: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    Website: 'border-slate-200 bg-slate-50 text-slate-700',
+    Zalo: 'border-blue-200 bg-blue-50 text-blue-700',
+    Tiktok: 'border-zinc-300 bg-zinc-50 text-zinc-800',
+    'Khach cu': 'border-amber-200 bg-amber-50 text-amber-800',
+    'Chua ro': 'border-rose-200 bg-rose-50 text-rose-700',
+};
+
+const getOrderSourceBadgeClassName = (source) => (
+    ORDER_SOURCE_BADGE_CLASSNAMES[normalizeOrderSource(source, UNKNOWN_ORDER_SOURCE)]
+    || 'border-primary/10 bg-primary/[0.03] text-primary'
+);
 
 const EXPORT_SLIP_FILTER_OPTIONS = [
     { value: 'created', label: 'Đã tạo phiếu xuất' },
@@ -1079,6 +1101,7 @@ const ensureOrderListFinancialColumnPreference = () => {
 
         insertMissingColumn(ORDER_COST_TOTAL_COLUMN_ID, ['total_price']);
         insertMissingColumn(SHIPPING_FEE_COLUMN_ID, [ORDER_COST_TOTAL_COLUMN_ID, 'total_price']);
+        insertMissingColumn(ORDER_SOURCE_COLUMN_ID, ['customer']);
 
         if (hasChanges) {
             window.localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder));
@@ -2479,6 +2502,7 @@ const OrderList = () => {
     const [currentView, setCurrentView] = useState(() => initialView);
     const [copiedText, setCopiedText] = useState(null);
     const [statusMenuOrderId, setStatusMenuOrderId] = useState(null);
+    const [sourceUpdatingOrderId, setSourceUpdatingOrderId] = useState(null);
     const [productPopupOrderId, setProductPopupOrderId] = useState(null);
     const [inventorySlipOrderId, setInventorySlipOrderId] = useState(null);
     const [inventorySlipRefreshKey, setInventorySlipRefreshKey] = useState(0);
@@ -4366,6 +4390,60 @@ const OrderList = () => {
         }
     };
 
+    const handleOrderSourceChange = useCallback(async (order, nextSourceValue) => {
+        const nextSource = normalizeOrderSource(nextSourceValue, UNKNOWN_ORDER_SOURCE);
+        const previousSource = normalizeOrderSource(order?.source, UNKNOWN_ORDER_SOURCE);
+
+        if (!order?.id || nextSource === previousSource) {
+            return;
+        }
+
+        setSourceUpdatingOrderId(order.id);
+        setOrders((currentOrders) => currentOrders.map((item) => (
+            item.id === order.id ? { ...item, source: nextSource } : item
+        )));
+
+        try {
+            await orderApi.update(order.id, { source: nextSource });
+            setNotification({ type: 'success', message: 'Đã cập nhật nguồn đơn.' });
+        } catch (error) {
+            setOrders((currentOrders) => currentOrders.map((item) => (
+                item.id === order.id ? { ...item, source: order.source } : item
+            )));
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể cập nhật nguồn đơn.',
+            });
+        } finally {
+            setSourceUpdatingOrderId(null);
+        }
+    }, []);
+
+    const handleBulkSourceUpdate = useCallback(async (nextSourceValue) => {
+        const nextSource = normalizeOrderSource(nextSourceValue, UNKNOWN_ORDER_SOURCE);
+        const ids = [...selectedIdsRef.current];
+
+        if (!ids.length || !nextSource) {
+            return;
+        }
+
+        try {
+            setLoading(true);
+            await orderApi.bulkUpdate({ ids, source: nextSource });
+            setOrders((currentOrders) => currentOrders.map((item) => (
+                ids.includes(item.id) ? { ...item, source: nextSource } : item
+            )));
+            setNotification({ type: 'success', message: `Đã đổi nguồn ${ids.length} đơn.` });
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể đổi nguồn đơn hàng loạt.',
+            });
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
     const handleCopy = (t, e) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(t);
@@ -4888,6 +4966,23 @@ const OrderList = () => {
 
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
+                                <select
+                                    defaultValue=""
+                                    onClick={(event) => event.stopPropagation()}
+                                    onChange={(event) => {
+                                        const nextSource = event.target.value;
+                                        event.target.value = '';
+                                        handleBulkSourceUpdate(nextSource);
+                                    }}
+                                    disabled={loading}
+                                    className="h-9 max-w-[132px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Đổi nguồn cho đơn đã chọn"
+                                >
+                                    <option value="">Đổi nguồn</option>
+                                    {ORDER_SOURCE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
                                 <button
                                     type="button"
                                     onClick={handleToggleSelectedOnly}
@@ -5484,6 +5579,7 @@ const OrderList = () => {
                         const addressText = String(o.shipping_address || [o.ward, o.province].filter(Boolean).join(', ') || '').trim();
                         const trackingCode = o.shipping_tracking_code || o.active_shipment?.carrier_tracking_code || '';
                         const shippingFee = resolveOrderInternalShippingFee(o);
+                        const sourceMeta = getOrderSourceMeta(o.source);
 
                         return (
                             <div
@@ -5526,6 +5622,9 @@ const OrderList = () => {
                                                 <div className="mt-2 flex flex-wrap items-center gap-2">
                                                     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${ORDER_TYPE_BADGE_CLASSNAMES[normalizeOrderType(o.order_type)] || ORDER_TYPE_BADGE_CLASSNAMES[ORDER_TYPE_STANDARD]}`}>
                                                         {getOrderTypeMeta(o.order_type).shortLabel}
+                                                    </span>
+                                                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getOrderSourceBadgeClassName(sourceMeta.value)}`}>
+                                                        {sourceMeta.label}
                                                     </span>
                                                     {normalizeOrderType(o.order_type) !== ORDER_TYPE_STANDARD && (
                                                         <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] ${getPartialReturnStatusBadgeClassName(o.return_status)}`}>
@@ -5769,6 +5868,28 @@ const OrderList = () => {
                                                 </div>
                                             </td>
                                         );
+                                        if (c.id === 'source') {
+                                            const sourceMeta = getOrderSourceMeta(o.source);
+                                            const hasCustomSource = !ORDER_SOURCE_OPTIONS.some((option) => option.value === sourceMeta.value);
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20">
+                                                    <select
+                                                        value={sourceMeta.value}
+                                                        disabled={isTrashView || sourceUpdatingOrderId === o.id}
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onMouseDown={(event) => event.stopPropagation()}
+                                                        onChange={(event) => handleOrderSourceChange(o, event.target.value)}
+                                                        className={`h-8 w-full rounded-sm border px-2 text-[12px] font-black outline-none transition-all disabled:cursor-not-allowed disabled:opacity-60 ${getOrderSourceBadgeClassName(sourceMeta.value)}`}
+                                                        title="Đổi nguồn đơn"
+                                                    >
+                                                        {hasCustomSource && <option value={sourceMeta.value}>{sourceMeta.label}</option>}
+                                                        {ORDER_SOURCE_OPTIONS.map((option) => (
+                                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                                        ))}
+                                                    </select>
+                                                </td>
+                                            );
+                                        }
                                         if (c.id === 'province') return (
                                             <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 group/province_cell relative text-primary font-bold">
                                                 <div className="flex items-center justify-between">

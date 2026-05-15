@@ -22,6 +22,13 @@ import {
     normalizeOrderType,
     SUPPLEMENT_RETURN_STATUS_NOT_RETURNED,
 } from '../../config/orderTypes';
+import {
+    DEFAULT_MANUAL_ORDER_SOURCE,
+    ORDER_SOURCE_OPTIONS,
+    UNKNOWN_ORDER_SOURCE,
+    getOrderSourceMeta,
+    normalizeOrderSource,
+} from '../../config/orderSources';
 import { writeLeadListReturnHint } from '../../utils/leadListViewState';
 import {
     getOrderItemActualDisplayName,
@@ -3498,7 +3505,7 @@ const OrderForm = () => {
         shipping_address: '',
         district: '',
         ward: '',
-        source: 'Website',
+        source: DEFAULT_MANUAL_ORDER_SOURCE,
         order_type: ORDER_TYPE_STANDARD,
         settlement_delta: 0,
         return_tracking_code: '',
@@ -5813,7 +5820,10 @@ const OrderForm = () => {
                 discount: loadedDiscountState.discount,
                 cost_total: order.cost_total || 0,
                 status: isDuplicating ? 'new' : (order.status || 'new'),
-                source: order.source || 'Website',
+                source: normalizeOrderSource(
+                    order.source,
+                    isDuplicating ? DEFAULT_MANUAL_ORDER_SOURCE : UNKNOWN_ORDER_SOURCE
+                ),
                 type: order.type || 'Lẻ',
                 shipment_status: isDuplicating ? 'Chưa giao' : (order.shipment_status || 'Chưa giao'),
                 province: order.province || '',
@@ -5910,7 +5920,7 @@ const OrderForm = () => {
                 district: draft.district || '',
                 ward: draft.ward || '',
                 province: draft.province || '',
-                source: draft.source || 'Website',
+                source: normalizeOrderSource(draft.source, UNKNOWN_ORDER_SOURCE),
                 order_type: ORDER_TYPE_STANDARD,
                 settlement_delta: 0,
                 return_tracking_code: '',
@@ -6051,6 +6061,7 @@ const OrderForm = () => {
                     formData.supplement_items
                 ),
                 discount: submittedDiscount,
+                source: normalizeOrderSource(formData.source, DEFAULT_MANUAL_ORDER_SOURCE),
                 items: normalizedItems,
                 order_kind: normalizedOrderKind,
                 order_type: normalizedOrderType,
@@ -7028,6 +7039,10 @@ const OrderForm = () => {
     }, []);
 
     const availableQuoteTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+    const orderSourceMeta = useMemo(
+        () => getOrderSourceMeta(formData.source, UNKNOWN_ORDER_SOURCE),
+        [formData.source]
+    );
     const normalizedQuoteTemplateSearch = normalizeCanvasText(quoteTemplateSearch).toLowerCase();
     const filteredQuoteTemplates = availableQuoteTemplates.filter((template) => (
         !normalizedQuoteTemplateSearch || normalizeCanvasText(template.name).toLowerCase().includes(normalizedQuoteTemplateSearch)
@@ -9439,6 +9454,21 @@ const OrderForm = () => {
                                     className={adminInputClassName}
                                 >
                                     {ORDER_TYPE_OPTIONS.map((option) => (
+                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                            </Field>
+                            <Field label="Ngu\u1ed3n \u0111\u01a1n">
+                                <select
+                                    name="source"
+                                    value={orderSourceMeta.value}
+                                    onChange={handleInputChange}
+                                    className={adminInputClassName}
+                                >
+                                    {!ORDER_SOURCE_OPTIONS.some((option) => option.value === orderSourceMeta.value) && (
+                                        <option value={orderSourceMeta.value}>{orderSourceMeta.label}</option>
+                                    )}
+                                    {ORDER_SOURCE_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                 </select>

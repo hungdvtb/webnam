@@ -33,6 +33,12 @@ const formatDisplayDate = (value) => {
     return `${padNumber(date.getDate())}/${padNumber(date.getMonth() + 1)}/${date.getFullYear()}`;
 };
 
+const AD_CHANNEL_OPTIONS = [
+    { value: 'all', label: 'Tất cả kênh' },
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'google', label: 'Google' },
+];
+
 const IconBase = ({ size = 20, className = '', children }) => (
     <svg
         width={size}
@@ -612,6 +618,7 @@ const DailyProfitReport = () => {
     const [filters, setFilters] = useState({
         start_date: getMonthStartInputDate(),
         end_date: formatInputDate(new Date()),
+        ad_channel: 'all',
     });
 
     const [showConfig, setShowConfig] = useState(false);
@@ -933,6 +940,7 @@ const DailyProfitReport = () => {
                 financeApi.getDailyPnlReport({
                     start_date: filters.start_date,
                     end_date: filters.end_date,
+                    ad_channel: filters.ad_channel,
                 }),
                 financeApi.getDailyPnlConfig()
             ]);
@@ -1084,10 +1092,23 @@ const DailyProfitReport = () => {
                                 onChange={(e) => setFilters({...filters, end_date: e.target.value})}
                                 className="text-[13px] border border-gray-200 rounded-md p-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-32"
                              />
-                         </div>
-                     </div>
+                          </div>
+                      </div>
 
-                 </div>
+                      <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                          <span className="text-[12px] font-bold uppercase tracking-wide text-gray-400">Kênh</span>
+                          <select
+                              value={filters.ad_channel}
+                              onChange={(e) => setFilters({...filters, ad_channel: e.target.value})}
+                              className="h-8 rounded-md border border-gray-200 bg-white px-2 text-[13px] font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          >
+                              {AD_CHANNEL_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                          </select>
+                      </div>
+
+                  </div>
 
                 <div className="flex items-center gap-2">
                     <button

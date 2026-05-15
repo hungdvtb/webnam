@@ -420,6 +420,21 @@ const normalizeStoreLocations = (value) => {
 const inputClasses = 'w-full h-10 bg-white border border-primary/20 rounded-sm px-3 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20';
 const textareaClasses = 'w-full min-h-[96px] bg-white border border-primary/20 rounded-sm px-3 py-2 text-[13px] font-bold text-primary focus:outline-none focus:border-primary transition-all placeholder:text-primary/20 resize-none';
 const labelClasses = 'text-[11px] font-black uppercase text-primary/80 tracking-wider mb-2 block';
+const metaFeedLinks = [
+    {
+        id: 'csv',
+        title: 'Meta Catalog CSV',
+        url: 'https://gomdaithanh.com/meta-feed.csv',
+        note: 'Khuyên dùng cho Meta/Facebook Catalog',
+    },
+    {
+        id: 'xml',
+        title: 'Meta Catalog XML',
+        url: 'https://gomdaithanh.com/meta-feed.xml',
+        note: 'Dự phòng nếu Meta cần định dạng XML',
+    },
+];
+const metaFeedFields = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand'];
 
 const HEADER_ROUTE_REFERENCE_ROWS = [
     { page: 'Trang chủ', route: '/', note: 'Storefront chính (đã tạo)', scope: 'Public', exists: true },
@@ -1574,6 +1589,7 @@ const SiteSettings = () => {
         { id: 'quote', title: 'Báo giá', icon: 'image' },
     ];
 
+    settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'meta-feed', title: 'Nguồn cấp sản phẩm', icon: 'rss_feed' });
     settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'google-merchant', title: 'Google Merchant', icon: 'shopping_bag' });
 
     const orderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
@@ -1595,7 +1611,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, cửa hàng, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && activeTab !== 'google-merchant' && (
+                {activeTab !== 'domains' && activeTab !== 'google-merchant' && activeTab !== 'meta-feed' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -1611,13 +1627,13 @@ const SiteSettings = () => {
                 )}
             </div>
 
-            <div className="flex gap-8 mb-6 border-b border-primary/10">
+            <div className="flex gap-6 mb-6 border-b border-primary/10 overflow-x-auto custom-scrollbar">
                 {settingsTabs.map((tab) => (
                     <button
                         key={tab.id}
                         type="button"
                         onClick={() => setActiveTab(tab.id)}
-                        className={`pb-3 text-[13px] font-black tracking-[0.04em] leading-tight transition-all relative flex items-center gap-2 ${activeTab === tab.id ? 'text-primary' : 'text-primary/40 hover:text-primary/70'}`}
+                        className={`shrink-0 pb-3 text-[13px] font-black tracking-[0.04em] leading-tight transition-all relative flex items-center gap-2 ${activeTab === tab.id ? 'text-primary' : 'text-primary/40 hover:text-primary/70'}`}
                     >
                         <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
                         {tab.title}
@@ -2614,6 +2630,74 @@ const SiteSettings = () => {
                                 </div>
                             </div>
                         </SectionCard>
+                    )}
+
+                    {activeTab === 'meta-feed' && (
+                        <div className="space-y-6">
+                            <SectionCard
+                                icon="rss_feed"
+                                title="Nguồn cấp sản phẩm Meta"
+                                rightSlot={(
+                                    <span className="text-[11px] font-black uppercase tracking-wider text-primary/40">
+                                        Cập nhật tự động theo sản phẩm đang bán
+                                    </span>
+                                )}
+                            >
+                                <div className="space-y-5">
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.02] px-4 py-3">
+                                        <p className="text-[13px] font-bold leading-6 text-primary/70">
+                                            Feed lấy các sản phẩm đang bật trên website. Khi sửa tên, mô tả, giá, ảnh hoặc tồn kho trong admin, các link bên dưới trả dữ liệu mới ngay.
+                                        </p>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        {metaFeedLinks.map((feed) => (
+                                            <div key={feed.id} className="grid grid-cols-1 gap-3 rounded-sm border border-primary/10 bg-white p-4 md:grid-cols-[180px_minmax(0,1fr)_auto] md:items-center">
+                                                <div>
+                                                    <p className="text-[13px] font-black text-primary">{feed.title}</p>
+                                                    <p className="mt-1 text-[11px] font-bold text-primary/40">{feed.note}</p>
+                                                </div>
+                                                <input
+                                                    readOnly
+                                                    value={feed.url}
+                                                    className={`${inputClasses} font-mono text-[12px]`}
+                                                    onFocus={(event) => event.target.select()}
+                                                />
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleCopyRoute(feed.url)}
+                                                        className={`h-10 px-4 rounded-sm border text-[12px] font-black uppercase tracking-wider inline-flex items-center gap-2 transition-all ${copiedRoute === feed.url ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/20 bg-white text-primary hover:bg-primary/[0.04]'}`}
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">{copiedRoute === feed.url ? 'check' : 'content_copy'}</span>
+                                                        {copiedRoute === feed.url ? 'Đã copy' : 'Copy link'}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => window.open(feed.url, '_blank', 'noopener,noreferrer')}
+                                                        className="h-10 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider inline-flex items-center gap-2 hover:bg-primary/90"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">open_in_new</span>
+                                                        Mở link
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    <div>
+                                        <label className={labelClasses}>Trường dữ liệu tối thiểu</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {metaFeedFields.map((field) => (
+                                                <span key={field} className="rounded-sm border border-primary/10 bg-stone-50 px-3 py-1.5 font-mono text-[12px] font-bold text-primary/70">
+                                                    {field}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </SectionCard>
+                        </div>
                     )}
 
                     {activeTab === 'google-merchant' && (

@@ -19,6 +19,9 @@ class FinDailyProfitReportController extends Controller
     private const MONTHLY_REPORT_INCLUDED_STATUS = 'completed';
     private const MONTHLY_REPORT_TAX_RATE = 1.5;
     private const EXCLUDED_ORDER_STATUSES = ['cancelled', 'canceled'];
+    private const REPORT_AD_CHANNEL_ALL = 'all';
+    private const REPORT_AD_CHANNEL_FACEBOOK = 'facebook';
+    private const REPORT_AD_CHANNEL_GOOGLE = 'google';
     private const MONTHLY_REPORT_COST_FIELDS = [
         'cost_actual',
         'shipping_fee',
@@ -231,6 +234,67 @@ class FinDailyProfitReportController extends Controller
         return $result;
     }
 
+    private function normalizeReportAdChannel(mixed $value): string
+    {
+        $normalized = strtolower(trim((string) $value));
+
+        return match ($normalized) {
+            'facebook', 'fb', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads' => self::REPORT_AD_CHANNEL_FACEBOOK,
+            'google', 'gg', 'ga', 'google_ads', 'google-ad', 'google ads', 'googleads' => self::REPORT_AD_CHANNEL_GOOGLE,
+            default => self::REPORT_AD_CHANNEL_ALL,
+        };
+    }
+
+    private function reportAdChannelLabel(string $channel): string
+    {
+        return match ($channel) {
+            self::REPORT_AD_CHANNEL_FACEBOOK => 'Facebook',
+            self::REPORT_AD_CHANNEL_GOOGLE => 'Google',
+            default => 'Tất cả',
+        };
+    }
+
+    private function reportAdChannelSourceMatches(string $channel): array
+    {
+        return match ($channel) {
+            self::REPORT_AD_CHANNEL_FACEBOOK => [
+                'exact' => ['fb', 'facebook', 'meta', 'facebook_ads', 'facebook-ad', 'facebook ads'],
+                'contains' => ['facebook', 'fbclid', 'meta'],
+            ],
+            self::REPORT_AD_CHANNEL_GOOGLE => [
+                'exact' => ['gg', 'google', 'ga', 'google_ads', 'google-ad', 'google ads', 'googleads'],
+                'contains' => ['google', 'gclid', 'googleads'],
+            ],
+            default => [
+                'exact' => [],
+                'contains' => [],
+            ],
+        };
+    }
+
+    private function applyReportAdChannelOrderFilter($query, string $channel, string $column = 'source'): void
+    {
+        if ($channel === self::REPORT_AD_CHANNEL_ALL) {
+            return;
+        }
+
+        $matches = $this->reportAdChannelSourceMatches($channel);
+        $exactValues = $matches['exact'] ?? [];
+        $containsValues = $matches['contains'] ?? [];
+
+        $query->where(function ($sourceQuery) use ($column, $exactValues, $containsValues) {
+            if ($exactValues !== []) {
+                $sourceQuery->whereIn(DB::raw("LOWER(COALESCE({$column}, ''))"), $exactValues);
+            } else {
+                $sourceQuery->whereRaw('1 = 0');
+            }
+
+            foreach ($containsValues as $keyword) {
+                $sourceQuery->orWhereRaw("LOWER(COALESCE({$column}, '')) LIKE ?", ['%' . $keyword . '%']);
+            }
+        });
+    }
+
     private function applyRequestedOrderTypeFilter($query, array $requestedOrderTypes, string $column = 'order_type'): void
     {
         if ($requestedOrderTypes === []) {
@@ -281,6 +345,11 @@ class FinDailyProfitReportController extends Controller
                 $this->extractRequestedOrderTypes($filters['order_type'])
             );
         }
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
     }
 
     private function dailyReportBaseOrdersQuery(string $startDate, string $endDate, array $filters = [])
@@ -359,6 +428,10 @@ class FinDailyProfitReportController extends Controller
         $returnRate = $config ? (float) $config->return_rate : 2.0;
         $packFee = $config ? (float) $config->packaging_fee : 2000.0;
         $taxRate = $config ? (float) $config->tax_rate : 1.5;
+        $adChannel = $this->normalizeReportAdChannel($filters['ad_channel'] ?? null);
+        $includeFacebookAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_FACEBOOK], true);
+        $includeGoogleAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_GOOGLE], true);
+        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL;
 
         $baseOrdersQuery = $this->dailyReportBaseOrdersQuery($startDate, $endDate, $filters);
 
@@ -386,23 +459,29 @@ class FinDailyProfitReportController extends Controller
             ])
             ->groupBy(fn (Order $order) => optional($order->officialized_at)?->format('Y-m-d'));
 
-        $fixedCosts = \App\Models\FixedCostDailySnapshot::query()
-            ->whereBetween('date', [$startDate, $endDate])
-            ->pluck('amount', 'date')
-            ->toArray();
+        $fixedCosts = $includeSharedCosts
+            ? \App\Models\FixedCostDailySnapshot::query()
+                ->whereBetween('date', [$startDate, $endDate])
+                ->pluck('amount', 'date')
+                ->toArray()
+            : [];
 
-        $fbAdsSpends = $this->dailyAdsSpendTotalsByDate(
-            $startDate,
-            $endDate,
-            DailyAdsSpend::PLATFORM_FACEBOOK,
-            app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config)
-        );
-        $googleAdsSpends = $this->dailyAdsSpendTotalsByDate(
-            $startDate,
-            $endDate,
-            DailyAdsSpend::PLATFORM_GOOGLE,
-            app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config)
-        );
+        $fbAdsSpends = $includeFacebookAds
+            ? $this->dailyAdsSpendTotalsByDate(
+                $startDate,
+                $endDate,
+                DailyAdsSpend::PLATFORM_FACEBOOK,
+                app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config)
+            )
+            : [];
+        $googleAdsSpends = $includeGoogleAds
+            ? $this->dailyAdsSpendTotalsByDate(
+                $startDate,
+                $endDate,
+                DailyAdsSpend::PLATFORM_GOOGLE,
+                app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config)
+            )
+            : [];
         $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
         $googleTaxRate = $config ? (float) ($config->google_tax_rate ?? 0) : 0;
 
@@ -509,6 +588,11 @@ class FinDailyProfitReportController extends Controller
                 'ads_spend_raw' => round((float) $reportCollection->sum('ads_spend_raw'), 2),
                 'ads_spend' => round((float) $reportCollection->sum('ads_spend'), 2),
             ],
+            'meta' => [
+                'ad_channel' => $adChannel,
+                'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
+                'shared_costs_included' => $includeSharedCosts,
+            ],
         ];
     }
 
@@ -570,12 +654,12 @@ class FinDailyProfitReportController extends Controller
         return $createdAt ? \Carbon\Carbon::parse($createdAt) : null;
     }
 
-    private function monthlySpecialOrderProfitLoss(string $startDate, string $endDate)
+    private function monthlySpecialOrderProfitLoss(string $startDate, string $endDate, array $filters = [])
     {
         $startAt = $startDate . ' 00:00:00';
         $endAt = $endDate . ' 23:59:59';
 
-        return Order::query()
+        $query = Order::query()
             ->where(function ($query) {
                 $query->where('order_kind', Order::KIND_OFFICIAL)
                     ->orWhereNull('order_kind')
@@ -592,7 +676,14 @@ class FinDailyProfitReportController extends Controller
                 Order::TYPE_EXCHANGE_RETURN,
                 Order::TYPE_PARTIAL_DELIVERY,
             ])
-            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
+            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query
             ->get([
                 'order_type',
                 'report_profit_total',
@@ -706,9 +797,9 @@ class FinDailyProfitReportController extends Controller
             || (float) ($row['total_profit'] ?? 0) !== 0.0;
     }
 
-    private function successfulOrdersForMonthlyReport(string $startDate, string $endDate)
+    private function successfulOrdersForMonthlyReport(string $startDate, string $endDate, array $filters = [])
     {
-        return Order::query()
+        $query = Order::query()
             ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where('status', self::MONTHLY_REPORT_INCLUDED_STATUS)
             ->where(function ($query) {
@@ -716,11 +807,18 @@ class FinDailyProfitReportController extends Controller
                     ->orWhereNull('order_kind')
                     ->orWhere('order_kind', '');
             });
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query;
     }
 
-    private function shippingOrdersForMonthlyReport(string $startDate, string $endDate)
+    private function shippingOrdersForMonthlyReport(string $startDate, string $endDate, array $filters = [])
     {
-        return Order::query()
+        $query = Order::query()
             ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
             ->where(function ($query) {
@@ -728,11 +826,18 @@ class FinDailyProfitReportController extends Controller
                     ->orWhereNull('order_kind')
                     ->orWhere('order_kind', '');
             });
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query;
     }
 
-    private function successfulStandardOrdersForMonthlyReport(string $startDate, string $endDate)
+    private function successfulStandardOrdersForMonthlyReport(string $startDate, string $endDate, array $filters = [])
     {
-        return $this->successfulOrdersForMonthlyReport($startDate, $endDate)
+        return $this->successfulOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->where(function ($query) {
                 $query->where('order_type', Order::TYPE_STANDARD)
                     ->orWhereNull('order_type')
@@ -740,9 +845,9 @@ class FinDailyProfitReportController extends Controller
             });
     }
 
-    private function monthlyRevenueAndCostActual(string $startDate, string $endDate)
+    private function monthlyRevenueAndCostActual(string $startDate, string $endDate, array $filters = [])
     {
-        return $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate)
+        return $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->get([
                 'officialized_at',
                 'total_price',
@@ -772,9 +877,9 @@ class FinDailyProfitReportController extends Controller
         return OrderShippingFeeCalculator::resolveTotalShippingFee($order);
     }
 
-    private function monthlyOrderShippingFee(string $startDate, string $endDate)
+    private function monthlyOrderShippingFee(string $startDate, string $endDate, array $filters = [])
     {
-        return $this->shippingOrdersForMonthlyReport($startDate, $endDate)
+        return $this->shippingOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->with(['activeShipment:id,order_id,shipping_cost'])
             ->get([
                 'id',
@@ -793,9 +898,9 @@ class FinDailyProfitReportController extends Controller
             });
     }
 
-    private function monthlySuccessfulOrderRevenueShippingAndTax(string $startDate, string $endDate, float $taxRate)
+    private function monthlySuccessfulOrderRevenueShippingAndTax(string $startDate, string $endDate, float $taxRate, array $filters = [])
     {
-        return $this->successfulOrdersForMonthlyReport($startDate, $endDate)
+        return $this->successfulOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->with(['activeShipment:id,order_id,shipping_cost'])
             ->get([
                 'id',
@@ -886,9 +991,9 @@ class FinDailyProfitReportController extends Controller
         ];
     }
 
-    private function dispatchedOrdersForMonthlyReport(string $startDate, string $endDate)
+    private function dispatchedOrdersForMonthlyReport(string $startDate, string $endDate, array $filters = [])
     {
-        return Order::query()
+        $query = Order::query()
             ->whereNotNull('shipping_dispatched_at')
             ->whereBetween('shipping_dispatched_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where(function ($query) {
@@ -897,14 +1002,21 @@ class FinDailyProfitReportController extends Controller
                     ->orWhere('order_kind', '');
             })
             ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query;
     }
 
-    private function specialOrdersForMonthlyReport(string $startDate, string $endDate, string $orderType)
+    private function specialOrdersForMonthlyReport(string $startDate, string $endDate, string $orderType, array $filters = [])
     {
         $startAt = $startDate . ' 00:00:00';
         $endAt = $endDate . ' 23:59:59';
 
-        return Order::query()
+        $query = Order::query()
             ->where(function ($query) {
                 $query->where('order_kind', Order::KIND_OFFICIAL)
                     ->orWhereNull('order_kind')
@@ -919,19 +1031,26 @@ class FinDailyProfitReportController extends Controller
             })
             ->where('order_type', $orderType)
             ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES);
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query;
     }
 
-    private function monthlyReportDrilldownOrders(string $metric, string $startDate, string $endDate): Collection
+    private function monthlyReportDrilldownOrders(string $metric, string $startDate, string $endDate, array $filters = []): Collection
     {
         return match ($metric) {
-            'order_count' => $this->dispatchedOrdersForMonthlyReport($startDate, $endDate)
+            'order_count' => $this->dispatchedOrdersForMonthlyReport($startDate, $endDate, $filters)
                 ->get([
                     'id',
                     'status',
                     'order_type',
                     'shipping_dispatched_at',
                 ]),
-            'revenue' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate)
+            'revenue' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate, $filters)
                 ->get([
                     'id',
                     'status',
@@ -941,7 +1060,7 @@ class FinDailyProfitReportController extends Controller
                     'total_price',
                     'report_revenue_total',
                 ]),
-            'cost_actual' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate)
+            'cost_actual' => $this->successfulStandardOrdersForMonthlyReport($startDate, $endDate, $filters)
                 ->get([
                     'id',
                     'status',
@@ -951,7 +1070,7 @@ class FinDailyProfitReportController extends Controller
                     'cost_total',
                     'report_cost_total',
                 ]),
-            'shipping_fee' => $this->shippingOrdersForMonthlyReport($startDate, $endDate)
+            'shipping_fee' => $this->shippingOrdersForMonthlyReport($startDate, $endDate, $filters)
                 ->with(['activeShipment:id,order_id,shipping_cost'])
                 ->get([
                     'id',
@@ -963,7 +1082,7 @@ class FinDailyProfitReportController extends Controller
                     'external_delivery_meta',
                     'total_price',
                 ]),
-            'exchange_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_EXCHANGE_RETURN)
+            'exchange_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_EXCHANGE_RETURN, $filters)
                 ->get([
                     'id',
                     'status',
@@ -972,7 +1091,7 @@ class FinDailyProfitReportController extends Controller
                     'created_at',
                     'report_profit_total',
                 ]),
-            'partial_delivery_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_PARTIAL_DELIVERY)
+            'partial_delivery_profit_loss' => $this->specialOrdersForMonthlyReport($startDate, $endDate, Order::TYPE_PARTIAL_DELIVERY, $filters)
                 ->get([
                     'id',
                     'status',
@@ -1045,6 +1164,7 @@ class FinDailyProfitReportController extends Controller
             'month' => ['required', 'regex:/^\d{4}-\d{2}$/'],
             'start_date' => ['nullable', 'date_format:Y-m-d'],
             'end_date' => ['nullable', 'date_format:Y-m-d'],
+            'ad_channel' => ['nullable', 'string'],
         ]);
 
         $metric = $this->normalizeMonthlyReportDrilldownMetric($request->input('metric'));
@@ -1067,7 +1187,10 @@ class FinDailyProfitReportController extends Controller
         }
 
         $metricConfig = self::MONTHLY_REPORT_DRILLDOWN_METRICS[$metric];
-        $orders = $this->monthlyReportDrilldownOrders($metric, $range['start_date'], $range['end_date']);
+        $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $orders = $this->monthlyReportDrilldownOrders($metric, $range['start_date'], $range['end_date'], [
+            'ad_channel' => $adChannel,
+        ]);
         $orderIds = $orders
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
@@ -1087,6 +1210,8 @@ class FinDailyProfitReportController extends Controller
                 'start_date' => $range['start_date'],
                 'end_date' => $range['end_date'],
                 'scope_label' => sprintf('Báo cáo tháng · %s · %s', $metricConfig['label'], $range['month_label']),
+                'ad_channel' => $adChannel,
+                'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
                 'value' => $this->calculateMonthlyReportDrilldownMetricValue($metric, $orders),
                 'order_ids' => $orderIds,
                 'filters' => $this->buildMonthlyReportDrilldownFilters($metric, $range, $orderIds),
@@ -1106,12 +1231,14 @@ class FinDailyProfitReportController extends Controller
         $payload = $this->buildDailyReportPayload($startDate, $endDate, [
             'status' => $request->input('status'),
             'order_type' => $request->input('order_type'),
+            'ad_channel' => $request->input('ad_channel'),
         ]);
 
         return response()->json([
             'status' => 'success',
             'data' => $payload['data'],
             'summary' => $payload['summary'],
+            'meta' => $payload['meta'] ?? [],
         ]);
     }
 
@@ -1119,11 +1246,16 @@ class FinDailyProfitReportController extends Controller
     {
         $startDate = $request->start_date ?: date('Y-01-01');
         $endDate = $request->end_date ?: date('Y-m-d');
+        $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $filters = [
+            'ad_channel' => $adChannel,
+        ];
+        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL;
 
         app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
         app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
 
-        $payload = $this->buildDailyReportPayload($startDate, $endDate);
+        $payload = $this->buildDailyReportPayload($startDate, $endDate, $filters);
         $config = FinDailyReportConfig::query()->first();
         $packagingFeePerOrder = $config ? (float) $config->packaging_fee : 2000.0;
         $taxRate = self::MONTHLY_REPORT_TAX_RATE;
@@ -1148,11 +1280,13 @@ class FinDailyProfitReportController extends Controller
                 return $monthly;
             });
 
-        $monthlyRevenueAndCost = $this->monthlyRevenueAndCostActual($startDate, $endDate);
-        $monthlyShippingFee = $this->monthlyOrderShippingFee($startDate, $endDate);
-        $monthlySuccessfulOrderTotals = $this->monthlySuccessfulOrderRevenueShippingAndTax($startDate, $endDate, $taxRate);
-        $monthlyDamagedGoods = $this->monthlyDamagedGoodsFromDamagedSlips($startDate, $endDate);
-        $monthlySpecialOrderProfitLoss = $this->monthlySpecialOrderProfitLoss($startDate, $endDate);
+        $monthlyRevenueAndCost = $this->monthlyRevenueAndCostActual($startDate, $endDate, $filters);
+        $monthlyShippingFee = $this->monthlyOrderShippingFee($startDate, $endDate, $filters);
+        $monthlySuccessfulOrderTotals = $this->monthlySuccessfulOrderRevenueShippingAndTax($startDate, $endDate, $taxRate, $filters);
+        $monthlyDamagedGoods = $includeSharedCosts
+            ? $this->monthlyDamagedGoodsFromDamagedSlips($startDate, $endDate)
+            : collect();
+        $monthlySpecialOrderProfitLoss = $this->monthlySpecialOrderProfitLoss($startDate, $endDate, $filters);
 
         foreach ($monthlyRevenueAndCost as $monthKey => $totals) {
             if (!$monthKey) {
@@ -1204,15 +1338,7 @@ class FinDailyProfitReportController extends Controller
             $monthlyRows->put($monthKey, $monthly);
         }
 
-        $dispatchedOrderCounts = Order::query()
-            ->whereNotNull('shipping_dispatched_at')
-            ->whereBetween('shipping_dispatched_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
-            ->where(function ($query) {
-                $query->where('order_kind', 'official')
-                    ->orWhereNull('order_kind')
-                    ->orWhere('order_kind', '');
-            })
-            ->whereNotIn('status', self::EXCLUDED_ORDER_STATUSES)
+        $dispatchedOrderCounts = $this->dispatchedOrdersForMonthlyReport($startDate, $endDate, $filters)
             ->get(['id', 'shipping_dispatched_at'])
             ->groupBy(fn (Order $order) => optional($order->shipping_dispatched_at)?->format('Y-m'))
             ->map(fn ($orders) => $orders->count());
@@ -1256,6 +1382,9 @@ class FinDailyProfitReportController extends Controller
                 'special_profit_source' => 'orders.report_profit_total',
                 'special_profit_month_basis' => 'officialized_at_or_created_at_fallback',
                 'total_profit_formula' => 'revenue - cost_actual - shipping_fee - damaged_goods - salary - packaging_fee - ads_spend - tax - fixed_cost + exchange_profit_loss + partial_delivery_profit_loss',
+                'ad_channel' => $adChannel,
+                'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
+                'shared_costs_included' => $includeSharedCosts,
             ],
         ]);
     }

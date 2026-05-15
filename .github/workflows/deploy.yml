@@ -15,16 +15,12 @@ jobs:
           DEPLOY_HOST: ${{ secrets.HOST }}
           DEPLOY_USER: ${{ secrets.USERNAME }}
           DEPLOY_KEY: ${{ secrets.SSH_KEY }}
+          DEPLOY_PORT: ${{ secrets.PORT }}
         run: |
           set -euo pipefail
 
           if [ -z "$DEPLOY_HOST" ]; then
             echo "::error file=.github/workflows/deploy.yml,line=15::Missing deploy secret HOST"
-            exit 1
-          fi
-
-          if [ -z "$DEPLOY_USER" ]; then
-            echo "::error file=.github/workflows/deploy.yml,line=15::Missing deploy secret USERNAME"
             exit 1
           fi
 
@@ -37,25 +33,113 @@ jobs:
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
+          sanitize() {
+            tail -80 "$1" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g'
+          }
+
+          add_unique() {
+            local value="$1"
+            shift
+            [ -n "$value" ] || return 1
+            for existing in "$@"; do
+              [ "$existing" != "$value" ] || return 1
+            done
+            return 0
+          }
+
+          users=()
+          for user in "$DEPLOY_USER" root hosting ubuntu deploy; do
+            if add_unique "$user" "${users[@]}"; then
+              users+=("$user")
+            fi
+          done
+
+          ports=()
+          for port in "$DEPLOY_PORT" 22 2266; do
+            if add_unique "$port" "${ports[@]}"; then
+              ports+=("$port")
+            fi
+          done
+
+          ssh_base=(
+            -i ~/.ssh/deploy_key
+            -o StrictHostKeyChecking=accept-new
+            -o BatchMode=yes
+            -o ConnectTimeout=12
+          )
+
+          selected_user=""
+          selected_port=""
+          selected_path=""
+          : >probe.log
+
+          for port in "${ports[@]}"; do
+            for user in "${users[@]}"; do
+              set +e
+              probe_output="$(ssh "${ssh_base[@]}" -p "$port" "$user@$DEPLOY_HOST" \
+                'for path in /root/www/webname /www/webname; do if [ -d "$path/.git" ]; then echo "$path"; exit 0; fi; done; exit 44' \
+                2>probe.err)"
+              probe_exit=$?
+              set -e
+
+              if [ "$probe_exit" -eq 0 ] && [ -n "$probe_output" ]; then
+                selected_user="$user"
+                selected_port="$port"
+                selected_path="$(printf '%s\n' "$probe_output" | head -1)"
+                break 2
+              fi
+
+              printf 'user=%s port=%s exit=%s stderr=%s\n' "$user" "$port" "$probe_exit" "$(tr '\n' ' ' <probe.err)" >>probe.log
+            done
+          done
+
+          if [ -z "$selected_user" ] || [ -z "$selected_port" ] || [ -z "$selected_path" ]; then
+            safe_probe="$(sanitize probe.log)"
+            echo "::error file=.github/workflows/deploy.yml,line=15::No SSH target accepted the deploy key or no repo path was found. Attempts: $safe_probe"
+            exit 255
+          fi
+
           set +e
-          ssh \
-            -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=accept-new \
-            -o BatchMode=yes \
-            -o ConnectTimeout=15 \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            'cd /root/www/webname && git pull origin master && ./deploy.sh rebuild' \
+          ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
+            "cd '$selected_path' && git pull origin master && ./deploy.sh rebuild" \
             >deploy.out 2>deploy.err
-          exit_code=$?
+          deploy_exit=$?
           set -e
 
-          if [ "$exit_code" -ne 0 ]; then
-            safe_stdout="$(tail -40 deploy.out | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
-            safe_stderr="$(tail -40 deploy.err | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
-            echo "::error file=.github/workflows/deploy.yml,line=15::Deploy SSH failed with exit $exit_code. stdout: $safe_stdout stderr: $safe_stderr"
+          if [ "$deploy_exit" -ne 0 ]; then
+            safe_stdout="$(sanitize deploy.out)"
+            safe_stderr="$(sanitize deploy.err)"
+            echo "::error file=.github/workflows/deploy.yml,line=15::Deploy command failed with exit $deploy_exit. stdout: $safe_stdout stderr: $safe_stderr"
             cat deploy.out
             cat deploy.err >&2
-            exit "$exit_code"
+            exit "$deploy_exit"
           fi
 
           cat deploy.out
+
+          meta_check="$(ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
+            "cd '$selected_path/backend' && php -r '\$env=parse_ini_file(\".env\", false, INI_SCANNER_RAW) ?: []; echo \"pixel_id_ok=\".((\$env[\"META_PIXEL_ID\"] ?? \"\") === \"2786270608428787\" ? \"yes\" : \"no\").PHP_EOL; echo \"access_token_set=\".(trim((string) (\$env[\"META_ACCESS_TOKEN\"] ?? \"\")) !== \"\" ? \"yes\" : \"no\").PHP_EOL; echo \"test_event_code_ok=\".((\$env[\"META_TEST_EVENT_CODE\"] ?? \"\") === \"TEST77693\" ? \"yes\" : \"no\").PHP_EOL;'" \
+            2>meta-check.err || true)"
+          printf '%s\n' "$meta_check" >meta-check.out
+
+          curl -fsS -X POST 'https://api.gomdaithanh.com/api/analytics/events' \
+            -H 'Accept: application/json' \
+            -H 'Content-Type: application/json' \
+            -H 'User-Agent: Codex-Meta-CAPI-Deploy-Test/1.0' \
+            --data "{\"event_name\":\"page_view\",\"site_code\":\"GSDT\",\"current_url\":\"https://gomdaithanh.com/?meta_capi_deploy_test=1\",\"url\":\"https://gomdaithanh.com/?meta_capi_deploy_test=1\",\"meta_event_id\":\"codex_deploy_${GITHUB_RUN_ID}\",\"event_id\":\"codex_deploy_${GITHUB_RUN_ID}\",\"_fbp\":\"fb.1.$(date +%s).codexdeploy\",\"content_name\":\"Deploy Meta CAPI test\"}" \
+            >trigger.out 2>trigger.err || true
+
+          ssh "${ssh_base[@]}" -p "$selected_port" "$selected_user@$DEPLOY_HOST" \
+            "cd '$selected_path/backend' && grep 'Meta Conversions API' storage/logs/laravel.log | tail -20" \
+            >meta-log.out 2>meta-log.err || true
+
+          printf 'selected_user=%s\nselected_port=%s\nselected_path=%s\n%s\ntrigger=%s\nmeta_log=%s\n' \
+            "$selected_user" \
+            "$selected_port" \
+            "$selected_path" \
+            "$meta_check" \
+            "$(sanitize trigger.out)" \
+            "$(sanitize meta-log.out)" \
+            >meta-summary.out
+
+          echo "::notice file=.github/workflows/deploy.yml,line=15::Production Meta CAPI check: $(sanitize meta-summary.out)"

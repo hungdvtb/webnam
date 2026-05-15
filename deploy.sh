@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Configuration
-PROJECT_ROOT="/root/www/webname"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$SCRIPT_DIR}"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 ADMIN_DIR="$PROJECT_ROOT/frontend"
 WEBSITE_DIR="$PROJECT_ROOT/webgom"
@@ -24,7 +25,22 @@ function deploy_backend() {
     php artisan optimize:clear
     php artisan config:clear
     php artisan cache:clear
+    restart_php_runtime
     echo -e "${GREEN}Backend deployment complete.${NC}"
+}
+
+function restart_php_runtime() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        return
+    fi
+
+    for service in php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php-fpm; do
+        if systemctl list-unit-files "$service.service" >/dev/null 2>&1 || systemctl status "$service" >/dev/null 2>&1; then
+            systemctl reload-or-restart "$service" || true
+            echo -e "${GREEN}PHP runtime refreshed: $service.${NC}"
+            return
+        fi
+    done
 }
 
 function deploy_worker() {

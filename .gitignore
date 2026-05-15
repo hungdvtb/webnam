@@ -32,3 +32,21 @@ webgom/public/tmp-*
 .codex-backups/
 brain/
 scratch/
+
+# Local database snapshots
+database-backups/*.dump
+
+# One-off local debug/import scripts and outputs
+backend/check_storage.php
+backend/debug_*.php
+backend/list_products.php
+backend/query*.sql
+backend/replace_images*.php
+backend/restore_post.php
+backend/test_*.php
+backend/update_blog_post.php
+test_output.json
+test_r2_url.txt
+
+# Office lock files
+~$*

@@ -10,12 +10,52 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
-            cd /root/www/webname
-            git pull origin master
-            ./deploy.sh rebuild
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST }}
+          DEPLOY_USER: ${{ secrets.USERNAME }}
+          DEPLOY_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error file=.github/workflows/deploy.yml,line=15::Missing deploy secret HOST"
+            exit 1
+          fi
+
+          if [ -z "$DEPLOY_USER" ]; then
+            echo "::error file=.github/workflows/deploy.yml,line=15::Missing deploy secret USERNAME"
+            exit 1
+          fi
+
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error file=.github/workflows/deploy.yml,line=15::Missing deploy secret SSH_KEY"
+            exit 1
+          fi
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          set +e
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            'cd /root/www/webname && git pull origin master && ./deploy.sh rebuild' \
+            >deploy.out 2>deploy.err
+          exit_code=$?
+          set -e
+
+          if [ "$exit_code" -ne 0 ]; then
+            safe_stdout="$(tail -40 deploy.out | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            safe_stderr="$(tail -40 deploy.err | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error file=.github/workflows/deploy.yml,line=15::Deploy SSH failed with exit $exit_code. stdout: $safe_stdout stderr: $safe_stderr"
+            cat deploy.out
+            cat deploy.err >&2
+            exit "$exit_code"
+          fi
+
+          cat deploy.out

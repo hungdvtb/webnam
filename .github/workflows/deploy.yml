@@ -16,6 +16,6 @@ jobs:
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           script: |
-            cd /www/webname
+            cd /root/www/webname
             git pull origin master
             ./deploy.sh rebuild

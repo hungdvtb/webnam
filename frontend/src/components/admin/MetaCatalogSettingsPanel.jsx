@@ -59,6 +59,53 @@ const StatBox = ({ label, value, tone = 'primary' }) => {
     );
 };
 
+const SkippedProductsTable = ({ entries = [] }) => {
+    if (!entries.length) {
+        return null;
+    }
+
+    return (
+        <div className="overflow-x-auto rounded-sm border border-amber-100">
+            <div className="flex items-center justify-between gap-3 border-b border-amber-100 bg-amber-50 px-4 py-3">
+                <p className="text-[12px] font-black uppercase tracking-wider text-amber-700">Sản phẩm bị bỏ qua</p>
+                <p className="text-[12px] font-bold text-amber-700">{compactNumber(entries.length)} sản phẩm</p>
+            </div>
+            <table className="w-full text-left text-[12px]">
+                <thead className="bg-amber-50/60 text-amber-700">
+                    <tr>
+                        <th className="px-4 py-3 font-black uppercase">SKU</th>
+                        <th className="px-4 py-3 font-black uppercase">Tên sản phẩm</th>
+                        <th className="px-4 py-3 font-black uppercase">Lý do bỏ qua</th>
+                        <th className="px-4 py-3 font-black uppercase">Chỉnh sửa</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-100 bg-white">
+                    {entries.map((entry, index) => {
+                        const editUrl = entry.admin_edit_url || (entry.product_id ? `/admin/products/edit/${entry.product_id}` : '');
+                        return (
+                            <tr key={`${entry.id || entry.product_id || index}-${index}`}>
+                                <td className="px-4 py-3 font-mono font-bold text-primary">{entry.id || `product-${entry.product_id || '-'}`}</td>
+                                <td className="px-4 py-3 font-bold text-primary">{entry.title || '-'}</td>
+                                <td className="px-4 py-3 text-amber-700 font-bold">{(entry.errors || []).join('; ') || '-'}</td>
+                                <td className="px-4 py-3">
+                                    {editUrl ? (
+                                        <a href={editUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1 rounded-sm border border-primary/20 px-3 text-[11px] font-black uppercase text-primary hover:bg-primary hover:text-white">
+                                            <span className="material-symbols-outlined text-[16px]">edit_square</span>
+                                            Mở
+                                        </a>
+                                    ) : (
+                                        <span className="text-primary/35">-</span>
+                                    )}
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
 const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, showModal }) => {
     const [settings, setSettings] = useState(defaultSettings);
     const [logs, setLogs] = useState([]);
@@ -181,10 +228,18 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
         setSyncResult(null);
         try {
             const response = await metaCatalogApi.dryRun({ check_remote_urls: checkRemoteUrls });
-            setDryRunResult(response.data?.result || null);
+            const result = response.data?.result || null;
+            setDryRunResult(result);
             setSettings((prev) => ({ ...prev, ...(response.data?.settings || {}), access_token: '' }));
             await refreshLogs();
-            showModal({ title: 'Dry-run hoàn tất', content: 'Dữ liệu đã sẵn sàng để đồng bộ Meta.', type: 'success' });
+            const skippedCount = Number(result?.skipped_count || 0);
+            showModal({
+                title: 'Dry-run hoàn tất',
+                content: skippedCount > 0
+                    ? `Có ${compactNumber(skippedCount)} sản phẩm bị bỏ qua. Các sản phẩm đủ điều kiện vẫn có thể sync Meta.`
+                    : 'Tất cả sản phẩm trong phạm vi website đều đủ điều kiện sync Meta.',
+                type: 'success',
+            });
         } catch (error) {
             const result = error.response?.data?.result || error.response?.data?.log?.details || null;
             if (result) {
@@ -192,8 +247,8 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
             }
             await refreshLogs();
             showModal({
-                title: 'Dry-run còn lỗi',
-                content: error.response?.data?.message || 'Vẫn còn sản phẩm chưa đủ dữ liệu để đồng bộ.',
+                title: 'Dry-run thất bại',
+                content: error.response?.data?.message || 'Không thể chạy kiểm tra dữ liệu Meta Catalog.',
                 type: 'error',
             });
         } finally {
@@ -203,7 +258,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
 
     const handleSyncNow = async () => {
         if (!dryRunResult || Number(dryRunResult.invalid_count || 0) > 0) {
-            showModal({ title: 'Chưa thể đồng bộ', content: 'Cần chạy dry-run và xử lý hết lỗi nghiêm trọng trước.', type: 'error' });
+            showModal({ title: 'Chưa thể đồng bộ', content: 'Cần chạy dry-run thành công trước. Sản phẩm bị bỏ qua không chặn sync live.', type: 'error' });
             return;
         }
 
@@ -219,6 +274,10 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
             await refreshLogs();
             showModal({ title: 'Đồng bộ thành công', content: 'Đã gửi dữ liệu sản phẩm lên Meta Catalog.', type: 'success' });
         } catch (error) {
+            const result = error.response?.data?.result || null;
+            if (result) {
+                setSyncResult(result);
+            }
             await refreshLogs();
             showModal({
                 title: 'Đồng bộ thất bại',
@@ -308,7 +367,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                     </div>
 
                     <div>
-                        <label className={labelClasses}>Ảnh dự phòng</label>
+                        <label className={labelClasses}>Ảnh dự phòng lưu cấu hình</label>
                         <input
                             name="fallback_image_url"
                             value={settings.fallback_image_url || ''}
@@ -399,45 +458,13 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                 <div className="space-y-5">
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                         <StatBox label="Tổng sản phẩm" value={dryRunResult?.feed_count || 0} />
-                        <StatBox label="Hợp lệ" value={dryRunResult?.valid_count || 0} tone="green" />
-                        <StatBox label="Lỗi" value={dryRunResult?.invalid_count || 0} tone={Number(dryRunResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
-                        <StatBox label="Dùng ảnh fallback" value={dryRunResult?.fallback_count || 0} tone={Number(dryRunResult?.fallback_count || 0) > 0 ? 'amber' : 'primary'} />
+                        <StatBox label="Đủ điều kiện" value={dryRunResult?.valid_count || 0} tone="green" />
+                        <StatBox label="Bị bỏ qua" value={dryRunResult?.skipped_count || 0} tone={Number(dryRunResult?.skipped_count || 0) > 0 ? 'amber' : 'green'} />
+                        <StatBox label="Lỗi thật sự" value={dryRunResult?.invalid_count || 0} tone={Number(dryRunResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
                         <StatBox label="Batch dự kiến" value={dryRunResult?.batch_count || 0} />
                     </div>
 
-                    {dryRunResult?.invalid_entries?.length > 0 && (
-                        <div className="overflow-x-auto rounded-sm border border-red-100">
-                            <table className="w-full text-left text-[12px]">
-                                <thead className="bg-red-50 text-red-700">
-                                    <tr>
-                                        <th className="px-4 py-3 font-black uppercase">SKU</th>
-                                        <th className="px-4 py-3 font-black uppercase">Tên sản phẩm</th>
-                                        <th className="px-4 py-3 font-black uppercase">Danh mục</th>
-                                        <th className="px-4 py-3 font-black uppercase">Lý do lỗi</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-red-100 bg-white">
-                                    {dryRunResult.invalid_entries.map((entry) => (
-                                        <tr key={entry.id}>
-                                            <td className="px-4 py-3 font-mono font-bold text-primary">{entry.id}</td>
-                                            <td className="px-4 py-3 font-bold text-primary">{entry.title}</td>
-                                            <td className="px-4 py-3 text-primary/70">{entry.product_type || '-'}</td>
-                                            <td className="px-4 py-3 text-red-700 font-bold">{(entry.errors || []).join('; ')}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-
-                    {dryRunResult?.fallback_entries?.length > 0 && (
-                        <div className="rounded-sm border border-amber-100 bg-amber-50 px-4 py-3">
-                            <p className="text-[12px] font-black uppercase tracking-wider text-amber-700">Sản phẩm đang dùng ảnh fallback</p>
-                            <p className="mt-2 text-[13px] font-bold text-amber-700">
-                                {dryRunResult.fallback_entries.map((entry) => entry.id).join(', ')}
-                            </p>
-                        </div>
-                    )}
+                    <SkippedProductsTable entries={dryRunResult?.skipped_entries || []} />
                 </div>
             </SectionCard>
 
@@ -450,16 +477,21 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                     </button>
                 )}
             >
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+                    <StatBox label="Tổng sản phẩm" value={syncResult?.feed_count || dryRunResult?.feed_count || 0} />
+                    <StatBox label="Đủ điều kiện" value={syncResult?.valid_count || dryRunResult?.valid_count || 0} tone="green" />
                     <StatBox label="Tạo mới" value={syncResult?.create_count || 0} tone="green" />
                     <StatBox label="Cập nhật" value={syncResult?.update_count || 0} />
                     <StatBox label="Xóa khỏi Meta" value={syncResult?.delete_count || 0} tone="amber" />
-                    <StatBox label="Lỗi" value={syncResult?.invalid_count || 0} tone={Number(syncResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
-                    <StatBox label="Sản phẩm gửi" value={syncResult?.request_count || 0} />
+                    <StatBox label="Bị bỏ qua" value={syncResult?.skipped_count || dryRunResult?.skipped_count || 0} tone={Number(syncResult?.skipped_count || dryRunResult?.skipped_count || 0) > 0 ? 'amber' : 'green'} />
+                    <StatBox label="Lỗi thật sự" value={syncResult?.invalid_count || 0} tone={Number(syncResult?.invalid_count || 0) > 0 ? 'red' : 'green'} />
+                </div>
+                <div className="mt-5">
+                    <SkippedProductsTable entries={syncResult?.skipped_entries || []} />
                 </div>
                 {!canSync && (
                     <p className="mt-4 rounded-sm border border-primary/10 bg-stone-50 px-4 py-3 text-[13px] font-bold text-primary/50">
-                        Nút sync live chỉ mở sau khi dry-run hoàn tất và không còn lỗi nghiêm trọng.
+                        Nút sync live mở sau khi dry-run hoàn tất. Sản phẩm thiếu ảnh/danh mục hoặc đang OFF sẽ tự bị bỏ qua.
                     </p>
                 )}
             </SectionCard>
@@ -474,6 +506,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                                 <th className="px-4 py-3 font-black uppercase">Người bấm</th>
                                 <th className="px-4 py-3 font-black uppercase">Tổng</th>
                                 <th className="px-4 py-3 font-black uppercase">Thành công</th>
+                                <th className="px-4 py-3 font-black uppercase">Bỏ qua</th>
                                 <th className="px-4 py-3 font-black uppercase">Lỗi</th>
                                 <th className="px-4 py-3 font-black uppercase">Trạng thái</th>
                                 <th className="px-4 py-3 font-black uppercase">Chi tiết</th>
@@ -482,7 +515,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                         <tbody className="divide-y divide-primary/5 bg-white">
                             {logs.length === 0 ? (
                                 <tr>
-                                    <td colSpan="8" className="px-4 py-10 text-center text-primary/35">Chưa có log Meta Catalog.</td>
+                                    <td colSpan="9" className="px-4 py-10 text-center text-primary/35">Chưa có log Meta Catalog.</td>
                                 </tr>
                             ) : logs.map((log) => (
                                 <tr key={log.id}>
@@ -491,6 +524,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                                     <td className="px-4 py-3 text-primary/70">{log.user?.name || log.user?.email || 'Hệ thống'}</td>
                                     <td className="px-4 py-3 font-mono text-primary">{compactNumber(log.total_products)}</td>
                                     <td className="px-4 py-3 font-mono text-green-700">{compactNumber(log.success_count || log.valid_products)}</td>
+                                    <td className="px-4 py-3 font-mono text-amber-700">{compactNumber(log.skipped_count || 0)}</td>
                                     <td className="px-4 py-3 font-mono text-red-700">{compactNumber(log.error_count || log.invalid_products)}</td>
                                     <td className="px-4 py-3">
                                         <span className={`rounded-sm border px-2 py-1 text-[10px] font-black uppercase ${statusClasses(log.status)}`}>{log.status}</span>

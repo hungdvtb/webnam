@@ -29,21 +29,20 @@ class MetaCatalogProductSyncService
         $pollStatus = (bool) ($options['poll_status'] ?? config('meta_catalog.poll_status', true));
         $checkRemoteUrls = (bool) ($options['check_remote_urls'] ?? false);
 
-        $entries = $this->feedEntries();
-        $currentRetailerIds = $this->retailerIdSet($entries);
-        $invalidEntries = $this->invalidEntries($entries, $checkRemoteUrls);
-        $fallbackEntries = $this->fallbackEntries($entries);
-        $validEntries = array_values(array_filter(
-            $entries,
-            fn (array $entry) => !isset($invalidEntries[$entry['id'] ?? ''])
-        ));
-
-        if (!$dryRun && empty($entries) && $deleteStale) {
-            throw new MetaCatalogProductSyncException('Website feed has no products; refusing to delete every item from the Meta catalog.');
+        $snapshot = $this->feedSnapshot();
+        $entries = $snapshot['entries'];
+        $skippedEntries = $snapshot['skipped_entries'];
+        if ($checkRemoteUrls) {
+            [$entries, $remoteSkippedEntries] = $this->skipEntriesWithRemoteUrlErrors($entries);
+            $skippedEntries = array_merge($skippedEntries, $remoteSkippedEntries);
         }
 
-        if (!$dryRun && !empty($invalidEntries)) {
-            throw new MetaCatalogProductSyncException('Dry-run still has invalid products; refusing to sync live to Meta.');
+        $currentRetailerIds = $this->retailerIdSet($entries);
+        $fallbackEntries = $this->fallbackEntries($entries);
+        $validEntries = array_values($entries);
+
+        if (!$dryRun && (int) ($snapshot['total_count'] ?? 0) === 0 && $deleteStale) {
+            throw new MetaCatalogProductSyncException('Website feed has no products; refusing to delete every item from the Meta catalog.');
         }
 
         $existingRetailerIds = $dryRun ? [] : $this->fetchCatalogRetailerIds();
@@ -59,13 +58,15 @@ class MetaCatalogProductSyncService
                 $batches[] = $this->sendBatch($chunk, $index + 1, $pollStatus);
             }
         }
+        $batchErrorCount = $this->countBatchErrors($batches);
 
         return [
             'dry_run' => $dryRun,
             'catalog_id' => (string) config('meta_catalog.catalog_id'),
-            'feed_count' => count($entries),
+            'feed_count' => (int) ($snapshot['total_count'] ?? count($entries)),
             'valid_count' => count($validEntries),
-            'invalid_count' => count($invalidEntries),
+            'skipped_count' => count($skippedEntries),
+            'invalid_count' => $batchErrorCount,
             'existing_count' => count($existingRetailerIds),
             'create_count' => $this->countByMethod($upsertRequests, 'CREATE'),
             'update_count' => $this->countByMethod($upsertRequests, 'UPDATE'),
@@ -73,9 +74,11 @@ class MetaCatalogProductSyncService
             'fallback_count' => count($fallbackEntries),
             'request_count' => count($requests),
             'batch_count' => (int) ceil(count($requests) / max($batchSize, 1)),
-            'invalid_entries' => array_values($invalidEntries),
+            'invalid_entries' => [],
+            'skipped_entries' => $skippedEntries,
             'fallback_entries' => $fallbackEntries,
             'batches' => $batches,
+            'batch_error_count' => $batchErrorCount,
         ];
     }
 
@@ -120,17 +123,27 @@ class MetaCatalogProductSyncService
         return $requests;
     }
 
-    private function feedEntries(): array
+    private function feedSnapshot(): array
     {
+        $snapshot = $this->feedService->catalogSnapshot();
         $entries = [];
-        foreach ($this->feedService->entries() as $entry) {
+        foreach ((array) ($snapshot['entries'] ?? []) as $entry) {
             $entry = array_map(fn ($value) => is_scalar($value) ? trim((string) $value) : '', $entry);
             if (($entry['id'] ?? '') !== '') {
                 $entries[] = $entry;
             }
         }
 
-        return $entries;
+        $skippedEntries = array_map(
+            fn (array $entry) => $this->normalizeSkippedEntry($entry),
+            (array) ($snapshot['skipped_entries'] ?? [])
+        );
+
+        return [
+            'total_count' => (int) ($snapshot['total_count'] ?? count($entries) + count($skippedEntries)),
+            'entries' => $entries,
+            'skipped_entries' => $skippedEntries,
+        ];
     }
 
     private function retailerIdSet(array $entries): array
@@ -157,68 +170,58 @@ class MetaCatalogProductSyncService
             ->all();
     }
 
-    private function invalidEntries(array $entries, bool $checkRemoteUrls): array
+    private function normalizeSkippedEntry(array $entry): array
     {
-        $invalid = [];
-        foreach ($entries as $entry) {
-            $errors = $this->validationErrors($entry, $checkRemoteUrls);
-            if (!empty($errors)) {
-                $invalid[(string) $entry['id']] = [
-                    'id' => (string) $entry['id'],
-                    'title' => (string) ($entry['title'] ?? ''),
-                    'product_type' => (string) ($entry['product_type'] ?? ''),
-                    'errors' => $errors,
-                ];
-            }
-        }
-
-        return $invalid;
+        return [
+            'id' => (string) ($entry['id'] ?? ''),
+            'product_id' => (int) ($entry['product_id'] ?? 0),
+            'title' => (string) ($entry['title'] ?? ''),
+            'product_type' => (string) ($entry['product_type'] ?? ''),
+            'admin_edit_url' => (string) ($entry['admin_edit_url'] ?? ''),
+            'errors' => array_values(array_filter(array_map(
+                fn ($error) => trim((string) $error),
+                (array) ($entry['errors'] ?? [])
+            ))),
+        ];
     }
 
-    private function validationErrors(array $entry, bool $checkRemoteUrls): array
+    private function skipEntriesWithRemoteUrlErrors(array $entries): array
     {
-        $required = [
-            'id',
-            'title',
-            'description',
-            'price',
-            'link',
-            'image_link',
-            'product_type',
-            'custom_label_0',
-        ];
+        $validEntries = [];
+        $skippedEntries = [];
 
-        $errors = [];
-        foreach ($required as $field) {
-            if (trim((string) ($entry[$field] ?? '')) === '') {
-                $errors[] = "{$field} is empty";
+        foreach ($entries as $entry) {
+            $errors = $this->remoteValidationErrors($entry);
+            if (!empty($errors)) {
+                $skippedEntries[] = [
+                    'id' => (string) $entry['id'],
+                    'product_id' => (int) ($entry['_product_id'] ?? 0),
+                    'title' => (string) ($entry['title'] ?? ''),
+                    'product_type' => (string) ($entry['product_type'] ?? ''),
+                    'admin_edit_url' => (string) ($entry['_admin_edit_url'] ?? ''),
+                    'errors' => $errors,
+                ];
+                continue;
             }
+
+            $validEntries[] = $entry;
         }
 
-        try {
-            $this->parsePrice((string) ($entry['price'] ?? ''));
-        } catch (Throwable $exception) {
-            $errors[] = $exception->getMessage();
-        }
+        return [$validEntries, $skippedEntries];
+    }
+
+    private function remoteValidationErrors(array $entry): array
+    {
+        $errors = [];
 
         $link = trim((string) ($entry['link'] ?? ''));
-        if ($link !== '' && !filter_var($link, FILTER_VALIDATE_URL)) {
-            $errors[] = 'link is not a valid URL';
+        if ($link !== '' && filter_var($link, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($link, false)) {
+            $errors[] = 'link lỗi hoặc không truy cập được';
         }
 
         $imageLink = trim((string) ($entry['image_link'] ?? ''));
-        if ($imageLink !== '' && !filter_var($imageLink, FILTER_VALIDATE_URL)) {
-            $errors[] = 'image_link is not a valid URL';
-        }
-
-        if ($checkRemoteUrls) {
-            if ($link !== '' && filter_var($link, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($link, false)) {
-                $errors[] = 'link URL is not reachable';
-            }
-
-            if ($imageLink !== '' && filter_var($imageLink, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($imageLink, true)) {
-                $errors[] = 'image_link URL is not reachable or not an image';
-            }
+        if ($imageLink !== '' && filter_var($imageLink, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($imageLink, true)) {
+            $errors[] = 'ảnh lỗi hoặc không phải ảnh';
         }
 
         return $errors;
@@ -279,6 +282,21 @@ class MetaCatalogProductSyncService
         }
 
         return $data;
+    }
+
+    private function countBatchErrors(array $batches): int
+    {
+        $count = 0;
+        foreach ($batches as $batch) {
+            foreach ((array) ($batch['statuses'] ?? []) as $status) {
+                $errors = data_get($status, 'response.data.0.errors', data_get($status, 'response.errors', []));
+                if (is_array($errors)) {
+                    $count += count($errors);
+                }
+            }
+        }
+
+        return $count;
     }
 
     private function parsePrice(string $value): array

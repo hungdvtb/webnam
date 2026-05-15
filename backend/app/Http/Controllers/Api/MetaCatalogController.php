@@ -82,7 +82,7 @@ class MetaCatalogController extends Controller
                 'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
                 'check_remote_urls' => (bool) ($validated['check_remote_urls'] ?? false),
             ]);
-            $status = ((int) ($result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
+            $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
             $log = $this->recordLog($request, $accountId, 'dry_run', $status, $result, $startedAt, $startTime);
 
             return response()->json([
@@ -114,13 +114,14 @@ class MetaCatalogController extends Controller
                 'dry_run' => false,
                 'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
             ]);
-            $log = $this->recordLog($request, $accountId, 'sync_live', 'success', $result, $startedAt, $startTime);
+            $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
+            $log = $this->recordLog($request, $accountId, 'sync_live', $status, $result, $startedAt, $startTime);
 
             return response()->json([
                 'result' => $result,
                 'log' => $this->logPayload($log),
                 'settings' => $this->settingsService->publicSettingsFor($accountId),
-            ]);
+            ], $status === 'success' ? 200 : 422);
         } catch (Throwable $exception) {
             $log = $this->recordFailure($request, $accountId, 'sync_live', $exception, $startedAt, $startTime);
 
@@ -231,6 +232,7 @@ class MetaCatalogController extends Controller
     private function recordLog(Request $request, ?int $accountId, string $operation, string $status, array $result, $startedAt, float $startTime): MetaCatalogSyncLog
     {
         $invalidEntries = (array) ($result['invalid_entries'] ?? []);
+        $skippedEntries = (array) ($result['skipped_entries'] ?? []);
         $fallbackEntries = (array) ($result['fallback_entries'] ?? []);
         $finishedAt = now();
 
@@ -252,6 +254,8 @@ class MetaCatalogController extends Controller
             'summary' => $this->summaryFor($operation, $status, $result),
             'details' => [
                 'invalid_entries' => $invalidEntries,
+                'skipped_entries' => $skippedEntries,
+                'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
                 'fallback_entries' => $fallbackEntries,
                 'batches' => $result['batches'] ?? [],
                 'details' => $result['details'] ?? null,
@@ -285,11 +289,12 @@ class MetaCatalogController extends Controller
     private function summaryFor(string $operation, string $status, array $result): string
     {
         return sprintf(
-            '%s %s: total %d, valid %d, invalid %d, create %d, update %d, delete %d, fallback %d.',
+            '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d, fallback %d.',
             $operation,
             $status,
             (int) ($result['feed_count'] ?? 0),
             (int) ($result['valid_count'] ?? 0),
+            (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
             (int) ($result['invalid_count'] ?? 0),
             (int) ($result['create_count'] ?? 0),
             (int) ($result['update_count'] ?? 0),
@@ -307,6 +312,7 @@ class MetaCatalogController extends Controller
             'total_products' => $log->total_products,
             'valid_products' => $log->valid_products,
             'invalid_products' => $log->invalid_products,
+            'skipped_count' => (int) data_get($log->details, 'skipped_count', count((array) data_get($log->details, 'skipped_entries', []))),
             'success_count' => $log->success_count,
             'error_count' => $log->error_count,
             'create_count' => $log->create_count,

@@ -53,10 +53,11 @@ class SyncMetaCatalogProducts extends Command
 
         $mode = $result['dry_run'] ? 'Dry run' : 'Submitted';
         $this->info(sprintf(
-            '%s Meta catalog sync. Feed: %d. Valid: %d. Invalid: %d. Create: %d. Update: %d. Delete: %d. Batches: %d.',
+            '%s Meta catalog sync. Total: %d. Eligible: %d. Skipped: %d. Errors: %d. Create: %d. Update: %d. Delete: %d. Batches: %d.',
             $mode,
             $result['feed_count'],
             $result['valid_count'],
+            $result['skipped_count'] ?? 0,
             $result['invalid_count'],
             $result['create_count'],
             $result['update_count'],
@@ -69,9 +70,9 @@ class SyncMetaCatalogProducts extends Command
             $this->warn('Products using fallback image: ' . count($fallbackEntries));
         }
 
-        foreach (array_slice($result['invalid_entries'], 0, 10) as $entry) {
+        foreach (array_slice((array) ($result['skipped_entries'] ?? []), 0, 20) as $entry) {
             $this->warn(sprintf(
-                '[invalid] %s %s',
+                '[skipped] %s %s',
                 $entry['id'] ?? '',
                 implode('; ', (array) ($entry['errors'] ?? []))
             ));
@@ -82,10 +83,10 @@ class SyncMetaCatalogProducts extends Command
             $this->warn("Meta reported {$batchErrors} batch error sample(s). Check the command output or Laravel logs for details.");
         }
 
-        $status = $result['invalid_count'] > 0 || $batchErrors > 0 ? 'error' : 'success';
+        $status = $batchErrors > 0 ? 'error' : 'success';
         $this->recordResult($accountId, $this->operationName(), $status, $result, $startedAt, $startTime);
 
-        return $result['invalid_count'] > 0 || $batchErrors > 0
+        return $batchErrors > 0
             ? self::FAILURE
             : self::SUCCESS;
     }
@@ -131,11 +132,12 @@ class SyncMetaCatalogProducts extends Command
             'fallback_count' => (int) ($result['fallback_count'] ?? count((array) ($result['fallback_entries'] ?? []))),
             'duration_ms' => (int) round((microtime(true) - $startTime) * 1000),
             'summary' => sprintf(
-                '%s %s: total %d, valid %d, invalid %d, create %d, update %d, delete %d.',
+                '%s %s: total %d, eligible %d, skipped %d, errors %d, create %d, update %d, delete %d.',
                 $operation,
                 $status,
                 (int) ($result['feed_count'] ?? 0),
                 (int) ($result['valid_count'] ?? 0),
+                (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
                 (int) ($result['invalid_count'] ?? 0),
                 (int) ($result['create_count'] ?? 0),
                 (int) ($result['update_count'] ?? 0),
@@ -143,6 +145,8 @@ class SyncMetaCatalogProducts extends Command
             ),
             'details' => [
                 'invalid_entries' => $result['invalid_entries'] ?? [],
+                'skipped_entries' => $result['skipped_entries'] ?? [],
+                'skipped_count' => (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
                 'fallback_entries' => $result['fallback_entries'] ?? [],
                 'batches' => $result['batches'] ?? [],
             ],

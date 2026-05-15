@@ -61,6 +61,39 @@ class MetaFeedService
 
     public function entries(): \Generator
     {
+        foreach ($this->catalogSnapshot()['entries'] as $entry) {
+            yield $entry;
+        }
+    }
+
+    public function catalogSnapshot(): array
+    {
+        $entries = [];
+        $skippedEntries = [];
+        $totalCount = 0;
+
+        foreach ($this->productQuery()->lazy(200) as $product) {
+            $totalCount++;
+            $entry = $this->entryForProduct($product);
+            $skipReasons = $this->skipReasonsForProduct($product, $entry);
+
+            if (!empty($skipReasons)) {
+                $skippedEntries[] = $this->skippedEntryPayload($product, $entry, $skipReasons);
+                continue;
+            }
+
+            $entries[] = $entry;
+        }
+
+        return [
+            'total_count' => $totalCount,
+            'entries' => $entries,
+            'skipped_entries' => $skippedEntries,
+        ];
+    }
+
+    private function productQuery(): Builder
+    {
         $query = Product::withoutGlobalScope('account_id')
             ->select([
                 'id',
@@ -81,7 +114,6 @@ class MetaFeedService
                 'stock_quantity',
                 'status',
             ])
-            ->where('status', true)
             ->whereDoesntHave('parentConfigurable')
             ->with([
                 'images' => fn ($imageQuery) => $imageQuery
@@ -98,9 +130,7 @@ class MetaFeedService
 
         $this->scopeToWebsiteDomain($query);
 
-        foreach ($query->lazy(200) as $product) {
-            yield $this->entryForProduct($product);
-        }
+        return $query;
     }
 
     private function entryForProduct(Product $product): array
@@ -110,9 +140,11 @@ class MetaFeedService
         $categoryName = $this->categoryNameForProduct($product);
         $primaryImage = $this->primaryImage($product);
         $imageLink = $this->imageUrl($primaryImage);
-        $usedFallbackImage = !$primaryImage && $imageLink !== '';
 
         return [
+            '_product_id' => (int) $product->id,
+            '_admin_edit_url' => $this->adminProductUrl($product),
+            '_status' => (bool) $product->status,
             'id' => $this->feedId($product),
             'title' => $title,
             'description' => $description !== '' ? $description : $title,
@@ -124,7 +156,62 @@ class MetaFeedService
             'brand' => $this->brand(),
             'product_type' => $categoryName,
             'custom_label_0' => $categoryName,
-            '_used_fallback_image' => $usedFallbackImage,
+            '_used_fallback_image' => false,
+        ];
+    }
+
+    private function skipReasonsForProduct(Product $product, array $entry): array
+    {
+        $reasons = [];
+
+        if (!(bool) $product->status) {
+            $reasons[] = 'trạng thái kinh doanh OFF';
+        }
+
+        if (trim((string) ($entry['id'] ?? '')) === '') {
+            $reasons[] = 'thiếu SKU/id';
+        }
+
+        if (trim((string) ($entry['title'] ?? '')) === '') {
+            $reasons[] = 'thiếu tên sản phẩm';
+        }
+
+        if ((float) ($product->current_price ?: $product->price ?: 0) <= 0) {
+            $reasons[] = 'thiếu giá bán hợp lệ > 0';
+        }
+
+        $link = trim((string) ($entry['link'] ?? ''));
+        if ($link === '') {
+            $reasons[] = 'thiếu link sản phẩm';
+        } elseif (!filter_var($link, FILTER_VALIDATE_URL)) {
+            $reasons[] = 'link sản phẩm không hợp lệ';
+        }
+
+        $imageLink = trim((string) ($entry['image_link'] ?? ''));
+        if ($imageLink === '') {
+            $reasons[] = 'thiếu ảnh';
+        } elseif (!filter_var($imageLink, FILTER_VALIDATE_URL)) {
+            $reasons[] = 'ảnh không hợp lệ';
+        }
+
+        $productType = trim((string) ($entry['product_type'] ?? ''));
+        $customLabel = trim((string) ($entry['custom_label_0'] ?? ''));
+        if ($productType === '' || $customLabel === '') {
+            $reasons[] = 'thiếu danh mục product_type/custom_label_0';
+        }
+
+        return array_values(array_unique($reasons));
+    }
+
+    private function skippedEntryPayload(Product $product, array $entry, array $reasons): array
+    {
+        return [
+            'id' => (string) ($entry['id'] ?? ''),
+            'product_id' => (int) $product->id,
+            'title' => (string) ($entry['title'] ?? $product->name ?? ''),
+            'product_type' => (string) ($entry['product_type'] ?? ''),
+            'admin_edit_url' => (string) ($entry['_admin_edit_url'] ?? $this->adminProductUrl($product)),
+            'errors' => array_values($reasons),
         ];
     }
 
@@ -250,6 +337,11 @@ class MetaFeedService
         return $this->normalizeUrl($this->websiteBaseUrl(), '/product/' . rawurlencode($identifier));
     }
 
+    private function adminProductUrl(Product $product): string
+    {
+        return '/admin/products/edit/' . (int) $product->id;
+    }
+
     private function primaryImage(Product $product): ?ProductImage
     {
         $images = $product->relationLoaded('images') ? $product->images : $product->images()->get();
@@ -289,9 +381,7 @@ class MetaFeedService
             return $this->normalizeUrl($this->mediaBaseUrl(), $url);
         }
 
-        $fallback = trim((string) config('meta_catalog.fallback_image_url'));
-
-        return $fallback !== '' ? $this->normalizeUrl($this->websiteBaseUrl(), $fallback) : '';
+        return '';
     }
 
     private function websiteBaseUrl(): string

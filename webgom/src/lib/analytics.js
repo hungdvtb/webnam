@@ -29,6 +29,75 @@ const safeStorageSet = (storage, key, value) => {
   }
 };
 
+const readCookieValue = (name) => {
+  if (typeof document === 'undefined' || !name) {
+    return '';
+  }
+
+  const prefix = `${name}=`;
+  const cookie = document.cookie
+    .split('; ')
+    .find((part) => part.startsWith(prefix));
+
+  if (!cookie) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(cookie.slice(prefix.length));
+  } catch {
+    return cookie.slice(prefix.length);
+  }
+};
+
+const readCurrentQueryParam = (name) => {
+  if (typeof window === 'undefined' || !name) {
+    return '';
+  }
+
+  try {
+    return new URL(window.location.href).searchParams.get(name) || '';
+  } catch {
+    return '';
+  }
+};
+
+const normalizeEventIdPart = (value) => String(value || '')
+  .trim()
+  .replace(/[^A-Za-z0-9:_-]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .slice(0, 160);
+
+export const createMetaEventId = (eventName, stableKey = '') => {
+  const normalizedEvent = normalizeEventIdPart(eventName || 'event') || 'event';
+  const normalizedKey = normalizeEventIdPart(stableKey);
+
+  if (normalizedKey) {
+    return `webgom_${normalizedEvent}_${normalizedKey}`;
+  }
+
+  return createId(`webgom_${normalizedEvent}`);
+};
+
+export const getMetaBrowserData = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const fbp = readCookieValue('_fbp');
+  let fbc = readCookieValue('_fbc');
+  const fbclid = readCurrentQueryParam('fbclid');
+
+  if (!fbc && fbclid) {
+    fbc = `fb.1.${Date.now()}.${fbclid}`;
+  }
+
+  return {
+    _fbp: fbp,
+    _fbc: fbc,
+  };
+};
+
 export const getAnalyticsIdentity = () => {
   if (typeof window === 'undefined') {
     return {
@@ -131,12 +200,18 @@ const buildCommerceItems = (items = []) => (
     .filter(Boolean)
 );
 
-const trackMetaPixel = (eventName, payload = {}) => {
+const trackMetaPixel = (eventName, payload = {}, eventId = '') => {
   if (typeof window === 'undefined' || typeof window.fbq !== 'function') {
     return;
   }
 
   try {
+    const eventData = eventId ? { eventID: eventId } : undefined;
+    if (eventData) {
+      window.fbq('track', eventName, payload, eventData);
+      return;
+    }
+
     window.fbq('track', eventName, payload);
   } catch {
     // Marketing pixels must never block storefront UX.
@@ -253,6 +328,7 @@ export const trackAnalyticsEvent = (eventName, payload = {}) => {
 
   const body = {
     ...getUrlPayload(),
+    ...getMetaBrowserData(),
     ...payload,
     ...getAnalyticsIdentity(),
     event_name: eventName,
@@ -271,7 +347,15 @@ export const trackAnalyticsEvent = (eventName, payload = {}) => {
   }).catch(() => null);
 };
 
-export const trackPageView = () => trackAnalyticsEvent('page_view');
+export const trackPageView = () => {
+  const eventId = createMetaEventId('PageView');
+
+  trackMetaPixel('PageView', {}, eventId);
+
+  return trackAnalyticsEvent('page_view', {
+    meta_event_id: eventId,
+  });
+};
 
 export const trackProductView = (product = {}) => {
   const productId = Number(product?.id || product?.product_id || 0);
@@ -279,12 +363,32 @@ export const trackProductView = (product = {}) => {
     return Promise.resolve(null);
   }
 
+  const eventId = createMetaEventId('ViewContent');
+  const value = Number(product?.current_price || product?.price || 0) || undefined;
+  const contentId = getProductTrackingId(product) || String(productId);
+  const contentName = getProductTrackingName(product) || product?.name || product?.product_name || '';
+  const metaPayload = {
+    content_ids: [contentId],
+    content_name: contentName,
+    content_type: 'product',
+    value,
+    currency: 'VND',
+  };
+
+  trackMetaPixel('ViewContent', metaPayload, eventId);
+
   return trackAnalyticsEvent('product_view', {
+    meta_event_id: eventId,
     product_id: productId,
     product_name: product?.name || product?.product_name || '',
     product_sku: product?.sku || product?.product_sku || '',
     product_slug: product?.slug || product?.product_slug || '',
-    value: Number(product?.current_price || product?.price || 0) || undefined,
+    value,
+    currency: 'VND',
+    content_ids: [contentId],
+    content_name: contentName,
+    content_type: 'product',
+    contents: [{ id: contentId, quantity: 1, item_price: value || 0 }],
     metadata: {
       product_type: product?.type || product?.item_type || '',
     },
@@ -306,16 +410,19 @@ export const trackAddToCart = (product = {}, quantity = 1, extra = {}) => {
     unit_value: unitValue,
   }]);
   const primaryItem = commerceItems[0];
+  const eventId = createMetaEventId('AddToCart');
 
   if (primaryItem) {
-    trackMetaPixel('AddToCart', {
+    const metaPayload = {
       content_ids: [primaryItem.id],
       content_name: primaryItem.name,
       content_type: 'product',
       contents: toMetaContents(commerceItems),
       value: totalValue,
       currency: 'VND',
-    });
+    };
+
+    trackMetaPixel('AddToCart', metaPayload, eventId);
 
     trackGoogleEvent('add_to_cart', {
       currency: 'VND',
@@ -331,12 +438,18 @@ export const trackAddToCart = (product = {}, quantity = 1, extra = {}) => {
   }
 
   return trackAnalyticsEvent('add_to_cart', {
+    meta_event_id: eventId,
     product_id: productId,
     product_name: product?.name || product?.product_name || '',
     product_sku: product?.sku || product?.product_sku || '',
     product_slug: product?.slug || product?.product_slug || '',
     quantity: normalizedQuantity,
-    value: unitValue,
+    value: totalValue,
+    currency: 'VND',
+    content_ids: primaryItem ? [primaryItem.id] : [],
+    content_name: primaryItem?.name || product?.name || product?.product_name || '',
+    content_type: 'product',
+    contents: toMetaContents(commerceItems),
     metadata: {
       product_type: product?.type || product?.item_type || '',
       ...extra,
@@ -348,16 +461,19 @@ export const trackCheckoutStarted = (cartItems = [], totalValue = 0) => {
   const commerceItems = buildCommerceItems(cartItems);
   const normalizedValue = normalizeMoneyValue(totalValue);
   const totalQuantity = commerceItems.reduce((sum, item) => sum + item.quantity, 0);
+  const eventId = createMetaEventId('InitiateCheckout');
 
   if (commerceItems.length > 0) {
-    trackMetaPixel('InitiateCheckout', {
+    const metaPayload = {
       content_ids: commerceItems.map((item) => item.id),
       content_type: 'product',
       contents: toMetaContents(commerceItems),
       num_items: totalQuantity,
       value: normalizedValue,
       currency: 'VND',
-    });
+    };
+
+    trackMetaPixel('InitiateCheckout', metaPayload, eventId);
 
     trackGoogleEvent('begin_checkout', {
       currency: 'VND',
@@ -373,8 +489,14 @@ export const trackCheckoutStarted = (cartItems = [], totalValue = 0) => {
   }
 
   return trackAnalyticsEvent('checkout_started', {
+    meta_event_id: eventId,
     quantity: totalQuantity,
     value: normalizedValue,
+    currency: 'VND',
+    content_ids: commerceItems.map((item) => item.id),
+    content_type: 'product',
+    contents: toMetaContents(commerceItems),
+    num_items: totalQuantity,
     metadata: {
       items_count: cartItems.length,
       items: cartItems.slice(0, 30).map((item) => ({
@@ -388,11 +510,13 @@ export const trackCheckoutStarted = (cartItems = [], totalValue = 0) => {
   });
 };
 
-export const trackPurchase = (orderNumber, cartItems = [], totalValue = 0) => {
+export const trackPurchase = (orderNumber, cartItems = [], totalValue = 0, extra = {}) => {
   const commerceItems = buildCommerceItems(cartItems);
   const normalizedValue = normalizeMoneyValue(totalValue);
   const totalQuantity = commerceItems.reduce((sum, item) => sum + item.quantity, 0);
   const transactionId = String(orderNumber || '').trim();
+  const eventId = String(extra?.eventId || extra?.meta_event_id || '').trim()
+    || createMetaEventId('Purchase', transactionId || undefined);
 
   trackGoogleAdsPurchase(transactionId, normalizedValue);
 
@@ -406,11 +530,11 @@ export const trackPurchase = (orderNumber, cartItems = [], totalValue = 0) => {
       currency: 'VND',
     };
 
-    trackMetaPixel('Purchase', metaPayload);
+    trackMetaPixel('Purchase', metaPayload, eventId);
     trackMetaPixel('CompleteRegistration', {
       ...metaPayload,
       status: true,
-    });
+    }, createMetaEventId('CompleteRegistration', transactionId || undefined));
 
     trackGoogleEvent('purchase', {
       transaction_id: transactionId,
@@ -427,9 +551,15 @@ export const trackPurchase = (orderNumber, cartItems = [], totalValue = 0) => {
   }
 
   return trackAnalyticsEvent('purchase', {
+    meta_event_id: eventId,
     order_number: transactionId,
     quantity: totalQuantity,
     value: normalizedValue,
+    currency: 'VND',
+    content_ids: commerceItems.map((item) => item.id),
+    content_type: 'product',
+    contents: toMetaContents(commerceItems),
+    num_items: totalQuantity,
     metadata: {
       items_count: cartItems.length,
       items: cartItems.slice(0, 30).map((item) => ({

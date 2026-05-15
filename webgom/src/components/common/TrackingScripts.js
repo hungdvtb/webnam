@@ -1,6 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import React from 'react';
+import config from '@/lib/config';
 
 const isTrackingEnabled = (value) => {
     if (value === true || value === 1 || value === "1") return true;
@@ -93,16 +94,19 @@ const getActiveGoogleAdsConversions = (items) => {
 };
 
 const TrackingScripts = ({ settings }) => {
-    if (!settings) return null;
+    const source = settings || {};
 
     const {
         fb_pixel_id, fb_pixel_active,
         ga_id, ga_active,
         tt_pixel_id, tt_pixel_active,
         fb_pixels, ga_trackings, google_ads_conversions, tt_pixels
-    } = settings;
+    } = source;
 
-    const fbPixelIds = getActiveTrackingIds(fb_pixels, fb_pixel_id, fb_pixel_active);
+    const fbPixelIds = uniqueTrackingIds([
+        ...getActiveTrackingIds(fb_pixels, fb_pixel_id, fb_pixel_active),
+        config.metaPixelId,
+    ]);
     const gaTrackingIds = getActiveTrackingIds(ga_trackings, ga_id, ga_active);
     const googleAdsConversions = getActiveGoogleAdsConversions(google_ads_conversions);
     const googleAdsConversionIds = uniqueTrackingIds(googleAdsConversions.map((item) => item.conversion_id));
@@ -124,7 +128,6 @@ const TrackingScripts = ({ settings }) => {
                     s.parentNode.insertBefore(t,s)}(window, document,'script',
                     'https://connect.facebook.net/en_US/fbevents.js');
                     ${fbPixelIds.map((id) => `fbq('init', ${JSON.stringify(id)});`).join("\n                    ")}
-                    fbq('track', 'PageView');
                     `}} />
                     {fbPixelIds.map((id) => (
                         <noscript key={`fb-noscript-${id}`}>

@@ -10,7 +10,7 @@ import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api'
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
 import { resolveCartItemImageUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
-import { getAnalyticsIdentity, trackCheckoutStarted, trackPurchase } from '@/lib/analytics';
+import { createMetaEventId, getAnalyticsIdentity, getMetaBrowserData, trackCheckoutStarted, trackPurchase } from '@/lib/analytics';
 import SearchableSelect from '@/components/ui/SearchableSelect';
 import ComponentSelectionModal from '@/components/product/common/ComponentSelectionModal';
 import styles from './cart.module.css';
@@ -764,6 +764,7 @@ export default function CartPage() {
       draft_lead_id: draftLeadIdRef.current,
       visitor_id: analyticsIdentity.visitor_id,
       session_id: analyticsIdentity.session_id,
+      ...getMetaBrowserData(),
       landing_url: attribution.landing_url || attribution.first_url || currentUrl,
       current_url: currentUrl,
       referrer: attribution.referrer || (typeof document !== 'undefined' ? document.referrer : '') || '',
@@ -1210,7 +1211,11 @@ export default function CartPage() {
     clearDraftTimers();
     setIsSubmitting(true);
     try {
-      const orderData = buildCheckoutPayload();
+      const purchaseEventId = createMetaEventId('Purchase', ensureDraftToken());
+      const orderData = {
+        ...buildCheckoutPayload(),
+        meta_event_id: purchaseEventId,
+      };
       const response = await placeWebOrder(orderData);
       const createdAt = new Date().toISOString();
       const completedOrderNumber = response.order_number;
@@ -1218,7 +1223,7 @@ export default function CartPage() {
       const orderTotalForTracking = Number.isFinite(completedOrderTotal)
         ? Math.max(completedOrderTotal, 0)
         : Math.max(Number(cartTotal || 0) || 0, 0);
-      trackPurchase(completedOrderNumber, cartItems, orderTotalForTracking);
+      trackPurchase(completedOrderNumber, cartItems, orderTotalForTracking, { eventId: purchaseEventId });
       setOrderNumber(completedOrderNumber);
       // Cache details for thank you page
       setSuccessOrderData({

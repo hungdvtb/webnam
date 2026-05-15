@@ -10,13 +10,17 @@ class SiteAnalyticsEvent extends Model
     public const EVENT_PRODUCT_VIEW = 'product_view';
     public const EVENT_ADD_TO_CART = 'add_to_cart';
     public const EVENT_CHECKOUT_STARTED = 'checkout_started';
+    public const EVENT_PURCHASE = 'purchase';
     public const EVENT_ORDER_PLACED = 'order_placed';
+    public const EVENT_LEAD = 'lead';
 
     public const PUBLIC_EVENTS = [
         self::EVENT_PAGE_VIEW,
         self::EVENT_PRODUCT_VIEW,
         self::EVENT_ADD_TO_CART,
         self::EVENT_CHECKOUT_STARTED,
+        self::EVENT_PURCHASE,
+        self::EVENT_LEAD,
     ];
 
     protected $fillable = [

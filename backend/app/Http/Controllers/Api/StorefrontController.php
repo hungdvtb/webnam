@@ -10,6 +10,7 @@ use App\Models\Post;
 use App\Models\ProductReview;
 use App\Services\Leads\LeadCaptureService;
 use App\Services\Analytics\SiteAnalyticsService;
+use App\Services\Analytics\MetaConversionsApiService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -1076,10 +1077,16 @@ class StorefrontController extends Controller
             'gclid' => 'nullable|string|max:255',
             'ttclid' => 'nullable|string|max:255',
             'raw_query' => 'nullable|string|max:2000',
+            'meta_event_id' => 'nullable|string|max:255',
+            '_fbp' => 'nullable|string|max:255',
+            '_fbc' => 'nullable|string|max:255',
+            'fbp' => 'nullable|string|max:255',
+            'fbc' => 'nullable|string|max:255',
         ]);
 
         $lead = app(LeadCaptureService::class)->createWebsiteOrderLead($request);
         app(SiteAnalyticsService::class)->recordOrderPlaced($request, $lead);
+        app(MetaConversionsApiService::class)->sendPurchaseFromLead($request, $lead);
 
         return response()->json([
             'success' => true,
@@ -1133,6 +1140,11 @@ class StorefrontController extends Controller
             'raw_query' => 'nullable|string|max:2000',
             'discount' => 'nullable|numeric',
             'total' => 'nullable|numeric',
+            'meta_event_id' => 'nullable|string|max:255',
+            '_fbp' => 'nullable|string|max:255',
+            '_fbc' => 'nullable|string|max:255',
+            'fbp' => 'nullable|string|max:255',
+            'fbc' => 'nullable|string|max:255',
         ]);
 
         $lead = app(LeadCaptureService::class)->createWebsiteOrderDraft($request);
@@ -1172,6 +1184,11 @@ class StorefrontController extends Controller
             'gclid' => 'nullable|string|max:255',
             'ttclid' => 'nullable|string|max:255',
             'raw_query' => 'nullable|string|max:2000',
+            'meta_event_id' => 'nullable|string|max:255',
+            '_fbp' => 'nullable|string|max:255',
+            '_fbc' => 'nullable|string|max:255',
+            'fbp' => 'nullable|string|max:255',
+            'fbc' => 'nullable|string|max:255',
         ]);
 
         if (!$request->filled('product_name') && $request->filled('product_id')) {
@@ -1180,7 +1197,8 @@ class StorefrontController extends Controller
             ]);
         }
 
-        app(LeadCaptureService::class)->createGenericLead($request);
+        $lead = app(LeadCaptureService::class)->createGenericLead($request);
+        app(MetaConversionsApiService::class)->sendLeadFromLead($request, $lead);
 
         return response()->json([
             'success' => true,

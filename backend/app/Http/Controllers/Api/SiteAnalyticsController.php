@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\SiteAnalyticsEvent;
+use App\Services\Analytics\MetaConversionsApiService;
 use App\Services\Analytics\SiteAnalyticsService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -34,10 +35,23 @@ class SiteAnalyticsController extends Controller
             'utm_campaign' => 'nullable|string|max:255',
             'utm_content' => 'nullable|string|max:255',
             'utm_term' => 'nullable|string|max:255',
+            'meta_event_id' => 'nullable|string|max:255',
+            'event_id' => 'nullable|string|max:255',
+            '_fbp' => 'nullable|string|max:255',
+            '_fbc' => 'nullable|string|max:255',
+            'fbp' => 'nullable|string|max:255',
+            'fbc' => 'nullable|string|max:255',
+            'currency' => 'nullable|string|max:3',
+            'content_ids' => 'nullable|array',
+            'contents' => 'nullable|array',
+            'content_name' => 'nullable|string|max:255',
+            'content_type' => 'nullable|string|max:80',
+            'num_items' => 'nullable|integer|min:0|max:100000',
             'metadata' => 'nullable|array',
         ]);
 
         $analyticsService->recordFromRequest($request, $validated['event_name']);
+        app(MetaConversionsApiService::class)->sendFromRequest($request, $validated['event_name']);
 
         return response()->json(['success' => true]);
     }

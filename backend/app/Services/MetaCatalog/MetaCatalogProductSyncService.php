@@ -27,14 +27,12 @@ class MetaCatalogProductSyncService
         $deleteStale = (bool) ($options['delete_stale'] ?? config('meta_catalog.delete_stale', true));
         $batchSize = $this->batchSize((int) ($options['batch_size'] ?? config('meta_catalog.batch_size', 500)));
         $pollStatus = (bool) ($options['poll_status'] ?? config('meta_catalog.poll_status', true));
-
-        if (!$dryRun && !(bool) config('meta_catalog.enabled', false)) {
-            throw new MetaCatalogProductSyncException('Meta Catalog sync is disabled. Set META_CATALOG_SYNC_ENABLED=true.');
-        }
+        $checkRemoteUrls = (bool) ($options['check_remote_urls'] ?? false);
 
         $entries = $this->feedEntries();
         $currentRetailerIds = $this->retailerIdSet($entries);
-        $invalidEntries = $this->invalidEntries($entries);
+        $invalidEntries = $this->invalidEntries($entries, $checkRemoteUrls);
+        $fallbackEntries = $this->fallbackEntries($entries);
         $validEntries = array_values(array_filter(
             $entries,
             fn (array $entry) => !isset($invalidEntries[$entry['id'] ?? ''])
@@ -42,6 +40,10 @@ class MetaCatalogProductSyncService
 
         if (!$dryRun && empty($entries) && $deleteStale) {
             throw new MetaCatalogProductSyncException('Website feed has no products; refusing to delete every item from the Meta catalog.');
+        }
+
+        if (!$dryRun && !empty($invalidEntries)) {
+            throw new MetaCatalogProductSyncException('Dry-run still has invalid products; refusing to sync live to Meta.');
         }
 
         $existingRetailerIds = $dryRun ? [] : $this->fetchCatalogRetailerIds();
@@ -68,9 +70,11 @@ class MetaCatalogProductSyncService
             'create_count' => $this->countByMethod($upsertRequests, 'CREATE'),
             'update_count' => $this->countByMethod($upsertRequests, 'UPDATE'),
             'delete_count' => count($deleteRequests),
+            'fallback_count' => count($fallbackEntries),
             'request_count' => count($requests),
             'batch_count' => (int) ceil(count($requests) / max($batchSize, 1)),
             'invalid_entries' => array_values($invalidEntries),
+            'fallback_entries' => $fallbackEntries,
             'batches' => $batches,
         ];
     }
@@ -140,15 +144,29 @@ class MetaCatalogProductSyncService
             ->all();
     }
 
-    private function invalidEntries(array $entries): array
+    private function fallbackEntries(array $entries): array
+    {
+        return collect($entries)
+            ->filter(fn (array $entry) => in_array((string) ($entry['_used_fallback_image'] ?? ''), ['1', 'true'], true))
+            ->map(fn (array $entry) => [
+                'id' => (string) ($entry['id'] ?? ''),
+                'title' => (string) ($entry['title'] ?? ''),
+                'image_link' => (string) ($entry['image_link'] ?? ''),
+            ])
+            ->values()
+            ->all();
+    }
+
+    private function invalidEntries(array $entries, bool $checkRemoteUrls): array
     {
         $invalid = [];
         foreach ($entries as $entry) {
-            $errors = $this->validationErrors($entry);
+            $errors = $this->validationErrors($entry, $checkRemoteUrls);
             if (!empty($errors)) {
                 $invalid[(string) $entry['id']] = [
                     'id' => (string) $entry['id'],
                     'title' => (string) ($entry['title'] ?? ''),
+                    'product_type' => (string) ($entry['product_type'] ?? ''),
                     'errors' => $errors,
                 ];
             }
@@ -157,7 +175,7 @@ class MetaCatalogProductSyncService
         return $invalid;
     }
 
-    private function validationErrors(array $entry): array
+    private function validationErrors(array $entry, bool $checkRemoteUrls): array
     {
         $required = [
             'id',
@@ -166,6 +184,8 @@ class MetaCatalogProductSyncService
             'price',
             'link',
             'image_link',
+            'product_type',
+            'custom_label_0',
         ];
 
         $errors = [];
@@ -181,7 +201,58 @@ class MetaCatalogProductSyncService
             $errors[] = $exception->getMessage();
         }
 
+        $link = trim((string) ($entry['link'] ?? ''));
+        if ($link !== '' && !filter_var($link, FILTER_VALIDATE_URL)) {
+            $errors[] = 'link is not a valid URL';
+        }
+
+        $imageLink = trim((string) ($entry['image_link'] ?? ''));
+        if ($imageLink !== '' && !filter_var($imageLink, FILTER_VALIDATE_URL)) {
+            $errors[] = 'image_link is not a valid URL';
+        }
+
+        if ($checkRemoteUrls) {
+            if ($link !== '' && filter_var($link, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($link, false)) {
+                $errors[] = 'link URL is not reachable';
+            }
+
+            if ($imageLink !== '' && filter_var($imageLink, FILTER_VALIDATE_URL) && !$this->remoteUrlLooksReachable($imageLink, true)) {
+                $errors[] = 'image_link URL is not reachable or not an image';
+            }
+        }
+
         return $errors;
+    }
+
+    private function remoteUrlLooksReachable(string $url, bool $expectImage): bool
+    {
+        try {
+            $response = Http::timeout(8)
+                ->connectTimeout(4)
+                ->withOptions(['verify' => (bool) config('meta_catalog.verify_ssl', true)])
+                ->head($url);
+
+            if ($response->status() === 405) {
+                $response = Http::timeout(8)
+                    ->connectTimeout(4)
+                    ->withOptions(['verify' => (bool) config('meta_catalog.verify_ssl', true)])
+                    ->get($url);
+            }
+
+            if (!$response->successful()) {
+                return false;
+            }
+
+            if (!$expectImage) {
+                return true;
+            }
+
+            $contentType = Str::lower((string) $response->header('Content-Type', ''));
+
+            return $contentType === '' || str_starts_with($contentType, 'image/');
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     private function catalogData(array $entry): array

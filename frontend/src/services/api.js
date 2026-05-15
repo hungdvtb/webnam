@@ -425,6 +425,24 @@ export const googleMerchantApi = {
     getLogs: (params) => api.get('/google-merchant/logs', { params }),
 };
 
+export const metaCatalogApi = {
+    getSettings: () => api.get('/meta-catalog/settings'),
+    updateSettings: (data) => api.put('/meta-catalog/settings', data),
+    dryRun: (data = {}) => api.post('/meta-catalog/dry-run', data, {
+        retryPolicy: 'never',
+        timeout: 120000,
+    }),
+    syncNow: () => api.post('/meta-catalog/sync-now', {}, {
+        retryPolicy: 'never',
+        timeout: 180000,
+    }),
+    checkFeed: (format) => api.post(`/meta-catalog/feed/${format}/check`, {}, {
+        retryPolicy: 'never',
+        timeout: 60000,
+    }),
+    getLogs: (params) => api.get('/meta-catalog/logs', { params }),
+};
+
 export const productImageApi = {
     upload: (productId, formData) => api.post(`/products/${productId}/images`, formData, multipartConfig(formData)),
     syncProductImages: (productId, formData) => api.post(`/products/${productId}/images/sync`, formData, multipartConfig(formData)),

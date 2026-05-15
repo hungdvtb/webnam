@@ -5,6 +5,7 @@ import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/head
 import { createDefaultFooterMenuGroups, normalizeFooterMenuGroups, normalizeMultilineText } from '../../utils/footerSettings';
 import { useSearchParams } from 'react-router-dom';
 import OrderQuickPickGroupEditor from '../../components/admin/OrderQuickPickGroupEditor';
+import MetaCatalogSettingsPanel from '../../components/admin/MetaCatalogSettingsPanel';
 import {
     ORDER_QUICK_PICK_MAX_ITEMS,
     createOrderQuickPickGroup,
@@ -1590,6 +1591,7 @@ const SiteSettings = () => {
     ];
 
     settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'meta-feed', title: 'Nguồn cấp sản phẩm', icon: 'rss_feed' });
+    settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'meta-catalog', title: 'Meta Catalog', icon: 'shopping_cart_checkout' });
     settingsTabs.splice(settingsTabs.length - 1, 0, { id: 'google-merchant', title: 'Google Merchant', icon: 'shopping_bag' });
 
     const orderQuickPickGroups = normalizeOrderQuickPickGroups(settings.order_quick_pick_groups);
@@ -1611,7 +1613,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, cửa hàng, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && activeTab !== 'google-merchant' && activeTab !== 'meta-feed' && (
+                {activeTab !== 'domains' && activeTab !== 'google-merchant' && activeTab !== 'meta-feed' && activeTab !== 'meta-catalog' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -2891,6 +2893,15 @@ const SiteSettings = () => {
                                 </div>
                             </SectionCard>
                         </div>
+                    )}
+
+                    {activeTab === 'meta-catalog' && (
+                        <MetaCatalogSettingsPanel
+                            SectionCard={SectionCard}
+                            inputClasses={inputClasses}
+                            labelClasses={labelClasses}
+                            showModal={showModal}
+                        />
                     )}
 
                     {activeTab === 'quote' && (

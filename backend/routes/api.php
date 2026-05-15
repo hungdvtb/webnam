@@ -103,6 +103,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/google-merchant/products/{id}/sync', [GoogleMerchantController::class, 'syncProduct'])->whereNumber('id');
     Route::get('/google-merchant/logs', [GoogleMerchantController::class, 'logs']);
 
+    // Meta Catalog sync
+    Route::middleware('admin')->prefix('meta-catalog')->group(function () {
+        Route::get('/settings', [\App\Http\Controllers\Api\MetaCatalogController::class, 'settings']);
+        Route::put('/settings', [\App\Http\Controllers\Api\MetaCatalogController::class, 'updateSettings']);
+        Route::post('/dry-run', [\App\Http\Controllers\Api\MetaCatalogController::class, 'dryRun']);
+        Route::post('/sync-now', [\App\Http\Controllers\Api\MetaCatalogController::class, 'syncNow']);
+        Route::post('/feed/{format}/check', [\App\Http\Controllers\Api\MetaCatalogController::class, 'checkFeed'])->where('format', 'csv|xml');
+        Route::get('/logs', [\App\Http\Controllers\Api\MetaCatalogController::class, 'logs']);
+    });
+
     // Admin Product Image routes
     Route::post('/products/{id}/images/sync', [ProductImageController::class , 'syncProductImages'])->whereNumber('id');
     Route::post('/products/{id}/images', [ProductImageController::class , 'store']);

@@ -108,6 +108,9 @@ class MetaFeedService
         $title = $this->cleanText((string) $product->name, 150);
         $description = $this->descriptionForProduct($product);
         $categoryName = $this->categoryNameForProduct($product);
+        $primaryImage = $this->primaryImage($product);
+        $imageLink = $this->imageUrl($primaryImage);
+        $usedFallbackImage = !$primaryImage && $imageLink !== '';
 
         return [
             'id' => $this->feedId($product),
@@ -117,10 +120,11 @@ class MetaFeedService
             'condition' => 'new',
             'price' => $this->formatPrice((float) ($product->current_price ?: $product->price ?: 0)),
             'link' => $this->productUrl($product),
-            'image_link' => $this->imageUrl($this->primaryImage($product)),
+            'image_link' => $imageLink,
             'brand' => $this->brand(),
             'product_type' => $categoryName,
             'custom_label_0' => $categoryName,
+            '_used_fallback_image' => $usedFallbackImage,
         ];
     }
 

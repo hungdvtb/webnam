@@ -8,8 +8,6 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-if ((bool) config('meta_catalog.enabled', false)) {
-    Schedule::command('meta-catalog:sync-products --delete-stale')
-        ->hourly()
-        ->withoutOverlapping(55);
-}
+Schedule::command('meta-catalog:sync-products --delete-stale --scheduled')
+    ->hourly()
+    ->withoutOverlapping(55);

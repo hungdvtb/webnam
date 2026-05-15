@@ -81,6 +81,16 @@ class SyncMetaCatalogProducts extends Command
             ));
         }
 
+        foreach (array_slice((array) ($result['price_previews'] ?? []), 0, 5) as $entry) {
+            $this->line(sprintf(
+                '[price] %s web=%s api=%s expected=%s',
+                $entry['id'] ?? '',
+                $entry['website_price'] ?? '',
+                $entry['api_price'] ?? '',
+                $entry['expected_meta_display'] ?? ''
+            ));
+        }
+
         $batchErrors = $this->countBatchErrors($result['batches']);
         if ($batchErrors > 0) {
             $this->warn("Meta reported {$batchErrors} batch error sample(s). Check the command output or Laravel logs for details.");
@@ -159,6 +169,7 @@ class SyncMetaCatalogProducts extends Command
                 'skipped_entries' => $result['skipped_entries'] ?? [],
                 'skipped_count' => (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
                 'fallback_entries' => $result['fallback_entries'] ?? [],
+                'price_previews' => $result['price_previews'] ?? [],
                 'batches' => $result['batches'] ?? [],
                 'product_sets' => $result['product_sets'] ?? [],
                 'product_set_errors' => $result['product_set_errors'] ?? [],

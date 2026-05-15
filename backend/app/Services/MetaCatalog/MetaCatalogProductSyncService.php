@@ -12,11 +12,6 @@ use Throwable;
 
 class MetaCatalogProductSyncService
 {
-    private const ZERO_DECIMAL_CURRENCIES = [
-        'BIF', 'CLP', 'DJF', 'GNF', 'JPY', 'KMF', 'KRW', 'MGA', 'PYG', 'RWF',
-        'UGX', 'VND', 'VUV', 'XAF', 'XOF', 'XPF',
-    ];
-
     public function __construct(
         private readonly MetaFeedService $feedService,
     ) {
@@ -92,6 +87,7 @@ class MetaCatalogProductSyncService
             ? $this->dryRunProductSets($validEntries)
             : $this->syncProductSets($validEntries, $progress);
         $productSetErrorCount = (int) ($productSetResult['error_count'] ?? 0);
+        $pricePreviews = $this->pricePreviewEntries($validEntries);
 
         $result = [
             'dry_run' => $dryRun,
@@ -110,6 +106,7 @@ class MetaCatalogProductSyncService
             'invalid_entries' => [],
             'skipped_entries' => $skippedEntries,
             'fallback_entries' => $fallbackEntries,
+            'price_previews' => $pricePreviews,
             'batches' => $batches,
             'batch_error_count' => $batchErrorCount,
             'product_set_count' => (int) ($productSetResult['total_count'] ?? 0),
@@ -773,6 +770,13 @@ class MetaCatalogProductSyncService
 
     private function parsePrice(string $value): array
     {
+        [$amount, $currency] = $this->parseFeedPrice($value);
+
+        return [(string) ((int) round($amount * 100)), $currency];
+    }
+
+    private function parseFeedPrice(string $value): array
+    {
         $value = trim($value);
         if (!preg_match('/^([0-9]+(?:\.[0-9]+)?)\s+([A-Z]{3})$/i', $value, $matches)) {
             throw new MetaCatalogProductSyncException('price must use "<amount> <ISO currency>" format');
@@ -784,11 +788,47 @@ class MetaCatalogProductSyncService
         }
 
         $currency = strtoupper($matches[2]);
-        $minorUnits = in_array($currency, self::ZERO_DECIMAL_CURRENCIES, true)
-            ? (int) round($amount)
-            : (int) round($amount * 100);
 
-        return [(string) $minorUnits, $currency];
+        return [$amount, $currency];
+    }
+
+    private function pricePreviewEntries(array $entries): array
+    {
+        return collect($entries)
+            ->map(function (array $entry) {
+                [$websiteAmount, $currency] = $this->parseFeedPrice((string) ($entry['price'] ?? ''));
+                [$apiPrice] = $this->parsePrice((string) ($entry['price'] ?? ''));
+
+                return [
+                    'id' => trim((string) ($entry['id'] ?? '')),
+                    'title' => Str::limit((string) ($entry['title'] ?? ''), 200, ''),
+                    'website_price' => $this->formatPlainAmount($websiteAmount),
+                    'feed_price' => trim((string) ($entry['price'] ?? '')),
+                    'api_price' => $apiPrice,
+                    'currency' => $currency,
+                    'expected_meta_display' => $this->formatExpectedMetaPrice($websiteAmount, $currency),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function formatPlainAmount(float $amount): string
+    {
+        if (floor($amount) === $amount) {
+            return (string) ((int) round($amount));
+        }
+
+        return rtrim(rtrim(number_format($amount, 2, '.', ''), '0'), '.');
+    }
+
+    private function formatExpectedMetaPrice(float $amount, string $currency): string
+    {
+        if ($currency === 'VND') {
+            return number_format($amount, 0, ',', '.') . ' đ';
+        }
+
+        return number_format($amount, 2, '.', ',') . ' ' . $currency;
     }
 
     private function fetchCatalogRetailerIds(?callable $progress = null): array

@@ -300,6 +300,7 @@ class MetaCatalogController extends Controller
                 'skipped_entries' => $skippedEntries,
                 'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
                 'fallback_entries' => $fallbackEntries,
+                'price_previews' => $result['price_previews'] ?? [],
                 'batches' => $result['batches'] ?? [],
                 'product_sets' => $result['product_sets'] ?? [],
                 'product_set_errors' => $result['product_set_errors'] ?? [],
@@ -350,6 +351,7 @@ class MetaCatalogController extends Controller
         $details['skipped_entries'] = $skippedEntries;
         $details['skipped_count'] = (int) ($result['skipped_count'] ?? count($skippedEntries));
         $details['fallback_entries'] = $fallbackEntries;
+        $details['price_previews'] = $result['price_previews'] ?? [];
         $details['batches'] = $result['batches'] ?? [];
         $details['product_sets'] = $result['product_sets'] ?? [];
         $details['product_set_errors'] = $result['product_set_errors'] ?? [];

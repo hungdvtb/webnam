@@ -98,6 +98,7 @@ const resultFromLog = (log) => {
         invalid_entries: details.invalid_entries || [],
         skipped_entries: details.skipped_entries || [],
         fallback_entries: details.fallback_entries || [],
+        price_previews: details.price_previews || [],
         product_sets: details.product_sets || [],
         product_set_errors: details.product_set_errors || [],
         product_set_sort_note: details.product_set_sort_note || '',
@@ -159,6 +160,43 @@ const SkippedProductsTable = ({ entries = [] }) => {
                             </tr>
                         );
                     })}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
+const PricePreviewTable = ({ entries = [] }) => {
+    if (!entries.length) {
+        return null;
+    }
+
+    return (
+        <div className="overflow-x-auto rounded-sm border border-blue-100">
+            <div className="flex items-center justify-between gap-3 border-b border-blue-100 bg-blue-50 px-4 py-3">
+                <p className="text-[12px] font-black uppercase tracking-wider text-blue-700">Kiểm tra giá gửi Meta API</p>
+                <p className="text-[12px] font-bold text-blue-700">{compactNumber(entries.length)} sản phẩm</p>
+            </div>
+            <table className="w-full text-left text-[12px]">
+                <thead className="bg-blue-50/60 text-blue-700">
+                    <tr>
+                        <th className="px-4 py-3 font-black uppercase">SKU</th>
+                        <th className="px-4 py-3 font-black uppercase">Tên sản phẩm</th>
+                        <th className="px-4 py-3 font-black uppercase">Giá web</th>
+                        <th className="px-4 py-3 font-black uppercase">Giá gửi API</th>
+                        <th className="px-4 py-3 font-black uppercase">Dự kiến Meta hiển thị</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-blue-100 bg-white">
+                    {entries.map((entry, index) => (
+                        <tr key={`${entry.id || index}-${index}`}>
+                            <td className="px-4 py-3 font-mono font-bold text-primary">{entry.id || '-'}</td>
+                            <td className="px-4 py-3 font-bold text-primary">{entry.title || '-'}</td>
+                            <td className="px-4 py-3 font-mono text-primary">{entry.website_price || '-'}</td>
+                            <td className="px-4 py-3 font-mono font-bold text-blue-700">{entry.api_price || '-'}</td>
+                            <td className="px-4 py-3 font-bold text-primary/70">{entry.expected_meta_display || '-'}</td>
+                        </tr>
+                    ))}
                 </tbody>
             </table>
         </div>
@@ -652,6 +690,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                         <StatBox label="Batch dự kiến" value={dryRunResult?.batch_count || 0} />
                     </div>
 
+                    <PricePreviewTable entries={dryRunResult?.price_previews || []} />
                     <SkippedProductsTable entries={dryRunResult?.skipped_entries || []} />
                 </div>
             </SectionCard>
@@ -690,6 +729,9 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                         <p className="mt-2 text-[12px] font-bold text-blue-700">{runningProgress?.message || runningSyncLog.summary || 'Backend đang chạy đồng bộ Meta.'}</p>
                     </div>
                 )}
+                <div className="mt-5">
+                    <PricePreviewTable entries={syncDisplayResult?.price_previews || []} />
+                </div>
                 <div className="mt-5">
                     <SkippedProductsTable entries={syncDisplayResult?.skipped_entries || []} />
                 </div>

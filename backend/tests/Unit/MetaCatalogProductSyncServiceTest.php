@@ -37,7 +37,7 @@ class MetaCatalogProductSyncServiceTest extends TestCase
         $this->assertSame('Mo ta san pham', $requests[0]['data']['description']);
         $this->assertSame('in stock', $requests[0]['data']['availability']);
         $this->assertSame('new', $requests[0]['data']['condition']);
-        $this->assertSame('1500000', $requests[0]['data']['price']);
+        $this->assertSame('150000000', $requests[0]['data']['price']);
         $this->assertSame('VND', $requests[0]['data']['currency']);
         $this->assertSame('https://gomdaithanh.com/product/bo-do-tho-men-lam', $requests[0]['data']['url']);
         $this->assertSame('https://cdn.gomdaithanh.com/gdt-001.jpg', $requests[0]['data']['image_url']);

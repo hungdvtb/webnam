@@ -81,6 +81,7 @@ class MetaCatalogController extends Controller
                 'dry_run' => true,
                 'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
                 'check_remote_urls' => (bool) ($validated['check_remote_urls'] ?? false),
+                'account_id' => $accountId,
             ]);
             $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
             $log = $this->recordLog($request, $accountId, 'dry_run', $status, $result, $startedAt, $startTime);
@@ -136,6 +137,7 @@ class MetaCatalogController extends Controller
                 $result = $this->syncService->sync([
                     'dry_run' => false,
                     'delete_stale' => (bool) ($settings['delete_stale'] ?? true),
+                    'account_id' => $accountId,
                     'progress' => $progress,
                 ]);
                 $status = ((int) ($result['batch_error_count'] ?? $result['invalid_count'] ?? 0)) > 0 ? 'error' : 'success';
@@ -301,6 +303,12 @@ class MetaCatalogController extends Controller
                 'skipped_count' => (int) ($result['skipped_count'] ?? count($skippedEntries)),
                 'fallback_entries' => $fallbackEntries,
                 'price_previews' => $result['price_previews'] ?? [],
+                'synced_retailer_ids' => $result['synced_retailer_ids'] ?? [],
+                'skipped_retailer_ids' => $result['skipped_retailer_ids'] ?? [],
+                'previous_synced_count' => (int) ($result['previous_synced_count'] ?? 0),
+                'delete_candidate_count' => (int) ($result['delete_candidate_count'] ?? 0),
+                'stale_delete_mode' => $result['stale_delete_mode'] ?? null,
+                'stale_delete_note' => $result['stale_delete_note'] ?? null,
                 'batches' => $result['batches'] ?? [],
                 'product_sets' => $result['product_sets'] ?? [],
                 'product_set_errors' => $result['product_set_errors'] ?? [],
@@ -352,6 +360,12 @@ class MetaCatalogController extends Controller
         $details['skipped_count'] = (int) ($result['skipped_count'] ?? count($skippedEntries));
         $details['fallback_entries'] = $fallbackEntries;
         $details['price_previews'] = $result['price_previews'] ?? [];
+        $details['synced_retailer_ids'] = $result['synced_retailer_ids'] ?? [];
+        $details['skipped_retailer_ids'] = $result['skipped_retailer_ids'] ?? [];
+        $details['previous_synced_count'] = (int) ($result['previous_synced_count'] ?? 0);
+        $details['delete_candidate_count'] = (int) ($result['delete_candidate_count'] ?? 0);
+        $details['stale_delete_mode'] = $result['stale_delete_mode'] ?? null;
+        $details['stale_delete_note'] = $result['stale_delete_note'] ?? null;
         $details['batches'] = $result['batches'] ?? [];
         $details['product_sets'] = $result['product_sets'] ?? [];
         $details['product_set_errors'] = $result['product_set_errors'] ?? [];

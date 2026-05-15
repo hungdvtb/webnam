@@ -20,6 +20,11 @@ if (is_string($verifySsl)) {
     $verifySsl = filter_var($verifySsl, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true;
 }
 
+$fullStaleScan = env('META_CATALOG_FULL_STALE_SCAN', false);
+if (is_string($fullStaleScan)) {
+    $fullStaleScan = filter_var($fullStaleScan, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? false;
+}
+
 return [
     'enabled' => (bool) $enabled,
 
@@ -32,9 +37,11 @@ return [
     'currency' => env('META_CATALOG_CURRENCY', 'VND'),
     'fallback_image_url' => env('META_CATALOG_FALLBACK_IMAGE_URL'),
     'delete_stale' => (bool) $deleteStale,
+    'full_stale_scan' => (bool) $fullStaleScan,
 
     'batch_size' => (int) env('META_CATALOG_BATCH_SIZE', 500),
     'catalog_page_limit' => (int) env('META_CATALOG_PAGE_LIMIT', 1000),
+    'catalog_lookup_chunk_size' => (int) env('META_CATALOG_LOOKUP_CHUNK_SIZE', 25),
     'product_set_page_limit' => (int) env('META_CATALOG_PRODUCT_SET_PAGE_LIMIT', 1000),
     'max_catalog_pages' => (int) env('META_CATALOG_MAX_PAGES', 1000),
 

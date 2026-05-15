@@ -43,6 +43,7 @@ class SyncMetaCatalogProducts extends Command
                 'delete_stale' => $deleteStale,
                 'batch_size' => $this->option('batch-size') ? (int) $this->option('batch-size') : null,
                 'poll_status' => !$this->option('no-status-poll'),
+                'account_id' => $accountId,
             ]);
         } catch (\Throwable $exception) {
             $this->recordFailure($accountId, $this->operationName(), $exception, $startedAt, $startTime);
@@ -170,6 +171,12 @@ class SyncMetaCatalogProducts extends Command
                 'skipped_count' => (int) ($result['skipped_count'] ?? count((array) ($result['skipped_entries'] ?? []))),
                 'fallback_entries' => $result['fallback_entries'] ?? [],
                 'price_previews' => $result['price_previews'] ?? [],
+                'synced_retailer_ids' => $result['synced_retailer_ids'] ?? [],
+                'skipped_retailer_ids' => $result['skipped_retailer_ids'] ?? [],
+                'previous_synced_count' => (int) ($result['previous_synced_count'] ?? 0),
+                'delete_candidate_count' => (int) ($result['delete_candidate_count'] ?? 0),
+                'stale_delete_mode' => $result['stale_delete_mode'] ?? null,
+                'stale_delete_note' => $result['stale_delete_note'] ?? null,
                 'batches' => $result['batches'] ?? [],
                 'product_sets' => $result['product_sets'] ?? [],
                 'product_set_errors' => $result['product_set_errors'] ?? [],

@@ -99,6 +99,10 @@ const resultFromLog = (log) => {
         skipped_entries: details.skipped_entries || [],
         fallback_entries: details.fallback_entries || [],
         price_previews: details.price_previews || [],
+        previous_synced_count: details.previous_synced_count || 0,
+        delete_candidate_count: details.delete_candidate_count || 0,
+        stale_delete_mode: details.stale_delete_mode || '',
+        stale_delete_note: details.stale_delete_note || '',
         product_sets: details.product_sets || [],
         product_set_errors: details.product_set_errors || [],
         product_set_sort_note: details.product_set_sort_note || '',
@@ -732,6 +736,11 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
                 <div className="mt-5">
                     <PricePreviewTable entries={syncDisplayResult?.price_previews || []} />
                 </div>
+                {syncDisplayResult?.stale_delete_note && (
+                    <p className="mt-4 rounded-sm border border-blue-100 bg-blue-50 px-4 py-3 text-[13px] font-bold text-blue-700">
+                        {syncDisplayResult.stale_delete_note}
+                    </p>
+                )}
                 <div className="mt-5">
                     <SkippedProductsTable entries={syncDisplayResult?.skipped_entries || []} />
                 </div>

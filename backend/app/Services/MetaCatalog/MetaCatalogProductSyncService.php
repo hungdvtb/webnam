@@ -2,6 +2,7 @@
 
 namespace App\Services\MetaCatalog;
 
+use App\Models\MetaCatalogSyncLog;
 use App\Services\MetaFeedService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
@@ -21,6 +22,8 @@ class MetaCatalogProductSyncService
     {
         $dryRun = (bool) ($options['dry_run'] ?? false);
         $deleteStale = (bool) ($options['delete_stale'] ?? config('meta_catalog.delete_stale', true));
+        $fullStaleScan = (bool) ($options['full_stale_scan'] ?? config('meta_catalog.full_stale_scan', false));
+        $accountId = array_key_exists('account_id', $options) && $options['account_id'] !== null ? (int) $options['account_id'] : null;
         $batchSize = $this->batchSize((int) ($options['batch_size'] ?? config('meta_catalog.batch_size', 500)));
         $pollStatus = (bool) ($options['poll_status'] ?? config('meta_catalog.poll_status', true));
         $checkRemoteUrls = (bool) ($options['check_remote_urls'] ?? false);
@@ -50,14 +53,40 @@ class MetaCatalogProductSyncService
             throw new MetaCatalogProductSyncException('Website feed has no products; refusing to delete every item from the Meta catalog.');
         }
 
-        if (!$dryRun) {
-            $this->reportProgress($progress, 'fetch_meta_existing', 35, 'Dang lay danh sach san pham hien co tren Meta...');
-        }
-        $existingRetailerIds = $dryRun ? [] : $this->fetchCatalogRetailerIds($progress);
-        $upsertRequests = $this->buildUpsertRequests($validEntries, $existingRetailerIds);
-        $deleteRequests = $deleteStale
-            ? $this->buildDeleteRequests($existingRetailerIds, $currentRetailerIds)
+        $skippedRetailerIds = $this->retailerIdSet($skippedEntries);
+        $previousSyncedRetailerIds = $deleteStale && !$fullStaleScan
+            ? $this->previousSyncedRetailerIds($accountId)
             : [];
+        $deleteCandidateIds = $deleteStale && !$fullStaleScan
+            ? $this->trackedDeleteCandidateIds($currentRetailerIds, $skippedRetailerIds, $previousSyncedRetailerIds)
+            : [];
+
+        $existingRetailerIds = [];
+        if (!$dryRun) {
+            $this->reportProgress(
+                $progress,
+                'fetch_meta_existing',
+                35,
+                $fullStaleScan
+                    ? 'Dang lay danh sach san pham hien co tren Meta...'
+                    : 'Dang kiem tra nhanh cac SKU lien quan tren Meta...',
+                [
+                    'full_stale_scan' => $fullStaleScan,
+                    'lookup_count' => $fullStaleScan ? null : count(array_unique(array_merge($currentRetailerIds, $deleteCandidateIds))),
+                    'delete_candidate_count' => count($deleteCandidateIds),
+                ]
+            );
+            $existingRetailerIds = $fullStaleScan
+                ? $this->fetchCatalogRetailerIds($progress)
+                : $this->fetchCatalogRetailerIdsFor(array_merge($currentRetailerIds, $deleteCandidateIds), $progress);
+        }
+        $upsertRequests = $this->buildUpsertRequests($validEntries, $existingRetailerIds);
+        $deleteRequests = [];
+        if ($deleteStale) {
+            $deleteRequests = $fullStaleScan
+                ? $this->buildDeleteRequests($existingRetailerIds, $currentRetailerIds)
+                : $this->buildExplicitDeleteRequests($deleteCandidateIds, $existingRetailerIds);
+        }
         $requests = array_merge($upsertRequests, $deleteRequests);
         $this->reportProgress($progress, 'build_requests', $dryRun ? 95 : 50, 'Da chuan bi request gui sang Meta.', [
             'existing_count' => count($existingRetailerIds),
@@ -66,6 +95,8 @@ class MetaCatalogProductSyncService
             'delete_count' => count($deleteRequests),
             'request_count' => count($requests),
             'batch_count' => (int) ceil(count($requests) / max($batchSize, 1)),
+            'stale_delete_mode' => $fullStaleScan ? 'full_scan' : 'tracked',
+            'delete_candidate_count' => count($deleteCandidateIds),
         ]);
 
         $batches = [];
@@ -107,6 +138,14 @@ class MetaCatalogProductSyncService
             'skipped_entries' => $skippedEntries,
             'fallback_entries' => $fallbackEntries,
             'price_previews' => $pricePreviews,
+            'synced_retailer_ids' => $currentRetailerIds,
+            'skipped_retailer_ids' => $skippedRetailerIds,
+            'previous_synced_count' => count($previousSyncedRetailerIds),
+            'delete_candidate_count' => count($deleteCandidateIds),
+            'stale_delete_mode' => $fullStaleScan ? 'full_scan' : 'tracked',
+            'stale_delete_note' => $fullStaleScan
+                ? 'Dang bat che do quet toan bo Meta Catalog de xoa stale. Che do nay co the cham neu Catalog co nhieu SKU.'
+                : 'Dong bo nhanh chi kiem tra SKU lien quan, xoa san pham bi OFF/thieu du lieu va SKU da tung sync boi he thong o lan truoc. Khong quet toan bo 20k SKU tren Meta.',
             'batches' => $batches,
             'batch_error_count' => $batchErrorCount,
             'product_set_count' => (int) ($productSetResult['total_count'] ?? 0),
@@ -177,6 +216,59 @@ class MetaCatalogProductSyncService
         }
 
         return $requests;
+    }
+
+    private function buildExplicitDeleteRequests(array $retailerIds, array $existingRetailerIds): array
+    {
+        $existingSet = array_fill_keys(array_map('strval', $existingRetailerIds), true);
+        $requests = [];
+
+        foreach ($retailerIds as $retailerId) {
+            $retailerId = trim((string) $retailerId);
+            if ($retailerId === '' || !isset($existingSet[$retailerId])) {
+                continue;
+            }
+
+            $requests[] = [
+                'method' => 'DELETE',
+                'retailer_id' => $retailerId,
+            ];
+        }
+
+        return $requests;
+    }
+
+    private function trackedDeleteCandidateIds(array $currentRetailerIds, array $skippedRetailerIds, array $previousSyncedRetailerIds): array
+    {
+        $currentSet = array_fill_keys(array_map('strval', $currentRetailerIds), true);
+
+        return collect(array_merge($skippedRetailerIds, $previousSyncedRetailerIds))
+            ->map(fn ($id) => trim((string) $id))
+            ->filter(fn ($id) => $id !== '' && !isset($currentSet[$id]))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function previousSyncedRetailerIds(?int $accountId): array
+    {
+        $log = MetaCatalogSyncLog::query()
+            ->whereIn('operation', ['sync_live', 'scheduled_sync'])
+            ->where('status', 'success')
+            ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
+            ->latest('finished_at')
+            ->first();
+
+        if (!$log) {
+            return [];
+        }
+
+        return collect((array) data_get($log->details, 'synced_retailer_ids', []))
+            ->map(fn ($id) => trim((string) $id))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function feedSnapshot(): array
@@ -866,6 +958,103 @@ class MetaCatalogProductSyncService
         }
 
         return collect($ids)->unique()->values()->all();
+    }
+
+    private function fetchCatalogRetailerIdsFor(array $retailerIds, ?callable $progress = null): array
+    {
+        $retailerIds = collect($retailerIds)
+            ->map(fn ($id) => trim((string) $id))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($retailerIds)) {
+            return [];
+        }
+
+        $chunkSize = max(min((int) config('meta_catalog.catalog_lookup_chunk_size', 25), 100), 1);
+        $chunks = array_chunk($retailerIds, $chunkSize);
+        $found = [];
+
+        foreach ($chunks as $index => $chunk) {
+            $chunkNumber = $index + 1;
+            $this->reportProgress(
+                $progress,
+                'fetch_meta_existing',
+                min(45, 35 + (int) floor(($chunkNumber / max(count($chunks), 1)) * 10)),
+                sprintf('Dang kiem tra SKU Meta: nhom %d/%d, da thay %d SKU...', $chunkNumber, count($chunks), count($found)),
+                [
+                    'chunk_number' => $chunkNumber,
+                    'chunk_count' => count($chunks),
+                    'lookup_count' => count($retailerIds),
+                    'existing_count' => count($found),
+                ]
+            );
+
+            foreach ($this->fetchCatalogRetailerIdsByFilter($chunk) as $retailerId) {
+                $found[] = $retailerId;
+            }
+        }
+
+        return collect($found)->unique()->values()->all();
+    }
+
+    private function fetchCatalogRetailerIdsByFilter(array $retailerIds): array
+    {
+        $url = $this->endpoint('products');
+        $query = [
+            'fields' => 'retailer_id',
+            'limit' => max(count($retailerIds), 1),
+            'filter' => json_encode($this->retailerIdFilter($retailerIds), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+        ];
+        $ids = [];
+        $page = 0;
+        $maxPages = 10;
+
+        while ($url !== '' && $page < $maxPages) {
+            $response = $this->metaGet($url, $query);
+            if ($response->failed()) {
+                throw new MetaCatalogProductSyncException($this->responseErrorMessage($response, 'Meta Catalog API rejected the filtered product lookup request.'));
+            }
+
+            $body = $response->json() ?: [];
+            foreach ((array) ($body['data'] ?? []) as $item) {
+                $retailerId = trim((string) ($item['retailer_id'] ?? ''));
+                if ($retailerId !== '') {
+                    $ids[] = $retailerId;
+                }
+            }
+
+            $url = trim((string) data_get($body, 'paging.next', ''));
+            $query = [];
+            $page++;
+        }
+
+        return collect($ids)->unique()->values()->all();
+    }
+
+    private function retailerIdFilter(array $retailerIds): array
+    {
+        $retailerIds = array_values(array_filter(array_map(fn ($id) => trim((string) $id), $retailerIds)));
+        if (count($retailerIds) === 1) {
+            return [
+                'retailer_id' => [
+                    'eq' => $retailerIds[0],
+                ],
+            ];
+        }
+
+        return [
+            'or' => array_map(
+                fn (string $retailerId) => [
+                    'retailer_id' => [
+                        'eq' => $retailerId,
+                    ],
+                ],
+                $retailerIds
+            ),
+        ];
     }
 
     private function sendBatch(array $requests, int $batchNumber, bool $pollStatus, ?callable $progress = null, int $totalBatches = 1): array

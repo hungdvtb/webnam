@@ -284,9 +284,25 @@ class MetaConversionsApiService
                 ->withOptions(['verify' => (bool) config('meta_conversions.verify_ssl', true)])
                 ->post($url, $payload);
 
+            Log::info('Meta Conversions API response.', [
+                'status' => $response->status(),
+                'events' => collect($payload['data'])
+                    ->map(fn (array $event) => [
+                        'event_name' => $event['event_name'] ?? null,
+                        'event_id' => $event['event_id'] ?? null,
+                        'event_source_url' => $event['event_source_url'] ?? null,
+                    ])
+                    ->values()
+                    ->all(),
+                'has_test_event_code' => isset($payload['test_event_code']),
+                'body' => Str::limit($response->body(), 1000, '...'),
+            ]);
+
             if ($response->failed()) {
                 Log::warning('Meta Conversions API request failed.', [
                     'status' => $response->status(),
+                    'events' => collect($payload['data'])->pluck('event_name')->values()->all(),
+                    'has_test_event_code' => isset($payload['test_event_code']),
                     'body' => Str::limit($response->body(), 1000, '...'),
                 ]);
 

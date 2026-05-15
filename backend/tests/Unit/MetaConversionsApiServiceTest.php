@@ -14,12 +14,15 @@ class MetaConversionsApiServiceTest extends TestCase
 {
     public function test_it_sends_purchase_with_deduplication_and_hashed_customer_data(): void
     {
+        $testEventCode = env('META_TEST_EVENT_CODE', 'TEST_EVENT_CODE');
+
         config([
             'meta_conversions.enabled' => true,
             'meta_conversions.pixel_id' => '2786270608428787',
             'meta_conversions.access_token' => 'test-token',
             'meta_conversions.graph_api_version' => 'v25.0',
             'meta_conversions.verify_ssl' => false,
+            'meta_conversions.test_event_code' => $testEventCode,
         ]);
 
         Http::fake([
@@ -56,7 +59,7 @@ class MetaConversionsApiServiceTest extends TestCase
         $sent = app(MetaConversionsApiService::class)->sendPurchaseFromLead($request, $lead);
 
         $this->assertTrue($sent);
-        Http::assertSent(function (HttpRequest $request): bool {
+        Http::assertSent(function (HttpRequest $request) use ($testEventCode): bool {
             $payload = json_decode($request->body(), true);
             $event = $payload['data'][0] ?? [];
             $userData = $event['user_data'] ?? [];
@@ -64,6 +67,7 @@ class MetaConversionsApiServiceTest extends TestCase
 
             return str_contains($request->url(), '/v25.0/2786270608428787/events')
                 && str_contains($request->url(), 'access_token=test-token')
+                && ($payload['test_event_code'] ?? null) === $testEventCode
                 && $event['event_name'] === 'Purchase'
                 && $event['event_id'] === 'webgom_Purchase_checkout-token'
                 && $event['event_source_url'] === 'https://gomdaithanh.com/cart'

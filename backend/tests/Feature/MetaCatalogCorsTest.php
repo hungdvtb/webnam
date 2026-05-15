@@ -29,6 +29,22 @@ class MetaCatalogCorsTest extends TestCase
         }
     }
 
+    public function test_meta_catalog_auth_response_keeps_cors_headers_for_admin_origin(): void
+    {
+        $origin = 'https://admin.gomdaithanh.com';
+
+        $response = $this->withHeaders([
+            'Origin' => $origin,
+            'Accept' => 'application/json',
+        ])->postJson('/api/meta-catalog/dry-run', [
+            'check_remote_urls' => false,
+        ]);
+
+        $response->assertUnauthorized();
+        $this->assertSame($origin, $response->headers->get('Access-Control-Allow-Origin'));
+        $this->assertSame('true', $response->headers->get('Access-Control-Allow-Credentials'));
+    }
+
     public function test_meta_catalog_cors_and_session_config_include_production_domains(): void
     {
         $this->assertContains('https://admin.gomdaithanh.com', config('cors.allowed_origins'));

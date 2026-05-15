@@ -59,6 +59,41 @@ const StatBox = ({ label, value, tone = 'primary' }) => {
     );
 };
 
+const resultFromLog = (log) => {
+    if (!log) return null;
+    const details = log.details || {};
+
+    return {
+        dry_run: log.operation === 'dry_run',
+        feed_count: log.total_products || 0,
+        valid_count: log.valid_products || 0,
+        skipped_count: log.skipped_count || details.skipped_count || 0,
+        invalid_count: log.invalid_products || log.error_count || 0,
+        success_count: log.success_count || log.valid_products || 0,
+        create_count: log.create_count || 0,
+        update_count: log.update_count || 0,
+        delete_count: log.delete_count || 0,
+        fallback_count: log.fallback_count || 0,
+        request_count: log.success_count || log.valid_products || 0,
+        batch_count: Array.isArray(details.batches) ? details.batches.length : 0,
+        invalid_entries: details.invalid_entries || [],
+        skipped_entries: details.skipped_entries || [],
+        fallback_entries: details.fallback_entries || [],
+        batches: details.batches || [],
+        recovered_from_log: true,
+    };
+};
+
+const recentOperationLog = (logs, operation, startedAtMs) => {
+    const minFinishedAt = Number(startedAtMs || 0) - 30000;
+
+    return (logs || []).find((log) => {
+        if (log?.operation !== operation) return false;
+        const finishedAt = new Date(log.finished_at || log.started_at || '').getTime();
+        return Number.isFinite(finishedAt) && finishedAt >= minFinishedAt;
+    }) || null;
+};
+
 const SkippedProductsTable = ({ entries = [] }) => {
     if (!entries.length) {
         return null;
@@ -161,9 +196,12 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
     const refreshLogs = async () => {
         try {
             const response = await metaCatalogApi.getLogs({ per_page: 10 });
-            setLogs(response.data?.data || []);
+            const nextLogs = response.data?.data || [];
+            setLogs(nextLogs);
+            return nextLogs;
         } catch {
             // Log refresh is secondary to the action result.
+            return [];
         }
     };
 
@@ -224,6 +262,7 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
     };
 
     const handleDryRun = async () => {
+        const startedAtMs = Date.now();
         setRunningDryRun(true);
         setSyncResult(null);
         try {
@@ -245,7 +284,21 @@ const MetaCatalogSettingsPanel = ({ SectionCard, inputClasses, labelClasses, sho
             if (result) {
                 setDryRunResult(result);
             }
-            await refreshLogs();
+            const latestLogs = await refreshLogs();
+            const recoveredResult = resultFromLog(recentOperationLog(latestLogs, 'dry_run', startedAtMs));
+            if (!result && recoveredResult && Number(recoveredResult.invalid_count || 0) === 0) {
+                setDryRunResult(recoveredResult);
+                const skippedCount = Number(recoveredResult.skipped_count || 0);
+                showModal({
+                    title: 'Dry-run hoàn tất',
+                    content: skippedCount > 0
+                        ? `Backend đã chạy xong. Có ${compactNumber(skippedCount)} sản phẩm bị bỏ qua; các sản phẩm đủ điều kiện vẫn có thể sync Meta.`
+                        : 'Backend đã chạy xong và tất cả sản phẩm trong phạm vi website đều đủ điều kiện sync Meta.',
+                    type: 'success',
+                });
+                return;
+            }
+
             showModal({
                 title: 'Dry-run thất bại',
                 content: error.response?.data?.message || 'Không thể chạy kiểm tra dữ liệu Meta Catalog.',

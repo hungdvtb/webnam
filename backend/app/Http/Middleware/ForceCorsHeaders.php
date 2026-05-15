@@ -3,8 +3,10 @@
 namespace App\Http\Middleware;
 
 use Closure;
+use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 class ForceCorsHeaders
 {
@@ -29,7 +31,14 @@ class ForceCorsHeaders
             return $this->withCorsHeaders(response()->noContent(), $request, $origin);
         }
 
-        return $this->withCorsHeaders($next($request), $request, $origin);
+        try {
+            $response = $next($request);
+        } catch (Throwable $exception) {
+            app(ExceptionHandler::class)->report($exception);
+            $response = app(ExceptionHandler::class)->render($request, $exception);
+        }
+
+        return $this->withCorsHeaders($response, $request, $origin);
     }
 
     private function shouldHandle(Request $request): bool

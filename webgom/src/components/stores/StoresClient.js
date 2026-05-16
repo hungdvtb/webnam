@@ -292,7 +292,7 @@ export default function StoresClient({ stores = [] }) {
                                 height={320}
                                 sizes="(max-width: 389px) 100vw, 156px"
                                 className="stores-card-image"
-                                unoptimized
+ 
                               />
                               <span className="stores-card-media-zoom">
                                 <span className="material-symbols-outlined">zoom_in</span>
@@ -393,7 +393,7 @@ export default function StoresClient({ stores = [] }) {
                 width={1400}
                 height={1400}
                 className="stores-lightbox-image"
-                unoptimized
+ 
               />
             </div>
 

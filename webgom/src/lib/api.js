@@ -36,16 +36,17 @@ export async function fetchFromApi(endpoint, options = {}) {
 }
 
 export async function resolveAccount() {
-    return fetchFromApi(`/accounts/resolve/${config.siteCode}`);
+    return fetchFromApi(`/accounts/resolve/${config.siteCode}`, { next: { revalidate: 3600 } });
 }
 
 export async function getActiveMenu() {
-    // Revalidate 0 to always get fresh data
-    return fetchFromApi('/menus/active', { next: { revalidate: 0 } });
+    // Cache for 5 minutes
+    return fetchFromApi('/menus/active', { next: { revalidate: 300 } });
 }
 
 export async function getStorefrontData() {
-    return fetchFromApi('/storefront/homepage');
+    // Cache for 1 minute
+    return fetchFromApi('/storefront/homepage', { next: { revalidate: 60 } });
 }
 
 export async function getProducts(params = {}) {
@@ -64,7 +65,7 @@ export async function getProducts(params = {}) {
             urlParams.append(key, value);
         }
     });
-    return fetchFromApi(`/storefront/products?${urlParams.toString()}`);
+    return fetchFromApi(`/storefront/products?${urlParams.toString()}`, { next: { revalidate: 30 } });
 }
 
 export async function getWebProducts(params = {}) {
@@ -82,21 +83,22 @@ export async function getWebProducts(params = {}) {
             urlParams.append(key, value);
         }
     });
-    return fetchFromApi(`/web-api/products?${urlParams.toString()}`);
+    return fetchFromApi(`/web-api/products?${urlParams.toString()}`, { next: { revalidate: 30 } });
 }
 
 export async function getWebCategories() {
-    return fetchFromApi('/web-api/categories', { next: { revalidate: 0 } });
+    // Cache for 5 minutes
+    return fetchFromApi('/web-api/categories', { next: { revalidate: 300 } });
 }
 
 export async function getWebCategory(slug) {
-    return fetchFromApi(`/web-api/categories/${slug}`);
+    // Cache for 1 minute
+    return fetchFromApi(`/web-api/categories/${slug}`, { next: { revalidate: 60 } });
 }
 
 export async function getWebProductDetail(slug) {
-    // Cache for 30 seconds - balances freshness with SSR performance.
-    // Next.js also deduplicates identical fetch() calls within the same render pass.
-    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 30 } });
+    // Cache for 1 minute
+    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 } });
 }
 
 export async function getWebProductBundleOptionDetail(slug, params = {}) {
@@ -110,12 +112,12 @@ export async function getWebProductBundleOptionDetail(slug, params = {}) {
     const query = urlParams.toString();
     return fetchFromApi(
         `/web-api/products/${slug}/bundle-option-detail${query ? `?${query}` : ''}`,
-        { next: { revalidate: 30 } },
+        { next: { revalidate: 60 } },
     );
 }
 
 export async function getWebRelatedProducts(slug) {
-    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 60 } });
+    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 300 } });
 
     if (Array.isArray(response)) {
         return {
@@ -153,5 +155,7 @@ export async function saveWebOrderDraft(orderData) {
 }
 
 export async function getWebSiteSettings() {
-    return fetchFromApi('/site-settings', { next: { revalidate: 0 } });
+    // Cache for 10 minutes
+    return fetchFromApi('/site-settings', { next: { revalidate: 600 } });
 }
+

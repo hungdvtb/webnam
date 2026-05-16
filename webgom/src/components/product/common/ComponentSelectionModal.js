@@ -527,7 +527,7 @@ export default function ComponentSelectionModal({
                         alt={item.name}
                         fill
                         style={{ objectFit: 'cover' }}
-                        unoptimized
+ 
                       />
                     </div>
                     <div className={styles.productCardInfo}>

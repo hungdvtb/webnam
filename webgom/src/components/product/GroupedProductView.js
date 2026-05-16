@@ -92,7 +92,7 @@ export default function GroupedProductView({
                           alt={item.name}
                           fill
                           style={{ objectFit: 'cover' }}
-                          unoptimized
+ 
                         />
                       </div>
                       <div className={styles.itemInfo}>

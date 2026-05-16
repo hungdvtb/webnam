@@ -92,7 +92,6 @@ export default function InfiniteProductListLayout2({ initialData }) {
                     fill
                     className={styles.image}
                     sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
-                    unoptimized
                   />
                 </Link>
               </div>

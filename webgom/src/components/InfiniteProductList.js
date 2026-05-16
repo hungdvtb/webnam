@@ -91,7 +91,6 @@ export default function InfiniteProductList({ initialData }) {
                   fill
                   sizes="(max-width: 359px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 33vw, 25vw"
                   style={{ objectFit: 'cover' }}
-                  unoptimized
                 />
               </Link>
 

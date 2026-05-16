@@ -53,7 +53,7 @@ export default function ProductGallery({ images = [], productName }) {
           style={{ objectFit: 'cover' }}
           priority
           key={activeIndex}
-          unoptimized
+ 
         />
       </div>
       {validImages.length > 1 && (
@@ -71,7 +71,7 @@ export default function ProductGallery({ images = [], productName }) {
                 fill
                 sizes="100px"
                 style={{ objectFit: 'cover' }}
-                unoptimized
+ 
               />
             </button>
           ))}

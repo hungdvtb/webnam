@@ -1821,7 +1821,7 @@ export default function CartPage() {
                       <div className={styles.mobileItemMain}>
                         <div className={styles.mobileItemImage}>
                           {imgSrc ? (
-                            <Image src={imgSrc} alt={item.name} fill style={{ objectFit: 'cover' }} unoptimized />
+                            <Image src={imgSrc} alt={item.name} fill style={{ objectFit: 'cover' }} />
                           ) : (
                             <div style={{
                               width: '100%', height: '100%', display: 'flex',
@@ -1973,7 +1973,7 @@ export default function CartPage() {
                                                 alt={bundleItemName}
                                                 fill
                                                 sizes="32px"
-                                                unoptimized
+ 
                                                 style={{ objectFit: 'cover' }}
                                               />
                                             ) : (
@@ -1991,7 +1991,7 @@ export default function CartPage() {
                                               alt={bundleItemName}
                                               fill
                                               sizes="32px"
-                                              unoptimized
+ 
                                               style={{ objectFit: 'cover' }}
                                             />
                                           ) : (
@@ -2082,7 +2082,7 @@ export default function CartPage() {
                         <div className={styles.itemImage}>
                           {imgSrc ? (
                             <Image src={imgSrc} alt={item.name} fill
-                              style={{ objectFit: 'cover' }} unoptimized />
+                              style={{ objectFit: 'cover' }} />
                           ) : (
                             <div style={{
                               width: '100%', height: '100%', display: 'flex',
@@ -2196,7 +2196,7 @@ export default function CartPage() {
                                               alt={bundleItemName}
                                               fill
                                               sizes="32px"
-                                              unoptimized
+ 
                                               style={{ objectFit: 'cover' }}
                                             />
                                           ) : (
@@ -2214,7 +2214,7 @@ export default function CartPage() {
                                             alt={bundleItemName}
                                             fill
                                             sizes="32px"
-                                            unoptimized
+ 
                                             style={{ objectFit: 'cover' }}
                                           />
                                         ) : (

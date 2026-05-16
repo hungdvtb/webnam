@@ -850,7 +850,7 @@ export default function Header({
               width={56}
               height={56}
               sizes="56px"
-              unoptimized
+ 
             />
           </span>
         </Link>
@@ -1010,7 +1010,7 @@ export default function Header({
                           height={28}
                           sizes="28px"
                           className="mobile-products-link__logo-image"
-                          unoptimized
+ 
                         />
                       ) : (
                         <span className="mobile-products-link__logo-fallback">

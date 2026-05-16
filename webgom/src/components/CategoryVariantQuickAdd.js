@@ -1002,7 +1002,7 @@ export default function CategoryVariantQuickAdd({
             fill
             sizes="76px"
             style={{ objectFit: 'cover' }}
-            unoptimized
+ 
           />
         </span>
         <div className={styles.optionInfo}>
@@ -1039,7 +1039,7 @@ export default function CategoryVariantQuickAdd({
             fill
             sizes="76px"
             style={{ objectFit: 'cover' }}
-            unoptimized
+ 
           />
         </span>
         <div className={styles.optionInfo}>

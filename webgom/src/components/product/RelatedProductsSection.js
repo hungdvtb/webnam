@@ -321,7 +321,7 @@ export default function RelatedProductsSection({
                       fill
                       sizes="(max-width: 768px) 50vw, (max-width: 1200px) 50vw, 25vw"
                       style={{ objectFit: 'cover' }}
-                      unoptimized
+ 
                     />
                   ) : (
                     <div className={styles.relatedImagePlaceholder}>

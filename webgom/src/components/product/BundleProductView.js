@@ -444,7 +444,7 @@ export default function BundleProductView({
           alt={imageAlt}
           fill
           style={{ objectFit: 'cover' }}
-          unoptimized
+ 
         />
       </div>
     );
@@ -1741,7 +1741,7 @@ export default function BundleProductView({
                           >
                             <div className={styles.relatedOptionImgWrap}>
                               {displayImgSrc
-                                ? <Image src={displayImgSrc} alt={txt} fill sizes="30px" unoptimized style={{ objectFit: 'cover' }} />
+                                ? <Image src={displayImgSrc} alt={txt} fill sizes="30px" style={{ objectFit: 'cover' }} />
                                 : <span className={`material-symbols-outlined ${styles.relatedOptionFallback}`}>image</span>
                               }
                             </div>

@@ -137,7 +137,6 @@ export function HomeDesktopHero({ bannerCategories = [] }) {
               sizes="(min-width: 1201px) calc(100vw - 660px), 100vw"
               style={{ objectFit: "cover" }}
               priority
-              unoptimized
             />
             <div className={styles.heroOverlay}></div>
             <div className={styles.heroContent}>
@@ -234,7 +233,6 @@ export function HomeDesktopCatalog({ categorySections = [] }) {
                             fill
                             sizes="(min-width: 1201px) 25vw, 100vw"
                             style={{ objectFit: "cover" }}
-                            unoptimized
                           />
                           {product.isFeatured && (
                             <span className={`${styles.badge} ${styles.badgeHot}`}>HOT</span>

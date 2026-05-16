@@ -17,7 +17,7 @@ const parseRemotePattern = (value) => {
   }
 };
 
-const mediaRemotePattern = parseRemotePattern(process.env.NEXT_PUBLIC_MEDIA_BASE_URL);
+const mediaRemotePattern = parseRemotePattern(process.env.NEXT_PUBLIC_MEDIA_BASE_URL || process.env.NEXT_PUBLIC_STORAGE_URL || 'https://api.gomdaithanh.com/storage');
 
 const nextConfig = {
   devIndicators: false,

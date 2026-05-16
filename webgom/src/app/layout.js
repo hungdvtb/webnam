@@ -8,6 +8,14 @@ import { CartProvider } from "@/context/CartContext";
 import TrackingScripts from "@/components/common/TrackingScripts";
 import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
 import WebAnalyticsTracker from "@/components/common/WebAnalyticsTracker";
+import { Roboto } from "next/font/google";
+
+const roboto = Roboto({
+  weight: ["100", "300", "400", "500", "700", "900"],
+  subsets: ["vietnamese"],
+  display: "swap",
+  variable: "--font-roboto",
+});
 
 const DEFAULT_TOP_NOTICE = "MIỄN PHÍ VẬN CHUYỂN TOÀN QUỐC CHO ĐƠN HÀNG TỪ 500.000Đ";
 const DEFAULT_BRAND_TEXT = "GỐM ĐẠI THÀNH";
@@ -139,21 +147,16 @@ export default async function RootLayout({ children }) {
   let productCategories = [];
 
   try {
-    const [menuRes, settingsRes] = await Promise.all([
+    const [menuRes, settingsRes, categoriesRes] = await Promise.all([
       getActiveMenu(),
       getWebSiteSettings(),
+      getWebCategories(),
     ]);
     menuData = menuRes;
     settings = settingsRes;
-  } catch (error) {
-    console.error("Failed to fetch layout data:", error);
-  }
-
-  try {
-    const categoriesRes = await getWebCategories();
     productCategories = Array.isArray(categoriesRes) ? categoriesRes : [];
   } catch (error) {
-    console.error("Failed to fetch header categories:", error);
+    console.error("Failed to fetch layout data:", error);
   }
 
   const headerMenuItems = normalizeHeaderMenuItems(parseMenuArray(settings?.header_menu_items));
@@ -179,14 +182,11 @@ export default async function RootLayout({ children }) {
   };
 
   return (
-    <html lang="vi">
+    <html lang="vi" className={roboto.variable}>
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap&subset=vietnamese"
-        />
+        <link rel="preconnect" href="https://api.gomdaithanh.com" />
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"

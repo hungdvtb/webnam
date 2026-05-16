@@ -1050,7 +1050,7 @@ export default function ProductGallery({
             priority={priorityFirstImage && !hidden}
             loading={priorityFirstImage && !hidden ? undefined : 'lazy'}
             draggable={false}
-            unoptimized
+ 
             onLoad={() => {
               if (!hidden) {
                 logProductTimingOnce(
@@ -1222,7 +1222,7 @@ export default function ProductGallery({
                       sizes="88px"
                       className={styles.productMediaThumbImage}
                       draggable={false}
-                      unoptimized
+ 
                     />
                   </div>
                 ) : (
@@ -1261,7 +1261,7 @@ export default function ProductGallery({
                     sizes="88px"
                     className={styles.productMediaThumbImage}
                     draggable={false}
-                    unoptimized
+ 
                   />
                 </div>
               </button>

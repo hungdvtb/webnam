@@ -157,7 +157,6 @@ export default function HomeMobileHero({ bannerCategories = [] }) {
                 sizes="100vw"
                 className={styles.mobileHeroImage}
                 priority={index === 0}
-                unoptimized
               />
               <div className={styles.mobileHeroOverlay} />
 

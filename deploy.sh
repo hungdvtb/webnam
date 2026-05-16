@@ -76,7 +76,6 @@ function deploy_website() {
     else
         pm2 start npm --name "webnam-website" -- start -- -p 3003
     fi
-    pm2 save
     echo -e "${GREEN}Main Website deployment complete.${NC}"
 }
 

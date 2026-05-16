@@ -5,12 +5,12 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
-import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from '@/lib/productPrefetch';
 import { markProductNavigationClick } from '@/lib/productPerformance';
+import CategoryVariantQuickAdd from './CategoryVariantQuickAdd';
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const FALLBACK_PRODUCT_ALT = 'Sản phẩm gốm sứ';
@@ -76,7 +76,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
             : {};
 
           return (
-            <div key={productCardKey} className={styles.productCard}>
+            <div key={productCardKey} className={styles.productCard} data-product-card="true">
               <div className={styles.imageArea}>
                 <Link
                   href={productHref}
@@ -108,26 +108,22 @@ export default function InfiniteProductListLayout2({ initialData }) {
                 >
                   <h3 className={styles.productName}>{product.name}</h3>
                 </Link>
-
                 <div className={styles.footer}>
                   <p className={styles.price}>
                     {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(displayPrice)}
                   </p>
 
                   <div className={styles.actions}>
-                    <button
-                      className={styles.cartAction}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        addToCart(product, 1, cartOptions, [], displayPrice);
-                        const card = event.currentTarget.closest(`.${styles.productCard}`);
-                        const imgSrc = card?.querySelector('img')?.src || FALLBACK_PRODUCT_IMAGE;
-                        flyToCart(event, imgSrc);
-                      }}
+                    <CategoryVariantQuickAdd
+                      product={product}
+                      addToCart={addToCart}
+                      displayPrice={displayPrice}
+                      cartOptions={cartOptions}
+                      buttonClassName={styles.cartAction}
                     >
                       <span className={`material-symbols-outlined ${styles.cartActionIcon}`}>add_shopping_cart</span>
                       {ADD_TO_CART_LABEL}
-                    </button>
+                    </CategoryVariantQuickAdd>
                   </div>
                 </div>
               </div>

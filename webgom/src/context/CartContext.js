@@ -237,6 +237,23 @@ const resolveBundleEntryUnitPrice = (product = {}, fallback = 0) => {
   return 0;
 };
 
+const resolveCartReplacementUnitPrice = (product = {}, fallback = 0) => {
+  const candidates = [
+    product?.current_price,
+    product?.price,
+    fallback,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = Number(candidate);
+    if (Number.isFinite(normalized)) {
+      return normalized;
+    }
+  }
+
+  return 0;
+};
+
 const mergeBundleSelectionIntoEntry = (currentItem = {}, newProduct = {}, fallbackIndex = 0) => {
   const isSiblingVariant = newProduct?.pivot?.link_type === 'super_link';
   const preservedQty = Math.max(1, Number(currentItem?.qty || currentItem?.quantity || 1));
@@ -327,22 +344,33 @@ export function CartProvider({ children }) {
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+    let nextCartItems = [];
     const savedCart = localStorage.getItem('webgom_cart');
 
     if (savedCart) {
       try {
         const parsedCart = JSON.parse(savedCart);
-        setCartItems(
-          Array.isArray(parsedCart)
-            ? parsedCart.map((item) => normalizeCartItem(item))
-            : []
-        );
+        nextCartItems = Array.isArray(parsedCart)
+          ? parsedCart.map((item) => normalizeCartItem(item))
+          : [];
       } catch (error) {
         console.error('Failed to parse cart:', error);
       }
     }
 
-    setIsInitialized(true);
+    queueMicrotask(() => {
+      if (!isMounted) {
+        return;
+      }
+
+      setCartItems(nextCartItems);
+      setIsInitialized(true);
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -542,6 +570,98 @@ export function CartProvider({ children }) {
     )));
   };
 
+  const replaceCartItemProduct = (
+    cartKey,
+    product,
+    options = {},
+    finalPrice = null,
+    mediaContext = null,
+  ) => {
+    if (!cartKey || !product?.id) {
+      return;
+    }
+
+    setCartItems((prev) => {
+      const currentItem = prev.find((item) => item.cartKey === cartKey);
+      if (!currentItem) {
+        return prev;
+      }
+
+      const normalizedOptions = normalizeOptions(options);
+      const normalizedProductId = Number(product.id || 0);
+      const normalizedPrice = resolveCartReplacementUnitPrice(
+        product,
+        finalPrice ?? currentItem.price ?? 0,
+      );
+      const nextCartKey = buildCartItemKey(normalizedProductId, normalizedOptions, []);
+      const mediaPayload = buildCartItemMediaPayload(product, mediaContext);
+      const currentUrl = typeof window !== 'undefined'
+        ? `${window.location.origin}/product/${product.slug || normalizedProductId}`
+        : currentItem.productUrl;
+      const replacementItem = normalizeCartItem({
+        ...currentItem,
+        cartKey: nextCartKey,
+        id: normalizedProductId,
+        name: product.name || currentItem.name,
+        slug: product.slug || currentItem.slug,
+        sku: product.sku || '',
+        productUrl: currentUrl,
+        price: normalizedPrice,
+        originalPrice: normalizedPrice,
+        ...mediaPayload,
+        options: normalizedOptions,
+        groupedItems: [],
+        bundleSnapshot: [],
+        originalGroupedItems: [],
+        originalSubCount: 0,
+        bundleMetadataVersion: 0,
+        bundleConfigName: '',
+      });
+
+      const hasExistingTarget = prev.some((item) => (
+        item.cartKey !== cartKey && item.cartKey === nextCartKey
+      ));
+
+      if (!hasExistingTarget) {
+        return prev.map((item) => (
+          item.cartKey === cartKey ? replacementItem : item
+        ));
+      }
+
+      return prev.reduce((nextItems, item) => {
+        if (item.cartKey === cartKey) {
+          return nextItems;
+        }
+
+        if (item.cartKey === nextCartKey) {
+          nextItems.push(normalizeCartItem({
+            ...item,
+            ...mediaPayload,
+            id: normalizedProductId,
+            name: product.name || item.name,
+            slug: product.slug || item.slug,
+            sku: product.sku || '',
+            productUrl: currentUrl,
+            price: normalizedPrice,
+            originalPrice: normalizedPrice,
+            options: normalizedOptions,
+            groupedItems: [],
+            bundleSnapshot: [],
+            originalGroupedItems: [],
+            originalSubCount: 0,
+            bundleMetadataVersion: 0,
+            bundleConfigName: '',
+            quantity: item.quantity + currentItem.quantity,
+          }));
+          return nextItems;
+        }
+
+        nextItems.push(item);
+        return nextItems;
+      }, []);
+    });
+  };
+
   const updateBundleItemProduct = (cartKey, bundleItemUid, newProduct) => {
     setCartItems((prev) => prev.map((item) => {
       if (item.cartKey !== cartKey || !Array.isArray(item.groupedItems) || item.groupedItems.length === 0) {
@@ -611,6 +731,7 @@ export function CartProvider({ children }) {
         removeFromCart,
         updateQuantity,
         updateItem,
+        replaceCartItemProduct,
         updateBundleItemProduct,
         clearCart,
         restoreCombo,

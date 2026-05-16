@@ -79,6 +79,12 @@ export default function ComponentSelectionModal({
   mobilePresentation = 'modal',
   title = 'Chọn sản phẩm thay thế',
   subtitlePrefix = 'Đang thay thế:',
+  variantsOnly = false,
+  preferRelatedWhenNoVariants = false,
+  excludeCurrentItem = false,
+  excludeConfigurableParents = false,
+  emptyVariantMessage = 'Không có biến thể nào khác cho sản phẩm này.',
+  emptySearchMessage = 'Không tìm thấy sản phẩm phù hợp.',
 }) {
   const [mode, setMode] = useState('variants');
   const [searchTerm, setSearchTerm] = useState('');
@@ -263,8 +269,15 @@ export default function ComponentSelectionModal({
       } else if (Array.isArray(data.variations) && data.variations.length > 0) {
         setVariants(data.variations);
       } else if (data.id) {
-        const relatedProducts = await fetchRelatedFallback(identifier);
-        setVariants(uniqueProductsById([data, ...relatedProducts]));
+        if (variantsOnly) {
+          setVariants([]);
+        } else {
+          const relatedProducts = await fetchRelatedFallback(identifier);
+          setVariants(uniqueProductsById([
+            ...(preferRelatedWhenNoVariants ? [] : [data]),
+            ...relatedProducts,
+          ]));
+        }
       } else {
         const fallbackItems = uniqueProductsById([
           ...(currentProduct ? [currentProduct] : []),
@@ -288,7 +301,7 @@ export default function ComponentSelectionModal({
     } finally {
       setLoading(false);
     }
-  }, [currentSlot, fetchRelatedFallback, fetchSearchFallback, isOpen]);
+  }, [currentSlot, fetchRelatedFallback, fetchSearchFallback, isOpen, preferRelatedWhenNoVariants, variantsOnly]);
 
   const fetchSearch = useCallback(async () => {
     if (!isOpen || !allowSearch) {
@@ -424,7 +437,24 @@ export default function ComponentSelectionModal({
     return null;
   }
 
-  const displayItems = mode === 'search' && allowSearch ? searchResults : variants;
+  const currentProductId = currentSlot?.selected_product_id
+    || currentSlot?.pivot?.variant_id
+    || currentSlot?.id;
+  const displayItems = (mode === 'search' && allowSearch ? searchResults : variants).filter((item) => {
+    if (!item) {
+      return false;
+    }
+
+    if (excludeCurrentItem && Number(item.id) === Number(currentProductId)) {
+      return false;
+    }
+
+    if (excludeConfigurableParents && String(item.type || '').toLowerCase() === 'configurable') {
+      return false;
+    }
+
+    return true;
+  });
 
   return (
     <div
@@ -477,9 +507,6 @@ export default function ComponentSelectionModal({
           ) : displayItems.length > 0 ? (
             <div className={styles.productGrid}>
               {displayItems.map((item) => {
-                const currentProductId = currentSlot?.selected_product_id
-                  || currentSlot?.pivot?.variant_id
-                  || currentSlot?.id;
                 const isCurrent = Number(item.id) === Number(currentProductId);
 
                 return (
@@ -531,8 +558,8 @@ export default function ComponentSelectionModal({
               ) : (
                 <p className={styles.emptyStateMessage}>
                   {mode === 'variants'
-                    ? 'Không có biến thể nào khác cho sản phẩm này.'
-                    : 'Không tìm thấy sản phẩm phù hợp.'}
+                    ? emptyVariantMessage
+                    : emptySearchMessage}
                 </p>
               )}
               {allowSearch && mode === 'variants' && !errorMsg ? (

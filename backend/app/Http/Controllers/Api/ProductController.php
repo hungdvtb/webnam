@@ -3027,7 +3027,7 @@ class ProductController extends Controller
             'attributeValues.attribute:' . $attributeResourceColumns,
             'linkedProducts' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.status'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'is_default'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
@@ -3675,6 +3675,17 @@ class ProductController extends Controller
         }
 
         return $preparedVariants;
+    }
+
+    protected function resolveDefaultVariantIndex(array $variants): ?int
+    {
+        foreach ($variants as $index => $variantData) {
+            if (filter_var($variantData['is_default'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                return (int) $index;
+            }
+        }
+
+        return empty($variants) ? null : 0;
     }
 
     protected function throwSkuConstraintValidation(QueryException $exception, ?string $message = null): never
@@ -9196,6 +9207,7 @@ class ProductController extends Controller
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|numeric|min:0',
             'variants.*.status' => 'nullable|boolean',
+            'variants.*.is_default' => 'nullable|boolean',
             'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
             'variants.*.image_reference_url' => 'nullable|string|max:2048',
@@ -9238,6 +9250,7 @@ class ProductController extends Controller
                 $preparedVariants = $validated['type'] === 'configurable'
                     ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'])
                     : [];
+                $defaultVariantIndex = $this->resolveDefaultVariantIndex($preparedVariants);
 
                 $product = Product::create(array_merge($validated, [
                     'account_id' => $accountId,
@@ -9391,6 +9404,7 @@ class ProductController extends Controller
                         $product->linkedProducts()->attach($variantProduct->id, [
                             'link_type' => 'super_link',
                             'position' => $idx,
+                            'is_default' => $defaultVariantIndex !== null && $idx === $defaultVariantIndex,
                         ]);
 
                         if (isset($vData['attributes'])) {
@@ -9876,6 +9890,7 @@ class ProductController extends Controller
             'variants.*.inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'variants.*.stock_quantity' => 'nullable|numeric|min:0',
             'variants.*.status' => 'nullable|boolean',
+            'variants.*.is_default' => 'nullable|boolean',
             'variants.*.image' => 'nullable|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
             'variants.*.library_image_id' => 'nullable|integer',
             'variants.*.image_reference_url' => 'nullable|string|max:2048',
@@ -9948,6 +9963,7 @@ class ProductController extends Controller
                 $preparedVariants = ($request->has('variants') && $resolvedType === 'configurable')
                     ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'], $product)
                     : [];
+                $defaultVariantIndex = $this->resolveDefaultVariantIndex($preparedVariants);
 
                 $product->fill($validated);
                 $nameChanged = $product->isDirty('name');
@@ -10143,6 +10159,14 @@ class ProductController extends Controller
                 Product::whereIn('id', $toDelete)->delete();
             }
 
+            DB::table('product_links')
+                ->where('product_id', $product->id)
+                ->where('link_type', 'super_link')
+                ->update([
+                    'is_default' => false,
+                    'updated_at' => now(),
+                ]);
+
             // 3. Process remaining variants (Update or Create)
             foreach ($incomingVariants as $idx => $vData) {
                 if (isset($vData['id'])) {
@@ -10204,6 +10228,7 @@ class ProductController extends Controller
                         ->where('link_type', 'super_link')
                         ->update([
                             'position' => $idx,
+                            'is_default' => $defaultVariantIndex !== null && $idx === $defaultVariantIndex,
                             'updated_at' => now(),
                         ]);
 
@@ -10255,6 +10280,7 @@ class ProductController extends Controller
                     $product->linkedProducts()->attach($variant->id, [
                         'link_type' => 'super_link',
                         'position' => $idx,
+                        'is_default' => $defaultVariantIndex !== null && $idx === $defaultVariantIndex,
                     ]);
 
                     if (isset($vData['attributes'])) {
@@ -10338,6 +10364,7 @@ class ProductController extends Controller
                     foreach ($original->variations as $index => $variation) {
                         $this->productSkuService->cloneVariantForParent($variation, $clone, [
                             'position' => $variation->pivot->position ?? $index,
+                            'is_default' => (bool) ($variation->pivot->is_default ?? false),
                         ]);
                     }
                 }
@@ -10433,6 +10460,7 @@ class ProductController extends Controller
                     if ($linkedProduct->pivot->link_type === 'super_link') {
                         $this->productSkuService->cloneVariantForParent($linkedProduct, $clone, [
                             'position' => $linkedProduct->pivot->position,
+                            'is_default' => (bool) ($linkedProduct->pivot->is_default ?? false),
                         ]);
                         continue;
                     }
@@ -10468,6 +10496,7 @@ class ProductController extends Controller
                 foreach ($original->variations as $index => $variation) {
                     $this->productSkuService->cloneVariantForParent($variation, $clone, [
                         'position' => $variation->pivot->position ?? $index,
+                        'is_default' => (bool) ($variation->pivot->is_default ?? false),
                     ]);
                 }
             }

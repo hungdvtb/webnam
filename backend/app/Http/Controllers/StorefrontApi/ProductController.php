@@ -193,6 +193,10 @@ class ProductController extends Controller
         $normalizedRequestedTitle = Str::squish((string) $requestedTitle);
         $normalizedRequestedUid = $this->normalizeBundleOptionUid($requestedUid);
 
+        if ($normalizedRequestedKey === '' && $normalizedRequestedTitle === '' && $normalizedRequestedUid === null) {
+            return null;
+        }
+
         $hasBundleOptionUid = $this->hasProductLinksBundleOptionUid();
         $bundleOptionUidSelectSql = $hasBundleOptionUid ? 'bundle_option_uid' : 'NULL as bundle_option_uid';
         $bundleOptionUidGroupColumns = $hasBundleOptionUid
@@ -987,9 +991,19 @@ class ProductController extends Controller
         $finalQuery->orderBy('id', 'desc');
 
         $perPage = min((int) $request->get('per_page', 24), 60);
-        $products = $finalQuery->with(['images' => function ($q) {
+        $products = $finalQuery->with([
+            'images' => function ($q) {
                 $q->orderBy('is_primary', 'desc')->orderBy('sort_order');
-            }, 'category:id,name,slug'])
+            },
+            'category:id,name,slug',
+            'variations' => function ($q) {
+                $q->where('status', true)
+                    ->with([
+                        'images' => fn ($imageQuery) => $imageQuery->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                        'attributeValues.attribute:id,name,code,frontend_type',
+                    ]);
+            },
+        ])
             ->paginate($perPage);
 
         // Build parent_product_id map for all products in this page (for picker mode)
@@ -1055,8 +1069,8 @@ class ProductController extends Controller
             return $product;
         });
 
-        $bundleOptionProductIds = $products->getCollection()
-            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option')
+        $bundleProductIds = $products->getCollection()
+            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option' || ($product->type ?? null) === 'bundle')
             ->pluck('id')
             ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
             ->filter()
@@ -1064,17 +1078,19 @@ class ProductController extends Controller
             ->values();
 
         $bundleOptionCatalog = [];
+        $bundleItemsByProductId = [];
 
-        if ($bundleOptionProductIds->isNotEmpty()) {
+        if ($bundleProductIds->isNotEmpty()) {
             $bundleProducts = Product::query()
                 ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                ->whereIn('id', $bundleOptionProductIds->all())
+                ->whereIn('id', $bundleProductIds->all())
                 ->with([
                     'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
                     'bundleItems' => fn ($query) => $query
                         ->where('status', true)
                         ->with([
                             'images' => fn ($imageQuery) => $imageQuery->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                            'attributeValues.attribute:id,name,code,frontend_type',
                         ]),
                 ])
                 ->get();
@@ -1092,6 +1108,7 @@ class ProductController extends Controller
                     ->whereIn('id', $variantIds->all())
                     ->with([
                         'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
+                        'attributeValues.attribute:id,name,code,frontend_type',
                     ])
                     ->get()
                     ->keyBy(fn (Product $variant) => (int) $variant->id)
@@ -1113,7 +1130,69 @@ class ProductController extends Controller
                     ->keyBy(fn (Post $post) => (int) $post->id)
                 : collect();
 
+            foreach ($bundleProducts as $bundleProduct) {
+                foreach ($bundleProduct->bundleItems as $item) {
+                    if ($item->pivot->price !== null) {
+                        $item->price = $item->pivot->price;
+                    }
+
+                    if ($item->pivot->cost_price !== null) {
+                        $item->cost_price = $item->pivot->cost_price;
+                    }
+
+                    $variantId = $item->pivot->variant_id;
+                    if ($variantId && $variantMap->has((int) $variantId)) {
+                        $variant = $variantMap->get((int) $variantId);
+
+                        if ($item->pivot->price === null) {
+                            $item->price = $variant->price;
+                        }
+
+                        if ($item->pivot->cost_price === null) {
+                            $item->cost_price = $variant->cost_price;
+                        }
+
+                        $item->sku = $variant->sku;
+                        $item->name = $variant->name;
+
+                        if ($variant->images && $variant->images->count() > 0) {
+                            $item->setRelation('images', $variant->images);
+                        }
+
+                        if ($variant->attributeValues && $variant->attributeValues->count() > 0) {
+                            $item->setRelation('attributeValues', $variant->attributeValues);
+                        }
+                    }
+                }
+            }
+
             $bundleOptionCatalog = $this->buildBundleOptionCatalog($bundleProducts, $variantMap, $optionPosts);
+
+            foreach ($bundleProducts as $bundleProduct) {
+                $productCatalog = $bundleOptionCatalog[(int) $bundleProduct->id] ?? [];
+                $bundleItemsByProductId[(int) $bundleProduct->id] = $bundleProduct->bundleItems
+                    ->map(function (Product $item) use ($productCatalog, $optionPosts) {
+                        $itemData = $item->toArray();
+                        $optionPostId = data_get($itemData, 'pivot.option_post_id');
+                        $optionUid = $this->normalizeBundleOptionUid(data_get($itemData, 'pivot.bundle_option_uid'));
+                        $optionTitle = data_get($itemData, 'pivot.option_title');
+                        $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
+                        $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
+                        $optionPost = filled($optionPostId) && is_numeric($optionPostId)
+                            ? $optionPosts->get((int) $optionPostId)
+                            : null;
+                        $optionMeta = $productCatalog[$catalogKey] ?? $productCatalog[$optionKey] ?? null;
+                        $itemData['option_key'] = $optionKey;
+                        $itemData['option_uid'] = $optionUid;
+                        $itemData['option_post_title'] = Str::squish((string) ($optionPost?->title ?? '')) ?: null;
+                        $itemData['option_post_slug'] = Str::squish((string) ($optionPost?->slug ?? '')) ?: null;
+                        $itemData['option_post_featured_image'] = $optionMeta['primary_image'] ?? $this->mapPostPrimaryImage($optionPost);
+
+                        return $itemData;
+                    })
+                    ->values()
+                    ->all();
+            }
         }
 
         // Calculate available filters
@@ -1227,7 +1306,7 @@ class ProductController extends Controller
 
         $responseData = $products->toArray();
         $responseData['data'] = collect($responseData['data'] ?? [])
-            ->flatMap(function (array $product) use ($bundleOptionCatalog, $parentIdMap, $attrValuesMap) {
+            ->flatMap(function (array $product) use ($bundleOptionCatalog, $bundleItemsByProductId, $parentIdMap, $attrValuesMap) {
                 $productId = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $bundleOptionUid = $this->normalizeBundleOptionUid($product['bundle_option_uid'] ?? null);
                 $bundleOptionKey = $this->resolveAssignmentBundleOptionKey(
@@ -1259,6 +1338,26 @@ class ProductController extends Controller
                 $pid = is_numeric($product['id'] ?? null) ? (int) $product['id'] : 0;
                 $enrichedParentId = $parentIdMap[$pid] ?? null;
                 $enrichedAttrValues = $attrValuesMap[$pid] ?? [];
+                $variationRows = collect($product['variations'] ?? []);
+                $defaultVariant = $variationRows->first(fn ($variant) => filter_var(data_get($variant, 'pivot.is_default'), FILTER_VALIDATE_BOOLEAN));
+                $defaultVariantId = is_array($defaultVariant) && is_numeric($defaultVariant['id'] ?? null)
+                    ? (int) $defaultVariant['id']
+                    : null;
+                $hasVariants = ($itemType !== 'bundle_option')
+                    && (
+                        ($product['type'] ?? null) === 'configurable'
+                        || $variationRows->isNotEmpty()
+                    );
+                $isBundleParentProduct = $itemType === 'product' && ($product['type'] ?? null) === 'bundle';
+                $productBundleCatalog = $isBundleParentProduct && isset($bundleOptionCatalog[$productId])
+                    ? $bundleOptionCatalog[$productId]
+                    : [];
+                $productBundleOptions = $isBundleParentProduct
+                    ? $this->uniqueBundleOptionCatalogValues($productBundleCatalog)
+                    : ($product['bundle_options'] ?? []);
+                $productBundleItems = $isBundleParentProduct
+                    ? ($bundleItemsByProductId[$productId] ?? [])
+                    : ($product['bundle_items'] ?? []);
 
                 if (!is_array($optionMeta)) {
                     return [[
@@ -1273,6 +1372,11 @@ class ProductController extends Controller
                         'bundle_option_title' => $bundleOptionTitle,
                         'parent_product_id' => $enrichedParentId,
                         'attribute_values' => $enrichedAttrValues,
+                        'has_variants' => $hasVariants,
+                        'variants_count' => $variationRows->count(),
+                        'default_variant_id' => $defaultVariantId,
+                        'bundle_options' => $productBundleOptions,
+                        'bundle_items' => $productBundleItems,
                     ]];
                 }
 
@@ -1734,6 +1838,7 @@ class ProductController extends Controller
                 'images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order'),
                 'category:id,name,slug',
                 'categories:id,name,slug',
+                'attributeValues.attribute:id,name,code,frontend_type',
             ])
             ->get();
 
@@ -1781,6 +1886,7 @@ class ProductController extends Controller
                 'images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order'),
                 'category:id,name,slug',
                 'categories:id,name,slug',
+                'attributeValues.attribute:id,name,code,frontend_type',
             ])
             ->inRandomOrder()
             ->limit($limit)
@@ -1806,6 +1912,9 @@ class ProductController extends Controller
                 'id' => $product->id,
                 'name' => $product->name,
                 'slug' => $product->slug,
+                'sku' => $product->sku,
+                'type' => $product->type,
+                'stock_quantity' => $product->stock_quantity,
                 'price' => $product->price,
                 'current_price' => $product->current_price,
                 'main_image' => $product->main_image ?: ($primaryImage['url'] ?? null),
@@ -1813,6 +1922,14 @@ class ProductController extends Controller
                 'primary_image' => $primaryImage,
                 'images' => $images,
                 'category' => $this->resolvePrimaryCategory($product),
+                'attribute_values' => $product->relationLoaded('attributeValues')
+                    ? $product->attributeValues->map(fn ($value) => [
+                        'attribute_id' => $value->attribute_id,
+                        'attribute_code' => $value->attribute?->code,
+                        'attribute_name' => $value->attribute?->name,
+                        'value' => $value->value,
+                    ])->values()->all()
+                    : [],
             ];
         })->values();
     }

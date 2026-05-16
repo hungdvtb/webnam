@@ -409,6 +409,46 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame('Tron bo do tho', data_get($items->first(), 'name'));
         $this->assertSame('product', data_get($items->first(), 'item_type'));
         $this->assertNull(data_get($items->first(), 'bundle_option_key'));
+        $this->assertCount(2, data_get($items->first(), 'bundle_options'));
+        $this->assertCount(2, data_get($items->first(), 'bundle_items'));
+    }
+
+    public function test_web_api_bundle_option_detail_without_requested_option_returns_full_catalog_for_quick_add(): void
+    {
+        $bundle = $this->createProduct(
+            null,
+            'Tron bo do tho men lam',
+            'tron-bo-do-tho-men-lam',
+            Carbon::parse('2026-03-14 08:00:00'),
+            null,
+            'bundle'
+        );
+        $firstItem = $this->createProduct(null, 'Bat huong', 'bat-huong-men-lam', Carbon::parse('2026-03-14 09:00:00'));
+        $secondItem = $this->createProduct(null, 'Den tho', 'den-tho-men-lam', Carbon::parse('2026-03-14 10:00:00'));
+
+        $this->attachBundleItem($bundle, $firstItem, Carbon::parse('2026-03-14 09:30:00'), [
+            'option_title' => 'Ban tho 1m - Men lam',
+            'price' => 1000000,
+        ]);
+        $this->attachBundleItem($bundle, $secondItem, Carbon::parse('2026-03-14 10:30:00'), [
+            'option_title' => 'Ban than tai - Men lam',
+            'price' => 2000000,
+        ]);
+
+        $response = $this->getJson("/api/web-api/products/{$bundle->slug}/bundle-option-detail")
+            ->assertOk();
+
+        $this->assertCount(2, $response->json('bundle_items'));
+        $this->assertSame(
+            ['Ban tho 1m - Men lam', 'Ban than tai - Men lam'],
+            collect($response->json('bundle_options'))->pluck('bundle_option_title')->all()
+        );
+
+        $selectedResponse = $this->getJson("/api/web-api/products/{$bundle->slug}/bundle-option-detail?bundle_option=" . rawurlencode('Ban than tai - Men lam'))
+            ->assertOk();
+
+        $this->assertCount(1, $selectedResponse->json('bundle_items'));
+        $this->assertSame(['Ban than tai - Men lam'], collect($selectedResponse->json('bundle_options'))->pluck('bundle_option_title')->all());
     }
 
     private function seedCategoryWithVariantAndBundleOptionAssignments(): array

@@ -163,10 +163,10 @@ class FacebookAdsSyncService
                         );
                     }
                 } else {
-                    Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $response->body());
+                    Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $this->sanitizeForLog($response->body(), [$token]));
                 }
             } catch (\Exception $e) {
-                Log::error("Facebook Ads Sync Exception: " . $e->getMessage());
+                Log::error("Facebook Ads Sync Exception: " . $this->sanitizeForLog($e->getMessage(), [$token]));
             }
         }
 
@@ -206,5 +206,19 @@ class FacebookAdsSyncService
             ->whereDate('date', $date)
             ->whereNull('account_id')
             ->value('amount');
+    }
+
+    private function sanitizeForLog(mixed $value, array $tokens = []): string
+    {
+        $message = (string) $value;
+
+        foreach ($tokens as $token) {
+            $token = trim((string) $token);
+            if ($token !== '') {
+                $message = str_replace($token, '[redacted]', $message);
+            }
+        }
+
+        return preg_replace('/(access_token=)[^&\s"]+/i', '$1[redacted]', $message) ?? $message;
     }
 }

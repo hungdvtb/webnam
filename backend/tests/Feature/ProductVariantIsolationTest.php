@@ -144,6 +144,139 @@ class ProductVariantIsolationTest extends TestCase
         $this->assertSame([$activeVariant->id, $inactiveVariant->id], $variationIds);
     }
 
+    public function test_update_configurable_product_persists_one_default_variant(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Default Variant',
+            'slug' => 'parent-default-variant',
+            'sku' => 'PARENT-DEFAULT',
+            'type' => 'configurable',
+            'price' => 500000,
+        ]);
+        $variantA = $this->createProduct([
+            'name' => 'Variant 28cm',
+            'slug' => 'variant-28cm',
+            'sku' => 'PARENT-DEFAULT-28',
+            'price' => 280000,
+        ]);
+        $variantB = $this->createProduct([
+            'name' => 'Variant 32cm',
+            'slug' => 'variant-32cm',
+            'sku' => 'PARENT-DEFAULT-32',
+            'price' => 320000,
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $this->postJson("/api/products/{$parent->id}", [
+            'type' => 'configurable',
+            'name' => $parent->name,
+            'sku' => $parent->sku,
+            'price' => $parent->price,
+            'variants' => [
+                [
+                    'id' => $variantA->id,
+                    'name' => $variantA->name,
+                    'sku' => $variantA->sku,
+                    'price' => $variantA->price,
+                    'is_default' => false,
+                ],
+                [
+                    'id' => $variantB->id,
+                    'name' => $variantB->name,
+                    'sku' => $variantB->sku,
+                    'price' => $variantB->price,
+                    'is_default' => true,
+                ],
+            ],
+        ])->assertOk();
+
+        $this->assertDatabaseHas('product_links', [
+            'product_id' => $parent->id,
+            'linked_product_id' => $variantA->id,
+            'link_type' => 'super_link',
+            'is_default' => false,
+        ]);
+        $this->assertDatabaseHas('product_links', [
+            'product_id' => $parent->id,
+            'linked_product_id' => $variantB->id,
+            'link_type' => 'super_link',
+            'is_default' => true,
+        ]);
+
+        $response = $this->getJson("/api/products/{$parent->id}")
+            ->assertOk();
+        $defaultVariantIds = collect($response->json('linked_products'))
+            ->filter(fn (array $variant) => (bool) data_get($variant, 'pivot.is_default'))
+            ->pluck('id')
+            ->values()
+            ->all();
+
+        $this->assertSame([$variantB->id], $defaultVariantIds);
+    }
+
+    public function test_update_configurable_product_falls_back_to_first_variant_when_default_is_missing(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Missing Default Variant',
+            'slug' => 'parent-missing-default-variant',
+            'sku' => 'PARENT-MISSING-DEFAULT',
+            'type' => 'configurable',
+            'price' => 500000,
+        ]);
+        $variantA = $this->createProduct([
+            'name' => 'Variant First',
+            'slug' => 'variant-first-default',
+            'sku' => 'PARENT-MISSING-DEFAULT-1',
+            'price' => 280000,
+        ]);
+        $variantB = $this->createProduct([
+            'name' => 'Variant Second',
+            'slug' => 'variant-second-default',
+            'sku' => 'PARENT-MISSING-DEFAULT-2',
+            'price' => 320000,
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $this->postJson("/api/products/{$parent->id}", [
+            'type' => 'configurable',
+            'name' => $parent->name,
+            'sku' => $parent->sku,
+            'price' => $parent->price,
+            'variants' => [
+                [
+                    'id' => $variantA->id,
+                    'name' => $variantA->name,
+                    'sku' => $variantA->sku,
+                    'price' => $variantA->price,
+                ],
+                [
+                    'id' => $variantB->id,
+                    'name' => $variantB->name,
+                    'sku' => $variantB->sku,
+                    'price' => $variantB->price,
+                ],
+            ],
+        ])->assertOk();
+
+        $defaultVariantIds = DB::table('product_links')
+            ->where('product_id', $parent->id)
+            ->where('link_type', 'super_link')
+            ->where('is_default', true)
+            ->pluck('linked_product_id')
+            ->values()
+            ->all();
+
+        $this->assertSame([$variantA->id], $defaultVariantIds);
+    }
+
     public function test_variant_without_own_image_exposes_parent_primary_image_without_copying_gallery(): void
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));

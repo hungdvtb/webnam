@@ -365,7 +365,6 @@ export default function ProductDetailClientShell({
 
   const productContentKey = [
     product?.id || slug,
-    product?.is_bundle_option_lite ? 'lite' : 'full',
     requestedBundleOptionKey || requestedBundleOptionTitle || '',
     requestedBundleOptionUid || '',
   ].join(':');

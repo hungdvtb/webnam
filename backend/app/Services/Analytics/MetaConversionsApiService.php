@@ -306,7 +306,7 @@ class MetaConversionsApiService
                     ->values()
                     ->all(),
                 'has_test_event_code' => isset($payload['test_event_code']),
-                'body' => Str::limit($response->body(), 1000, '...'),
+                'body' => Str::limit($this->sanitizeForLog($response->body()), 1000, '...'),
             ]);
 
             if ($response->failed()) {
@@ -314,7 +314,7 @@ class MetaConversionsApiService
                     'status' => $response->status(),
                     'events' => collect($payload['data'])->pluck('event_name')->values()->all(),
                     'has_test_event_code' => isset($payload['test_event_code']),
-                    'body' => Str::limit($response->body(), 1000, '...'),
+                    'body' => Str::limit($this->sanitizeForLog($response->body()), 1000, '...'),
                 ]);
 
                 return false;
@@ -323,7 +323,7 @@ class MetaConversionsApiService
             return true;
         } catch (\Throwable $exception) {
             Log::warning('Unable to send Meta Conversions API event.', [
-                'message' => $exception->getMessage(),
+                'message' => $this->sanitizeForLog($exception->getMessage()),
             ]);
 
             return false;
@@ -521,5 +521,17 @@ class MetaConversionsApiService
     private function isFilled(mixed $value): bool
     {
         return trim((string) $value) !== '';
+    }
+
+    private function sanitizeForLog(mixed $value): string
+    {
+        $message = (string) $value;
+        $accessToken = trim((string) config('meta_conversions.access_token'));
+
+        if ($accessToken !== '') {
+            $message = str_replace($accessToken, '[redacted]', $message);
+        }
+
+        return preg_replace('/(access_token=)[^&\s"]+/i', '$1[redacted]', $message) ?? $message;
     }
 }

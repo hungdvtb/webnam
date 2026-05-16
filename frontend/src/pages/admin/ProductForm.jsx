@@ -2387,6 +2387,7 @@ const ProductForm = () => {
 
     const [variantTableWidths, setVariantTableWidths] = useState({
         select: 64,
+        default_variant: 124,
         image: 80,
         name: 320,
         sku: 200,
@@ -4527,6 +4528,7 @@ const ProductForm = () => {
             image_preview_owned: false,
             label: 'Biến thể tùy chỉnh',
             sku_auto: true,
+            is_default: false,
         };
         setLastDeletedVariantBatch(null);
         setVariants(prev => buildAutoVariantSkuList(formData.sku, [...prev, newV]));
@@ -4786,6 +4788,7 @@ const ProductForm = () => {
                         status: normalizeVariantStatus(v.status, true),
                         sku: v.sku ?? '',
                         sku_auto: false,
+                        is_default: !!v.pivot?.is_default,
                         attributes: attrs,
                         library_image_id: null,
                         image_reference_url: null,
@@ -5555,6 +5558,7 @@ const ProductForm = () => {
                 image_preview_owned: false,
                 label: `${formData.name} - ${attrLabel}`,
                 sku_auto: true,
+                is_default: false,
             };
         });
 
@@ -5581,6 +5585,15 @@ const ProductForm = () => {
         updated[index][field] = value;
         setVariants(updated);
     };
+
+    const handleDefaultVariantToggle = useCallback((index) => {
+        hasNonImageFormChangesRef.current = true;
+        setVariants((prev) => prev.map((variant, variantIndex) => ({
+            ...variant,
+            is_default: variantIndex === index,
+        })));
+        clearServerValidationErrors(['variants.']);
+    }, [clearServerValidationErrors]);
 
     const openVariantUploadDialog = useCallback((index) => {
         variantImageInputRefs.current[index]?.click();
@@ -7081,6 +7094,7 @@ const ProductForm = () => {
                     setVariantValue('weight', v.weight || '');
                     setVariantValue('inventory_unit_id', v.inventory_unit_id || formData.inventory_unit_id || '');
                     setVariantValue('status', submitData instanceof FormData ? (isActiveVariantDraft(v) ? '1' : '0') : isActiveVariantDraft(v));
+                    setVariantValue('is_default', submitData instanceof FormData ? (v.is_default ? '1' : '0') : Boolean(v.is_default));
 
                     if (submitData instanceof FormData && v.image_file) {
                         submitData.append(`variants[${idx}][image]`, v.image_file);
@@ -8442,6 +8456,10 @@ const ProductForm = () => {
                                                             </span>
                                                         </button>
                                                     </th>
+                                                    <th className="relative px-3 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.default_variant }}>
+                                                        Mặc định
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('default_variant', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.image }}>
                                                         Ảnh
                                                         <div onMouseDown={(e) => handleVariantColumnResize('image', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
@@ -8480,7 +8498,7 @@ const ProductForm = () => {
                                             <tbody className="divide-y divide-stone/20">
                                                 {visibleVariantCount === 0 ? (
                                                     <tr>
-                                                        <td colSpan={10} className="px-6 py-12">
+                                                        <td colSpan={11} className="px-6 py-12">
                                                             <div className="flex flex-col items-center justify-center gap-3 text-center">
                                                                 <span className="material-symbols-outlined text-4xl text-amber-300">inventory_2</span>
                                                                 <div>
@@ -8533,6 +8551,23 @@ const ProductForm = () => {
                                                                         {isVariantSelected ? 'check_box' : 'check_box_outline_blank'}
                                                                     </span>
                                                                 </button>
+                                                            </td>
+                                                            <td className="px-3 py-3 border-r border-stone/20 text-center align-top">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleDefaultVariantToggle(index)}
+                                                                    className={`mx-auto inline-flex size-9 items-center justify-center rounded-sm border transition-all ${v.is_default ? 'border-emerald-300 bg-emerald-50 text-emerald-700 shadow-sm' : 'border-stone/15 bg-white text-stone/35 hover:border-emerald-200 hover:text-emerald-700'}`}
+                                                                    title={v.is_default ? 'Biến thể mặc định' : 'Đặt làm biến thể mặc định'}
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[19px]">
+                                                                        {v.is_default ? 'verified' : 'radio_button_unchecked'}
+                                                                    </span>
+                                                                </button>
+                                                                {v.is_default ? (
+                                                                    <span className="mt-1 block text-[9px] font-black uppercase tracking-[0.12em] text-emerald-700">
+                                                                        Mặc định
+                                                                    </span>
+                                                                ) : null}
                                                             </td>
                                                             <td className="px-3 py-2 border-r border-stone/20 text-center">
                                                                 <div

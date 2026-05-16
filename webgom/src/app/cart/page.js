@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef, useEffectEvent } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useEffectEvent, useCallback } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
@@ -146,6 +146,112 @@ const getCartItemUnitPrice = (item) => {
   return parseFloat(item?.price || 0);
 };
 
+const getProductAttributeEntries = (product = {}) => {
+  if (Array.isArray(product?.attribute_values)) {
+    return product.attribute_values;
+  }
+
+  if (Array.isArray(product?.attributeValues)) {
+    return product.attributeValues;
+  }
+
+  if (Array.isArray(product?.attributes)) {
+    return product.attributes;
+  }
+
+  return [];
+};
+
+const buildAttributeOptions = (product = {}) => (
+  getProductAttributeEntries(product).reduce((options, entry) => {
+    const value = String(entry?.value ?? entry?.label ?? '').trim();
+    const key = String(
+      entry?.attribute?.code
+      || entry?.attribute_code
+      || entry?.code
+      || entry?.attribute?.name
+      || entry?.attribute_name
+      || entry?.name
+      || entry?.attribute_id
+      || ''
+    ).trim();
+
+    if (key && value) {
+      options[key] = value;
+    }
+
+    return options;
+  }, {})
+);
+
+const getCartItemChangeKind = (item = {}) => (
+  item?.options?.parent_product_id || item?.options?.variant_id
+    ? 'variant'
+    : 'simple'
+);
+
+const getCartItemProductId = (item = {}) => Number(
+  item?.id
+  || item?.product_id
+  || item?.productId
+  || item?.options?.variant_id
+  || 0
+);
+
+const canChangeCartItem = (item = {}) => {
+  if (item?.groupedItems?.length) {
+    return false;
+  }
+
+  return true;
+};
+
+const buildCartItemSelectionSlot = (item = {}) => {
+  const kind = getCartItemChangeKind(item);
+  const itemProductId = getCartItemProductId(item);
+  const selectedProductId = Number(item?.options?.variant_id || itemProductId || 0);
+  const baseProductId = kind === 'variant'
+    ? Number(item?.options?.parent_product_id || 0)
+    : itemProductId;
+
+  return {
+    ...item,
+    id: selectedProductId || itemProductId,
+    selected_product_id: selectedProductId || itemProductId,
+    base_product_id: baseProductId || itemProductId,
+    base_product_slug: kind === 'variant'
+      ? String(item?.options?.parent_product_slug || '').trim()
+      : String(item?.slug || '').trim(),
+    name: item?.name || item?.options?.variant_name || '',
+    price: item?.price || 0,
+    current_price: item?.price || 0,
+  };
+};
+
+const buildVariantReplacementOptions = (currentItem = {}, variant = {}) => ({
+  ...buildAttributeOptions(variant),
+  variant_id: variant.id,
+  variant_name: variant.name,
+  variant_sku: variant.sku,
+  parent_product_id: currentItem?.options?.parent_product_id || undefined,
+  parent_product_name: currentItem?.options?.parent_product_name || undefined,
+});
+
+const buildSimpleReplacementOptions = (product = {}) => buildAttributeOptions(product);
+
+const resolveReplacementPrice = (product = {}, fallback = 0) => {
+  const candidates = [product?.current_price, product?.price, fallback];
+
+  for (const candidate of candidates) {
+    const normalized = Number(candidate);
+    if (Number.isFinite(normalized)) {
+      return normalized;
+    }
+  }
+
+  return 0;
+};
+
 const createCheckoutDraftToken = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -289,6 +395,7 @@ export default function CartPage() {
     removeFromCart,
     updateQuantity,
     updateItem,
+    replaceCartItemProduct,
     updateBundleItemProduct,
     restoreCombo,
     cartCount,
@@ -312,6 +419,7 @@ export default function CartPage() {
   const [isOrderSuccess, setIsOrderSuccess] = useState(false);
   const [orderNumber, setOrderNumber] = useState('');
   const [activeBundleSelection, setActiveBundleSelection] = useState(null);
+  const [activeCartItemSelection, setActiveCartItemSelection] = useState(null);
   
   const [bankSettings, setBankSettings] = useState(null);
   const [successOrderData, setSuccessOrderData] = useState(null);
@@ -525,6 +633,28 @@ export default function CartPage() {
     setActiveBundleSelection({ cartKey, slot });
   };
 
+  const closeCartItemSelectionModal = () => {
+    setActiveCartItemSelection(null);
+  };
+
+  const openCartItemSelectionModal = (item) => {
+    if (!item?.cartKey || !canChangeCartItem(item)) {
+      return;
+    }
+
+    const slot = buildCartItemSelectionSlot(item);
+    if (!slot.id && !slot.base_product_id && !slot.base_product_slug) {
+      window.alert('Sản phẩm này chưa có đủ dữ liệu để đổi mẫu / size.');
+      return;
+    }
+
+    setActiveCartItemSelection({
+      cartKey: item.cartKey,
+      kind: getCartItemChangeKind(item),
+      slot,
+    });
+  };
+
   const handleSelectBundleComponent = (newProduct) => {
     if (!activeBundleSelection?.cartKey || !activeBundleSelection?.slot) {
       return;
@@ -538,7 +668,43 @@ export default function CartPage() {
     closeBundleSelectionModal();
   };
 
-  const rememberBundleComponentReturnState = useEffectEvent((anchorKey = '') => {
+  const handleSelectCartItemReplacement = (newProduct) => {
+    if (!activeCartItemSelection?.cartKey || !newProduct?.id) {
+      return;
+    }
+
+    const currentItem = cartItems.find((item) => item.cartKey === activeCartItemSelection.cartKey);
+    if (!currentItem) {
+      closeCartItemSelectionModal();
+      return;
+    }
+
+    const isVariantReplacement = activeCartItemSelection.kind === 'variant';
+    const nextOptions = isVariantReplacement
+      ? buildVariantReplacementOptions(currentItem, newProduct)
+      : buildSimpleReplacementOptions(newProduct);
+    const nextPrice = resolveReplacementPrice(newProduct, currentItem.price);
+    const mediaContext = isVariantReplacement
+      ? {
+        variantProduct: newProduct,
+        parentProduct: {
+          id: currentItem?.options?.parent_product_id,
+          name: currentItem?.options?.parent_product_name,
+        },
+      }
+      : null;
+
+    replaceCartItemProduct(
+      activeCartItemSelection.cartKey,
+      newProduct,
+      nextOptions,
+      nextPrice,
+      mediaContext,
+    );
+    closeCartItemSelectionModal();
+  };
+
+  const rememberBundleComponentReturnState = useCallback((anchorKey = '') => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -550,9 +716,9 @@ export default function CartPage() {
       anchorViewportTop: anchorNode ? anchorNode.getBoundingClientRect().top : null,
       updatedAt: Date.now(),
     });
-  });
+  }, []);
 
-  const handleBundleComponentLinkClick = useEffectEvent((event, anchorKey = '') => {
+  const handleBundleComponentLinkClick = useCallback((event, anchorKey = '') => {
     if (event?.defaultPrevented) {
       return;
     }
@@ -566,7 +732,7 @@ export default function CartPage() {
     }
 
     rememberBundleComponentReturnState(anchorKey);
-  });
+  }, [rememberBundleComponentReturnState]);
 
   const bundleStatesByKey = useMemo(() => {
     const bundleStateMap = new Map();
@@ -1682,6 +1848,16 @@ export default function CartPage() {
                           ) : isBundleItem ? (
                             <p className={styles.mobileMetaFallback}>Combo bộ sưu tập</p>
                           ) : null}
+
+                          {!isBundleItem && canChangeCartItem(item) ? (
+                            <button
+                              type="button"
+                              className={styles.mobileItemChange}
+                              onClick={() => openCartItemSelectionModal(item)}
+                            >
+                              Đổi mẫu / size
+                            </button>
+                          ) : null}
                         </div>
                       </div>
 
@@ -1718,6 +1894,18 @@ export default function CartPage() {
                           </div>
                         </div>
                       </div>
+
+                      {!isBundleItem && canChangeCartItem(item) ? (
+                        <div className={styles.mobileItemChangeRow}>
+                          <button
+                            type="button"
+                            className={styles.mobileItemChange}
+                            onClick={() => openCartItemSelectionModal(item)}
+                          >
+                            Đổi mẫu / size
+                          </button>
+                        </div>
+                      ) : null}
 
                       {isBundleItem && (
                         <div className={styles.mobileBundleBlock}>
@@ -1943,6 +2131,18 @@ export default function CartPage() {
                         </div>
                       </div>
 
+                      {!isBundleItem && canChangeCartItem(item) ? (
+                        <div className={styles.itemChangeRow}>
+                          <button
+                            type="button"
+                            className={styles.itemChange}
+                            onClick={() => openCartItemSelectionModal(item)}
+                          >
+                            Đổi mẫu / size
+                          </button>
+                        </div>
+                      ) : null}
+
                       {/* Sub-items for bundle/combo with qty controls */}
                       {isBundleItem && (
                         <div className={styles.itemGroup}>
@@ -2136,6 +2336,28 @@ export default function CartPage() {
         mobilePresentation="sheet"
         title="Đổi mẫu / size"
         subtitlePrefix="Đang chỉnh:"
+      />
+
+      <ComponentSelectionModal
+        isOpen={Boolean(activeCartItemSelection?.slot)}
+        onClose={closeCartItemSelectionModal}
+        onSelect={handleSelectCartItemReplacement}
+        currentSlot={activeCartItemSelection?.slot}
+        getImageUrl={getImageUrl}
+        formatPrice={formatPrice}
+        allowSearch={false}
+        mobilePresentation="sheet"
+        title="Đổi mẫu / size"
+        subtitlePrefix="Đang chọn:"
+        variantsOnly={activeCartItemSelection?.kind === 'variant'}
+        preferRelatedWhenNoVariants={activeCartItemSelection?.kind === 'simple'}
+        excludeCurrentItem={activeCartItemSelection?.kind === 'simple'}
+        excludeConfigurableParents={activeCartItemSelection?.kind === 'simple'}
+        emptyVariantMessage={
+          activeCartItemSelection?.kind === 'simple'
+            ? 'Không tìm thấy sản phẩm thay thế phù hợp.'
+            : 'Không có biến thể nào khác cho sản phẩm này.'
+        }
       />
 
       <div className={styles.mobileCheckoutBar}>

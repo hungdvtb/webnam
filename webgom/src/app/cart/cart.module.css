@@ -846,6 +846,30 @@
     border-color: rgba(197,160,101,0.4);
 }
 
+.itemChangeRow {
+    display: flex;
+    justify-content: center;
+    margin-top: 0.75rem;
+}
+
+.itemChange {
+    min-height: 2rem;
+    padding: 0.3rem 0.85rem;
+    border: 1px solid rgba(197,160,101,0.28);
+    border-radius: 999px;
+    background: rgba(197,160,101,0.1);
+    color: var(--accent-dark);
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.itemChange:hover {
+    background: rgba(197,160,101,0.18);
+    border-color: rgba(197,160,101,0.4);
+}
+
 .childRemove {
     color: #cc0000;
     font-size: 0.7rem;
@@ -1615,6 +1639,25 @@
 
     .mobileBundleTotalMetric .mobileLinePrice {
         text-align: right;
+        white-space: nowrap;
+    }
+
+    .mobileItemChangeRow {
+        display: none;
+    }
+
+    .mobileItemChange {
+        align-self: flex-end;
+        margin-right: -2.2rem;
+        min-height: 2rem;
+        padding: 0.35rem 0.85rem;
+        border: 1px solid rgba(197, 160, 101, 0.28);
+        border-radius: 999px;
+        background: rgba(197, 160, 101, 0.1);
+        color: var(--accent-dark);
+        font-size: var(--mobile-meta-size);
+        line-height: var(--mobile-meta-line);
+        font-weight: 700;
         white-space: nowrap;
     }
 

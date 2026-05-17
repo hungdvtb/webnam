@@ -50,6 +50,7 @@ const stripQuickAddHistoryMarker = (state) => {
 
 const FALLBACK_PRODUCT_IMAGE = '/logo-dai-thanh.png';
 const READY_STATUS_TEXT = 'Sẵn sàng giao ngay';
+const DEFAULT_VARIANT_NOTE = 'Mẫu + size phổ thông';
 
 const formatPrice = (value) => (
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0))
@@ -135,6 +136,23 @@ export const getDefaultVariant = (product = {}) => {
   return defaultVariantId > 0
     ? rows.find((variant) => Number(variant?.id || 0) === defaultVariantId) || null
     : null;
+};
+
+const isDefaultVariantRow = (product = {}, variant = {}) => {
+  if (!variant) {
+    return false;
+  }
+
+  if (
+    truthy(variant?.pivot?.is_default)
+    || truthy(variant?.is_default)
+    || truthy(variant?.default_variant)
+  ) {
+    return true;
+  }
+
+  const defaultVariantId = Number(product?.default_variant_id || product?.defaultVariantId || 0);
+  return defaultVariantId > 0 && Number(variant?.id || 0) === defaultVariantId;
 };
 
 const getVariantAttributeValues = (variant = {}) => (
@@ -611,8 +629,7 @@ export default function CategoryVariantQuickAdd({
   const bundleOptions = useMemo(() => getBundleOptionRows(pickerProduct), [pickerProduct]);
   const bundleProduct = isBundleProduct(product) || isBundleProduct(pickerProduct);
   const configurable = isConfigurableProduct(product) || isConfigurableProduct(pickerProduct);
-  const defaultVariant = getDefaultVariant(pickerProduct);
-  const pickerWillOpenDialog = bundleProduct || (configurable && !defaultVariant);
+  const pickerWillOpenDialog = bundleProduct || configurable;
 
   const captureScrollRestoreTarget = useCallback((sourceElement) => {
     if (typeof window === 'undefined') {
@@ -881,7 +898,13 @@ export default function CategoryVariantQuickAdd({
     animateCart(eventOrElement);
   };
 
-  const addVariant = (variant, eventOrElement, isDefault = false, parentProduct = pickerProduct) => {
+  const addVariant = (
+    variant,
+    eventOrElement,
+    isDefault = false,
+    parentProduct = pickerProduct,
+    { closeAfterAdd = false } = {},
+  ) => {
     const variantPrice = getVariantPrice(variant, displayPrice);
     addToCart(
       variant,
@@ -897,9 +920,9 @@ export default function CategoryVariantQuickAdd({
     );
     showNotice(buildAddedMessage(parentProduct, variant, isDefault));
     animateCart(eventOrElement, variant, parentProduct);
-    if (isPickerOpenRef.current) {
+    if (closeAfterAdd && isPickerOpenRef.current) {
       closePicker();
-    } else {
+    } else if (closeAfterAdd) {
       setIsPickerOpen(false);
     }
   };
@@ -967,6 +990,8 @@ export default function CategoryVariantQuickAdd({
         bundle_option_key: product?.bundle_option_key ?? detailProduct?.bundle_option_key,
         bundle_option_post_id: product?.bundle_option_post_id ?? detailProduct?.bundle_option_post_id,
         bundle_option_title: product?.bundle_option_title ?? detailProduct?.bundle_option_title,
+        default_variant_id: detailProduct?.default_variant_id ?? product?.default_variant_id,
+        defaultVariantId: detailProduct?.defaultVariantId ?? product?.defaultVariantId ?? product?.default_variant_id,
       };
 
       setHydratedProduct(mergedProduct);
@@ -998,34 +1023,23 @@ export default function CategoryVariantQuickAdd({
       return;
     }
 
-    if (defaultVariant) {
-      addVariant(defaultVariant, triggerElement, true, pickerProduct);
-      return;
-    }
-
     if (variants.length > 0) {
       openPicker('variant', triggerElement);
       return;
     }
 
     openPicker('variant', triggerElement);
-    const productWithVariants = await loadProductDetail();
-    const loadedDefaultVariant = getDefaultVariant(productWithVariants);
-
-    if (loadedDefaultVariant) {
-      addVariant(loadedDefaultVariant, triggerElement, true, productWithVariants);
-      return;
-    }
-
+    await loadProductDetail();
   };
 
   const renderVariantCard = (variant) => {
     const summary = getVariantSelectionSummary(pickerProduct, variant);
     const variantPrice = getVariantPrice(variant, displayPrice);
     const optionName = variant.name || getVariantNameSuffix(pickerProduct, variant) || summary.value || 'Biến thể';
+    const isDefault = isDefaultVariantRow(pickerProduct, variant);
 
     return (
-      <div key={variant.id} className={styles.optionCard}>
+      <div key={variant.id} className={`${styles.optionCard} ${isDefault ? styles.defaultVariantCard : ''}`}>
         <span className={styles.optionThumb}>
           <Image
             src={getVariantImageUrl(pickerProduct, variant)}
@@ -1042,15 +1056,18 @@ export default function CategoryVariantQuickAdd({
           {summary.value && !normalizeText(optionName).includes(normalizeText(summary.value)) ? (
             <span className={styles.optionMeta}>{summary.value}</span>
           ) : null}
+          {isDefault ? (
+            <span className={styles.defaultVariantNote}>{DEFAULT_VARIANT_NOTE}</span>
+          ) : null}
           <strong className={styles.optionPrice}>{formatPrice(variantPrice)}</strong>
           <span className={styles.stockState}>{READY_STATUS_TEXT}</span>
         </div>
         <button
           type="button"
           className={styles.selectButton}
-          onClick={(event) => addVariant(variant, event.currentTarget, false, pickerProduct)}
+          onClick={(event) => addVariant(variant, event.currentTarget, isDefault, pickerProduct)}
         >
-          Chọn
+          Thêm
         </button>
       </div>
     );

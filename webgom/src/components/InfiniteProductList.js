@@ -5,7 +5,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import styles from '../app/products/products.module.css';
 import { useCart } from '@/context/CartContext';
-import { resolveImageObjectUrl } from '@/lib/media';
+import { resolveEntityImageUrl } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from '@/lib/productPrefetch';
@@ -64,6 +64,7 @@ export default function InfiniteProductList({ initialData }) {
           const productHref = buildProductDetailHref(product);
           const productCardKey = buildProductCardKey(product);
           const displayPrice = getDisplayPrice(product);
+          const imageSrc = resolveEntityImageUrl(product, 'medium', FALLBACK_PRODUCT_IMAGE);
           const cartOptions = product.item_type === 'bundle_option'
             ? {
                 bundle_option_uid: product.bundle_option_uid,
@@ -86,9 +87,10 @@ export default function InfiniteProductList({ initialData }) {
                 onClick={() => handleProductClick(product, productHref)}
               >
                 <Image
-                  src={resolveImageObjectUrl(product.primary_image, 'medium', FALLBACK_PRODUCT_IMAGE)}
+                  src={imageSrc}
                   alt={product.name || FALLBACK_PRODUCT_ALT}
                   fill
+                  unoptimized
                   sizes="(max-width: 359px) 100vw, (max-width: 767px) 50vw, (max-width: 1200px) 33vw, 25vw"
                   style={{ objectFit: 'cover' }}
                 />

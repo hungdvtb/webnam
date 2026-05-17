@@ -574,6 +574,11 @@ const getBundleDetailParams = (product = {}) => {
   };
 };
 
+const isBundleOptionScopedProduct = (product = {}) => (
+  product?.item_type === 'bundle_option'
+  || Object.keys(getBundleDetailParams(product)).length > 0
+);
+
 const extractProductDetailPayload = (payload) => {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -1027,6 +1032,24 @@ export default function CategoryVariantQuickAdd({
     const triggerElement = event.currentTarget;
 
     if (bundleProduct) {
+      if (bundleOptions.length === 1 && hasBundleCartSource(pickerProduct)) {
+        await addBundleOption(bundleOptions[0], triggerElement, pickerProduct);
+        return;
+      }
+
+      if (isBundleOptionScopedProduct(product)) {
+        const productWithBundleOption = await loadProductDetail('bundle');
+        const loadedBundleOptions = getBundleOptionRows(productWithBundleOption);
+
+        if (loadedBundleOptions.length === 1 && hasBundleCartSource(productWithBundleOption)) {
+          await addBundleOption(loadedBundleOptions[0], triggerElement, productWithBundleOption);
+          return;
+        }
+
+        openPicker('bundle', triggerElement);
+        return;
+      }
+
       openPicker('bundle', triggerElement);
 
       if (bundleOptions.length === 0 || !hasBundleCartSource(pickerProduct)) {

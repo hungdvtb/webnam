@@ -10,12 +10,6 @@ use Throwable;
 
 class ForceCorsHeaders
 {
-    private const ALLOWED_ORIGINS = [
-        'https://admin.gomdaithanh.com',
-        'https://gomdaithanh.com',
-        'https://www.gomdaithanh.com',
-    ];
-
     private const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 
     private const DEFAULT_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN, X-Account-Id, X-Site-Code, Accept, Origin';
@@ -50,7 +44,26 @@ class ForceCorsHeaders
     {
         $origin = rtrim((string) $request->headers->get('Origin'), '/');
 
-        return in_array($origin, self::ALLOWED_ORIGINS, true) ? $origin : null;
+        if ($origin === '') {
+            return null;
+        }
+
+        $allowedOrigins = array_map(
+            static fn ($allowedOrigin) => rtrim((string) $allowedOrigin, '/'),
+            (array) config('cors.allowed_origins', [])
+        );
+
+        if (in_array('*', $allowedOrigins, true) || in_array($origin, $allowedOrigins, true)) {
+            return $origin;
+        }
+
+        foreach ((array) config('cors.allowed_origins_patterns', []) as $pattern) {
+            if (@preg_match($pattern, $origin) === 1) {
+                return $origin;
+            }
+        }
+
+        return null;
     }
 
     private function withCorsHeaders(Response $response, Request $request, ?string $origin): Response

@@ -283,22 +283,29 @@ const mapBundleItemsForConfig = (items = [], requestedKey = '', requestedTitle =
   };
 };
 
-const buildInitialBundleSelectionState = (
-  product,
+const getBundleSourceItems = (product) => {
+  if (product?.type !== 'bundle') {
+    return [];
+  }
+
+  if (Array.isArray(product.bundle_items) && product.bundle_items.length > 0) {
+    return product.bundle_items;
+  }
+
+  if (Array.isArray(product.grouped_items) && product.grouped_items.length > 0) {
+    return product.grouped_items;
+  }
+
+  return [];
+};
+
+const buildBundleSelectionStateFromItems = (
+  items = [],
   requestedUid = '',
   requestedKey = '',
   requestedTitle = '',
 ) => {
-  if (product?.type !== 'bundle') {
-    return {
-      bundleItems: [],
-      activeBundleConfig: '',
-    };
-  }
-
-  const items = product.bundle_items || product.grouped_items || [];
-
-  if (items.length === 0) {
+  if (!Array.isArray(items) || items.length === 0) {
     return {
       bundleItems: [],
       activeBundleConfig: '',
@@ -319,6 +326,50 @@ const buildInitialBundleSelectionState = (
     })),
     activeBundleConfig: initialConfigTitle,
   };
+};
+
+const buildBundleSourceSignature = (product, items = []) => {
+  if (product?.type !== 'bundle') {
+    return `${product?.type || 'unknown'}:${product?.id || ''}`;
+  }
+
+  return [
+    product?.id || '',
+    product?.is_bundle_option_lite ? 'lite' : 'full',
+    items.length,
+    ...items.map((item, index) => ([
+      item?.id || '',
+      item?.base_product_id || '',
+      item?.selected_product_id || '',
+      item?.pivot?.variant_id || '',
+      getBundleOptionTitle(item),
+      getBundleOptionUid(item),
+      getBundleSourcePosition(item, index),
+      item?.qty ?? item?.pivot?.quantity ?? '',
+      item?.price ?? item?.unit_price ?? '',
+    ].join(':'))),
+  ].join('|');
+};
+
+const buildInitialBundleSelectionState = (
+  product,
+  requestedUid = '',
+  requestedKey = '',
+  requestedTitle = '',
+) => {
+  if (product?.type !== 'bundle') {
+    return {
+      bundleItems: [],
+      activeBundleConfig: '',
+    };
+  }
+
+  return buildBundleSelectionStateFromItems(
+    getBundleSourceItems(product),
+    requestedUid,
+    requestedKey,
+    requestedTitle,
+  );
 };
 
 export default function ProductDetailContent({
@@ -352,6 +403,16 @@ export default function ProductDetailContent({
   const router = useRouter();
   const hasStructuredVariantAttributes = product?.super_attributes?.length > 0;
   const hasVariants = product?.type === 'configurable' && product?.variations?.length > 0;
+  const bundleSourceItemsForState = useMemo(
+    () => getBundleSourceItems(product),
+    [product],
+  );
+  const bundleSourceSignature = useMemo(
+    () => buildBundleSourceSignature(product, bundleSourceItemsForState),
+    [bundleSourceItemsForState, product],
+  );
+  const bundleSourceSignatureRef = useRef(bundleSourceSignature);
+  const hasCustomizedBundleRef = useRef(false);
 
   // Initialize configurable/grouped selected options on mount or when product changes.
   // Bundle state is intentionally excluded: it is initialized synchronously via useState()
@@ -405,47 +466,43 @@ export default function ProductDetailContent({
     requestedVariantId,
   ]);
 
-  // Reset bundle state only when navigating to a different product (product.id changes).
-  // This avoids the redundant post-hydration re-render that causes the spinner delay.
-  const productIdRef = useRef(product?.id);
+  // Sync bundle state when the product source changes. This handles deferred bundle
+  // pages where a lite shell renders first and the full bundle items arrive later
+  // with the same product id, without resetting customer edits afterwards.
   useEffect(() => {
-    const prevId = productIdRef.current;
-    productIdRef.current = product?.id;
+    const previousSignature = bundleSourceSignatureRef.current;
+    bundleSourceSignatureRef.current = bundleSourceSignature;
 
-    // Skip on initial mount: useState() already initialized bundle state correctly.
-    if (prevId === product?.id) {
+    if (previousSignature === bundleSourceSignature) {
       return;
     }
 
-    // Product changed (e.g. SPA navigation): re-initialize bundle state.
-    if (product?.type === 'bundle') {
-      const items = product.bundle_items || product.grouped_items || [];
-      if (items.length > 0) {
-        const { mappedItems, initialConfigTitle } = mapBundleItemsForConfig(
-          items,
-          requestedBundleOptionKey,
-          requestedBundleOptionTitle,
-          requestedBundleOptionUid,
-        );
+    if (hasCustomizedBundleRef.current && bundleItems.length > 0) {
+      return;
+    }
 
-        setBundleItems(mappedItems.map(item => ({
-          ...item,
-          selected: !item.option_title || item.option_title === initialConfigTitle
-        })));
-        setActiveBundleConfig(initialConfigTitle);
-      } else {
-        setBundleItems([]);
-        setActiveBundleConfig('');
-      }
-    } else {
+    if (product?.type !== 'bundle') {
       setBundleItems([]);
       setActiveBundleConfig('');
+      hasCustomizedBundleRef.current = false;
+      return;
     }
+
+    const nextBundleSelectionState = buildBundleSelectionStateFromItems(
+      bundleSourceItemsForState,
+      requestedBundleOptionUid,
+      requestedBundleOptionKey,
+      requestedBundleOptionTitle,
+    );
+
+    setBundleItems(nextBundleSelectionState.bundleItems);
+    setActiveBundleConfig(nextBundleSelectionState.activeBundleConfig);
+    hasCustomizedBundleRef.current = false;
   }, [
-    product?.id,
     product?.type,
-    product?.bundle_items,
-    product?.grouped_items,
+    bundleItems.length,
+    bundleSourceItemsForState,
+    bundleSourceSignature,
     requestedBundleOptionUid,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
@@ -536,24 +593,28 @@ export default function ProductDetailContent({
   };
 
   const updateBundleItemQuantity = (bundleItemUid, newQty) => {
+    hasCustomizedBundleRef.current = true;
     setBundleItems(prev => prev.map(item => 
       item.bundle_item_uid === bundleItemUid ? { ...item, qty: Math.max(1, newQty) } : item
     ));
   };
 
   const removeBundleItem = (bundleItemUid) => {
+    hasCustomizedBundleRef.current = true;
     setBundleItems(prev => prev.map(item =>
       item.bundle_item_uid === bundleItemUid ? { ...item, removed: true, selected: false } : item
     ));
   };
 
   const restoreBundleItem = (bundleItemUid) => {
+    hasCustomizedBundleRef.current = true;
     setBundleItems(prev => prev.map(item =>
       item.bundle_item_uid === bundleItemUid ? { ...item, removed: false, selected: true } : item
     ));
   };
 
   const updateBundleItemProduct = (bundleItemUid, newProduct) => {
+    hasCustomizedBundleRef.current = true;
     setBundleItems(prev => prev.map(item => {
       if (item.bundle_item_uid === bundleItemUid) {
         const isSiblingVariant = newProduct?.pivot?.link_type === 'super_link';
@@ -603,21 +664,21 @@ export default function ProductDetailContent({
 
   // Reset bundle to original configuration from product data
   const resetBundleItems = () => {
-    const items = product.bundle_items || product.grouped_items || [];
+    const items = getBundleSourceItems(product);
     if (items.length === 0) return;
-    const { mappedItems, initialConfigTitle } = mapBundleItemsForConfig(
+    const { bundleItems: nextBundleItems, activeBundleConfig: nextActiveBundleConfig } = buildBundleSelectionStateFromItems(
       items,
+      requestedBundleOptionUid,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
     );
-    setBundleItems(mappedItems.map(item => ({
-      ...item,
-      selected: !item.option_title || item.option_title === initialConfigTitle
-    })));
-    setActiveBundleConfig(initialConfigTitle);
+    hasCustomizedBundleRef.current = false;
+    setBundleItems(nextBundleItems);
+    setActiveBundleConfig(nextActiveBundleConfig);
   };
 
   const toggleBundleItem = (bundleItemUid) => {
+    hasCustomizedBundleRef.current = true;
     setBundleItems(prev => {
       const itemToToggle = prev.find(it => it.bundle_item_uid === bundleItemUid);
       if (!itemToToggle) return prev;

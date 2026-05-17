@@ -1,6 +1,7 @@
 const BUNDLE_DISCOUNT_RATE = 0.1;
 const BUNDLE_METADATA_VERSION = 2;
 const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
+const ORDER_TOTAL_DISCOUNT_THRESHOLD = 4000000;
 
 const cloneBundleValue = (value) => {
   if (Array.isArray(value)) {
@@ -57,6 +58,39 @@ export const calculateFullBundleDiscount = (
     comboDiscountAmount,
     discountRoundingAdjustment: Math.max(comboDiscountAmount - baseDiscountAmount, 0),
     finalSubtotal,
+  };
+};
+
+export const calculateOrderThresholdDiscount = (
+  subtotal,
+  {
+    discountRate = BUNDLE_DISCOUNT_RATE,
+    threshold = ORDER_TOTAL_DISCOUNT_THRESHOLD,
+  } = {},
+) => {
+  const normalizedSubtotal = Math.max(toFiniteNumber(subtotal, 0), 0);
+  const normalizedThreshold = Math.max(
+    toFiniteNumber(threshold, ORDER_TOTAL_DISCOUNT_THRESHOLD),
+    0,
+  );
+
+  if (normalizedSubtotal < normalizedThreshold) {
+    return {
+      baseDiscountAmount: 0,
+      comboDiscountAmount: 0,
+      discountRoundingAdjustment: 0,
+      finalSubtotal: normalizedSubtotal,
+      eligibleDiscount: false,
+      threshold: normalizedThreshold,
+    };
+  }
+
+  const discount = calculateFullBundleDiscount(normalizedSubtotal, { discountRate });
+
+  return {
+    ...discount,
+    eligibleDiscount: discount.comboDiscountAmount > 0,
+    threshold: normalizedThreshold,
   };
 };
 
@@ -202,6 +236,8 @@ export const evaluateBundleSelection = (
   );
 
   if (normalizedSnapshotItems.length === 0) {
+    const orderThresholdDiscount = calculateOrderThresholdDiscount(currentSubtotal, { discountRate });
+
     return {
       currentItems: normalizedCurrentItems,
       snapshotItems: normalizedSnapshotItems,
@@ -215,10 +251,14 @@ export const evaluateBundleSelection = (
       expectedCount: 0,
       currentCount: normalizedCurrentItems.length,
       comboDiscountRate: discountRate,
-      comboDiscountAmount: 0,
-      finalSubtotal: currentSubtotal,
+      baseComboDiscountAmount: orderThresholdDiscount.baseDiscountAmount,
+      comboDiscountAmount: orderThresholdDiscount.comboDiscountAmount,
+      comboDiscountRoundingAdjustment: orderThresholdDiscount.discountRoundingAdjustment,
+      finalSubtotal: orderThresholdDiscount.finalSubtotal,
       isFullBundle: false,
-      eligibleDiscount: false,
+      isOrderThresholdEligible: orderThresholdDiscount.eligibleDiscount,
+      eligibleDiscount: orderThresholdDiscount.eligibleDiscount,
+      discountEligibilityReason: orderThresholdDiscount.eligibleDiscount ? 'order_threshold' : null,
       failureCode: 'missing_snapshot',
     };
   }
@@ -279,7 +319,9 @@ export const evaluateBundleSelection = (
     && missingItems.length === 0
     && invalidItems.length === 0
     && extraItems.length === 0;
-  const bundleDiscount = isFullBundle
+  const isOrderThresholdEligible = currentSubtotal >= ORDER_TOTAL_DISCOUNT_THRESHOLD;
+  const eligibleDiscount = isFullBundle || isOrderThresholdEligible;
+  const bundleDiscount = eligibleDiscount
     ? calculateFullBundleDiscount(currentSubtotal, { discountRate })
     : {
       baseDiscountAmount: 0,
@@ -318,7 +360,13 @@ export const evaluateBundleSelection = (
     comboDiscountRoundingAdjustment: bundleDiscount.discountRoundingAdjustment,
     finalSubtotal: bundleDiscount.finalSubtotal,
     isFullBundle,
-    eligibleDiscount: isFullBundle,
+    isOrderThresholdEligible,
+    eligibleDiscount,
+    discountEligibilityReason: isFullBundle
+      ? 'full_bundle'
+      : isOrderThresholdEligible
+        ? 'order_threshold'
+        : null,
     failureCode,
   };
 };
@@ -395,4 +443,5 @@ export {
   BUNDLE_DISCOUNT_RATE,
   BUNDLE_METADATA_VERSION,
   BUNDLE_TOTAL_ROUNDING_UNIT,
+  ORDER_TOTAL_DISCOUNT_THRESHOLD,
 };

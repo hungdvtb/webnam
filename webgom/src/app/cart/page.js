@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useEffectEvent, useCallbac
 import Link from 'next/link';
 import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
-import { BUNDLE_DISCOUNT_RATE, getCartBundlePricing } from '@/lib/bundlePricing';
+import { BUNDLE_DISCOUNT_RATE, calculateOrderThresholdDiscount, getCartBundlePricing } from '@/lib/bundlePricing';
 import config from '@/lib/config';
 import { placeWebOrder, saveWebOrderDraft, getWebSiteSettings } from '@/lib/api';
 import { rememberLeadAttribution } from '@/lib/leadAttribution';
@@ -1231,10 +1231,13 @@ export default function CartPage() {
     updateItem(cartKey, { groupedItems: newGroupedItems });
   };
 
-  // ── Discount: 10% per bundle item that still has ALL original sub-items ─────
-  const discount = cartItems.reduce((acc, item) => (
+  // Carts at or above the order threshold qualify as a whole; otherwise only full bundles qualify.
+  const bundleDiscount = cartItems.reduce((acc, item) => (
     acc + (bundleStatesByKey.get(item.cartKey)?.lineDiscount || 0)
   ), 0);
+  const orderThresholdDiscount = calculateOrderThresholdDiscount(cartTotal).comboDiscountAmount;
+  const discount = Math.max(bundleDiscount, orderThresholdDiscount);
+  const hasDiscount = discount > 0;
 
   // ── Hide "Thêm sản phẩm khác" when EVERY cart item is a combo/bundle ────────
   const hasOnlyBundles = cartItems.length > 0 &&
@@ -1821,7 +1824,7 @@ export default function CartPage() {
                       <div className={styles.mobileItemMain}>
                         <div className={styles.mobileItemImage}>
                           {imgSrc ? (
-                            <Image src={imgSrc} alt={item.name} fill style={{ objectFit: 'cover' }} />
+                            <Image src={imgSrc} alt={item.name} fill unoptimized style={{ objectFit: 'cover' }} />
                           ) : (
                             <div style={{
                               width: '100%', height: '100%', display: 'flex',
@@ -1972,6 +1975,7 @@ export default function CartPage() {
                                                 src={bundleImageSrc}
                                                 alt={bundleItemName}
                                                 fill
+                                                unoptimized
                                                 sizes="32px"
  
                                                 style={{ objectFit: 'cover' }}
@@ -1990,6 +1994,7 @@ export default function CartPage() {
                                               src={bundleImageSrc}
                                               alt={bundleItemName}
                                               fill
+                                              unoptimized
                                               sizes="32px"
  
                                               style={{ objectFit: 'cover' }}
@@ -2082,6 +2087,7 @@ export default function CartPage() {
                         <div className={styles.itemImage}>
                           {imgSrc ? (
                             <Image src={imgSrc} alt={item.name} fill
+                              unoptimized
                               style={{ objectFit: 'cover' }} />
                           ) : (
                             <div style={{
@@ -2195,6 +2201,7 @@ export default function CartPage() {
                                               src={bundleImageSrc}
                                               alt={bundleItemName}
                                               fill
+                                              unoptimized
                                               sizes="32px"
  
                                               style={{ objectFit: 'cover' }}
@@ -2213,6 +2220,7 @@ export default function CartPage() {
                                             src={bundleImageSrc}
                                             alt={bundleItemName}
                                             fill
+                                            unoptimized
                                             sizes="32px"
  
                                             style={{ objectFit: 'cover' }}
@@ -2293,12 +2301,14 @@ export default function CartPage() {
                   <span>Phí vận chuyển</span>
                   <span style={{ fontWeight: 600 }}>Miễn phí</span>
                 </div>
-                <div className={styles.summaryRow}>
-                  <span>Ưu đãi combo (10%)</span>
-                  <span className={styles.discountText} style={{ fontWeight: 600 }}>
-                    {discount > 0 ? `− ${formatPrice(discount)}` : '− 0₫'}
-                  </span>
-                </div>
+                {hasDiscount ? (
+                  <div className={styles.summaryRow}>
+                    <span>Ưu đãi combo (10%)</span>
+                    <span className={styles.discountText} style={{ fontWeight: 600 }}>
+                      {`− ${formatPrice(discount)}`}
+                    </span>
+                  </div>
+                ) : null}
               </div>
 
               <div className={styles.totalRow}>
@@ -2368,7 +2378,7 @@ export default function CartPage() {
               <strong className={styles.mobileCheckoutPrice}>{formatPrice(totalAfterDiscount)}</strong>
               <span className={styles.mobileCheckoutSubtext}>
                 {cartCount} sản phẩm
-                {discount > 0 ? ` • Giảm ${formatPrice(discount)}` : ' • Miễn phí vận chuyển'}
+                {hasDiscount ? ` • Giảm ${formatPrice(discount)}` : ' • Miễn phí vận chuyển'}
               </span>
             </div>
 

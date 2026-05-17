@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
 import {
   BUNDLE_DISCOUNT_RATE,
+  ORDER_TOTAL_DISCOUNT_THRESHOLD,
   buildBundleSnapshot,
   createBundleCartEntry,
   evaluateBundleSelection,
@@ -884,6 +885,23 @@ export default function BundleProductView({
   const tabDiscountAmount = activeBundleEvaluation.comboDiscountAmount || 0;
   const tabFinalPrice = activeBundleEvaluation.finalSubtotal || tabSubtotal;
   const bundleRequirementCount = activeBundleEvaluation.expectedCount || tabItems.length;
+  const hasBundleDiscount = Boolean(activeBundleEvaluation.eligibleDiscount && tabDiscountAmount > 0);
+  const discountPercent = (BUNDLE_DISCOUNT_RATE * 100).toFixed(0);
+  const thresholdLabel = formatPrice(ORDER_TOTAL_DISCOUNT_THRESHOLD);
+  const discountBannerText = isFullCombo
+    ? 'Bạn đang mua trọn bộ'
+    : `Bộ từ ${thresholdLabel}`;
+  const discountHintText = `Mua đủ ${bundleRequirementCount} món hoặc bộ từ ${thresholdLabel} để nhận ưu đãi giảm ${discountPercent}%`;
+  const mobileOfferText = hasBundleDiscount
+    ? (
+      isFullCombo
+        ? `Giảm giá ${discountPercent}% khi mua trọn bộ`
+        : `Bộ từ ${thresholdLabel}: -${discountPercent}%`
+    )
+    : `Đủ ${bundleRequirementCount} món hoặc từ ${thresholdLabel}: -${discountPercent}%`;
+  const summaryDiscountLabel = isFullCombo
+    ? `Giảm ${discountPercent}% (trọn bộ):`
+    : `Giảm ${discountPercent}% (bộ từ ${thresholdLabel}):`;
 
   useEffect(() => {
     if (!showBundleDetailSection) {
@@ -1009,13 +1027,15 @@ export default function BundleProductView({
 
   // Subtotal of tab items (active items only)
   // Full combo subtotal (sum of all tab items at their default qty × price)
-  const DISCOUNT_RATE = BUNDLE_DISCOUNT_RATE;
   // For upper info section: selectedItems (all configs) for top-level displayPrice
   const selectedItems = bundleItems.filter(item => item.selected && !item.removed);
   const subtotal = selectedItems.reduce((acc, it) => acc + (parseFloat(it.price || 0) * (it.qty || 1)), 0);
 
   // Use global displayPrice from parent (already computed from all selected items)
   const infoDiscount = subtotal - displayPrice;
+  const infoSavingsText = isFullCombo
+    ? `Tiết kiệm ${formatPrice(infoDiscount)} khi mua trọn bộ`
+    : `Tiết kiệm ${formatPrice(infoDiscount)} với ưu đãi bộ từ ${thresholdLabel}`;
 
   const isConfigEligibleForDiscount = (configName) => {
     return Boolean(bundleEvaluationsByConfig.get(configName)?.eligibleDiscount);
@@ -1464,19 +1484,15 @@ export default function BundleProductView({
 
               <span
                   className={`${builderStyles.mobileConfigOfferChip} ${
-                    isFullCombo
+                    hasBundleDiscount
                       ? builderStyles.mobileConfigOfferChipActive
                       : builderStyles.mobileConfigOfferChipHint
                   }`}
                 >
                   <span className="material-symbols-outlined">
-                    {isFullCombo ? 'local_offer' : 'info'}
+                    {hasBundleDiscount ? 'local_offer' : 'info'}
                   </span>
-                  <span>
-                    {isFullCombo
-                      ? `Giảm giá ${(DISCOUNT_RATE * 100).toFixed(0)}% khi mua trọn bộ`
-                      : `Đủ ${bundleRequirementCount} món: -${(DISCOUNT_RATE * 100).toFixed(0)}%`}
-                  </span>
+                  <span>{mobileOfferText}</span>
                 </span>
 
               {handleBuyTabConfig && tabItems.some((item) => !item.removed) ? (
@@ -1623,15 +1639,15 @@ export default function BundleProductView({
 
       {tabItems.length > 0 && (
               <div className={`${builderStyles.topActionBar} ${builderStyles.topActionBarWithMedia}`}>
-                {isFullCombo ? (
+                {hasBundleDiscount ? (
                   <div className={builderStyles.discountBannerInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
-                    <span>Báº¡n Ä‘ang mua trá»n bá»™ â€” Æ¯u Ä‘Ã£i giáº£m <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
+                    <span>{discountBannerText} - Ưu đãi giảm <strong>{discountPercent}%</strong>!</span>
                   </div>
           ) : (
             <div className={builderStyles.discountHintInline}>
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-                    <span>Mua Ä‘á»§ <strong>{bundleRequirementCount} mÃ³n</strong> nháº­n Æ°u Ä‘Ã£i giáº£m {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                    <span>{discountHintText}</span>
                   </div>
                 )}
 
@@ -1821,7 +1837,7 @@ export default function BundleProductView({
                   <div className={styles.currentPrice}>{formatPrice(displayPrice)}</div>
                   {infoDiscount > 0 && <span className={styles.originalPrice}>{formatPrice(subtotal)}</span>}
                 </div>
-                {infoDiscount > 0 && <p className={styles.savingsText}>Tiết kiệm {formatPrice(infoDiscount)} khi mua trọn bộ</p>}
+                {infoDiscount > 0 && <p className={styles.savingsText}>{infoSavingsText}</p>}
                 <p className={styles.priceMeta}>Số lượng món: {selectedItems.length} | Đã bao gồm phí bảo hiểm vận chuyển</p>
               </div>
 
@@ -1935,15 +1951,15 @@ export default function BundleProductView({
               {/* === Top Action Bar === */}
             {tabItems.length > 0 && (
               <div className={`${builderStyles.topActionBar} ${builderStyles.topActionBarWithMedia}`}>
-                {isFullCombo ? (
+                {hasBundleDiscount ? (
                   <div className={builderStyles.discountBannerInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>local_offer</span>
-                    <span>Bạn đang mua trọn bộ — Ưu đãi giảm <strong>{(DISCOUNT_RATE * 100).toFixed(0)}%</strong>!</span>
+                    <span>{discountBannerText} - Ưu đãi giảm <strong>{discountPercent}%</strong>!</span>
                   </div>
                 ) : (
                   <div className={builderStyles.discountHintInline}>
                     <span className="material-symbols-outlined" style={{ fontSize: 18 }}>info</span>
-                    <span>Mua đủ <strong>{bundleRequirementCount} món</strong> nhận ưu đãi giảm {(DISCOUNT_RATE * 100).toFixed(0)}%</span>
+                    <span>{discountHintText}</span>
                   </div>
                 )}
 
@@ -2245,11 +2261,9 @@ export default function BundleProductView({
                       <span className={builderStyles.summaryLabelSub}>Tạm tính:</span>
                       <span className={builderStyles.summarySubtotal}>{formatPrice(tabSubtotal)}</span>
                     </div>
-                    {isFullCombo && tabDiscountAmount > 0 && (
+                    {hasBundleDiscount && (
                       <div className={builderStyles.summaryRow}>
-                        <span className={builderStyles.summaryLabelDiscount}>
-                          Giảm {(DISCOUNT_RATE * 100).toFixed(0)}% (trọn bộ):
-                        </span>
+                        <span className={builderStyles.summaryLabelDiscount}>{summaryDiscountLabel}</span>
                         <span className={builderStyles.summaryDiscount}>- {formatPrice(tabDiscountAmount)}</span>
                       </div>
                     )}

@@ -10,6 +10,7 @@ import {
   getSelectedParentIdForSlug,
   orderRootCategories,
 } from "@/lib/categoryNavigation";
+import { markCategoryNavigationClick } from "@/lib/productPerformance";
 import stylesStandard from "../app/products/products.module.css";
 import styles2 from "../app/products/layout2.module.css";
 
@@ -149,6 +150,11 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
     return query ? `/products?${query}` : "/products";
   };
 
+  const handleCategoryLinkClick = (category) => {
+    markCategoryNavigationClick(category || {}, buildCategoryHref(category?.slug || ""));
+    setIsOpen(false);
+  };
+
   const handleMobileParentSelect = (parentId) => {
     setSelectedParentId((currentParentId) => (currentParentId === parentId ? null : parentId));
   };
@@ -215,7 +221,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                 <Link
                   href={buildCategoryHref("")}
                   className={`${styles.dropdownItem} ${!currentCategorySlug ? styles.activeItem : ""}`}
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => handleCategoryLinkClick({ slug: "", name: "Tất cả sản phẩm" })}
                   style={{ fontSize: "0.875rem" }}
                 >
                   <div className={styles.itemInfo}>
@@ -231,7 +237,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                       className={`${styles.dropdownItem} ${
                         currentCategorySlug === category.slug ? styles.activeItem : ""
                       }`}
-                      onClick={() => setIsOpen(false)}
+                      onClick={() => handleCategoryLinkClick(category)}
                       style={{
                         fontSize: "0.875rem",
                         paddingLeft: category.level > 0 ? `${category.level + 1}rem` : "1rem",
@@ -265,7 +271,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                           className={`${styles.dropdownItem} ${
                             currentCategorySlug === parentCategory.slug ? styles.activeItem : ""
                           }`}
-                          onClick={() => setIsOpen(false)}
+                          onClick={() => handleCategoryLinkClick(parentCategory)}
                         >
                           <div className={styles.itemInfo}>
                             <span className={styles.itemLabel}>{parentCategory.name}</span>
@@ -307,7 +313,7 @@ export default function CategoryDropdown({ categories, currentCategorySlug, vari
                                 className={`${styles.dropdownItem} ${styles.mobileCategoryChildItem} ${
                                   currentCategorySlug === childCategory.slug ? styles.activeItem : ""
                                 }`}
-                                onClick={() => setIsOpen(false)}
+                                onClick={() => handleCategoryLinkClick(childCategory)}
                                 style={{ paddingLeft: `${1 + childCategory.level * 0.85}rem` }}
                               >
                                 <div className={styles.itemInfo}>

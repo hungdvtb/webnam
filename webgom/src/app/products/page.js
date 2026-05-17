@@ -8,6 +8,7 @@ import CategoryDropdown from '@/components/CategoryDropdown';
 import DesktopCategorySidebar from '@/components/DesktopCategorySidebar';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
+import CategoryPerformanceLogger from '@/components/CategoryPerformanceLogger';
 import { resolveImageObjectUrl, resolveMediaUrl } from '@/lib/media';
 
 export const dynamic = 'force-dynamic';
@@ -255,10 +256,21 @@ export default async function ProductsPage({ searchParams }) {
   }
 
   const activeLayout = categoryInfo?.display_layout === 'layout_2' ? 'layout_2' : 'layout_1';
+  const performanceLogger = (
+    <CategoryPerformanceLogger
+      categorySlug={currentCategorySlug}
+      productsCount={productsData.data?.length || 0}
+      filtersCount={productsData.available_filters?.length || 0}
+      productsTiming={productsData.__webgomTiming}
+      categoriesTiming={categories.__webgomTiming}
+      categoryTiming={categoryInfo?.__webgomTiming}
+    />
+  );
 
   if (activeLayout === 'layout_2') {
     return (
       <div className={styles2.container}>
+        {performanceLogger}
         <nav className={styles2.breadcrumbs}>
           <Link href="/" className={styles2.breadcrumbLink}>Trang chủ</Link>
           <span className="material-symbols-outlined" style={{ fontSize: '14px', opacity: 0.4 }}>chevron_right</span>
@@ -314,6 +326,7 @@ export default async function ProductsPage({ searchParams }) {
 
   return (
     <div className={styles.productsPage}>
+      {performanceLogger}
       <main className="container py-8">
         <nav className={styles.breadcrumbNav}>
           <Link href="/">Trang chủ</Link>

@@ -1,6 +1,7 @@
 'use client';
 
 const NAV_MARK_KEY = 'webgom:product-nav-mark';
+const CATEGORY_NAV_MARK_KEY = 'webgom:category-nav-mark';
 const onceKeys = new Set();
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -74,6 +75,68 @@ export function logProductTimingOnce(key, label, detail = {}) {
 
 export function markProductRouteReady(detail = {}) {
   logProductTiming('route-change', {
+    href: typeof window !== 'undefined' ? window.location.href : '',
+    ...detail,
+  });
+}
+
+const readCategoryNavigationMark = () => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(CATEGORY_NAV_MARK_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+export function logCategoryTiming(label, detail = {}, navigationMark = readCategoryNavigationMark()) {
+  if (typeof window === 'undefined' || typeof console === 'undefined') {
+    return;
+  }
+
+  const currentTime = now();
+  const fromClickMs = navigationMark?.at !== undefined
+    ? Math.max(0, Math.round(currentTime - Number(navigationMark.at)))
+    : null;
+
+  console.info(`[category-perf] ${label}`, {
+    atMs: Math.round(currentTime),
+    fromClickMs,
+    ...detail,
+  });
+}
+
+export function markCategoryNavigationClick(category = {}, href = '') {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const mark = {
+    at: now(),
+    href,
+    slug: category?.slug || '',
+    name: category?.name || '',
+  };
+
+  try {
+    window.sessionStorage.setItem(CATEGORY_NAV_MARK_KEY, JSON.stringify(mark));
+  } catch {
+    // Timing logs must never block navigation.
+  }
+
+  logCategoryTiming('click-category', {
+    href,
+    slug: mark.slug,
+    name: mark.name,
+  }, mark);
+}
+
+export function markCategoryRouteReady(detail = {}) {
+  logCategoryTiming('route-change', {
     href: typeof window !== 'undefined' ? window.location.href : '',
     ...detail,
   });

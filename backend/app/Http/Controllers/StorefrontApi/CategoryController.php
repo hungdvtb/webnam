@@ -6,10 +6,35 @@ use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Support\Utf8Sanitizer;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class CategoryController extends Controller
 {
+    private function markTiming(array &$timings, string $name, float $startedAt): float
+    {
+        $now = microtime(true);
+        $timings[$name] = round(($now - $startedAt) * 1000, 1);
+
+        return $now;
+    }
+
+    private function timedJsonResponse(array $payload, array $timings)
+    {
+        $sanitizeStartedAt = microtime(true);
+        $normalizedPayload = Utf8Sanitizer::normalize($payload);
+        $timings['sanitize'] = round((microtime(true) - $sanitizeStartedAt) * 1000, 1);
+
+        $serverTiming = collect($timings)
+            ->map(fn ($duration, $name) => sprintf('%s;dur=%s', preg_replace('/[^a-zA-Z0-9_-]/', '_', $name), $duration))
+            ->implode(', ');
+
+        return response()
+            ->json($normalizedPayload)
+            ->header('Server-Timing', $serverTiming)
+            ->header('X-Webgom-Timing', json_encode($timings, JSON_UNESCAPED_SLASHES));
+    }
+
     protected function getAccountId(Request $request)
     {
         $siteCode = $request->header('X-Site-Code');
@@ -143,37 +168,55 @@ class CategoryController extends Controller
 
     public function index(Request $request)
     {
+        $timings = [];
+        $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
+        $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
-        $categories = Category::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('status', true)
-            ->orderBy('order', 'asc')
-            ->orderBy('id', 'asc') // Stable sorting
-            ->get();
+        $cacheKey = 'web_api_categories:index:' . ($accountId ?? 'all');
+        $categories = Cache::remember($cacheKey, 60, function () use ($accountId) {
+            $categories = Category::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('status', true)
+                ->orderBy('order', 'asc')
+                ->orderBy('id', 'asc') // Stable sorting
+                ->get();
 
-        $this->applyStorefrontCategoryItemCounts($categories, $accountId);
+            $this->applyStorefrontCategoryItemCounts($categories, $accountId);
 
-        return response()->json(Utf8Sanitizer::normalize($categories->toArray()));
+            return $categories->toArray();
+        });
+        $this->markTiming($timings, 'categories', $stepStartedAt);
+
+        return $this->timedJsonResponse($categories, $timings);
     }
 
     public function show(Request $request, $slug)
     {
+        $timings = [];
+        $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
+        $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
-        $category = Category::query()
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->where('slug', $slug)
-            ->with(['children' => function($q) {
-                $q->where('status', true)->orderBy('order');
-            }])
-            ->firstOrFail();
+        $cacheKey = 'web_api_categories:show:' . ($accountId ?? 'all') . ':' . $slug;
+        $category = Cache::remember($cacheKey, 60, function () use ($accountId, $slug) {
+            $category = Category::query()
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+                ->where('slug', $slug)
+                ->with(['children' => function($q) {
+                    $q->where('status', true)->orderBy('order');
+                }])
+                ->firstOrFail();
 
-        $this->applyStorefrontCategoryItemCounts(
-            collect([$category])->merge($category->children),
-            $accountId
-        );
+            $this->applyStorefrontCategoryItemCounts(
+                collect([$category])->merge($category->children),
+                $accountId
+            );
 
-        return response()->json(Utf8Sanitizer::normalize($category->toArray()));
+            return $category->toArray();
+        });
+        $this->markTiming($timings, 'category', $stepStartedAt);
+
+        return $this->timedJsonResponse($category, $timings);
     }
 }

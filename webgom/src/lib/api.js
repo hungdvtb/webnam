@@ -18,17 +18,38 @@ export async function fetchFromApi(endpoint, options = {}) {
 
     const payload = await response.json();
     const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const timing = {
+        endpoint,
+        durationMs: Math.round(finishedAt - startedAt),
+        serverTiming: response.headers.get('server-timing') || '',
+        webgomTiming: response.headers.get('x-webgom-timing') || '',
+    };
+
+    if (payload && typeof payload === 'object') {
+        try {
+            Object.defineProperty(payload, '__webgomTiming', {
+                value: timing,
+                enumerable: false,
+                configurable: true,
+            });
+        } catch {
+            // Timing metadata is best-effort and must never affect data flow.
+        }
+    }
 
     if (
-        typeof window !== 'undefined'
-        && endpoint.includes('/web-api/products/')
-        && (process.env.NODE_ENV !== 'production' || window.__WEBGOM_PRODUCT_PERF__ === true)
+        (
+            endpoint.includes('/web-api/products')
+            || endpoint.includes('/web-api/categories')
+        )
+        && (
+            typeof window === 'undefined'
+            || process.env.NODE_ENV !== 'production'
+            || window.__WEBGOM_PRODUCT_PERF__ === true
+        )
     ) {
         console.info('[product-perf] api-response', {
-            endpoint,
-            durationMs: Math.round(finishedAt - startedAt),
-            serverTiming: response.headers.get('server-timing'),
-            webgomTiming: response.headers.get('x-webgom-timing'),
+            ...timing,
         });
     }
 

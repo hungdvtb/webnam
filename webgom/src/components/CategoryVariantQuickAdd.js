@@ -13,6 +13,7 @@ import {
   getBundleOptionTitle,
   resolveBundleConfigName,
 } from '@/lib/bundlePricing';
+import { logCategoryTiming } from '@/lib/productPerformance';
 import { flyToCart } from '@/utils/flyToCart';
 import { resolveImageObjectUrl } from '@/lib/media';
 
@@ -526,6 +527,28 @@ const getProductDetailIdentifier = (product = {}) => (
   String(product?.slug || product?.id || '').trim()
 );
 
+const getBundleDetailParams = (product = {}) => {
+  const optionUid = getBundleOptionUid(product);
+  const optionKey = getBundleOptionKey(product);
+  const optionTitle = String(
+    product?.bundle_option_title
+    || product?.bundleOptionTitle
+    || product?.option_title
+    || product?.pivot?.option_title
+    || ''
+  ).trim();
+
+  if (product?.item_type !== 'bundle_option' && !optionUid && !optionKey && !optionTitle) {
+    return {};
+  }
+
+  return {
+    bundle_option_uid: optionUid,
+    bundle_option_key: optionKey,
+    bundle_option: optionTitle,
+  };
+};
+
 const extractProductDetailPayload = (payload) => {
   if (!payload || typeof payload !== 'object') {
     return null;
@@ -919,9 +942,17 @@ export default function CategoryVariantQuickAdd({
     setIsLoadingOptions(true);
 
     try {
+      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
       const payload = kind === 'bundle'
-        ? await getWebProductBundleOptionDetail(identifier)
+        ? await getWebProductBundleOptionDetail(identifier, getBundleDetailParams(product))
         : await getWebProductDetail(identifier);
+      const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      logCategoryTiming(kind === 'bundle' ? 'api-bundle-options' : 'api-variants', {
+        identifier,
+        productId: product?.id ?? null,
+        productType: product?.type || '',
+        durationMs: Math.round(finishedAt - startedAt),
+      });
       const detailProduct = extractProductDetailPayload(payload);
 
       if (!detailProduct) {

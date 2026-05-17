@@ -319,6 +319,7 @@ export default function RelatedProductsSection({
                       src={imageSrc}
                       alt={relatedProduct.name}
                       fill
+                      unoptimized
                       sizes="(max-width: 768px) 50vw, (max-width: 1200px) 50vw, 25vw"
                       style={{ objectFit: 'cover' }}
  

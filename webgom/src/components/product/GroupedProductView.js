@@ -91,6 +91,7 @@ export default function GroupedProductView({
                           src={getImageUrl(item.primary_image || { path: item.main_image })}
                           alt={item.name}
                           fill
+                          unoptimized
                           style={{ objectFit: 'cover' }}
  
                         />

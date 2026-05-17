@@ -139,6 +139,7 @@ function DeferredDescription({ product, descriptionReady }) {
               }
               alt="Mô tả sản phẩm"
               fill
+              unoptimized
               sizes="(max-width: 768px) 100vw, 80vw"
               style={{ objectFit: 'cover' }}
               loading="lazy"

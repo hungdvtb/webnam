@@ -526,6 +526,7 @@ export default function ComponentSelectionModal({
                         src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
                         alt={item.name}
                         fill
+                        unoptimized
                         style={{ objectFit: 'cover' }}
  
                       />

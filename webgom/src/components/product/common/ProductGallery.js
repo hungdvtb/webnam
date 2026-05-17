@@ -1045,6 +1045,7 @@ export default function ProductGallery({
             src={resolveGalleryImageSrc(image)}
             alt={productName}
             fill
+            unoptimized
             sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
             className={styles.productMediaImage}
             priority={priorityFirstImage && !hidden}
@@ -1219,6 +1220,7 @@ export default function ProductGallery({
                       src={candidateThumbnailUrl}
                       alt={`${productName} video ${videoIndex + 1} thumbnail`}
                       fill
+                      unoptimized
                       sizes="88px"
                       className={styles.productMediaThumbImage}
                       draggable={false}
@@ -1258,6 +1260,7 @@ export default function ProductGallery({
                     src={resolveGalleryImageSrc(image)}
                     alt={`${productName} \u1ea3nh ${index + 1}`}
                     fill
+                    unoptimized
                     sizes="88px"
                     className={styles.productMediaThumbImage}
                     draggable={false}

@@ -135,6 +135,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
                     }
                     alt="Mô tả sản phẩm"
                     fill
+                    unoptimized
                     sizes="(max-width: 768px) 100vw, 80vw"
                     style={{ objectFit: 'cover' }}
                   />

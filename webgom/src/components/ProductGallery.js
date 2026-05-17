@@ -49,6 +49,7 @@ export default function ProductGallery({ images = [], productName }) {
           src={getImageUrl(activeImage)}
           alt={productName}
           fill
+          unoptimized
           sizes="(max-width: 768px) 100vw, 50vw"
           style={{ objectFit: 'cover' }}
           priority
@@ -69,6 +70,7 @@ export default function ProductGallery({ images = [], productName }) {
                 src={getImageUrl(img)}
                 alt={`${productName} thumb ${idx}`}
                 fill
+                unoptimized
                 sizes="100px"
                 style={{ objectFit: 'cover' }}
  

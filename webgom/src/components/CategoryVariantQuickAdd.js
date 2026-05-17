@@ -1031,6 +1031,7 @@ export default function CategoryVariantQuickAdd({
             src={getVariantImageUrl(pickerProduct, variant)}
             alt=""
             fill
+            unoptimized
             sizes="76px"
             style={{ objectFit: 'cover' }}
  
@@ -1068,6 +1069,7 @@ export default function CategoryVariantQuickAdd({
             src={getBundleOptionImageUrl(pickerProduct, option)}
             alt=""
             fill
+            unoptimized
             sizes="76px"
             style={{ objectFit: 'cover' }}
  

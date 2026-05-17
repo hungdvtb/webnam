@@ -159,6 +159,16 @@
   box-shadow: inset 0 0 0 1px rgba(197, 160, 101, 0.16);
 }
 
+.selectedOptionCard {
+  opacity: 0.52;
+}
+
+.selectedOptionCard:hover {
+  border-color: rgba(27, 54, 93, 0.08);
+  box-shadow: none;
+  transform: none;
+}
+
 .optionThumb {
   position: relative;
   display: block;
@@ -263,6 +273,12 @@
 
 .selectButton:hover {
   background: #c5a065;
+}
+
+.selectButton:disabled {
+  background: #94a3b8;
+  color: #fff;
+  cursor: not-allowed;
 }
 
 .emptyText {

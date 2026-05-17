@@ -155,6 +155,13 @@ const isDefaultVariantRow = (product = {}, variant = {}) => {
   return defaultVariantId > 0 && Number(variant?.id || 0) === defaultVariantId;
 };
 
+const getVariantSelectionKey = (variant = {}) => String(
+  variant?.id
+  || variant?.sku
+  || variant?.name
+  || ''
+).trim();
+
 const getVariantAttributeValues = (variant = {}) => (
   Array.isArray(variant?.attribute_values)
     ? variant.attribute_values
@@ -619,6 +626,7 @@ export default function CategoryVariantQuickAdd({
   const [hydratedProduct, setHydratedProduct] = useState(null);
   const [isLoadingOptions, setIsLoadingOptions] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
+  const [selectedVariantKeys, setSelectedVariantKeys] = useState(() => new Set());
   const noticeTimerRef = useRef(null);
   const scrollRestoreRef = useRef({ scrollY: 0, cardElement: null, cardTop: null });
   const isPickerOpenRef = useRef(isPickerOpen);
@@ -771,6 +779,7 @@ export default function CategoryVariantQuickAdd({
 
   useEffect(() => {
     setHydratedProduct(null);
+    setSelectedVariantKeys(new Set());
     if (isPickerOpenRef.current) {
       closePicker();
     } else {
@@ -919,6 +928,14 @@ export default function CategoryVariantQuickAdd({
       },
     );
     showNotice(buildAddedMessage(parentProduct, variant, isDefault));
+    const selectedKey = getVariantSelectionKey(variant);
+    if (selectedKey) {
+      setSelectedVariantKeys((previousKeys) => {
+        const nextKeys = new Set(previousKeys);
+        nextKeys.add(selectedKey);
+        return nextKeys;
+      });
+    }
     animateCart(eventOrElement, variant, parentProduct);
     if (closeAfterAdd && isPickerOpenRef.current) {
       closePicker();
@@ -1037,9 +1054,18 @@ export default function CategoryVariantQuickAdd({
     const variantPrice = getVariantPrice(variant, displayPrice);
     const optionName = variant.name || getVariantNameSuffix(pickerProduct, variant) || summary.value || 'Biến thể';
     const isDefault = isDefaultVariantRow(pickerProduct, variant);
+    const selectionKey = getVariantSelectionKey(variant);
+    const isSelected = selectionKey ? selectedVariantKeys.has(selectionKey) : false;
 
     return (
-      <div key={variant.id} className={`${styles.optionCard} ${isDefault ? styles.defaultVariantCard : ''}`}>
+      <div
+        key={variant.id}
+        className={[
+          styles.optionCard,
+          isDefault ? styles.defaultVariantCard : '',
+          isSelected ? styles.selectedOptionCard : '',
+        ].filter(Boolean).join(' ')}
+      >
         <span className={styles.optionThumb}>
           <Image
             src={getVariantImageUrl(pickerProduct, variant)}
@@ -1065,9 +1091,10 @@ export default function CategoryVariantQuickAdd({
         <button
           type="button"
           className={styles.selectButton}
+          disabled={isSelected}
           onClick={(event) => addVariant(variant, event.currentTarget, isDefault, pickerProduct)}
         >
-          Thêm
+          {isSelected ? 'Đã thêm' : 'Thêm'}
         </button>
       </div>
     );

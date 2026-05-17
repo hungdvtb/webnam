@@ -1855,7 +1855,7 @@ export default function CartPage() {
                           {!isBundleItem && canChangeCartItem(item) ? (
                             <button
                               type="button"
-                              className={styles.mobileItemChange}
+                              className={`${styles.mobileItemChange} ${itemMeta.length > 0 ? styles.mobileItemChangeWithMeta : ''}`}
                               onClick={() => openCartItemSelectionModal(item)}
                             >
                               Đổi mẫu / size
@@ -2062,6 +2062,7 @@ export default function CartPage() {
 
               <div className={styles.cartList}>
                 {cartItems.map((item) => {
+                  const itemMeta = getCartItemMeta(item);
                   const imgSrc = getImageUrl(item);
                   const isBundleItem = item.groupedItems?.length > 0;
                   const bundleState = isBundleItem ? bundleStatesByKey.get(item.cartKey) : null;
@@ -2101,9 +2102,34 @@ export default function CartPage() {
                         </div>
                         <div className={styles.itemDetails}>
                           <h4 className={styles.itemName}>{item.name}</h4>
-                          {isBundleItem ? (
+
+                          {!isBundleItem ? (
+                            <div className={styles.itemVariantActionRow}>
+                              {itemMeta.length > 0 ? (
+                                <div className={styles.itemMetaList}>
+                                  {itemMeta.map((meta) => (
+                                    <span key={`${item.cartKey}-desktop-meta-${meta}`} className={styles.itemMetaBadge}>
+                                      {meta}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className={styles.itemMetaList} aria-hidden="true" />
+                              )}
+
+                              {canChangeCartItem(item) ? (
+                                <button
+                                  type="button"
+                                  className={styles.itemChange}
+                                  onClick={() => openCartItemSelectionModal(item)}
+                                >
+                                  Đổi mẫu / size
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : (
                             <p className={styles.itemMeta}>Combo bộ sưu tập</p>
-                          ) : null}
+                          )}
                         </div>
                       </div>
 
@@ -2136,18 +2162,6 @@ export default function CartPage() {
                           <strong className={styles.itemLinePrice}>{formatPrice(lineTotal)}</strong>
                         </div>
                       </div>
-
-                      {!isBundleItem && canChangeCartItem(item) ? (
-                        <div className={styles.itemChangeRow}>
-                          <button
-                            type="button"
-                            className={styles.itemChange}
-                            onClick={() => openCartItemSelectionModal(item)}
-                          >
-                            Đổi mẫu / size
-                          </button>
-                        </div>
-                      ) : null}
 
                       {/* Sub-items for bundle/combo with qty controls */}
                       {isBundleItem && (

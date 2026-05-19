@@ -4,7 +4,7 @@ import styles from '../../../app/product/[slug]/product.module.css';
 
 export default function SpecificationList({ product, currentProduct }) {
   return (
-    <div className={styles.specCard}>
+    <div id="specs-section" className={styles.specCard}>
       <h4 className={styles.specTitle}>
         <span className="material-symbols-outlined">info</span>
         Thông số chi tiết

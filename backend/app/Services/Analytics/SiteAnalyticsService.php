@@ -35,11 +35,16 @@ class SiteAnalyticsService
                 'product_sku' => $this->truncate($request->input('product_sku'), 120),
                 'product_slug' => $this->truncate($request->input('product_slug'), 255),
                 'source' => $this->truncate($request->input('source'), 80),
+                'source_label' => $this->truncate($request->input('source_label'), 80),
                 'utm_source' => $this->truncate($request->input('utm_source'), 255),
                 'utm_medium' => $this->truncate($request->input('utm_medium'), 255),
                 'utm_campaign' => $this->truncate($request->input('utm_campaign'), 255),
                 'utm_content' => $this->truncate($request->input('utm_content'), 255),
                 'utm_term' => $this->truncate($request->input('utm_term'), 255),
+                'fbclid' => $this->truncate($request->input('fbclid'), 255),
+                'gclid' => $this->truncate($request->input('gclid'), 255),
+                'ttclid' => $this->truncate($request->input('ttclid'), 255),
+                'raw_query' => $this->truncate($request->input('raw_query'), 2000),
             ], fn ($value) => $value !== null && $value !== '');
 
             $metadata = array_replace($metadata, Arr::wrap($request->input('metadata', [])), Arr::wrap($overrides['metadata'] ?? []));

@@ -8,6 +8,7 @@ use App\Models\Category;
 use App\Models\Attribute;
 use App\Models\Post;
 use App\Models\ProductAttributeValue;
+use App\Models\ProductImage;
 use App\Support\Utf8Sanitizer;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -635,6 +636,58 @@ class ProductController extends Controller
         ];
     }
 
+    private function filterDisplayProductImages($images): Collection
+    {
+        return collect($images)
+            ->filter(fn ($image) => $image instanceof ProductImage && ! $image->isStaleTeamPhoto())
+            ->values();
+    }
+
+    private function productHasLoadedImage(Product $product): bool
+    {
+        return $product->relationLoaded('images')
+            && collect($product->images)->filter(fn ($image) => $image instanceof ProductImage)->isNotEmpty();
+    }
+
+    private function resolveVariantOverrideImages(Product $variant, ?Product $baseProduct = null): Collection
+    {
+        $variantImages = collect($variant->images ?? collect())
+            ->filter(fn ($image) => $image instanceof ProductImage)
+            ->values();
+
+        if ($variantImages->isEmpty()) {
+            return collect();
+        }
+
+        $displayImages = $this->filterDisplayProductImages($variantImages);
+        if ($displayImages->isNotEmpty()) {
+            return $displayImages;
+        }
+
+        return $baseProduct instanceof Product && $this->productHasLoadedImage($baseProduct)
+            ? collect()
+            : $variantImages;
+    }
+
+    private function sanitizeProductImageRelations(Product $product, bool $filterOwnImages = false): void
+    {
+        if ($filterOwnImages && $product->relationLoaded('images')) {
+            $product->setRelation('images', $this->filterDisplayProductImages($product->images));
+        }
+
+        if (! $product->relationLoaded('variations')) {
+            return;
+        }
+
+        $product->variations->each(function ($variation) use ($product): void {
+            if (! $variation instanceof Product || ! $variation->relationLoaded('images')) {
+                return;
+            }
+
+            $variation->setRelation('images', $this->resolveVariantOverrideImages($variation, $product));
+        });
+    }
+
     private function resolveBundleOptionGalleryImage(?Product $bundleProduct, ?string $optionTitle): ?array
     {
         if (!$bundleProduct || !$bundleProduct->relationLoaded('images') || $bundleProduct->images->isEmpty()) {
@@ -645,6 +698,10 @@ class ProductController extends Controller
         $optionText = $this->normalizeSearchKeyword($optionTitle);
 
         foreach ($bundleProduct->images as $image) {
+            if ($image instanceof ProductImage && $image->isStaleTeamPhoto()) {
+                continue;
+            }
+
             $imageText = $this->normalizeSearchKeyword(implode(' ', array_filter([
                 $image->file_name ?? null,
                 $image->mediaAsset?->original_name ?? null,
@@ -1411,11 +1468,17 @@ class ProductController extends Controller
             // This is the key optimization for bundle products: skip variations & superAttributes.
             if ($product->type === 'bundle') {
                 $product->load([
+                    'bundleItems' => function ($query) {
+                        $query->where('products.status', true);
+                    },
                     'bundleItems.images',
                     'bundleItems.attributeValues.attribute',
                 ]);
             } elseif ($product->type === 'grouped') {
                 $product->load([
+                    'groupedItems' => function ($query) {
+                        $query->where('products.status', true);
+                    },
                     'groupedItems.images',
                     'groupedItems.attributeValues.attribute',
                 ]);
@@ -1496,8 +1559,9 @@ class ProductController extends Controller
                         $item->name = $v->name;
 
                         // Merge images if variant has images
-                        if ($v->images && $v->images->count() > 0) {
-                            $item->setRelation('images', $v->images);
+                        $variantImages = $this->resolveVariantOverrideImages($v, $item);
+                        if ($variantImages->isNotEmpty()) {
+                            $item->setRelation('images', $variantImages);
                         }
 
                         // Merge attributes
@@ -1555,6 +1619,7 @@ class ProductController extends Controller
             );
             $stepStartedAt = $this->markTiming($timings, 'attributes_cache', $stepStartedAt);
             
+            $this->sanitizeProductImageRelations($product);
             $responseData = $product->toArray();
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
@@ -1634,6 +1699,7 @@ class ProductController extends Controller
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             if ($product->type !== 'bundle') {
+                $this->sanitizeProductImageRelations($product);
                 $responseData = $product->toArray();
                 $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
                 $responseData['bundle_items'] = [];
@@ -1726,8 +1792,9 @@ class ProductController extends Controller
                     $item->sku = $variant->sku;
                     $item->name = $variant->name;
 
-                    if ($variant->images && $variant->images->count() > 0) {
-                        $item->setRelation('images', $variant->images);
+                    $variantImages = $this->resolveVariantOverrideImages($variant, $item);
+                    if ($variantImages->isNotEmpty()) {
+                        $item->setRelation('images', $variantImages);
                     }
 
                     if ($variant->attributeValues && $variant->attributeValues->count() > 0) {
@@ -1744,6 +1811,7 @@ class ProductController extends Controller
             );
             $stepStartedAt = $this->markTiming($timings, 'selected_catalog', $stepStartedAt);
 
+            $this->sanitizeProductImageRelations($product);
             $responseData = $product->toArray();
             $responseData['description'] = '';
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);

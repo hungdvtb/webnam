@@ -1718,8 +1718,18 @@
 }
 
 .tabHeader {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.75rem;
+  min-width: 0;
+  overflow-x: auto;
   border-bottom: 1px solid rgba(27, 54, 93, 0.1);
   margin-bottom: 0.5rem;
+  scrollbar-width: none;
+}
+
+.tabHeader::-webkit-scrollbar {
+  display: none;
 }
 
 .tabTitle {
@@ -1731,12 +1741,53 @@
   font-weight: 700;
   font-size: 1.125rem;
   display: inline-block;
+  margin: 0;
+}
+
+.tabButton {
+  flex: 0 0 auto;
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: rgba(27, 54, 93, 0.62);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 -1px;
+  padding: 0 0.5rem 1rem;
+  font-family: var(--font-roboto);
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.tabButton:hover,
+.tabButton:focus-visible {
+  color: #1B365D;
+}
+
+.tabButton:focus-visible {
+  outline: 2px solid rgba(197, 160, 101, 0.7);
+  outline-offset: 3px;
+}
+
+.tabButtonActive {
+  border-bottom-color: #1B365D;
+  color: #1B365D;
 }
 
 .tabContent {
   padding-top: 2.5rem;
   padding-bottom: 2.5rem;
   min-width: 0;
+}
+
+.productInfoAnchor {
+  scroll-margin-top: 96px;
 }
 
 .descBody {
@@ -1820,7 +1871,7 @@
   margin: 1.75rem 0 0.85rem;
   font-weight: 800;
   color: #1B365D;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.3;
 }
 
@@ -1984,6 +2035,128 @@
   clear: both;
 }
 
+.policyTabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+}
+
+.policyPicker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.policyCard {
+  appearance: none;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+  min-height: 4.85rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  border-radius: 1rem;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(252, 249, 242, 0.94));
+  color: #1B365D;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 10px 22px rgba(27, 54, 93, 0.05);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.policyCard:hover,
+.policyCard:focus-visible {
+  border-color: rgba(197, 160, 101, 0.6);
+  box-shadow: 0 14px 26px rgba(27, 54, 93, 0.08);
+  transform: translateY(-1px);
+}
+
+.policyCard:focus-visible {
+  outline: 2px solid rgba(197, 160, 101, 0.68);
+  outline-offset: 3px;
+}
+
+.policyCardActive {
+  border-color: rgba(197, 160, 101, 0.92);
+  background:
+    linear-gradient(180deg, rgba(255, 250, 240, 0.98), rgba(255, 255, 255, 0.98));
+  box-shadow:
+    0 0 0 3px rgba(197, 160, 101, 0.14),
+    0 16px 30px rgba(27, 54, 93, 0.08);
+}
+
+.policyCardIconWrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.35rem;
+  height: 2.35rem;
+  border-radius: 0.85rem;
+  background: rgba(197, 160, 101, 0.14);
+  color: #8e5229;
+  flex-shrink: 0;
+}
+
+.policyCardIconWrap .material-symbols-outlined {
+  font-size: 1.18rem;
+  line-height: 1;
+}
+
+.policyCardCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.policyCardTitle {
+  color: #1B365D;
+  display: block;
+  font-family: var(--font-roboto);
+  font-size: 0.96rem;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.policyCardAction {
+  align-items: center;
+  color: rgba(27, 54, 93, 0.42);
+  display: inline-flex;
+  height: 2.35rem;
+}
+
+.policyCardActive .policyCardAction {
+  color: #8e5229;
+}
+
+.policyCardAction .material-symbols-outlined {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.policyDetail {
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  border-radius: 1.1rem;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 1.25rem 1.35rem 1.45rem;
+  box-shadow: 0 12px 26px rgba(27, 54, 93, 0.05);
+}
+
+.policyArticle {
+  color: #374151;
+}
+
+.policyStatus {
+  color: rgba(27, 54, 93, 0.72);
+  font-size: 1rem;
+  line-height: 1.7;
+  margin: 0;
+}
+
 .descImage {
   margin-top: 2rem;
   border-radius: 1rem;
@@ -1995,6 +2168,14 @@
 /* Related Products */
 .relatedSection {
   margin-top: 0;
+}
+
+.relatedDesktopSection {
+  display: block;
+}
+
+.relatedMobileSection {
+  display: none;
 }
 
 .relatedSectionEmpty {
@@ -3717,10 +3898,19 @@
   }
 
   .tabHeader {
+    gap: 1rem;
     margin-bottom: 0;
   }
 
   .tabTitle {
+    padding-left: 0;
+    padding-right: 0;
+    padding-bottom: 0.75rem;
+    font-size: 18px;
+    line-height: 1.25;
+  }
+
+  .tabButton {
     padding-left: 0;
     padding-right: 0;
     padding-bottom: 0.75rem;
@@ -3782,7 +3972,7 @@
   .descBody :where(h1, h2, h3, h4, h5, h6) {
     margin: 1.25rem 0 0.75rem;
     font-weight: 800;
-    font-size: 18px;
+    font-size: 16px;
   }
 
   .descBody p:last-child {
@@ -3829,8 +4019,194 @@
     border-radius: 1rem;
   }
 
+  .policyTabPanel {
+    gap: 1rem;
+  }
+
+  .policyPicker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .policyCard {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.52rem;
+    min-height: 4.25rem;
+    padding: 0.68rem;
+    border-radius: 0.95rem;
+  }
+
+  .policyCardIconWrap {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.7rem;
+  }
+
+  .policyCardIconWrap .material-symbols-outlined {
+    font-size: 1rem;
+  }
+
+  .policyCardTitle {
+    font-size: 13px;
+    line-height: 1.22;
+  }
+
+  .policyCardAction {
+    display: none;
+  }
+
+  .policyDetail {
+    padding: 0.9rem 0.85rem 1rem;
+    border-radius: 1rem;
+  }
+
+  .policyStatus {
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
   .relatedSectionEmpty {
     display: block;
+  }
+
+  .relatedDesktopSection {
+    display: none !important;
+  }
+
+  .relatedMobileSection {
+    display: block;
+    width: 100%;
+    margin-top: 0;
+    padding: 0.25rem 0.05rem 2.75rem;
+    scroll-margin-top: 86px;
+  }
+
+  .relatedMobileHeader {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.9rem;
+    padding: 0 0.05rem;
+  }
+
+  .relatedMobileHeading {
+    min-width: 0;
+  }
+
+  .relatedMobileEyebrow {
+    margin: 0 0 0.25rem;
+    color: rgba(27, 54, 93, 0.56);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .relatedMobileTitle {
+    margin: 0;
+    color: #1B365D;
+    font-family: var(--font-serif);
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.18;
+  }
+
+  .relatedMobileViewAll {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 0.15rem;
+    min-height: 34px;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.25;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .relatedMobileViewAll .material-symbols-outlined {
+    font-size: 17px;
+    line-height: 1;
+  }
+
+  .relatedMobileProducts {
+    min-height: 18rem;
+  }
+
+  .relatedMobileProducts [data-product-card="true"] {
+    content-visibility: auto;
+    contain-intrinsic-size: 225px 320px;
+  }
+
+  .relatedMobileSkeletonGrid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.52rem;
+    min-height: 18rem;
+  }
+
+  .relatedMobileSkeletonCard {
+    width: min(100%, 225px);
+    justify-self: center;
+    overflow: hidden;
+    border: 1px solid rgba(27, 54, 93, 0.06);
+    border-radius: 16px;
+    background: #fff;
+  }
+
+  .relatedMobileSkeletonImage {
+    aspect-ratio: 1 / 1;
+    border-bottom: 1px solid rgba(27, 54, 93, 0.05);
+  }
+
+  .relatedMobileSkeletonBody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.54rem 0.58rem 0.62rem;
+  }
+
+  .relatedMobileSkeletonImage,
+  .relatedMobileSkeletonBody span,
+  .relatedMobileSkeletonBody strong {
+    position: relative;
+    overflow: hidden;
+    background: linear-gradient(90deg, rgba(232, 235, 240, 0.9) 0%, rgba(245, 247, 250, 1) 45%, rgba(232, 235, 240, 0.9) 100%);
+    background-size: 200% 100%;
+    animation: relatedSkeletonPulse 1.3s ease-in-out infinite;
+  }
+
+  .relatedMobileSkeletonBody span,
+  .relatedMobileSkeletonBody strong {
+    display: block;
+    height: 0.85rem;
+    border-radius: 999px;
+  }
+
+  .relatedMobileSkeletonBody span:nth-child(2) {
+    width: 74%;
+  }
+
+  .relatedMobileSkeletonBody strong {
+    width: 52%;
+    height: 1rem;
+    margin-top: 0.2rem;
+  }
+
+  .relatedMobileLoadingMore,
+  .relatedMobileStatus {
+    margin: 1rem 0 0;
+    color: rgba(27, 54, 93, 0.62);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.5;
+    text-align: center;
   }
 
   .relatedHeader {

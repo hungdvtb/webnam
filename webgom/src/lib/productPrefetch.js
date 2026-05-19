@@ -4,6 +4,7 @@ import config from './config';
 
 const SNAPSHOT_PREFIX = 'webgom:bundle-option-snapshot:';
 const DETAIL_PREFIX = 'webgom:bundle-option-detail:';
+const CACHE_VERSION = 6;
 const pendingPrefetches = new Map();
 
 const normalizeText = (value) => String(value || '').trim();
@@ -30,6 +31,7 @@ const getCacheKey = (slug = '', optionUid = '', optionKey = '', optionTitle = ''
 };
 
 const pickBundleOptionSnapshot = (product = {}, href = '') => ({
+  cache_version: CACHE_VERSION,
   cached_at: Date.now(),
   href,
   id: product?.id ?? null,
@@ -89,6 +91,11 @@ export function readBundleOptionSnapshot(slug = '', optionKey = '', optionTitle 
         continue;
       }
 
+      if (Number(snapshot.cache_version || 0) !== CACHE_VERSION) {
+        window.sessionStorage.removeItem(key);
+        continue;
+      }
+
       const sameSlug = normalizeText(snapshot.slug) === normalizeText(slug);
       const sameOption = !optionUid && !optionKey && !optionTitle
         ? true
@@ -116,7 +123,14 @@ export function readCachedBundleOptionDetail(slug = '', optionKey = '', optionTi
 
   try {
     const raw = window.sessionStorage.getItem(`${DETAIL_PREFIX}${getCacheKey(slug, optionUid, optionKey, optionTitle)}`);
-    return raw ? JSON.parse(raw) : null;
+    const payload = raw ? JSON.parse(raw) : null;
+
+    if (Number(payload?.cache_version || 0) === CACHE_VERSION) {
+      return payload;
+    }
+
+    window.sessionStorage.removeItem(`${DETAIL_PREFIX}${getCacheKey(slug, optionUid, optionKey, optionTitle)}`);
+    return null;
   } catch {
     return null;
   }
@@ -153,7 +167,10 @@ export function prefetchBundleOptionDetail(product = {}, href = '') {
     .then((payload) => {
       if (payload) {
         try {
-          window.sessionStorage.setItem(`${DETAIL_PREFIX}${cacheKey}`, JSON.stringify(payload));
+          window.sessionStorage.setItem(`${DETAIL_PREFIX}${cacheKey}`, JSON.stringify({
+            ...payload,
+            cache_version: CACHE_VERSION,
+          }));
         } catch {
           // Ignore cache pressure.
         }

@@ -20,6 +20,20 @@
   overflow: visible;
 }
 
+.mobileFloatingContactsHidden {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px) scale(0.96);
+  pointer-events: none;
+}
+
+:global(body.webgom-mobile-overlay-open) .mobileFloatingContacts {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(8px) scale(0.96);
+  pointer-events: none;
+}
+
 .button {
   width: 54px;
   height: 54px;
@@ -137,6 +151,20 @@
     display: inline-flex;
     right: max(12px, calc(env(safe-area-inset-right, 0px) + 12px));
     bottom: max(106px, calc(env(safe-area-inset-bottom, 0px) + 106px));
+  }
+
+  :global(body:has(.mobile-products-sheet-open)) .mobileFloatingContacts,
+  :global(body:has(.mobile-product-info-sheet-open)) .mobileFloatingContacts,
+  :global(body:has(.search-history-panel)) .mobileFloatingContacts,
+  :global(body:has(.stores-lightbox)) .mobileFloatingContacts,
+  :global(body:has([class*="bundleActionOverlay"])) .mobileFloatingContacts,
+  :global(body:has([class*="modalOverlay"])) .mobileFloatingContacts,
+  :global(body:has([class*="CategoryVariantQuickAdd_backdrop"])) .mobileFloatingContacts,
+  :global(body:has([class*="sortDialogContent"])) .mobileFloatingContacts {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px) scale(0.96);
+    pointer-events: none;
   }
 
   .button {

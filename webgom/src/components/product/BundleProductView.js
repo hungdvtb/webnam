@@ -22,7 +22,7 @@ import {
   evaluateBundleSelection,
   getBundleOptionTitle,
 } from '@/lib/bundlePricing';
-import { resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
+import { resolveCartItemImageUrl, resolveImageObjectUrl, resolveVideoEmbedUrl } from '@/lib/media';
 import { buildBundleComponentDetailHref } from '@/lib/productLinks';
 import { logProductTimingOnce } from '@/lib/productPerformance';
 
@@ -375,23 +375,10 @@ export default function BundleProductView({
   };
 
   const getBundleImageSrc = (item) => {
-    const candidates = [
-      item?.selected_variant?.primary_image,
-      item?.selected_variant?.images?.[0],
-      item?.primary_image,
-      item?.images?.[0],
-      item?.selected_variant?.main_image ? { path: item.selected_variant.main_image } : null,
-      item?.main_image ? { path: item.main_image } : null,
-    ];
-
-    for (const candidate of candidates) {
-      const resolved = resolveImageObjectUrl(candidate, 'medium', '');
-      if (resolved) {
-        return resolved;
-      }
-    }
-
-    return getImageUrl(item?.primary_image || item?.images?.[0] || { path: item?.main_image });
+    return (
+      resolveCartItemImageUrl(item, 'medium', '')
+      || getImageUrl(item?.primary_image || item?.images?.[0] || { path: item?.main_image })
+    );
   };
 
   const saveBundleWorkspaceState = (configName = resolvedActiveTab) => {
@@ -1683,12 +1670,13 @@ export default function BundleProductView({
         <div className={styles.mainGrid}>
           {/* Gallery */}
           <div
-            id="bundle-product-gallery"
+            id="image-video-section"
             className={styles.galleryColumn}
             ref={gallerySectionRef}
             data-bundle-gallery-root="true"
           >
             <span
+              id="bundle-product-gallery"
               ref={galleryAnchorRef}
               data-bundle-gallery-anchor="true"
               aria-hidden="true"

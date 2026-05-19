@@ -12,7 +12,7 @@ import {
   orderRootCategories,
 } from "@/lib/categoryNavigation";
 import { useCart } from "@/context/CartContext";
-import { resolveMediaUrl } from "@/lib/media";
+import { resolveImageObjectUrl, resolveMediaUrl } from "@/lib/media";
 
 const DEFAULT_BRAND_TITLE = "G\u1ed1m \u0110\u1ea1i Th\u00e0nh";
 const DEFAULT_SEARCH_PLACEHOLDER = "B\u1ea1n c\u1ea7n t\u00ecm s\u1ea3n ph\u1ea9m g\u00ec";
@@ -95,11 +95,65 @@ const MOBILE_ORDER_ITEM = {
 const MOBILE_BOTTOM_LABEL_LINE_MAP = {
   "san pham": ["S\u1ea3n", "ph\u1ea9m"],
   "gioi thieu": ["Gi\u1edbi", "thi\u1ec7u"],
+  "thong tin": ["Th\u00f4ng", "tin"],
   "kien thuc": ["Ki\u1ebfn", "th\u1ee9c"],
   "cua hang": ["C\u1eeda", "h\u00e0ng"],
   "gio hang": ["Gi\u1ecf", "h\u00e0ng"],
   "dat hang": ["\u0110\u1eb7t", "h\u00e0ng"],
 };
+const PRODUCT_INFO_SCROLL_EVENT = "webgom:product-info-section-request";
+const PRODUCT_INFO_SHEET_CLOSE_DELAY_MS = 180;
+const PRODUCT_INFO_INTRO_HREF = "https://gomdaithanh.com/blog/gioi-thieu-gom-dai-thanh";
+const PRODUCT_INFO_MENU_ITEMS = [
+  {
+    id: "about",
+    icon: "groups_2",
+    label: "Gi\u1edbi thi\u1ec7u v\u1ec1 ch\u00fang t\u00f4i",
+    href: PRODUCT_INFO_INTRO_HREF,
+  },
+  {
+    id: "media",
+    icon: "perm_media",
+    label: "H\u00ecnh \u1ea3nh & video s\u1ea3n ph\u1ea9m",
+    sectionId: "image-video-section",
+  },
+  {
+    id: "specs",
+    icon: "info",
+    label: "Th\u00f4ng s\u1ed1 chi ti\u1ebft",
+    sectionId: "specs-section",
+  },
+  {
+    id: "description",
+    icon: "article",
+    label: "M\u00f4 t\u1ea3 s\u1ea3n ph\u1ea9m",
+    sectionId: "description-section",
+  },
+  {
+    id: "refund",
+    icon: "assignment_return",
+    label: "Ch\u00ednh s\u00e1ch \u0111\u1ed5i tr\u1ea3 & ho\u00e0n ti\u1ec1n",
+    sectionId: "refund-policy-section",
+  },
+  {
+    id: "inspection",
+    icon: "rule",
+    label: "Ch\u00ednh s\u00e1ch ki\u1ec3m h\u00e0ng",
+    sectionId: "inspection-policy-section",
+  },
+  {
+    id: "shipping",
+    icon: "local_shipping",
+    label: "Ch\u00ednh s\u00e1ch giao h\u00e0ng",
+    sectionId: "shipping-policy-section",
+  },
+  {
+    id: "warranty",
+    icon: "workspace_premium",
+    label: "Ch\u00ednh s\u00e1ch b\u1ea3o h\u00e0nh",
+    sectionId: "warranty-policy-section",
+  },
+];
 const SEARCH_HISTORY_STORAGE_KEY = "webgom_mobile_search_history";
 const MAX_SEARCH_HISTORY_ITEMS = 6;
 const MOBILE_SEARCH_DEBOUNCE_MS = 320;
@@ -153,6 +207,47 @@ const getMobileBottomLabelLines = (value = "") => {
   const mappedLines = MOBILE_BOTTOM_LABEL_LINE_MAP[normalized];
 
   return Array.isArray(mappedLines) && mappedLines.length > 0 ? mappedLines : [label];
+};
+const getProductInfoScrollOffset = () => {
+  if (typeof document === "undefined") {
+    return 88;
+  }
+
+  const stickyHeader = document.querySelector(".mobile-sticky-header-shell");
+  const stickyHeaderHeight = Math.round(
+    stickyHeader?.getBoundingClientRect?.().height || stickyHeader?.offsetHeight || 0
+  );
+
+  return stickyHeaderHeight > 0 ? stickyHeaderHeight + 10 : 88;
+};
+const scrollToProductInfoSectionId = (sectionId = "", attempt = 0) => {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return false;
+  }
+
+  const normalizedSectionId = String(sectionId || "").trim();
+
+  if (!normalizedSectionId) {
+    return false;
+  }
+
+  const targetNode = document.getElementById(normalizedSectionId);
+
+  if (!targetNode) {
+    if (attempt < 6) {
+      window.setTimeout(() => scrollToProductInfoSectionId(normalizedSectionId, attempt + 1), 180);
+    }
+
+    return false;
+  }
+
+  const targetTop = Math.max(
+    0,
+    Math.round(window.scrollY + targetNode.getBoundingClientRect().top - getProductInfoScrollOffset())
+  );
+
+  window.scrollTo({ top: targetTop, behavior: "smooth" });
+  return true;
 };
 const getMobileMenuMeta = (item = {}) => {
   const label = toComparableText(item?.title || item?.label || "");
@@ -216,10 +311,18 @@ const isMobileMenuItemActive = (pathname, item) => {
 
 const resolveCategoryLogoUrl = (category = {}) => {
   const candidates = [
+    resolveImageObjectUrl(category?.logo_image, "thumbnail", ""),
+    resolveImageObjectUrl(category?.logoImage, "thumbnail", ""),
     category?.logo_path,
     category?.logoPath,
     category?.logo_url,
     category?.logoUrl,
+    category?.logo_image?.thumbnail_url,
+    category?.logo_image?.medium_url,
+    category?.logo_image?.url,
+    category?.logoImage?.thumbnail_url,
+    category?.logoImage?.medium_url,
+    category?.logoImage?.url,
     category?.logo?.path,
     category?.logo?.url,
     category?.logo?.src,
@@ -279,6 +382,8 @@ export default function Header({
   const [isSearchHistoryOpen, setIsSearchHistoryOpen] = useState(false);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isMobileProductsMenuOpen, setIsMobileProductsMenuOpen] = useState(false);
+  const [isProductInfoSheetOpen, setIsProductInfoSheetOpen] = useState(false);
+  const [productInfoSheetDragY, setProductInfoSheetDragY] = useState(0);
   const [currentMobileCategorySlug, setCurrentMobileCategorySlug] = useState("");
   const [currentMobileSearchParamsString, setCurrentMobileSearchParamsString] = useState("");
   const [selectedMobileParentId, setSelectedMobileParentId] = useState(null);
@@ -293,6 +398,12 @@ export default function Header({
   const mobileProductsMenuRef = useRef(null);
   const mobileProductsToggleRef = useRef(null);
   const mobileProductsListRef = useRef(null);
+  const productInfoSheetRef = useRef(null);
+  const productInfoSheetDragRef = useRef({
+    pointerId: null,
+    startY: 0,
+    currentY: 0,
+  });
   const mobileOrderNoticeTimerRef = useRef(null);
   const lastSearchTouchTimestampRef = useRef(0);
   const cartBadgeLabel = cartCount > 99 ? "99+" : cartCount;
@@ -335,6 +446,21 @@ export default function Header({
 
     return () => mediaQuery.removeListener(syncViewport);
   }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return undefined;
+    }
+
+    const shouldHideFloatingContact =
+      isMobileViewport && (isMobileProductsMenuOpen || isProductInfoSheetOpen);
+
+    document.body.classList.toggle("webgom-mobile-overlay-open", shouldHideFloatingContact);
+
+    return () => {
+      document.body.classList.remove("webgom-mobile-overlay-open");
+    };
+  }, [isMobileProductsMenuOpen, isMobileViewport, isProductInfoSheetOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -386,7 +512,28 @@ export default function Header({
   }, [isMobileProductsMenuOpen]);
 
   useEffect(() => {
+    if (!isProductInfoSheetOpen) {
+      return undefined;
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape") {
+        setProductInfoSheetDragY(0);
+        setIsProductInfoSheetOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [isProductInfoSheetOpen]);
+
+  useEffect(() => {
     setIsMobileProductsMenuOpen(false);
+    setIsProductInfoSheetOpen(false);
+    setProductInfoSheetDragY(0);
     setIsSearchHistoryOpen(false);
   }, [pathname]);
 
@@ -739,11 +886,137 @@ export default function Header({
   };
 
   const toggleMobileProductsMenu = () => {
+    setIsProductInfoSheetOpen(false);
+    setProductInfoSheetDragY(0);
     setIsMobileProductsMenuOpen((currentValue) => !currentValue);
   };
 
   const handleMobileParentMenuClick = (parentId) => {
     setSelectedMobileParentId((currentParentId) => (currentParentId === parentId ? null : parentId));
+  };
+
+  const closeProductInfoSheet = () => {
+    setProductInfoSheetDragY(0);
+    setIsProductInfoSheetOpen(false);
+  };
+
+  const handleProductInfoTriggerClick = (event) => {
+    event.preventDefault();
+    setIsMobileProductsMenuOpen(false);
+    setProductInfoSheetDragY(0);
+    setIsProductInfoSheetOpen((currentValue) => !currentValue);
+  };
+
+  const handleProductInfoSectionSelect = (sectionId) => {
+    const normalizedSectionId = String(sectionId || "").trim();
+
+    if (!normalizedSectionId || typeof window === "undefined") {
+      closeProductInfoSheet();
+      return;
+    }
+
+    closeProductInfoSheet();
+
+    window.setTimeout(() => {
+      let requestHandled = false;
+
+      window.dispatchEvent(
+        new CustomEvent(PRODUCT_INFO_SCROLL_EVENT, {
+          detail: {
+            sectionId: normalizedSectionId,
+            respond: () => {
+              requestHandled = true;
+            },
+          },
+        })
+      );
+
+      if (!requestHandled) {
+        scrollToProductInfoSectionId(normalizedSectionId);
+      }
+    }, PRODUCT_INFO_SHEET_CLOSE_DELAY_MS);
+  };
+
+  const handleProductInfoItemClick = (event, item) => {
+    if (item?.href) {
+      closeProductInfoSheet();
+      return;
+    }
+
+    event.preventDefault();
+    handleProductInfoSectionSelect(item?.sectionId);
+  };
+
+  const handleProductInfoSheetPointerDown = (event) => {
+    if (!isProductInfoSheetOpen) {
+      return;
+    }
+
+    productInfoSheetDragRef.current = {
+      pointerId: event.pointerId ?? 1,
+      startY: event.clientY,
+      currentY: event.clientY,
+    };
+
+    if (typeof event.currentTarget?.setPointerCapture === "function" && event.pointerId != null) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture is optional for this close gesture.
+      }
+    }
+  };
+
+  const handleProductInfoSheetPointerMove = (event) => {
+    const gesture = productInfoSheetDragRef.current;
+
+    if (
+      gesture.pointerId === null
+      || (event.pointerId != null && gesture.pointerId !== event.pointerId)
+    ) {
+      return;
+    }
+
+    const dragY = Math.max(0, event.clientY - gesture.startY);
+    gesture.currentY = event.clientY;
+    setProductInfoSheetDragY(Math.min(dragY, 220));
+
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  };
+
+  const finishProductInfoSheetDrag = (event) => {
+    const gesture = productInfoSheetDragRef.current;
+
+    if (
+      gesture.pointerId === null
+      || (event?.pointerId != null && gesture.pointerId !== event.pointerId)
+    ) {
+      return;
+    }
+
+    if (typeof event?.currentTarget?.releasePointerCapture === "function" && event.pointerId != null) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be released.
+      }
+    }
+
+    const dragY = Math.max(0, gesture.currentY - gesture.startY);
+    productInfoSheetDragRef.current = {
+      pointerId: null,
+      startY: 0,
+      currentY: 0,
+    };
+
+    if (dragY > 72) {
+      closeProductInfoSheet();
+      return;
+    }
+
+    setProductInfoSheetDragY(0);
   };
 
   const handleMobileOrderClick = (event, item) => {
@@ -1010,6 +1283,7 @@ export default function Header({
                           height={28}
                           sizes="28px"
                           className="mobile-products-link__logo-image"
+                          unoptimized
  
                         />
                       ) : (
@@ -1089,6 +1363,101 @@ export default function Header({
             </div>
           )}
 
+          {isProductDetailPage ? (
+            <>
+              <button
+                type="button"
+                className={`mobile-product-info-backdrop ${
+                  isProductInfoSheetOpen ? "mobile-product-info-backdrop-open" : ""
+                }`}
+                aria-label="Dong menu thong tin san pham"
+                onClick={closeProductInfoSheet}
+              />
+
+              <div
+                id="mobile-product-info-sheet"
+                ref={productInfoSheetRef}
+                className={`mobile-product-info-sheet ${
+                  isProductInfoSheetOpen ? "mobile-product-info-sheet-open" : ""
+                }`}
+                aria-hidden={!isProductInfoSheetOpen}
+                style={
+                  productInfoSheetDragY > 0
+                    ? { "--product-info-sheet-drag-y": `${productInfoSheetDragY}px` }
+                    : undefined
+                }
+              >
+                <div className="mobile-product-info-sheet__panel" role="dialog" aria-modal="true" aria-label="Thong tin san pham">
+                  <div
+                    className="mobile-product-info-sheet__drag-zone"
+                    onPointerDown={handleProductInfoSheetPointerDown}
+                    onPointerMove={handleProductInfoSheetPointerMove}
+                    onPointerUp={finishProductInfoSheetDrag}
+                    onPointerCancel={finishProductInfoSheetDrag}
+                  >
+                    <span className="mobile-product-info-sheet__handle" aria-hidden="true" />
+                  </div>
+
+                  <div className="mobile-product-info-sheet__header">
+                    <div className="mobile-product-info-sheet__title-group">
+                      <h3 className="mobile-product-info-sheet__title">{"Th\u00f4ng tin s\u1ea3n ph\u1ea9m"}</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="mobile-product-info-sheet__close"
+                      aria-label="Dong menu thong tin san pham"
+                      onClick={closeProductInfoSheet}
+                    >
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  </div>
+
+                  <div className="mobile-product-info-sheet__list">
+                    {PRODUCT_INFO_MENU_ITEMS.map((item) => {
+                      const itemContent = (
+                        <>
+                          <span className="mobile-product-info-sheet__icon" aria-hidden="true">
+                            <span className="material-symbols-outlined">{item.icon}</span>
+                          </span>
+                          <span className="mobile-product-info-sheet__label">{item.label}</span>
+                          <span className="mobile-product-info-sheet__arrow" aria-hidden="true">
+                            <span className="material-symbols-outlined">
+                              {item.href ? "open_in_new" : "south"}
+                            </span>
+                          </span>
+                        </>
+                      );
+
+                      if (item.href) {
+                        return (
+                          <a
+                            key={item.id}
+                            href={item.href}
+                            className="mobile-product-info-sheet__item"
+                            onClick={(event) => handleProductInfoItemClick(event, item)}
+                          >
+                            {itemContent}
+                          </a>
+                        );
+                      }
+
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="mobile-product-info-sheet__item"
+                          onClick={(event) => handleProductInfoItemClick(event, item)}
+                        >
+                          {itemContent}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
+
           {mobileOrderNotice ? (
             <div className="mobile-bottom-order-toast" role="status" aria-live="polite">
               {mobileOrderNotice}
@@ -1099,34 +1468,44 @@ export default function Header({
             <div className="mobile-bottom-nav__inner">
               {mobileMenuItems.map((item) => {
                 const isProductsTrigger = item.id === "header-default-products" || item.shortLabel === "Sản phẩm";
+                const isProductInfoItem = isProductDetailPage && item.role === "about";
                 const isOrderItem = item.id === MOBILE_ORDER_ITEM.id;
                 const isOrderSaveMode = isOrderItem && isCartCheckoutView && mobileThankYouActive;
                 const isOrderEntryMode = isOrderItem && isCartCheckoutView && !mobileThankYouActive && !mobileCartFormReady;
                 const isOrderConfirmMode = isOrderItem && isCartCheckoutView && !mobileThankYouActive && mobileCartFormReady;
-                const isActive = isProductsTrigger
-                  ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
-                  : isMobileMenuItemActive(pathname, item);
-                const className = `mobile-bottom-item ${isActive ? "mobile-bottom-item-active" : ""} ${
-                  isProductsTrigger ? "mobile-bottom-item-products" : ""
-                } ${isOrderItem ? "mobile-bottom-item-order" : ""} ${
-                  isOrderEntryMode ? "mobile-bottom-item-order-entry" : ""
-                } ${isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : ""} ${
-                  isOrderSaveMode ? "mobile-bottom-item-order-save mobile-bottom-item-order-confirm" : ""
-                }`;
+                const isActive = isProductInfoItem
+                  ? isProductInfoSheetOpen
+                  : isProductsTrigger
+                    ? isMobileProductsMenuOpen || isMobileMenuItemActive(pathname, item)
+                    : isMobileMenuItemActive(pathname, item);
+                const className = [
+                  "mobile-bottom-item",
+                  isActive ? "mobile-bottom-item-active" : "",
+                  isProductsTrigger ? "mobile-bottom-item-products" : "",
+                  isProductInfoItem ? "mobile-bottom-item-info" : "",
+                  isOrderItem ? "mobile-bottom-item-order" : "",
+                  isOrderEntryMode ? "mobile-bottom-item-order-entry" : "",
+                  isOrderConfirmMode ? "mobile-bottom-item-order-confirm" : "",
+                  isOrderSaveMode ? "mobile-bottom-item-order-save mobile-bottom-item-order-confirm" : "",
+                ].filter(Boolean).join(" ");
                 const itemTitle = isOrderSaveMode
                   ? "Lưu ảnh"
                   : isOrderEntryMode
                   ? "Địa chỉ nhận hàng"
                   : isOrderConfirmMode
                     ? "Xác nhận đơn hàng"
-                    : item.title;
+                    : isProductInfoItem
+                      ? "Th\u00f4ng tin"
+                      : item.title;
                 const itemLabelLines = isOrderSaveMode
                   ? ["Lưu", "ảnh"]
                   : isOrderEntryMode
                   ? ["Địa chỉ", "nhận hàng"]
                   : isOrderConfirmMode
                     ? ["Xác nhận", "đơn hàng"]
-                    : getMobileBottomLabelLines(item.shortLabel);
+                    : isProductInfoItem
+                      ? getMobileBottomLabelLines("Th\u00f4ng tin")
+                      : getMobileBottomLabelLines(item.shortLabel);
                 const displayedItemLabelLines = isOrderSaveMode
                   ? ["Lưu ảnh", "đơn hàng"]
                   : itemLabelLines;
@@ -1190,6 +1569,22 @@ export default function Header({
                       aria-expanded={isMobileProductsMenuOpen}
                       aria-controls="mobile-products-sheet"
                       onClick={toggleMobileProductsMenu}
+                    >
+                      {content}
+                    </button>
+                  );
+                }
+
+                if (isProductInfoItem) {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`${className} mobile-bottom-item-button`}
+                      title={itemTitle}
+                      aria-expanded={isProductInfoSheetOpen}
+                      aria-controls="mobile-product-info-sheet"
+                      onClick={handleProductInfoTriggerClick}
                     >
                       {content}
                     </button>
@@ -1818,7 +2213,9 @@ export default function Header({
       `}</style>
       <style jsx>{`
         .mobile-products-backdrop,
-        .mobile-products-sheet {
+        .mobile-products-sheet,
+        .mobile-product-info-backdrop,
+        .mobile-product-info-sheet {
           display: none;
         }
 
@@ -2152,6 +2549,219 @@ export default function Header({
             background: rgba(197, 160, 89, 0.16);
             color: #8f6724;
             border-color: rgba(197, 160, 89, 0.24);
+          }
+
+          .mobile-product-info-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 1198;
+            display: block;
+            border: 0;
+            background: rgba(15, 23, 42, 0.38);
+            backdrop-filter: blur(3px);
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition:
+              opacity 180ms ease,
+              visibility 180ms ease;
+          }
+
+          .mobile-product-info-backdrop-open {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+          }
+
+          .mobile-product-info-sheet {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1199;
+            display: flex;
+            justify-content: center;
+            padding: 0 12px calc(env(safe-area-inset-bottom, 0px) + 10px);
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateY(calc(100% + 16px));
+            transition:
+              opacity 180ms ease,
+              visibility 180ms ease,
+              transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+          }
+
+          .mobile-product-info-sheet-open {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(var(--product-info-sheet-drag-y, 0px));
+          }
+
+          .mobile-product-info-sheet__panel {
+            width: min(100%, 460px);
+            max-height: min(72dvh, 560px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid rgba(197, 160, 89, 0.18);
+            border-radius: 22px 22px 16px 16px;
+            background: rgba(255, 255, 255, 0.98);
+            box-shadow: 0 -18px 46px rgba(15, 23, 42, 0.22);
+            pointer-events: auto;
+          }
+
+          .mobile-product-info-sheet__drag-zone {
+            height: 28px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            cursor: grab;
+            touch-action: none;
+          }
+
+          .mobile-product-info-sheet__drag-zone:active {
+            cursor: grabbing;
+          }
+
+          .mobile-product-info-sheet__handle {
+            width: 42px;
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(100, 116, 139, 0.36);
+          }
+
+          .mobile-product-info-sheet__header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 16px 12px;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.92);
+          }
+
+          .mobile-product-info-sheet__title-group {
+            min-width: 0;
+            flex: 1;
+          }
+
+          .mobile-product-info-sheet__title {
+            margin: 0;
+            color: #1a2c4e;
+            font-size: 16px;
+            font-weight: 900;
+            line-height: 1.25;
+          }
+
+          .mobile-product-info-sheet__close {
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            border: 1px solid rgba(226, 232, 240, 0.95);
+            border-radius: 999px;
+            background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+            color: #334155;
+            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+          }
+
+          .mobile-product-info-sheet__close :global(.material-symbols-outlined) {
+            font-size: 18px !important;
+          }
+
+          .mobile-product-info-sheet__list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding: 12px 14px 14px;
+            scrollbar-width: thin;
+          }
+
+          .mobile-product-info-sheet__item {
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 50px;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 11px;
+            padding: 11px 12px;
+            border: 1px solid rgba(226, 232, 240, 0.96);
+            border-radius: 14px;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+            color: #1f2a44;
+            font: inherit;
+            text-align: left;
+            text-decoration: none;
+            cursor: pointer;
+            box-shadow:
+              0 8px 18px rgba(15, 23, 42, 0.06),
+              inset 0 1px 0 rgba(255, 255, 255, 0.9);
+            transition:
+              border-color 180ms ease,
+              background-color 180ms ease,
+              transform 180ms ease,
+              box-shadow 180ms ease;
+          }
+
+          .mobile-product-info-sheet__item:hover,
+          .mobile-product-info-sheet__item:focus-visible {
+            border-color: rgba(197, 160, 89, 0.3);
+            background: linear-gradient(180deg, rgba(248, 243, 233, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%);
+            box-shadow:
+              0 10px 20px rgba(15, 23, 42, 0.08),
+              inset 0 0 0 1px rgba(197, 160, 89, 0.14);
+            outline: none;
+          }
+
+          .mobile-product-info-sheet__item:active {
+            transform: scale(0.985);
+          }
+
+          .mobile-product-info-sheet__icon {
+            width: 30px;
+            height: 30px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 11px;
+            background: rgba(197, 160, 89, 0.13);
+            color: #8f6724;
+            flex-shrink: 0;
+          }
+
+          .mobile-product-info-sheet__icon :global(.material-symbols-outlined) {
+            font-size: 17px !important;
+          }
+
+          .mobile-product-info-sheet__label {
+            min-width: 0;
+            color: #1a2c4e;
+            font-size: 14px;
+            font-weight: 800;
+            line-height: 1.3;
+            overflow-wrap: anywhere;
+          }
+
+          .mobile-product-info-sheet__arrow {
+            width: 25px;
+            height: 25px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
+            background: rgba(26, 44, 78, 0.06);
+            color: rgba(26, 44, 78, 0.58);
+            flex-shrink: 0;
+          }
+
+          .mobile-product-info-sheet__arrow :global(.material-symbols-outlined) {
+            font-size: 15px !important;
           }
 
           .mobile-bottom-order-toast {
@@ -2527,6 +3137,34 @@ export default function Header({
             max-width: calc(100vw - 16px);
             bottom: calc(env(safe-area-inset-bottom, 0px) + 82px);
             padding: 12px;
+          }
+
+          .mobile-product-info-sheet {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+          }
+
+          .mobile-product-info-sheet__panel {
+            max-height: min(74dvh, 540px);
+            border-radius: 20px 20px 14px 14px;
+          }
+
+          .mobile-product-info-sheet__header {
+            padding-left: 14px;
+            padding-right: 14px;
+          }
+
+          .mobile-product-info-sheet__list {
+            gap: 7px;
+            padding: 10px 12px 12px;
+          }
+
+          .mobile-product-info-sheet__item {
+            min-height: 48px;
+            padding: 10px 11px;
+            border-radius: 13px;
+            gap: 10px;
           }
 
           .mobile-bottom-order-toast {

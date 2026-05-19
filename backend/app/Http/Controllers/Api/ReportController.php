@@ -12,6 +12,7 @@ use App\Support\InventoryQuantity;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -240,11 +241,13 @@ class ReportController extends Controller
             'date_from' => 'nullable|date',
             'date_to' => 'nullable|date',
             'product_limit' => 'nullable|integer|min:5|max:100',
+            'source' => 'nullable|string|max:30',
         ]);
 
         $accountId = (int) $request->header('X-Account-Id');
         $now = now();
-        $from = Carbon::parse($validated['date_from'] ?? $now->copy()->subDays(13)->toDateString())->startOfDay();
+        $source = $this->normalizeWebAnalyticsSource($validated['source'] ?? 'all');
+        $from = Carbon::parse($validated['date_from'] ?? $now->toDateString())->startOfDay();
         $to = Carbon::parse($validated['date_to'] ?? $now->toDateString())->endOfDay();
 
         if ($from->greaterThan($to)) {
@@ -259,10 +262,15 @@ class ReportController extends Controller
         $toDate = $to->toDateString();
         $eventsTableExists = Schema::hasTable('site_analytics_events');
 
-        $eventRows = $eventsTableExists
-            ? DB::table('site_analytics_events')
+        $eventRows = collect();
+        if ($eventsTableExists) {
+            $eventRowsQuery = DB::table('site_analytics_events')
                 ->where('account_id', $accountId)
-                ->whereBetween('event_date', [$fromDate, $toDate])
+                ->whereBetween('event_date', [$fromDate, $toDate]);
+
+            $this->applyWebAnalyticsEventSourceFilter($eventRowsQuery, $source);
+
+            $eventRows = $eventRowsQuery
                 ->selectRaw('event_date as date_key')
                 ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as page_views", [SiteAnalyticsEvent::EVENT_PAGE_VIEW])
                 ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as product_views", [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW])
@@ -271,10 +279,10 @@ class ReportController extends Controller
                 ->groupBy('event_date')
                 ->orderBy('event_date')
                 ->get()
-                ->keyBy(fn ($row) => (string) $row->date_key)
-            : collect();
+                ->keyBy(fn ($row) => (string) $row->date_key);
+        }
 
-        $orderRows = DB::table('leads')
+        $orderRowsQuery = DB::table('leads')
             ->where('leads.account_id', $accountId)
             ->where('leads.is_draft', false)
             ->whereNotNull('leads.placed_at')
@@ -285,6 +293,9 @@ class ReportController extends Controller
                     ->from('lead_items')
                     ->whereColumn('lead_items.lead_id', 'leads.id');
             })
+            ->when($source !== 'all', fn (QueryBuilder $query) => $this->applyWebAnalyticsLeadSourceFilter($query, $source));
+
+        $orderRows = $orderRowsQuery
             ->selectRaw('DATE(leads.placed_at) as date_key')
             ->selectRaw('COUNT(DISTINCT leads.id) as orders_count')
             ->selectRaw('COALESCE(SUM(leads.total_amount), 0) as order_revenue')
@@ -328,14 +339,19 @@ class ReportController extends Controller
             $series[] = $row;
         }
 
-        $uniqueVisitors = $eventsTableExists
-            ? (int) DB::table('site_analytics_events')
+        $uniqueVisitors = 0;
+        if ($eventsTableExists) {
+            $uniqueVisitorsQuery = DB::table('site_analytics_events')
                 ->where('account_id', $accountId)
                 ->where('event_name', SiteAnalyticsEvent::EVENT_PAGE_VIEW)
-                ->whereBetween('event_date', [$fromDate, $toDate])
+                ->whereBetween('event_date', [$fromDate, $toDate]);
+
+            $this->applyWebAnalyticsEventSourceFilter($uniqueVisitorsQuery, $source);
+
+            $uniqueVisitors = (int) $uniqueVisitorsQuery
                 ->selectRaw("COUNT(DISTINCT COALESCE(visitor_id, session_id, ip_hash)) as unique_visitors")
-                ->value('unique_visitors')
-            : 0;
+                ->value('unique_visitors');
+        }
 
         $totals['order_revenue'] = round((float) $totals['order_revenue'], 2);
         $totals['unique_visitors'] = $uniqueVisitors;
@@ -351,12 +367,14 @@ class ReportController extends Controller
                 $from,
                 $to,
                 $eventsTableExists,
-                (int) ($validated['product_limit'] ?? 25)
+                (int) ($validated['product_limit'] ?? 25),
+                $source
             ),
             'filters' => [
                 'date_from' => $fromDate,
                 'date_to' => $toDate,
                 'product_limit' => (int) ($validated['product_limit'] ?? 25),
+                'source' => $source,
             ],
             'meta' => [
                 'generated_at' => now()->toIso8601String(),
@@ -513,18 +531,22 @@ class ReportController extends Controller
             ->all();
     }
 
-    private function buildWebAnalyticsProductRows(int $accountId, Carbon $from, Carbon $to, bool $eventsTableExists, int $limit): array
+    private function buildWebAnalyticsProductRows(int $accountId, Carbon $from, Carbon $to, bool $eventsTableExists, int $limit, string $source): array
     {
         $fromDate = $from->toDateString();
         $toDate = $to->toDateString();
         $productMetrics = [];
 
         if ($eventsTableExists) {
-            DB::table('site_analytics_events')
+            $productEventQuery = DB::table('site_analytics_events')
                 ->where('account_id', $accountId)
                 ->whereNotNull('product_id')
                 ->whereBetween('event_date', [$fromDate, $toDate])
-                ->whereIn('event_name', [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW, SiteAnalyticsEvent::EVENT_ADD_TO_CART])
+                ->whereIn('event_name', [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW, SiteAnalyticsEvent::EVENT_ADD_TO_CART]);
+
+            $this->applyWebAnalyticsEventSourceFilter($productEventQuery, $source);
+
+            $productEventQuery
                 ->select('product_id')
                 ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as product_views", [SiteAnalyticsEvent::EVENT_PRODUCT_VIEW])
                 ->selectRaw("SUM(CASE WHEN event_name = ? THEN 1 ELSE 0 END) as add_to_carts", [SiteAnalyticsEvent::EVENT_ADD_TO_CART])
@@ -540,13 +562,17 @@ class ReportController extends Controller
                 });
         }
 
-        DB::table('lead_items')
+        $productOrderQuery = DB::table('lead_items')
             ->join('leads', 'leads.id', '=', 'lead_items.lead_id')
             ->where('leads.account_id', $accountId)
             ->where('leads.is_draft', false)
             ->whereNotNull('leads.placed_at')
             ->whereBetween('leads.placed_at', [$from, $to])
-            ->whereNotNull('lead_items.product_id')
+            ->whereNotNull('lead_items.product_id');
+
+        $this->applyWebAnalyticsLeadSourceFilter($productOrderQuery, $source);
+
+        $productOrderQuery
             ->select('lead_items.product_id')
             ->selectRaw('COUNT(DISTINCT leads.id) as orders_count')
             ->selectRaw('COALESCE(SUM(lead_items.quantity), 0) as ordered_quantity')
@@ -604,6 +630,155 @@ class ReportController extends Controller
                 return $row;
             })
             ->all();
+    }
+
+    private function normalizeWebAnalyticsSource(?string $source): string
+    {
+        return match (strtolower(trim((string) $source))) {
+            'facebook', 'fb', 'meta' => 'facebook',
+            'google', 'gg', 'ga' => 'google',
+            default => 'all',
+        };
+    }
+
+    private function webAnalyticsSourceAliases(string $source): array
+    {
+        return match ($source) {
+            'facebook' => [
+                'FB',
+                'fb',
+                'Fb',
+                'facebook',
+                'Facebook',
+                'FACEBOOK',
+                'meta',
+                'Meta',
+                'META',
+                'facebook_ads',
+                'facebook-ad',
+                'facebook ads',
+                'Facebook Ads',
+            ],
+            'google' => [
+                'GG',
+                'gg',
+                'Gg',
+                'google',
+                'Google',
+                'GOOGLE',
+                'ga',
+                'GA',
+                'google_ads',
+                'google-ad',
+                'google ads',
+                'Google Ads',
+                'googleads',
+            ],
+            default => [],
+        };
+    }
+
+    private function webAnalyticsSourceContainsTerms(string $source): array
+    {
+        return match ($source) {
+            'facebook' => ['facebook', 'fbclid', 'meta'],
+            'google' => ['google', 'gclid', 'googleads'],
+            default => [],
+        };
+    }
+
+    private function applyWebAnalyticsEventSourceFilter(QueryBuilder $query, string $source): void
+    {
+        if ($source === 'all') {
+            return;
+        }
+
+        $aliases = $this->webAnalyticsSourceAliases($source);
+        $terms = $this->webAnalyticsSourceContainsTerms($source);
+        $clickIdField = $source === 'facebook' ? 'metadata->fbclid' : 'metadata->gclid';
+        $exactFields = [
+            'metadata->source',
+            'metadata->source_label',
+            'metadata->utm_source',
+        ];
+        $containsFields = [
+            'metadata->source',
+            'metadata->source_label',
+            'metadata->utm_source',
+            'metadata->utm_medium',
+            'metadata->utm_campaign',
+            'metadata->raw_query',
+        ];
+
+        $query->where(function (QueryBuilder $query) use ($aliases, $terms, $clickIdField, $exactFields, $containsFields) {
+            foreach ($exactFields as $field) {
+                $query->orWhereIn($field, $aliases);
+            }
+
+            foreach ($containsFields as $field) {
+                foreach ($terms as $term) {
+                    $query->orWhere($field, 'like', '%' . $term . '%');
+                }
+            }
+
+            $query
+                ->orWhere(function (QueryBuilder $query) use ($clickIdField) {
+                    $query
+                        ->whereNotNull($clickIdField)
+                        ->where($clickIdField, '!=', '');
+                });
+        });
+    }
+
+    private function applyWebAnalyticsLeadSourceFilter(QueryBuilder $query, string $source): void
+    {
+        if ($source === 'all') {
+            return;
+        }
+
+        $aliases = $this->webAnalyticsSourceAliases($source);
+        $terms = $this->webAnalyticsSourceContainsTerms($source);
+        $storageSource = $source === 'facebook' ? 'facebook' : 'google';
+        $clickIdField = $source === 'facebook' ? 'leads.conversion_data->fbclid' : 'leads.conversion_data->gclid';
+        $exactFields = [
+            'leads.tag',
+            'leads.utm_source',
+            'leads.conversion_data->source',
+            'leads.conversion_data->utm_source',
+            'leads.conversion_data->source_label',
+        ];
+        $containsFields = [
+            'leads.tag',
+            'leads.utm_source',
+            'leads.utm_medium',
+            'leads.utm_campaign',
+            'leads.conversion_data->source',
+            'leads.conversion_data->source_label',
+            'leads.conversion_data->utm_source',
+            'leads.conversion_data->utm_medium',
+            'leads.conversion_data->utm_campaign',
+            'leads.conversion_data->raw_query',
+        ];
+
+        $query->where(function (QueryBuilder $query) use ($aliases, $terms, $storageSource, $clickIdField, $exactFields, $containsFields) {
+            $query->where('leads.source', $storageSource);
+
+            foreach ($exactFields as $field) {
+                $query->orWhereIn($field, $aliases);
+            }
+
+            foreach ($containsFields as $field) {
+                foreach ($terms as $term) {
+                    $query->orWhere($field, 'like', '%' . $term . '%');
+                }
+            }
+
+            $query->orWhere(function (QueryBuilder $query) use ($clickIdField) {
+                $query
+                    ->whereNotNull($clickIdField)
+                    ->where($clickIdField, '!=', '');
+            });
+        });
     }
 
     private function percentage(int|float $numerator, int|float $denominator): float

@@ -161,10 +161,121 @@ function ContactMenuGlyph({ isOpen }) {
   );
 }
 
+const MOBILE_OVERLAY_SELECTORS = [
+  '[aria-modal="true"]',
+  '[role="dialog"]',
+  ".mobile-products-sheet-open",
+  ".mobile-product-info-sheet-open",
+  ".search-history-panel",
+  ".stores-lightbox",
+  '[class*="bundleActionOverlay"]',
+  '[class*="modalOverlay"]',
+  '[class*="modalOverlaySheet"]',
+  '[class*="CategoryVariantQuickAdd_backdrop"]',
+  '[class*="sortDialogContent"]',
+].join(",");
+
+const isHiddenByAncestor = (element) => {
+  let current = element;
+
+  while (current && current !== document.body) {
+    if (current.hidden || current.getAttribute("aria-hidden") === "true") {
+      return true;
+    }
+
+    const style = window.getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden") {
+      return true;
+    }
+
+    current = current.parentElement;
+  }
+
+  return false;
+};
+
+const isVisibleOverlay = (element) => {
+  if (!element || isHiddenByAncestor(element)) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 && element.getClientRects().length > 0;
+};
+
+const hasOpenMobileOverlay = () => {
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    return false;
+  }
+
+  return Array.from(document.querySelectorAll(MOBILE_OVERLAY_SELECTORS)).some(isVisibleOverlay);
+};
+
 export default function FloatingContactButtons({ settings }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileOverlayOpen, setIsMobileOverlayOpen] = useState(false);
   const containerRef = useRef(null);
   const buttons = buildContactLinks(settings);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    let animationFrame = 0;
+
+    const syncMobileOverlayState = () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+
+      animationFrame = window.requestAnimationFrame(() => {
+        const nextIsOpen = mediaQuery.matches && hasOpenMobileOverlay();
+
+        setIsMobileOverlayOpen((currentValue) => (
+          currentValue === nextIsOpen ? currentValue : nextIsOpen
+        ));
+
+        if (nextIsOpen) {
+          setIsMobileMenuOpen(false);
+        }
+      });
+    };
+
+    const observer = new MutationObserver(syncMobileOverlayState);
+
+    syncMobileOverlayState();
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["aria-hidden", "aria-modal", "class", "hidden", "role", "style"],
+    });
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", syncMobileOverlayState);
+    } else {
+      mediaQuery.addListener(syncMobileOverlayState);
+    }
+
+    window.addEventListener("resize", syncMobileOverlayState);
+
+    return () => {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+
+      observer.disconnect();
+      window.removeEventListener("resize", syncMobileOverlayState);
+
+      if (typeof mediaQuery.removeEventListener === "function") {
+        mediaQuery.removeEventListener("change", syncMobileOverlayState);
+      } else {
+        mediaQuery.removeListener(syncMobileOverlayState);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isMobileMenuOpen) {
@@ -214,7 +325,13 @@ export default function FloatingContactButtons({ settings }) {
         ))}
       </div>
 
-      <div className={styles.mobileFloatingContacts} ref={containerRef}>
+      <div
+        className={`${styles.mobileFloatingContacts} ${
+          isMobileOverlayOpen ? styles.mobileFloatingContactsHidden : ""
+        }`}
+        ref={containerRef}
+        aria-hidden={isMobileOverlayOpen}
+      >
         <div className={`${styles.mobileMenu} ${isMobileMenuOpen ? styles.mobileMenuOpen : ""}`}>
           {buttons.map((button) => (
             <a

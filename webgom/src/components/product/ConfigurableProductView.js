@@ -253,7 +253,7 @@ export default function ConfigurableProductView({
     <div className={styles.configurableView}>
       <Breadcrumb product={product} />
       <div className={styles.mainGrid}>
-        <div className={styles.galleryColumn}>
+        <div id="image-video-section" className={styles.galleryColumn}>
           <div className={styles.configurableMediaShell}>
             <ProductGallery
               images={images}

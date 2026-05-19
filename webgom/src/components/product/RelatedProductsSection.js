@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { resolveImageObjectUrl } from '@/lib/media';
+import MobileCategoryProductsSection from '@/components/product/MobileCategoryProductsSection';
 import styles from '../../app/product/[slug]/product.module.css';
 
 const DIRECT_IMAGE_FIELDS = [
@@ -114,6 +115,7 @@ function isDesktopRelatedRailEnabled() {
 export default function RelatedProductsSection({
   relatedProducts = [],
   viewAllHref = '/products',
+  currentProduct = null,
 }) {
   const railRef = useRef(null);
   const dragStateRef = useRef({
@@ -255,7 +257,8 @@ export default function RelatedProductsSection({
   };
 
   return (
-    <div className={`${styles.relatedSection} ${!hasRelatedProducts ? styles.relatedSectionEmpty : ''}`}>
+    <>
+      <div className={`${styles.relatedSection} ${styles.relatedDesktopSection} ${!hasRelatedProducts ? styles.relatedSectionEmpty : ''}`}>
       <div className={styles.relatedHeader}>
         <div>
           <h3 className={styles.relatedTitle}>Sản phẩm tương tự</h3>
@@ -322,7 +325,6 @@ export default function RelatedProductsSection({
                       unoptimized
                       sizes="(max-width: 768px) 50vw, (max-width: 1200px) 50vw, 25vw"
                       style={{ objectFit: 'cover' }}
- 
                     />
                   ) : (
                     <div className={styles.relatedImagePlaceholder}>
@@ -365,6 +367,12 @@ export default function RelatedProductsSection({
           ))}
         </div>
       </div>
-    </div>
+      </div>
+      <MobileCategoryProductsSection
+        key={currentProduct?.id || currentProduct?.slug || 'mobile-category-products'}
+        currentProduct={currentProduct}
+        viewAllHref={viewAllHref}
+      />
+    </>
   );
 }

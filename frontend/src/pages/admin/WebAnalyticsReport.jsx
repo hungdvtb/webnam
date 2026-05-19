@@ -15,16 +15,49 @@ const toDateInputValue = (date) => {
     return new Date(safeDate.getTime() - offset).toISOString().slice(0, 10);
 };
 
-const createDefaultRange = () => {
+const quickRanges = [
+    { key: 'today', label: 'Hôm nay' },
+    { key: 'week', label: 'Tuần này' },
+    { key: 'month', label: 'Tháng này' },
+];
+
+const sourceOptions = [
+    { value: 'all', label: 'Tất cả' },
+    { value: 'facebook', label: 'Facebook' },
+    { value: 'google', label: 'Google' },
+];
+
+const createQuickRange = (rangeKey) => {
     const today = new Date();
-    const from = new Date();
-    from.setDate(today.getDate() - 13);
+    const from = new Date(today);
+
+    if (rangeKey === 'week') {
+        const day = today.getDay();
+        const daysFromMonday = day === 0 ? 6 : day - 1;
+        from.setDate(today.getDate() - daysFromMonday);
+    }
+
+    if (rangeKey === 'month') {
+        from.setDate(1);
+    }
 
     return {
         date_from: toDateInputValue(from),
         date_to: toDateInputValue(today),
     };
 };
+
+const createDefaultRange = () => ({
+    ...createQuickRange('today'),
+    source: 'all',
+});
+
+const resolveActiveQuickRange = (filters) => (
+    quickRanges.find((range) => {
+        const rangeValue = createQuickRange(range.key);
+        return rangeValue.date_from === filters.date_from && rangeValue.date_to === filters.date_to;
+    })?.key || ''
+);
 
 const formatNumber = (value) => numberFormatter.format(Number(value || 0));
 const formatPercent = (value) => `${Number(value || 0).toFixed(2)}%`;
@@ -262,6 +295,25 @@ export default function WebAnalyticsReport() {
     const updateFilter = (key, value) => {
         setFilters((current) => ({ ...current, [key]: value }));
     };
+    const activeQuickRange = resolveActiveQuickRange(filters);
+
+    const applyQuickRange = (rangeKey) => {
+        const nextFilters = {
+            ...filters,
+            ...createQuickRange(rangeKey),
+        };
+        setFilters(nextFilters);
+        loadReport(nextFilters);
+    };
+
+    const updateSource = (source) => {
+        const nextFilters = {
+            ...filters,
+            source,
+        };
+        setFilters(nextFilters);
+        loadReport(nextFilters);
+    };
 
     return (
         <div className="space-y-6 font-sans">
@@ -281,6 +333,31 @@ export default function WebAnalyticsReport() {
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                     <AccountSelector />
+                    <div className="inline-flex h-10 rounded-sm border border-primary/10 bg-white p-1">
+                        {quickRanges.map((range) => (
+                            <button
+                                key={range.key}
+                                type="button"
+                                onClick={() => applyQuickRange(range.key)}
+                                disabled={loading && activeQuickRange === range.key}
+                                className={`h-8 rounded-sm px-3 text-[12px] font-black uppercase tracking-[0.08em] transition ${activeQuickRange === range.key ? 'bg-primary text-white shadow-sm' : 'text-primary/55 hover:bg-primary/5 hover:text-primary'} disabled:opacity-60`}
+                            >
+                                {range.label}
+                            </button>
+                        ))}
+                    </div>
+                    <label className="flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white pl-3 focus-within:border-primary">
+                        <span className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/40">Nguồn</span>
+                        <select
+                            value={filters.source || 'all'}
+                            onChange={(event) => updateSource(event.target.value)}
+                            className="h-full rounded-sm bg-transparent pr-3 text-[13px] font-bold text-primary outline-none"
+                        >
+                            {sourceOptions.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </label>
                     <input
                         type="date"
                         value={filters.date_from}

@@ -182,7 +182,7 @@ class AIController extends Controller
     {
         $request->validate([
             'content' => 'required|string',
-            'custom_instruction' => 'nullable|string|max:2000',
+            'custom_instruction' => 'nullable|string|max:4000',
         ]);
 
         $customInstruction = trim((string) $request->input('custom_instruction', ''));
@@ -190,18 +190,21 @@ class AIController extends Controller
             ? "Yeu cau bo sung tu nguoi dung (uu tien lam theo neu khong mau thuan):\n{$customInstruction}\n\n"
             : '';
 
-        $prompt = "Ban la mot bien tap vien chuyen nghiep ve nghe thuat gom su Bat Trang va marketing cao cap.\n"
-            . "Toi co mot doan mo ta noi dung san pham dang HTML. Hay viet lai phan van ban hien thi sao cho muot ma, cam xuc va hap dan hon.\n\n"
-            . "YEU CAU QUAN TRONG NHAT: GIU NGUYEN HOAN TOAN cac the <img>, cac duong link <a href>, cac placeholder he thong va khong doi thuoc tinh HTML hien co.\n"
-            . "Ban chi duoc sap xep lai cac the van ban nhu <p>, <h2>, <h3>, <ul>, <li> neu nguoi dung co yeu cau ro ve bo cuc/trinh bay.\n\n"
+        $prompt = "Ban la bien tap vien mo ta san pham bang tieng Viet cho website ban hang.\n"
+            . "Nguoi dung se cung cap HTML mo ta san pham hien tai. Nhiem vu cua ban la viet lai NOI DUNG CHU hien thi, khong thiet ke lai HTML.\n\n"
+            . "QUY TAC BAT BUOC:\n"
+            . "1. Giu nguyen 100% cau truc HTML dau vao: tag, thu tu tag, class, id, style, data-attribute, bang, heading, danh sach, button.\n"
+            . "2. Khong them, khong xoa, khong doi vi tri the HTML.\n"
+            . "3. Giu nguyen toan bo anh, video, iframe, picture, source, object, embed, svg, canvas va moi thuoc tinh lien quan nhu src, srcset, href, width, height, alt, title, loading.\n"
+            . "4. Giu nguyen cac placeholder he thong, dac biet cac chuoi dang __AI_MEDIA_PLACEHOLDER_0__ va the co data-ai-media-placeholder.\n"
+            . "5. Chi duoc thay doi text node/noi dung chu ben trong HTML de tu nhien, ro rang, chuyen nghiep va de ban hang hon.\n"
+            . "6. Khong tu bia thong so ky thuat, kich thuoc, chat lieu, xuat xu, bao hanh, gia, khuyen mai hoac phu kien neu HTML dau vao khong co.\n"
+            . "7. Giu nguyen ten san pham, ma san pham, thuong hieu va thong so neu co.\n"
+            . "8. Do dai noi dung tuong duong ban cu, khong viet dai lan man.\n"
+            . "9. Tra ve DUY NHAT HTML hoan chinh sau khi viet lai. Khong markdown, khong code fence, khong giai thich.\n\n"
             . $customInstructionBlock
-            . "Noi dung HTML dau vao:\n"
-            . $request->input('content')
-            . "\n\nLuu y:\n"
-            . "1. Ngon ngu: Tieng Viet, tinh te, sac sao.\n"
-            . "2. Khong thay doi thuoc tinh cua the HTML (src, class, style...).\n"
-            . "3. Neu nguoi dung muon them anh minh hoa, khong tu tao URL anh; hay chen dong goi y ro rang theo dang [Goi y anh minh hoa: ...] tai vi tri phu hop.\n"
-            . "4. Tra ve dung HTML ket qua, khong can markdown html.";
+            . "HTML dau vao:\n"
+            . $request->input('content');
 
         try {
             $result = $this->geminiService->generateText($prompt, $this->resolveAccountId($request));

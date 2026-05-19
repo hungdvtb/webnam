@@ -523,7 +523,7 @@ export default function ComponentSelectionModal({
                     ) : null}
                     <div className={styles.productCardImg}>
                       <Image
-                        src={getImageUrl(item.images?.[0] || item.primary_image || { path: item.main_image })}
+                        src={getImageUrl(item.primary_image || item.images?.find((image) => image?.is_primary) || (item.main_image ? { path: item.main_image } : null) || item.images?.[0])}
                         alt={item.name}
                         fill
                         unoptimized

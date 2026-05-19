@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Image from 'next/image';
 import ProductDetailContent from '@/components/ProductDetailContent';
+import ProductDetailTabs from '@/components/ProductDetailTabs';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
 import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
-import config from '@/lib/config';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
 import {
   markProductRouteReady,
@@ -109,7 +108,6 @@ function DeferredDescription({ product, descriptionReady }) {
     () => buildProductDescriptionHtml(product?.description || ''),
     [product?.description],
   );
-  const hasDescription = Boolean(descriptionHtml.trim());
   const images = Array.isArray(product?.images) ? product.images : [];
   const mainImage = images.find((img) => img.is_primary) || images[0];
 
@@ -118,36 +116,11 @@ function DeferredDescription({ product, descriptionReady }) {
   }
 
   return (
-    <div className={styles.tabsSection}>
-      <div className={styles.tabHeader}>
-        <h3 className={styles.tabTitle}>Mô tả chi tiết</h3>
-      </div>
-      <div className={styles.tabContent}>
-        <div
-          className={styles.descBody}
-          dangerouslySetInnerHTML={{
-            __html: hasDescription ? descriptionHtml : 'Đang cập nhật nội dung...',
-          }}
-        />
-        {mainImage && (mainImage.url || mainImage.path) && (
-          <div className={styles.descImage}>
-            <Image
-              src={
-                mainImage.url && mainImage.url.startsWith('http')
-                  ? mainImage.url
-                  : `${config.storageUrl}/${mainImage.path}`
-              }
-              alt="Mô tả sản phẩm"
-              fill
-              unoptimized
-              sizes="(max-width: 768px) 100vw, 80vw"
-              style={{ objectFit: 'cover' }}
-              loading="lazy"
-            />
-          </div>
-        )}
-      </div>
-    </div>
+    <ProductDetailTabs
+      descriptionHtml={descriptionHtml}
+      mainImage={mainImage}
+      lazyImage
+    />
   );
 }
 
@@ -392,6 +365,7 @@ export default function ProductDetailClientShell({
         <RelatedProductsSection
           relatedProducts={relatedProducts}
           viewAllHref={relatedViewAllHref}
+          currentProduct={product}
         />
       ) : null}
     </>

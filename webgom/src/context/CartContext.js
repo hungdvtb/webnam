@@ -15,6 +15,8 @@ import {
 import { trackAddToCart } from '@/lib/analytics';
 
 const CartContext = createContext();
+const CART_MEDIA_STORAGE_KEY = 'webgom_cart_media_version';
+const CART_MEDIA_VERSION = 6;
 
 const cloneCartValue = (value) => {
   if (Array.isArray(value)) {
@@ -114,12 +116,27 @@ const buildCartItemMediaPayload = (product = {}, mediaContext = {}) => {
 };
 
 const getCartItemLookupKey = (item = {}) => {
-  const parentProductId = Number(item?.options?.parent_product_id || 0);
+  const parentProductId = Number(
+    item?.options?.parent_product_id
+    || item?.base_product_id
+    || item?.baseProductId
+    || 0
+  );
   if (parentProductId > 0) {
     return String(parentProductId);
   }
 
-  const variantId = Number(item?.options?.variant_id || 0);
+  const parentSlug = String(
+    item?.options?.parent_product_slug
+    || item?.base_product_slug
+    || item?.baseProductSlug
+    || ''
+  ).trim();
+  if (parentSlug) {
+    return parentSlug;
+  }
+
+  const variantId = Number(item?.options?.variant_id || item?.variant_id || item?.pivot?.variant_id || 0);
   if (variantId > 0) {
     return String(variantId);
   }
@@ -142,8 +159,22 @@ const resolveLookupProducts = (item = {}, detail = null) => {
     };
   }
 
-  const variantId = Number(item?.options?.variant_id || 0);
-  const parentProductId = Number(item?.options?.parent_product_id || 0);
+  const parentProductId = Number(
+    item?.options?.parent_product_id
+    || item?.base_product_id
+    || item?.baseProductId
+    || 0
+  );
+  const selectedProductId = Number(item?.selected_product_id || item?.selectedProductId || 0);
+  const itemProductId = Number(item?.product_id || item?.id || 0);
+  const explicitVariantId = Number(item?.options?.variant_id || item?.variant_id || item?.pivot?.variant_id || 0);
+  const variantId = explicitVariantId || (
+    selectedProductId > 0
+    && selectedProductId !== parentProductId
+    && selectedProductId !== itemProductId
+      ? selectedProductId
+      : 0
+  );
   const detailId = Number(detail?.id || 0);
 
   const variantProduct = variantId > 0
@@ -236,6 +267,56 @@ const resolveBundleEntryUnitPrice = (product = {}, fallback = 0) => {
 
   return 0;
 };
+
+const resolveFreshCartMediaPayload = async (item = {}, detailPromiseCache) => {
+  const lookupKey = getCartItemLookupKey(item);
+  if (!lookupKey) {
+    return null;
+  }
+
+  if (!detailPromiseCache.has(lookupKey)) {
+    detailPromiseCache.set(lookupKey, getWebProductDetail(lookupKey));
+  }
+
+  const detail = await detailPromiseCache.get(lookupKey);
+  const { product: resolvedProduct, variantProduct, parentProduct } = resolveLookupProducts(item, detail);
+  if (!resolvedProduct) {
+    return null;
+  }
+
+  const mediaPayload = buildCartItemMediaPayload(resolvedProduct, {
+    variantProduct,
+    parentProduct,
+  });
+
+  return resolveCartItemImageUrl(mediaPayload, 'medium', '') ? mediaPayload : null;
+};
+
+const refreshCartEntryMedia = async (entry = {}, detailPromiseCache, forceRefresh = false) => {
+  if (!forceRefresh && resolveCartItemImageUrl(entry, 'medium', '')) {
+    return entry;
+  }
+
+  const mediaPayload = await resolveFreshCartMediaPayload(entry, detailPromiseCache);
+  return mediaPayload ? { ...entry, ...mediaPayload } : entry;
+};
+
+const refreshCartEntryCollectionMedia = async (items = [], detailPromiseCache, forceRefresh = false) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [];
+  }
+
+  return Promise.all(
+    items.map((entry) => refreshCartEntryMedia(entry, detailPromiseCache, forceRefresh))
+  );
+};
+
+const cartItemHasMissingMedia = (item = {}) => (
+  !resolveCartItemImageUrl(item, 'medium', '')
+  || (Array.isArray(item?.groupedItems) && item.groupedItems.some((entry) => !resolveCartItemImageUrl(entry, 'medium', '')))
+  || (Array.isArray(item?.bundleSnapshot) && item.bundleSnapshot.some((entry) => !resolveCartItemImageUrl(entry, 'medium', '')))
+  || (Array.isArray(item?.originalGroupedItems) && item.originalGroupedItems.some((entry) => !resolveCartItemImageUrl(entry, 'medium', '')))
+);
 
 const resolveCartReplacementUnitPrice = (product = {}, fallback = 0) => {
   const candidates = [
@@ -342,11 +423,13 @@ const mergeBundleSelectionIntoEntry = (currentItem = {}, newProduct = {}, fallba
 export function CartProvider({ children }) {
   const [cartItems, setCartItems] = useState([]);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [cartMediaVersion, setCartMediaVersion] = useState(CART_MEDIA_VERSION);
 
   useEffect(() => {
     let isMounted = true;
     let nextCartItems = [];
     const savedCart = localStorage.getItem('webgom_cart');
+    const savedCartMediaVersion = Number(localStorage.getItem(CART_MEDIA_STORAGE_KEY) || 0);
 
     if (savedCart) {
       try {
@@ -365,6 +448,7 @@ export function CartProvider({ children }) {
       }
 
       setCartItems(nextCartItems);
+      setCartMediaVersion(savedCartMediaVersion);
       setIsInitialized(true);
     });
 
@@ -384,45 +468,45 @@ export function CartProvider({ children }) {
       return undefined;
     }
 
-    const unresolvedItems = cartItems.filter((item) => !resolveCartItemImageUrl(item, 'medium', ''));
-    if (unresolvedItems.length === 0) {
+    const forceMediaRefresh = cartMediaVersion < CART_MEDIA_VERSION;
+    if (!forceMediaRefresh && !cartItems.some(cartItemHasMissingMedia)) {
       return undefined;
     }
 
     let isCancelled = false;
 
-    const hydrateMissingCartImages = async () => {
+    const hydrateCartImages = async () => {
       const detailPromiseCache = new Map();
       const updates = await Promise.all(
-        unresolvedItems.map(async (item) => {
-          const lookupKey = getCartItemLookupKey(item);
-          if (!lookupKey) {
-            return null;
-          }
-
+        cartItems.map(async (item) => {
           try {
-            if (!detailPromiseCache.has(lookupKey)) {
-              detailPromiseCache.set(lookupKey, getWebProductDetail(lookupKey));
-            }
-
-            const detail = await detailPromiseCache.get(lookupKey);
-            const { product: resolvedProduct, variantProduct, parentProduct } = resolveLookupProducts(item, detail);
-            if (!resolvedProduct) {
-              return null;
-            }
-
-            const mediaPayload = buildCartItemMediaPayload(resolvedProduct, {
-              variantProduct,
-              parentProduct,
-            });
-
-            if (!resolveCartItemImageUrl(mediaPayload, 'medium', '')) {
-              return null;
-            }
+            const mediaPayload = forceMediaRefresh || !resolveCartItemImageUrl(item, 'medium', '')
+              ? await resolveFreshCartMediaPayload(item, detailPromiseCache)
+              : null;
+            const groupedItems = await refreshCartEntryCollectionMedia(
+              item.groupedItems,
+              detailPromiseCache,
+              forceMediaRefresh
+            );
+            const bundleSnapshot = await refreshCartEntryCollectionMedia(
+              item.bundleSnapshot,
+              detailPromiseCache,
+              forceMediaRefresh
+            );
+            const originalGroupedItems = await refreshCartEntryCollectionMedia(
+              item.originalGroupedItems,
+              detailPromiseCache,
+              forceMediaRefresh
+            );
 
             return {
               cartKey: item.cartKey,
-              mediaPayload,
+              updates: {
+                ...(mediaPayload || {}),
+                ...(groupedItems.length > 0 ? { groupedItems } : {}),
+                ...(bundleSnapshot.length > 0 ? { bundleSnapshot } : {}),
+                ...(originalGroupedItems.length > 0 ? { originalGroupedItems } : {}),
+              },
             };
           } catch (error) {
             console.error('Failed to hydrate cart item image:', error);
@@ -437,27 +521,33 @@ export function CartProvider({ children }) {
 
       const updateMap = new Map(
         updates
-          .filter((entry) => entry?.cartKey && entry?.mediaPayload)
-          .map((entry) => [entry.cartKey, entry.mediaPayload])
+          .filter((entry) => entry?.cartKey && entry?.updates && Object.keys(entry.updates).length > 0)
+          .map((entry) => [entry.cartKey, entry.updates])
       );
 
-      if (updateMap.size === 0) {
-        return;
+      if (updateMap.size > 0) {
+        setCartItems((prev) => prev.map((item) => (
+          updateMap.has(item.cartKey)
+            ? normalizeCartItem({ ...item, ...updateMap.get(item.cartKey) })
+            : item
+        )));
       }
 
-      setCartItems((prev) => prev.map((item) => (
-        updateMap.has(item.cartKey)
-          ? normalizeCartItem({ ...item, ...updateMap.get(item.cartKey) })
-          : item
-      )));
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(CART_MEDIA_STORAGE_KEY, String(CART_MEDIA_VERSION));
+      }
+
+      if (!isCancelled) {
+        setCartMediaVersion(CART_MEDIA_VERSION);
+      }
     };
 
-    hydrateMissingCartImages();
+    hydrateCartImages();
 
     return () => {
       isCancelled = true;
     };
-  }, [cartItems, isInitialized]);
+  }, [cartItems, cartMediaVersion, isInitialized]);
 
   const addToCart = (
     product,

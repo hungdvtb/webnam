@@ -1,4 +1,5 @@
 import config from './config';
+import { readLeadAttribution } from './leadAttribution';
 
 const VISITOR_KEY = `webgom_analytics_visitor_${config.siteCode}`;
 const SESSION_KEY = `webgom_analytics_session_${config.siteCode}`;
@@ -132,6 +133,7 @@ const getUrlPayload = () => {
   }
 
   const url = new URL(window.location.href);
+  const searchParams = url.searchParams;
 
   return {
     path: `${url.pathname}${url.search}`,
@@ -139,12 +141,43 @@ const getUrlPayload = () => {
     current_url: window.location.href,
     referrer: document.referrer || '',
     title: document.title || '',
-    utm_source: url.searchParams.get('utm_source') || '',
-    utm_medium: url.searchParams.get('utm_medium') || '',
-    utm_campaign: url.searchParams.get('utm_campaign') || '',
-    utm_content: url.searchParams.get('utm_content') || '',
-    utm_term: url.searchParams.get('utm_term') || '',
+    utm_source: searchParams.get('utm_source') || '',
+    utm_medium: searchParams.get('utm_medium') || '',
+    utm_campaign: searchParams.get('utm_campaign') || '',
+    utm_content: searchParams.get('utm_content') || '',
+    utm_term: searchParams.get('utm_term') || '',
+    fbclid: searchParams.get('fbclid') || '',
+    gclid: searchParams.get('gclid') || '',
+    ttclid: searchParams.get('ttclid') || '',
+    source_label: searchParams.get('source') || '',
+    raw_query: searchParams.toString(),
   };
+};
+
+const stripEmptyPayload = (payload = {}) => Object.fromEntries(
+  Object.entries(payload).filter(([, value]) => value !== undefined && value !== null && value !== '')
+);
+
+const getStoredAttributionPayload = (urlPayload = {}) => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  const attribution = readLeadAttribution({ includePersistent: true }) || {};
+
+  return stripEmptyPayload({
+    source: attribution.source_display || attribution.source || '',
+    utm_source: urlPayload.utm_source || attribution.utm_source || '',
+    utm_medium: urlPayload.utm_medium || attribution.utm_medium || '',
+    utm_campaign: urlPayload.utm_campaign || attribution.utm_campaign || '',
+    utm_content: urlPayload.utm_content || attribution.utm_content || '',
+    utm_term: urlPayload.utm_term || attribution.utm_term || '',
+    fbclid: urlPayload.fbclid || attribution.fbclid || '',
+    gclid: urlPayload.gclid || attribution.gclid || '',
+    ttclid: urlPayload.ttclid || attribution.ttclid || '',
+    source_label: urlPayload.source_label || attribution.source_label || '',
+    raw_query: urlPayload.raw_query || attribution.raw_query || '',
+  });
 };
 
 const normalizeMoneyValue = (value) => Math.max(0, Number(value || 0) || 0);
@@ -326,8 +359,11 @@ export const trackAnalyticsEvent = (eventName, payload = {}) => {
     return Promise.resolve(null);
   }
 
+  const urlPayload = getUrlPayload();
+
   const body = {
-    ...getUrlPayload(),
+    ...urlPayload,
+    ...getStoredAttributionPayload(urlPayload),
     ...getMetaBrowserData(),
     ...payload,
     ...getAnalyticsIdentity(),

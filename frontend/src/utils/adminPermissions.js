@@ -14,6 +14,7 @@ export const ADMIN_PERMISSION_OPTIONS = [
     { id: 'users', label: 'Quan ly nguoi dung' },
     { id: 'blog', label: 'Bai viet tren web' },
     { id: 'reports', label: 'Bao cao va phan tich' },
+    { id: 'payroll', label: 'Công và lương' },
 ];
 
 export const LEGACY_ADMIN_PERMISSION_IDS = ADMIN_PERMISSION_OPTIONS.map((permission) => permission.id);

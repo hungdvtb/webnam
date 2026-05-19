@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\OrderAiController;
 use App\Http\Controllers\Api\OrderAiTrainingController;
+use App\Http\Controllers\Api\PayrollController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
@@ -161,6 +162,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/users', [\App\Http\Controllers\Api\UserController::class , 'store']);
     Route::put('/users/{id}', [\App\Http\Controllers\Api\UserController::class , 'update']);
     Route::delete('/users/{id}', [\App\Http\Controllers\Api\UserController::class , 'destroy']);
+
+    // Payroll and attendance management
+    Route::get('/payroll/overview', [PayrollController::class, 'overview']);
+    Route::put('/payroll/employees/sheet', [PayrollController::class, 'syncEmployees']);
+    Route::put('/payroll/shifts/sheet', [PayrollController::class, 'syncShifts']);
+    Route::put('/payroll/schedules/sheet', [PayrollController::class, 'syncSchedules']);
+    Route::put('/payroll/attendance/sheet', [PayrollController::class, 'syncAttendance']);
+    Route::put('/payroll/user-scopes/sheet', [PayrollController::class, 'syncUserScopes']);
 
     // Logistics routes
     Route::get('/warehouses', [App\Http\Controllers\Api\WarehouseController::class , 'index']);

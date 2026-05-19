@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { getWebSiteSettings } from '@/lib/api';
 import { getBlogPost } from '@/lib/blogApi';
 
 export const metadata = {
@@ -79,21 +80,78 @@ function getPolicyContent(post) {
   return content;
 }
 
+function getPhoneContact(value) {
+  const rawValue = normalizeValue(value);
+
+  if (!rawValue) {
+    return null;
+  }
+
+  const label = rawValue.replace(/^tel:/i, '').trim();
+  const hrefNumber = label.replace(/[^\d+]/g, '');
+
+  if (!hrefNumber) {
+    return null;
+  }
+
+  return {
+    label,
+    href: `tel:${hrefNumber}`,
+  };
+}
+
+function getMessengerHref(value) {
+  const href = normalizeValue(value);
+
+  if (!href) {
+    return '';
+  }
+
+  if (/^[a-z][a-z\d+.-]*:/i.test(href)) {
+    return href;
+  }
+
+  if (href.startsWith('//')) {
+    return `https:${href}`;
+  }
+
+  if (href.startsWith('/')) {
+    return href;
+  }
+
+  return `https://${href}`;
+}
+
+function shouldOpenInNewTab(href) {
+  return /^(https?:)?\/\//i.test(href);
+}
+
 export default async function PolicyPage({ searchParams }) {
   const resolvedSearchParams = await searchParams;
   const activePolicy = resolveActivePolicy(resolvedSearchParams);
 
   let activePost = null;
+  let siteSettings = null;
 
-  try {
-    activePost = await getBlogPost(activePolicy.postSlug);
-  } catch {
-    activePost = null;
+  const [activePostResult, siteSettingsResult] = await Promise.allSettled([
+    getBlogPost(activePolicy.postSlug),
+    getWebSiteSettings(),
+  ]);
+
+  if (activePostResult.status === 'fulfilled') {
+    activePost = activePostResult.value;
+  }
+
+  if (siteSettingsResult.status === 'fulfilled') {
+    siteSettings = siteSettingsResult.value;
   }
 
   const activeContent = getPolicyContent(activePost);
   const hasPost = Boolean(activePost?.id);
   const hasContent = activeContent.length > 0;
+  const supportHotline = getPhoneContact(siteSettings?.contact_phone);
+  const messengerHref = getMessengerHref(siteSettings?.messenger_link);
+  const openMessengerInNewTab = shouldOpenInNewTab(messengerHref);
 
   return (
     <main className="pol-page">
@@ -170,17 +228,21 @@ export default async function PolicyPage({ searchParams }) {
                 </p>
               </div>
               <div className="pol-support-btns">
-                <a href="tel:19001234" className="pol-support-btn pol-support-btn--primary">
-                  <span className="material-symbols-outlined">call</span> Gọi ngay
-                </a>
-                <a
-                  href="https://zalo.me"
-                  target="_blank"
-                  rel="noopener"
-                  className="pol-support-btn pol-support-btn--ghost"
-                >
-                  <span className="material-symbols-outlined">chat</span> Chat với chúng tôi
-                </a>
+                {supportHotline ? (
+                  <a href={supportHotline.href} className="pol-support-btn pol-support-btn--primary">
+                    <span className="material-symbols-outlined">call</span> Gọi ngay: {supportHotline.label}
+                  </a>
+                ) : null}
+                {messengerHref ? (
+                  <a
+                    href={messengerHref}
+                    target={openMessengerInNewTab ? '_blank' : undefined}
+                    rel={openMessengerInNewTab ? 'noopener noreferrer' : undefined}
+                    className="pol-support-btn pol-support-btn--ghost"
+                  >
+                    <span className="material-symbols-outlined">chat</span> Chat với chúng tôi
+                  </a>
+                ) : null}
               </div>
             </div>
           </div>

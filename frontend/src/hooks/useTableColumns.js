@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const parseWidthValue = (value, fallback = 0) => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -9,15 +9,65 @@ const parseWidthValue = (value, fallback = 0) => {
     return fallback;
 };
 
-export const useTableColumns = (storageKey, defaultColumns) => {
+const readJsonFromStorage = (key, fallback = null) => {
+    if (typeof window === 'undefined') return fallback;
+
+    try {
+        const saved = window.localStorage.getItem(key);
+        return saved ? JSON.parse(saved) : fallback;
+    } catch (error) {
+        console.warn(`Cannot parse table column setting: ${key}`, error);
+        return fallback;
+    }
+};
+
+const writeJsonToStorage = (key, value) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(key, JSON.stringify(value));
+};
+
+const removeStorageItem = (key) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(key);
+};
+
+const readStoredColumnWidths = (storageKey) => {
+    const saved = readJsonFromStorage(`${storageKey}_column_widths`, {});
+    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+};
+
+const sortColumnsBySavedOrder = (columns, orderIds) => {
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return [...columns];
+    }
+
+    return [...columns].sort((first, second) => {
+        const firstIndex = orderIds.indexOf(first.id);
+        const secondIndex = orderIds.indexOf(second.id);
+        if (firstIndex === -1 && secondIndex === -1) return 0;
+        if (firstIndex === -1) return 1;
+        if (secondIndex === -1) return -1;
+        return firstIndex - secondIndex;
+    });
+};
+
+const getSystemVisibleColumnIds = (columns) => {
+    const allIds = columns.map((column) => column.id);
+    const defaultVisibleIds = columns
+        .filter((column) => !column.hidden)
+        .map((column) => column.id);
+
+    return defaultVisibleIds.length > 0 ? defaultVisibleIds : allIds;
+};
+
+export const useTableColumns = (storageKey, defaultColumns, options = {}) => {
+    const resetDefaultToSystem = options.resetDefaultToSystem === true;
     const [visibleColumns, setVisibleColumns] = useState([]);
     const [availableColumns, setAvailableColumns] = useState([]);
-    const [columnWidths, setColumnWidths] = useState(() => {
-        const saved = localStorage.getItem(`${storageKey}_column_widths`);
-        return saved ? JSON.parse(saved) : {};
-    });
+    const [columnWidths, setColumnWidths] = useState(() => readStoredColumnWidths(storageKey));
     const [draggedItemIndex, setDraggedItemIndex] = useState(null);
     const [resizingColumnId, setResizingColumnId] = useState(null);
+    const columnWidthsStorageKeyRef = useRef(storageKey);
 
     const getColumnMinWidth = useCallback((columnId) => {
         const matchedColumn = defaultColumns.find((column) => column.id === columnId);
@@ -25,62 +75,58 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     }, [defaultColumns]);
 
     useEffect(() => {
-        const savedOrder = localStorage.getItem(`${storageKey}_column_order`);
-        let sortedColumns = [...defaultColumns];
-        let orderIds = [];
-
-        if (savedOrder) {
-            orderIds = JSON.parse(savedOrder);
-            sortedColumns = [...defaultColumns].sort((first, second) => {
-                const firstIndex = orderIds.indexOf(first.id);
-                const secondIndex = orderIds.indexOf(second.id);
-                if (firstIndex === -1 && secondIndex === -1) return 0;
-                if (firstIndex === -1) return 1;
-                if (secondIndex === -1) return -1;
-                return firstIndex - secondIndex;
-            });
-        }
+        const savedOrder = readJsonFromStorage(`${storageKey}_column_order`, []);
+        const orderIds = Array.isArray(savedOrder) ? savedOrder : [];
+        const sortedColumns = sortColumnsBySavedOrder(defaultColumns, orderIds);
 
         setAvailableColumns(sortedColumns);
 
-        const savedVisible = localStorage.getItem(`${storageKey}_columns`);
+        const savedVisible = readJsonFromStorage(`${storageKey}_columns`, null);
         const allIds = sortedColumns.map((column) => column.id);
-        const defaultVisibleIds = sortedColumns
-            .filter((column) => !column.hidden)
-            .map((column) => column.id);
-        const fallbackVisibleIds = defaultVisibleIds.length > 0 ? defaultVisibleIds : allIds;
+        const fallbackVisibleIds = getSystemVisibleColumnIds(sortedColumns);
 
-        if (savedVisible) {
-            const savedIds = JSON.parse(savedVisible);
-            const nextVisible = savedIds.filter((id) => allIds.includes(id));
-            const knownIds = (orderIds.length > 0 ? orderIds : savedIds).filter((id) => allIds.includes(id));
+        if (Array.isArray(savedVisible)) {
+            const nextVisible = savedVisible.filter((id) => allIds.includes(id));
+            const knownIds = (orderIds.length > 0 ? orderIds : savedVisible).filter((id) => allIds.includes(id));
             const addedVisibleIds = sortedColumns
                 .filter((column) => !column.hidden && !knownIds.includes(column.id) && !nextVisible.includes(column.id))
                 .map((column) => column.id);
-            const mergedVisible = [...nextVisible, ...addedVisibleIds];
-            const sanitizedVisible = mergedVisible.length > 0 ? mergedVisible : fallbackVisibleIds;
-            setVisibleColumns(sanitizedVisible);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(sanitizedVisible));
+            const sanitizedVisible = [...nextVisible, ...addedVisibleIds];
+            const nextVisibleColumns = sanitizedVisible.length > 0 ? sanitizedVisible : fallbackVisibleIds;
+            setVisibleColumns(nextVisibleColumns);
+            writeJsonToStorage(`${storageKey}_columns`, nextVisibleColumns);
         } else {
             setVisibleColumns(fallbackVisibleIds);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(fallbackVisibleIds));
+            writeJsonToStorage(`${storageKey}_columns`, fallbackVisibleIds);
         }
     }, [storageKey, defaultColumns]);
 
     useEffect(() => {
         setColumnWidths((prev) => {
-            const next = Object.entries(prev || {}).reduce((result, [columnId, width]) => {
+            const storedWidths = Object.keys(prev || {}).length === 0
+                ? readStoredColumnWidths(storageKey)
+                : {};
+            const sourceWidths = columnWidthsStorageKeyRef.current === storageKey
+                ? prev
+                : readStoredColumnWidths(storageKey);
+            const widthsToSanitize = columnWidthsStorageKeyRef.current === storageKey && Object.keys(storedWidths).length > 0
+                ? storedWidths
+                : sourceWidths;
+
+            columnWidthsStorageKeyRef.current = storageKey;
+
+            const next = Object.entries(widthsToSanitize || {}).reduce((result, [columnId, width]) => {
                 const minWidth = getColumnMinWidth(columnId);
                 result[columnId] = Math.max(minWidth, parseWidthValue(width, minWidth));
                 return result;
             }, {});
 
-            if (JSON.stringify(next) !== JSON.stringify(prev || {})) {
-                localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(next));
+            if (JSON.stringify(next) !== JSON.stringify(widthsToSanitize || {})) {
+                writeJsonToStorage(`${storageKey}_column_widths`, next);
                 return next;
             }
 
-            return prev;
+            return widthsToSanitize;
         });
     }, [getColumnMinWidth, storageKey]);
 
@@ -92,7 +138,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     const toggleColumn = useCallback((columnId) => {
         setVisibleColumns((prev) => {
             const next = prev.includes(columnId) ? prev.filter((id) => id !== columnId) : [...prev, columnId];
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(next));
+            writeJsonToStorage(`${storageKey}_columns`, next);
             return next;
         });
     }, [storageKey]);
@@ -127,7 +173,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
             setResizingColumnId(null);
             setColumnWidths((prev) => {
                 const next = { ...prev, [columnId]: currentWidth };
-                localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(next));
+                writeJsonToStorage(`${storageKey}_column_widths`, next);
                 return next;
             });
         };
@@ -157,7 +203,7 @@ export const useTableColumns = (storageKey, defaultColumns) => {
         nextColumns.splice(targetAvailableIndex, 0, draggedColumn);
 
         setAvailableColumns(nextColumns);
-        localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(nextColumns.map((column) => column.id)));
+        writeJsonToStorage(`${storageKey}_column_order`, nextColumns.map((column) => column.id));
         setDraggedItemIndex(null);
     }, [availableColumns, visibleColumns, draggedItemIndex, storageKey]);
 
@@ -167,48 +213,66 @@ export const useTableColumns = (storageKey, defaultColumns) => {
     }, 40), [renderedColumns, columnWidths]);
 
     const resetDefault = useCallback(() => {
-        const savedDefaultColumns = localStorage.getItem(`${storageKey}_columns_default`);
-        const savedDefaultOrder = localStorage.getItem(`${storageKey}_column_order_default`);
-        const savedDefaultWidths = localStorage.getItem(`${storageKey}_column_widths_default`);
+        if (!resetDefaultToSystem) {
+            const savedDefaultColumns = readJsonFromStorage(`${storageKey}_columns_default`, null);
+            const savedDefaultOrder = readJsonFromStorage(`${storageKey}_column_order_default`, null);
+            const savedDefaultWidths = readJsonFromStorage(`${storageKey}_column_widths_default`, null);
 
-        if (savedDefaultColumns) {
-            const columns = JSON.parse(savedDefaultColumns);
-            setVisibleColumns(columns);
-            localStorage.setItem(`${storageKey}_columns`, JSON.stringify(columns));
+            if (Array.isArray(savedDefaultColumns)) {
+                setVisibleColumns(savedDefaultColumns);
+                writeJsonToStorage(`${storageKey}_columns`, savedDefaultColumns);
+            }
+
+            if (Array.isArray(savedDefaultOrder)) {
+                const nextColumns = sortColumnsBySavedOrder(defaultColumns, savedDefaultOrder);
+                setAvailableColumns(nextColumns);
+                writeJsonToStorage(`${storageKey}_column_order`, savedDefaultOrder);
+            }
+
+            if (savedDefaultWidths && typeof savedDefaultWidths === 'object' && !Array.isArray(savedDefaultWidths)) {
+                setColumnWidths(savedDefaultWidths);
+                writeJsonToStorage(`${storageKey}_column_widths`, savedDefaultWidths);
+            }
+
+            if (!savedDefaultColumns && !savedDefaultOrder && !savedDefaultWidths) {
+                removeStorageItem(`${storageKey}_column_order`);
+                removeStorageItem(`${storageKey}_columns`);
+                removeStorageItem(`${storageKey}_column_widths`);
+                if (typeof window !== 'undefined') {
+                    window.location.reload();
+                }
+            }
+
+            return;
         }
 
-        if (savedDefaultOrder) {
-            const orderIds = JSON.parse(savedDefaultOrder);
-            const nextColumns = [...defaultColumns].sort((first, second) => {
-                const firstIndex = orderIds.indexOf(first.id);
-                const secondIndex = orderIds.indexOf(second.id);
-                if (firstIndex === -1 && secondIndex === -1) return 0;
-                if (firstIndex === -1) return 1;
-                if (secondIndex === -1) return -1;
-                return firstIndex - secondIndex;
-            });
-            setAvailableColumns(nextColumns);
-            localStorage.setItem(`${storageKey}_column_order`, JSON.stringify(orderIds));
-        }
+        const systemColumns = [...defaultColumns];
+        const systemVisibleColumns = getSystemVisibleColumnIds(systemColumns);
+        const systemColumnOrder = systemColumns.map((column) => column.id);
 
-        if (savedDefaultWidths) {
-            const widths = JSON.parse(savedDefaultWidths);
-            setColumnWidths(widths);
-            localStorage.setItem(`${storageKey}_column_widths`, JSON.stringify(widths));
-        }
+        setVisibleColumns(systemVisibleColumns);
+        setAvailableColumns(systemColumns);
+        setColumnWidths({});
+        setDraggedItemIndex(null);
 
-        if (!savedDefaultColumns && !savedDefaultOrder && !savedDefaultWidths) {
-            localStorage.removeItem(`${storageKey}_column_order`);
-            localStorage.removeItem(`${storageKey}_columns`);
-            localStorage.removeItem(`${storageKey}_column_widths`);
-            window.location.reload();
-        }
-    }, [storageKey, defaultColumns]);
+        writeJsonToStorage(`${storageKey}_columns`, systemVisibleColumns);
+        writeJsonToStorage(`${storageKey}_column_order`, systemColumnOrder);
+        removeStorageItem(`${storageKey}_column_widths`);
+        removeStorageItem(`${storageKey}_columns_default`);
+        removeStorageItem(`${storageKey}_column_order_default`);
+        removeStorageItem(`${storageKey}_column_widths_default`);
+    }, [storageKey, defaultColumns, resetDefaultToSystem]);
 
     const saveAsDefault = useCallback(() => {
-        localStorage.setItem(`${storageKey}_columns_default`, JSON.stringify(visibleColumns));
-        localStorage.setItem(`${storageKey}_column_order_default`, JSON.stringify(availableColumns.map((column) => column.id)));
-        localStorage.setItem(`${storageKey}_column_widths_default`, JSON.stringify(columnWidths));
+        const columnIds = availableColumns.map((column) => column.id);
+        const normalizedVisibleColumns = visibleColumns.filter((columnId) => columnIds.includes(columnId));
+
+        writeJsonToStorage(`${storageKey}_columns`, normalizedVisibleColumns);
+        writeJsonToStorage(`${storageKey}_column_order`, columnIds);
+        writeJsonToStorage(`${storageKey}_column_widths`, columnWidths);
+        writeJsonToStorage(`${storageKey}_columns_default`, normalizedVisibleColumns);
+        writeJsonToStorage(`${storageKey}_column_order_default`, columnIds);
+        writeJsonToStorage(`${storageKey}_column_widths_default`, columnWidths);
         window.alert('Đã lưu cấu hình cột mặc định.');
     }, [storageKey, visibleColumns, availableColumns, columnWidths]);
 

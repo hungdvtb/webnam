@@ -33,6 +33,9 @@ import { resolveImageObjectUrl } from '../../utils/mediaUrl';
 import { formatCategorySummary, getCategoryNamesByIds, getProductCategoryIds, normalizeCategoryIds } from '../../utils/productCategories';
 import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
 import { resolveAiRequestError } from '../../utils/aiError';
+import ProductDescriptionAiReviewModal from '../../components/admin/ProductDescriptionAiReviewModal';
+import ProductDescriptionHtmlPasteModal from '../../components/admin/ProductDescriptionHtmlPasteModal';
+import ProductDescriptionImageLibraryModal from '../../components/admin/ProductDescriptionImageLibraryModal';
 
 const ItemType = {
     IMAGE: 'image',
@@ -1283,6 +1286,67 @@ const normalizePersistedImageUrl = (url) => {
     return isTransientImageUrl(normalizedUrl) ? '' : normalizedUrl;
 };
 
+const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const escapeHtmlAttribute = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const AI_PROTECTED_MEDIA_SELECTOR = 'picture, video, audio, iframe, img, object, embed, svg, canvas';
+
+const protectDescriptionMediaHtml = (html) => {
+    if (typeof document === 'undefined') {
+        return {
+            html,
+            fragments: [],
+        };
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = String(html || '');
+    const fragments = [];
+    const nodes = Array.from(wrapper.querySelectorAll(AI_PROTECTED_MEDIA_SELECTOR));
+
+    nodes.forEach((node) => {
+        if (!node?.parentNode || !wrapper.contains(node)) {
+            return;
+        }
+
+        const token = `__AI_MEDIA_PLACEHOLDER_${fragments.length}__`;
+        fragments.push({
+            token,
+            originalHtml: node.outerHTML,
+        });
+
+        const placeholder = document.createElement('span');
+        placeholder.setAttribute('data-ai-media-placeholder', token);
+        placeholder.textContent = token;
+        node.replaceWith(placeholder);
+    });
+
+    return {
+        html: wrapper.innerHTML,
+        fragments,
+    };
+};
+
+const restoreDescriptionMediaHtml = (html, fragments = []) => {
+    let restoredHtml = String(html || '');
+
+    fragments.forEach(({ token, originalHtml }) => {
+        const escapedToken = escapeRegExp(token);
+        restoredHtml = restoredHtml.replace(
+            new RegExp(`<span\\b[^>]*data-ai-media-placeholder=["']${escapedToken}["'][^>]*>[\\s\\S]*?<\\/span>`, 'gi'),
+            originalHtml
+        );
+        restoredHtml = restoredHtml.replace(new RegExp(escapedToken, 'g'), originalHtml);
+    });
+
+    return restoredHtml;
+};
+
 const uploadImageViaMediaApi = async (file) => {
     const validationMessage = validateImageFileForUpload(file);
 
@@ -2401,6 +2465,15 @@ const ProductForm = () => {
 
     const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
     const [aiInstruction, setAiInstruction] = useState('');
+    const [aiRewriteReview, setAiRewriteReview] = useState({
+        open: false,
+        sourceHtml: '',
+        draftHtml: '',
+        revisionInstruction: '',
+        model: '',
+    });
+    const [descriptionImageLibraryOpen, setDescriptionImageLibraryOpen] = useState(false);
+    const [descriptionHtmlPasteOpen, setDescriptionHtmlPasteOpen] = useState(false);
     const quillRef = useRef(null);
 
     const registerBundleOptionCardRef = useCallback((optionId, node) => {
@@ -3441,6 +3514,25 @@ const ProductForm = () => {
                 return true;
             });
     }, [variantImageLibraryItems]);
+    const descriptionImageLibraryItems = useMemo(() => {
+        const seenUrls = new Set();
+
+        return variantImageLibraryItems
+            .map((image, index) => ({
+                ...image,
+                image_url: image?.large_url || image?.medium_url || image?.image_url || '',
+                display_name: image?.display_name || getAdminImageDisplayName(image, index),
+            }))
+            .filter((image) => {
+                const imageUrl = String(image?.image_url || '').trim();
+                if (!imageUrl || seenUrls.has(imageUrl)) {
+                    return false;
+                }
+
+                seenUrls.add(imageUrl);
+                return true;
+            });
+    }, [variantImageLibraryItems]);
     const bundleOptionImagePickerOption = useMemo(() => (
         bundleOptionImagePicker.optionId === null
             ? null
@@ -3817,11 +3909,108 @@ const ProductForm = () => {
             return;
         }
         navigator.clipboard.writeText(content).then(() => {
-            showToast('Đã sao chép toàn bộ nội dung HTML!', 'success');
+            showToast('Đã sao chép HTML mô tả!', 'success');
         }).catch(err => {
             showToast('Lỗi khi sao chép', 'error');
         });
     }, [formData.description, showToast]);
+
+    const handleApplyDescriptionHtmlPaste = useCallback((html) => {
+        let normalizedHtml = String(html || '').trim();
+        normalizedHtml = normalizedHtml.replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+        if (!normalizedHtml) {
+            showToast({
+                message: 'HTML đang trống.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            description: normalizedHtml,
+        }));
+        setDescriptionHtmlPasteOpen(false);
+        showToast({
+            message: 'Đã áp dụng HTML mô tả mới.',
+            type: 'success',
+        });
+    }, [showToast]);
+
+    const handleOpenDescriptionImageLibrary = useCallback(() => {
+        if (descriptionImageLibraryItems.length === 0) {
+            showToast({
+                message: 'Sản phẩm này chưa có ảnh trong thư viện để chèn vào mô tả.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        setDescriptionImageLibraryOpen(true);
+    }, [descriptionImageLibraryItems.length, showToast]);
+
+    const handleInsertDescriptionLibraryImage = useCallback(async (image) => {
+        let imageUrl = String(image?.large_url || image?.medium_url || image?.image_url || image?.url || image?.path || '').trim();
+
+        if (!imageUrl) {
+            showToast({
+                message: 'Ảnh này chưa có URL hợp lệ.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        if (isTransientImageUrl(imageUrl)) {
+            if (!image?.file) {
+                showToast({
+                    message: 'Ảnh này chưa được lưu. Hãy lưu sản phẩm hoặc tải ảnh lên trước khi chèn vào mô tả.',
+                    type: 'warning',
+                });
+                return;
+            }
+
+            try {
+                imageUrl = await uploadImageViaMediaApi(image.file);
+            } catch (error) {
+                showToast({
+                    message: resolveProductImageUploadErrorMessage(error),
+                    type: 'error',
+                    duration: 7000,
+                });
+                return;
+            }
+        }
+
+        try {
+            const quill = quillRef.current?.getEditor?.();
+            if (quill) {
+                const range = quill.getSelection(true);
+                const insertIndex = Number.isFinite(range?.index)
+                    ? range.index
+                    : Math.max((quill.getLength?.() || 1) - 1, 0);
+
+                quill.insertEmbed(insertIndex, 'image', imageUrl, 'user');
+                quill.insertText(insertIndex + 1, '\n', 'user');
+                quill.setSelection(insertIndex + 2, 0, 'silent');
+                setFormData((prev) => ({ ...prev, description: quill.root.innerHTML }));
+            } else {
+                const fallbackHtml = `<p><img src="${escapeHtmlAttribute(imageUrl)}" alt="${escapeHtmlAttribute(formData.name || image?.display_name || 'Ảnh sản phẩm')}" /></p>`;
+                setFormData((prev) => ({ ...prev, description: `${prev.description || ''}${fallbackHtml}` }));
+            }
+
+            setDescriptionImageLibraryOpen(false);
+            showToast({
+                message: 'Đã chèn ảnh vào mô tả sản phẩm.',
+                type: 'success',
+            });
+        } catch {
+            showToast({
+                message: 'Không thể chèn ảnh vào editor lúc này.',
+                type: 'error',
+            });
+        }
+    }, [formData.name, showToast]);
 
     const handleWordImport = useCallback(async (e) => {
         const file = e.target.files[0];
@@ -5325,6 +5514,18 @@ const ProductForm = () => {
         }
     };
 
+    const runProductDescriptionRewrite = useCallback(async (html, customInstruction = '', protectedFragments = []) => {
+        const response = await aiApi.rewriteProductDescription({
+            content: html,
+            custom_instruction: customInstruction || undefined,
+        });
+
+        return {
+            html: restoreDescriptionMediaHtml(response?.data?.description || response?.data?.text || '', protectedFragments),
+            model: response?.data?.model || '',
+        };
+    }, []);
+
     const handleAIRewrite = async () => {
         if (!aiAvailable) {
             showModal({ title: 'AI chưa sẵn sàng', content: disabledReason, type: 'warning' });
@@ -5335,32 +5536,25 @@ const ProductForm = () => {
             return;
         }
 
-        // Bóc tách hình ảnh (nhất là base64) ra thành placeholder để giảm siêu nhẹ payload gửi lên AI
-        const extractedImages = [];
-        let modifiedHtml = formData.description.replace(/<img[^>]*>/gi, (match) => {
-            const placeholder = `__IMG_PLACEHOLDER_${extractedImages.length}__`;
-            extractedImages.push({ placeholder, originalTag: match });
-            return `<img src="${placeholder}" />`;
-        });
+        // Protect media embeds so AI only rewrites text and cannot mutate heavy HTML fragments.
+        const protectedPayload = protectDescriptionMediaHtml(formData.description);
+        const customInstruction = aiInstruction.trim();
 
         setAiRewriting(true);
         try {
-            const response = await aiApi.rewriteProductDescription({
-                content: modifiedHtml,
-                custom_instruction: aiInstruction.trim() || undefined,
+            const result = await runProductDescriptionRewrite(
+                protectedPayload.html,
+                customInstruction,
+                protectedPayload.fragments
+            );
+
+            setAiRewriteReview({
+                open: true,
+                sourceHtml: formData.description,
+                draftHtml: result.html,
+                revisionInstruction: '',
+                model: result.model,
             });
-
-            let finalHtml = response.data.description;
-
-            // Phục hồi lại toàn bộ thẻ hình ảnh gốc
-            extractedImages.forEach(({ placeholder, originalTag }) => {
-                // Thay thế thẻ hình ảnh placeholder mà AI có thể đã chỉnh sửa lại các thuộc tính khác (nếu có)
-                finalHtml = finalHtml.replace(new RegExp(`<img[^>]+src="${placeholder}"[^>]*>`, 'gi'), originalTag);
-                // Fallback: nếu bằng cách nào đó chỉ còn sót lại đoạn text placeholder
-                finalHtml = finalHtml.replace(placeholder, originalTag);
-            });
-
-            setFormData(prev => ({ ...prev, description: finalHtml }));
         } catch (error) {
             console.error("Rewrite Error:", error.response?.data || error);
             showModal({
@@ -5375,6 +5569,105 @@ const ProductForm = () => {
             setAiRewriting(false);
         }
     };
+
+    const handleAiRewriteRevisionChange = useCallback((value) => {
+        setAiRewriteReview((prev) => ({
+            ...prev,
+            revisionInstruction: value,
+        }));
+    }, []);
+
+    const handleReviseAiRewriteDraft = useCallback(async () => {
+        const instruction = aiRewriteReview.revisionInstruction.trim();
+        if (!instruction || aiRewriting) {
+            return;
+        }
+
+        const protectedPayload = protectDescriptionMediaHtml(aiRewriteReview.draftHtml || aiRewriteReview.sourceHtml);
+        const revisionInstruction = [
+            'Sửa tiếp bản nháp hiện tại theo yêu cầu của người dùng.',
+            instruction,
+            'Vẫn giữ nguyên cấu trúc HTML, ảnh, video, iframe, link, class, id và style.',
+        ].join('\n');
+
+        setAiRewriting(true);
+        try {
+            const result = await runProductDescriptionRewrite(
+                protectedPayload.html,
+                revisionInstruction,
+                protectedPayload.fragments
+            );
+
+            setAiRewriteReview((prev) => ({
+                ...prev,
+                draftHtml: result.html,
+                revisionInstruction: '',
+                model: result.model || prev.model,
+            }));
+        } catch (error) {
+            showModal({
+                title: 'Lỗi AI',
+                content: resolveAiRequestError(error, 'Không thể sửa tiếp nội dung bằng AI lúc này.'),
+                type: 'error',
+            });
+        } finally {
+            setAiRewriting(false);
+        }
+    }, [aiRewriteReview.draftHtml, aiRewriteReview.revisionInstruction, aiRewriteReview.sourceHtml, aiRewriting, runProductDescriptionRewrite, showModal]);
+
+    const handleApplyAiRewriteDraft = useCallback(() => {
+        const finalHtml = aiRewriteReview.draftHtml;
+        if (!finalHtml || aiRewriting) {
+            return;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            description: finalHtml,
+        }));
+        setAiRewriteReview((prev) => ({
+            ...prev,
+            open: false,
+        }));
+        showToast({
+            message: 'Đã áp dụng nội dung AI vào mô tả sản phẩm.',
+            type: 'success',
+        });
+    }, [aiRewriteReview.draftHtml, aiRewriting, showToast]);
+
+    const handleCopyAiRewriteHtml = useCallback(() => {
+        const html = aiRewriteReview.draftHtml;
+        if (!html) {
+            showToast({
+                message: 'Chưa có HTML để sao chép.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        navigator.clipboard.writeText(html).then(() => {
+            showToast({
+                message: 'Đã sao chép HTML bản nháp AI.',
+                type: 'success',
+            });
+        }).catch(() => {
+            showToast({
+                message: 'Không thể sao chép HTML lúc này.',
+                type: 'error',
+            });
+        });
+    }, [aiRewriteReview.draftHtml, showToast]);
+
+    const handleCloseAiRewriteReview = useCallback(() => {
+        if (aiRewriting) {
+            return;
+        }
+
+        setAiRewriteReview((prev) => ({
+            ...prev,
+            open: false,
+        }));
+    }, [aiRewriting]);
 
     const renderAttributeField = (attr) => {
         const value = formData.custom_attributes[attr.id] ?? (attr.frontend_type === 'multiselect' ? [] : '');
@@ -9564,16 +9857,37 @@ const ProductForm = () => {
                                         {aiGenerating ? 'AI đang tạo...' : 'AI Viết mới'}
                                     </button>
 
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenDescriptionImageLibrary}
+                                        disabled={descriptionImageLibraryItems.length === 0}
+                                        className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-gold/20 text-gold font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-gold/5 active:scale-95 disabled:opacity-45 disabled:cursor-not-allowed"
+                                        title="Chèn ảnh có sẵn trong thư viện sản phẩm"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">photo_library</span>
+                                        Chèn ảnh
+                                    </button>
+
                                     <div className="h-6 w-px bg-gold/10 mx-1"></div>
 
                                     <button
                                         type="button"
                                         onClick={handleCopyContent}
                                         className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-gold/20 text-gold font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-gold/5 active:scale-95"
-                                        title="Copy toàn bộ nội dung"
+                                        title="Copy HTML mô tả để gửi sang ChatGPT"
                                     >
                                         <span className="material-symbols-outlined text-[16px]">content_copy</span>
-                                        Copy
+                                        Copy HTML
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setDescriptionHtmlPasteOpen(true)}
+                                        className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-primary/20 text-primary font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-primary/5 active:scale-95"
+                                        title="Dán HTML đã được ChatGPT viết lại"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">code_blocks</span>
+                                        Dán HTML
                                     </button>
 
                                     <label className="flex items-center gap-2 px-3 py-1.5 rounded-sm border border-gold/20 text-gold font-bold text-[11px] uppercase tracking-widest transition-all hover:bg-gold/5 active:scale-95 cursor-pointer" title="Nhập từ file Word (.docx)">
@@ -11411,6 +11725,34 @@ const ProductForm = () => {
                     <ImageLightboxModal image={lightboxImage} onClose={closeImageLightbox} />
                 )}
             </AnimatePresence>
+
+            <ProductDescriptionAiReviewModal
+                open={aiRewriteReview.open}
+                draftHtml={aiRewriteReview.draftHtml}
+                revisionInstruction={aiRewriteReview.revisionInstruction}
+                isLoading={aiRewriting}
+                model={aiRewriteReview.model}
+                onRevisionInstructionChange={handleAiRewriteRevisionChange}
+                onRevise={handleReviseAiRewriteDraft}
+                onApply={handleApplyAiRewriteDraft}
+                onCopyHtml={handleCopyAiRewriteHtml}
+                onClose={handleCloseAiRewriteReview}
+            />
+
+            <ProductDescriptionImageLibraryModal
+                open={descriptionImageLibraryOpen}
+                images={descriptionImageLibraryItems}
+                onInsert={handleInsertDescriptionLibraryImage}
+                onPreview={openImageLightbox}
+                onClose={() => setDescriptionImageLibraryOpen(false)}
+            />
+
+            <ProductDescriptionHtmlPasteModal
+                open={descriptionHtmlPasteOpen}
+                initialHtml={formData.description}
+                onApply={handleApplyDescriptionHtmlPaste}
+                onClose={() => setDescriptionHtmlPasteOpen(false)}
+            />
 
             {/* Slug Management Modal */}
             <AnimatePresence>

@@ -33,7 +33,7 @@ export default function GroupedProductView({
     <>
       <Breadcrumb product={product} />
       <div className={styles.mainGrid}>
-        <div className={styles.galleryColumn}>
+        <div id="image-video-section" className={styles.galleryColumn}>
           <ProductGallery
             images={images}
             videoUrl={videoUrl}

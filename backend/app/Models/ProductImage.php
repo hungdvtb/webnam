@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\MediaService;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 
 class ProductImage extends Model
 {
@@ -124,5 +125,16 @@ class ProductImage extends Model
         }
 
         return MediaAsset::query()->where('public_id', $publicId)->first();
+    }
+
+    public function isStaleTeamPhoto(): bool
+    {
+        $haystack = Str::ascii(mb_strtolower(trim(implode(' ', array_filter([
+            $this->file_name,
+            $this->mediaAsset?->original_name,
+            $this->getRawOriginal('image_url'),
+        ])))));
+
+        return str_contains($haystack, 'anh tap the');
     }
 }

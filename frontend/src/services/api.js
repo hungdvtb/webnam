@@ -1065,6 +1065,15 @@ export const userApi = {
     destroy: (id) => api.delete(`/users/${id}`),
 };
 
+export const payrollApi = {
+    getOverview: (params) => api.get('/payroll/overview', { params }),
+    saveEmployees: (employees) => api.put('/payroll/employees/sheet', { employees }),
+    saveShifts: (shifts) => api.put('/payroll/shifts/sheet', { shifts }),
+    saveSchedules: (schedules) => api.put('/payroll/schedules/sheet', { schedules }),
+    saveAttendance: (attendanceRecords) => api.put('/payroll/attendance/sheet', { attendance_records: attendanceRecords }),
+    saveUserScopes: (userScopes) => api.put('/payroll/user-scopes/sheet', { user_scopes: userScopes }),
+};
+
 export const mediaApi = {
     upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
 };

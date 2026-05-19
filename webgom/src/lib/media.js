@@ -216,17 +216,31 @@ export const getEntityImageCollection = (entity = {}) => {
   ];
 };
 
+const pickPrimaryImageFromCollection = (images = []) => (
+  toImageArray(images).find((image) => Boolean(image?.is_primary))
+  || toImageArray(images)[0]
+  || null
+);
+
 export const getEntityImageCandidates = (entity = {}) => {
   if (!entity || typeof entity !== 'object' || Array.isArray(entity)) {
     return [];
   }
 
+  const imageCollection = getEntityImageCollection(entity);
+  const collectionPrimaryImage = pickPrimaryImageFromCollection(imageCollection);
+
   return [
-    entity.image,
     entity.primary_image,
-    ...getEntityImageCollection(entity),
-    pickDirectImageCandidate(entity),
+    collectionPrimaryImage,
     entity.main_image ? { path: entity.main_image } : null,
+    entity.featured_image_media,
+    entity.featuredImageMedia,
+    entity.featured_image ? { path: entity.featured_image } : null,
+    entity.featuredImage ? { path: entity.featuredImage } : null,
+    ...imageCollection.filter((image) => image !== collectionPrimaryImage),
+    pickDirectImageCandidate(entity),
+    entity.image,
   ].filter(Boolean);
 };
 
@@ -256,23 +270,42 @@ export const resolveEntityImageUrl = (entity, preferredOrFallback = 'large', fal
 export const resolveCartItemImageUrl = (item, preferredOrFallback = 'medium', fallback = '') => {
   const normalizedPreferred = normalizeImagePreference(preferredOrFallback);
   const resolvedFallback = normalizedPreferred === preferredOrFallback ? fallback : preferredOrFallback;
+  const selectedVariant = item?.selected_variant || item?.selectedVariant || null;
+  const isCompositeCartItem = Array.isArray(item?.groupedItems) && item.groupedItems.length > 0;
+  const itemPrimaryCandidates = item && typeof item === 'object'
+    ? getEntityImageCandidates({ ...item, image: null })
+    : [];
 
   const candidates = [
-    item?.variantImage,
-    item?.variant_image,
-    item?.variantPrimaryImage,
-    item?.variant_primary_image,
-    ...toImageArray(item?.variantImages),
-    ...toImageArray(item?.variant_images),
-    ...getEntityImageCandidates(item),
-    item?.parentImage,
-    item?.parent_image,
+    ...(
+      isCompositeCartItem
+        ? []
+        : [
+          selectedVariant?.primary_image,
+          pickPrimaryImageFromCollection(selectedVariant?.images),
+          selectedVariant?.main_image ? { path: selectedVariant.main_image } : null,
+          item?.variantImage,
+          item?.variant_image,
+          item?.variantPrimaryImage,
+          item?.variant_primary_image,
+          item?.variant_main_image ? { path: item.variant_main_image } : null,
+          item?.variantMainImage ? { path: item.variantMainImage } : null,
+          ...toImageArray(item?.variantImages),
+          ...toImageArray(item?.variant_images),
+        ]
+    ),
+    ...itemPrimaryCandidates,
     item?.parentPrimaryImage,
     item?.parent_primary_image,
-    ...toImageArray(item?.parentImages),
-    ...toImageArray(item?.parent_images),
+    pickPrimaryImageFromCollection(item?.parentImages),
+    pickPrimaryImageFromCollection(item?.parent_images),
     item?.parentMainImage ? { path: item.parentMainImage } : null,
     item?.parent_main_image ? { path: item.parent_main_image } : null,
+    ...toImageArray(item?.parentImages),
+    ...toImageArray(item?.parent_images),
+    item?.parentImage,
+    item?.parent_image,
+    item?.image,
   ];
 
   for (const candidate of candidates) {

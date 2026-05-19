@@ -90,6 +90,7 @@ const ORDER_LIST_VIEW_STATE_STORAGE_KEY = 'order_list_view_state_v1';
 const ORDER_COST_TOTAL_COLUMN_ID = 'cost_total';
 const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
 const ORDER_SOURCE_COLUMN_ID = 'source';
+const ORDER_COLUMN_STORAGE_SCOPE_PAGE = 'order_list';
 const ORDER_SOURCE_BADGE_CLASSNAMES = {
     FB: 'border-sky-200 bg-sky-50 text-sky-700',
     GG: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -98,6 +99,64 @@ const ORDER_SOURCE_BADGE_CLASSNAMES = {
     Tiktok: 'border-zinc-300 bg-zinc-50 text-zinc-800',
     'Khach cu': 'border-amber-200 bg-amber-50 text-amber-800',
     'Chua ro': 'border-rose-200 bg-rose-50 text-rose-700',
+};
+
+const normalizeStorageScopeSegment = (value, fallback = 'default') => {
+    const normalizedValue = String(value ?? '').trim();
+    if (!normalizedValue) return fallback;
+    return normalizedValue.replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+
+const buildOrderColumnStorageKey = ({ userId, accountId, siteCode }) => [
+    ORDER_COLUMN_STORAGE_SCOPE_PAGE,
+    'user',
+    normalizeStorageScopeSegment(userId),
+    'account',
+    normalizeStorageScopeSegment(accountId),
+    'site',
+    normalizeStorageScopeSegment(siteCode),
+].join('_');
+
+const LEGACY_ORDER_COLUMN_STORAGE_CANDIDATES = {
+    _columns: ['_columns_default', '_columns'],
+    _column_order: ['_column_order_default', '_column_order'],
+    _column_widths: ['_column_widths_default', '_column_widths'],
+    _columns_default: ['_columns_default'],
+    _column_order_default: ['_column_order_default'],
+    _column_widths_default: ['_column_widths_default'],
+};
+
+const readValidStorageJsonValue = (key) => {
+    const value = window.localStorage.getItem(key);
+    if (value === null) return null;
+
+    try {
+        JSON.parse(value);
+        return value;
+    } catch {
+        return null;
+    }
+};
+
+const migrateOrderColumnStorageKey = (storageKey) => {
+    if (typeof window === 'undefined' || storageKey === ORDER_LIST_STORAGE_KEY) {
+        return;
+    }
+
+    Object.entries(LEGACY_ORDER_COLUMN_STORAGE_CANDIDATES).forEach(([targetSuffix, sourceSuffixes]) => {
+        const targetKey = `${storageKey}${targetSuffix}`;
+        if (window.localStorage.getItem(targetKey) !== null) {
+            return;
+        }
+
+        for (const sourceSuffix of sourceSuffixes) {
+            const sourceValue = readValidStorageJsonValue(`${ORDER_LIST_STORAGE_KEY}${sourceSuffix}`);
+            if (sourceValue !== null) {
+                window.localStorage.setItem(targetKey, sourceValue);
+                return;
+            }
+        }
+    });
 };
 
 const getOrderSourceBadgeClassName = (source) => (
@@ -1059,12 +1118,12 @@ const buildOrderSearchTerms = (filters = {}) => (
     buildActiveKeywordTokens(filters?.search_terms, filters?.search_input)
 );
 
-const ensureOrderListFinancialColumnPreference = () => {
+const ensureOrderListFinancialColumnPreference = (storageKey = ORDER_LIST_STORAGE_KEY) => {
     if (typeof window === 'undefined') {
         return;
     }
 
-    const columnOrderStorageKey = `${ORDER_LIST_STORAGE_KEY}_column_order`;
+    const columnOrderStorageKey = `${storageKey}_column_order`;
     const savedOrderRaw = window.localStorage.getItem(columnOrderStorageKey);
 
     if (!savedOrderRaw) {
@@ -2437,6 +2496,11 @@ const OrderList = () => {
     const activeSiteStorageKey = typeof window === 'undefined'
         ? 'default'
         : (window.localStorage.getItem('activeSiteCode') || 'default');
+    const orderColumnStorageKey = useMemo(() => buildOrderColumnStorageKey({
+        userId: user?.id || user?.email || 'default',
+        accountId: activeAccountStorageKey,
+        siteCode: activeSiteStorageKey,
+    }), [activeAccountStorageKey, activeSiteStorageKey, user?.email, user?.id]);
     const isActiveAccountReady = Boolean(activeAccountId);
     const returnWorkbenchStorageScopeKey = `${activeAccountStorageKey}::${activeSiteStorageKey}`;
     const filterRef = useRef(null);
@@ -2445,6 +2509,7 @@ const OrderList = () => {
     const [orders, setOrders] = useState([]);
     const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
     const [allAttributes, setAllAttributes] = useState([]);
+    const [tableColumns, setTableColumns] = useState(() => ORDER_TABLE_COLUMNS);
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIdsState] = useState([]);
     const selectedIdsRef = useRef(selectedIds);
@@ -2628,8 +2693,12 @@ const OrderList = () => {
     }, []);
 
     useEffect(() => {
-        ensureOrderListFinancialColumnPreference();
-    }, []);
+        migrateOrderColumnStorageKey(orderColumnStorageKey);
+    }, [orderColumnStorageKey]);
+
+    useEffect(() => {
+        ensureOrderListFinancialColumnPreference(orderColumnStorageKey);
+    }, [orderColumnStorageKey]);
 
     const {
         visibleColumns,
@@ -2643,9 +2712,8 @@ const OrderList = () => {
         handleHeaderDrop,
         resetDefault,
         saveAsDefault,
-        setAvailableColumns,
-        setVisibleColumns
-    } = useTableColumns('order_list', ORDER_TABLE_COLUMNS);
+        setAvailableColumns
+    } = useTableColumns(orderColumnStorageKey, tableColumns, { resetDefaultToSystem: true });
 
     const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
     const isTrashView = currentView === 'trash';
@@ -2953,36 +3021,10 @@ const OrderList = () => {
             }));
 
             const combinedColumns = [...ORDER_TABLE_COLUMNS, ...attrColumns];
-
-            const savedOrder = localStorage.getItem('order_list_column_order');
-            let sortedColumns = [...combinedColumns];
-            if (savedOrder) {
-                const orderIds = JSON.parse(savedOrder);
-                sortedColumns = [...combinedColumns].sort((a, b) => {
-                    const idxA = orderIds.indexOf(a.id);
-                    const idxB = orderIds.indexOf(b.id);
-                    if (idxA === -1 && idxB === -1) return 0;
-                    if (idxA === -1) return 1;
-                    if (idxB === -1) return -1;
-                    return idxA - idxB;
-                });
-            }
-            setAvailableColumns(sortedColumns);
-
-            const savedVisible = localStorage.getItem('order_list_columns');
-            const allColumnIds = sortedColumns.map((column) => column.id);
-            if (savedVisible) {
-                const savedIds = JSON.parse(savedVisible);
-                const nextVisible = allColumnIds.filter((id) => savedIds.includes(id));
-                const mergedVisible = [...nextVisible, ...allColumnIds.filter((id) => !nextVisible.includes(id))];
-                setVisibleColumns(mergedVisible);
-                localStorage.setItem('order_list_columns', JSON.stringify(mergedVisible));
-            } else {
-                setVisibleColumns(allColumnIds);
-            }
+            setTableColumns(combinedColumns);
             orderApi.preloadBootstrap({ mode: 'form' });
         } catch (error) { console.error("Error initial data", error); }
-    }, [isActiveAccountReady, setAvailableColumns, setVisibleColumns]);
+    }, [isActiveAccountReady]);
 
     const addToSearchHistory = (term) => {
         const normalizedTerm = serializeKeywordTokens(parseKeywordTokens(term));
@@ -5560,7 +5602,7 @@ const OrderList = () => {
                         </div>
                     )}
 
-            {showColumnSettings && <div ref={columnSettingsRef}><TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey="order_list" /></div>}
+            {showColumnSettings && <div ref={columnSettingsRef}><TableColumnSettingsPanel availableColumns={availableColumns} visibleColumns={visibleColumns} toggleColumn={toggleColumn} setAvailableColumns={setAvailableColumns} resetDefault={resetDefault} saveAsDefault={saveAsDefault} onClose={() => setShowColumnSettings(false)} storageKey={orderColumnStorageKey} /></div>}
 
             <div className="relative flex-1 space-y-3 lg:hidden">
                 {orders.length === 0 && !loading ? (

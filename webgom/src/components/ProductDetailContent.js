@@ -822,23 +822,11 @@ export default function ProductDetailContent({
       options.bundle_option_uid = optionUid;
     }
 
-    const optionMediaContext = optionMedia
-      ? {
-        variantProduct: {
-          ...product,
-          primary_image: optionMedia.primary_image || product.primary_image || null,
-          main_image: optionMedia.main_image || product.main_image || null,
-          images: optionMedia.primary_image ? [optionMedia.primary_image] : product.images,
-        },
-        parentProduct: product,
-      }
-      : null;
-
     return {
       itemsToCart: currentItems,
       finalPrice: pricing.finalSubtotal,
       pricing,
-      mediaContext: optionMediaContext,
+      mediaContext: null,
       options,
       bundleMeta: {
         bundleConfigName: resolvedConfigName,

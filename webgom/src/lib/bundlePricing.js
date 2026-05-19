@@ -34,6 +34,47 @@ const toPositiveInteger = (value, fallback = 1) => {
 
 const normalizeText = (value = '') => String(value || '').trim();
 
+const toImageArray = (value) => (
+  Array.isArray(value) ? value.filter(Boolean) : []
+);
+
+const pickPrimaryImage = (images = []) => (
+  toImageArray(images).find((image) => Boolean(image?.is_primary))
+  || toImageArray(images)[0]
+  || null
+);
+
+const imageFromUrl = (value) => {
+  const normalized = normalizeText(value);
+
+  return normalized ? { url: normalized, path: normalized, image_url: normalized } : null;
+};
+
+const resolveBundleEntryImage = (item = {}) => {
+  const selectedVariant = item?.selected_variant || item?.selectedVariant || null;
+
+  return cloneBundleValue(
+    selectedVariant?.primary_image
+    ?? pickPrimaryImage(selectedVariant?.images)
+    ?? imageFromUrl(selectedVariant?.main_image)
+    ?? item?.variantImage
+    ?? item?.variant_image
+    ?? item?.variantPrimaryImage
+    ?? item?.variant_primary_image
+    ?? imageFromUrl(item?.variant_main_image || item?.variantMainImage)
+    ?? pickPrimaryImage(item?.variantImages)
+    ?? pickPrimaryImage(item?.variant_images)
+    ?? item?.primary_image
+    ?? pickPrimaryImage(item?.images)
+    ?? imageFromUrl(item?.main_image)
+    ?? item?.featured_image_media
+    ?? item?.featuredImageMedia
+    ?? imageFromUrl(item?.featured_image || item?.featuredImage)
+    ?? item?.image
+    ?? null
+  );
+};
+
 const floorToUnit = (value, unit = BUNDLE_TOTAL_ROUNDING_UNIT) => {
   const normalizedValue = Math.max(toFiniteNumber(value, 0), 0);
   const normalizedUnit = Math.max(toInteger(unit, BUNDLE_TOTAL_ROUNDING_UNIT), 1);
@@ -168,12 +209,7 @@ export const createBundleCartEntry = (item = {}, fallbackIndex = 0) => {
     price: unitPrice,
     unit_price: unitPrice,
     line_total: unitPrice * quantity,
-    image: cloneBundleValue(
-      item?.image
-      ?? item?.primary_image
-      ?? item?.images?.[0]
-      ?? null
-    ),
+    image: resolveBundleEntryImage(item),
   };
 };
 

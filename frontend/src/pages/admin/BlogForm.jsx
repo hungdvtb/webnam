@@ -4,6 +4,8 @@ import ReactQuill from 'react-quill-new';
 import { blogApi, aiApi, cmsApi, mediaApi } from '../../services/api';
 import BlogInlineImageModal from '../../components/admin/BlogInlineImageModal';
 import BlogMediaGalleryModal from '../../components/admin/BlogMediaGalleryModal';
+import BlogPostBulkPasteModal from '../../components/admin/BlogPostBulkPasteModal';
+import ProductDescriptionHtmlPasteModal from '../../components/admin/ProductDescriptionHtmlPasteModal';
 import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import {
@@ -45,6 +47,8 @@ const BlogForm = () => {
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
     const [uploadingFeaturedImage, setUploadingFeaturedImage] = useState(false);
+    const [contentHtmlPasteOpen, setContentHtmlPasteOpen] = useState(false);
+    const [bulkPasteOpen, setBulkPasteOpen] = useState(false);
     const [categories, setCategories] = useState([]);
     const [domains, setDomains] = useState([]);
     const [mediaModalState, setMediaModalState] = useState({
@@ -170,6 +174,10 @@ const BlogForm = () => {
     const featuredImagePreviewUrl = useMemo(
         () => resolveMediaUrl(formData.featured_image),
         [formData.featured_image],
+    );
+    const selectedCategory = useMemo(
+        () => categories.find((category) => String(category.id) === String(formData.blog_category_id)) || null,
+        [categories, formData.blog_category_id],
     );
 
     const openMediaModal = (options = {}) => {
@@ -602,7 +610,6 @@ const BlogForm = () => {
         setAiGenerating(true);
 
         try {
-            const selectedCategory = categories.find((category) => String(category.id) === String(formData.blog_category_id));
             const prompt = [
                 'Bạn là biên tập viên SEO tiếng Việt cho website bán hàng.',
                 'Hãy tạo một bài viết blog mới và trả về DUY NHẤT JSON hợp lệ theo cấu trúc:',
@@ -656,6 +663,145 @@ const BlogForm = () => {
         }
     };
 
+    const getCurrentContentHtml = () => serializeEditorContent(getQuillEditor()) || formData.content || '';
+
+    const extractJsonObjectFromText = (value) => {
+        const normalized = String(value || '')
+            .trim()
+            .replace(/^```(?:json)?\s*/i, '')
+            .replace(/\s*```$/i, '')
+            .trim();
+
+        if (!normalized) {
+            throw new Error('EMPTY_JSON');
+        }
+
+        try {
+            return JSON.parse(normalized);
+        } catch {
+            const startIndex = normalized.indexOf('{');
+            const endIndex = normalized.lastIndexOf('}');
+
+            if (startIndex < 0 || endIndex <= startIndex) {
+                throw new Error('INVALID_JSON');
+            }
+
+            return JSON.parse(normalized.slice(startIndex, endIndex + 1));
+        }
+    };
+
+    const buildFullPostPromptForChatGpt = () => {
+        const payload = {
+            title: formData.title || '',
+            slug: formData.slug || '',
+            category: {
+                id: formData.blog_category_id || '',
+                name: selectedCategory?.name || '',
+            },
+            seo_keyword: formData.seo_keyword || '',
+            excerpt: formData.excerpt || '',
+            meta_title: formData.meta_title || '',
+            meta_description: formData.meta_description || '',
+            meta_keywords: formData.meta_keywords || '',
+            featured_image: formData.featured_image || '',
+            content_html: getCurrentContentHtml(),
+        };
+
+        return [
+            'Bạn là biên tập viên SEO tiếng Việt cho website bán hàng.',
+            '',
+            'Tôi sẽ gửi toàn bộ dữ liệu bài viết hiện tại ở dạng JSON.',
+            'Yêu cầu:',
+            '- Viết lại title, seo_keyword, excerpt, meta_title, meta_description, meta_keywords và content_html cho tự nhiên hơn, chuẩn SEO hơn.',
+            '- Giữ nguyên slug, category và featured_image, chỉ dùng làm thông tin tham khảo.',
+            '- content_html phải là HTML hoàn chỉnh.',
+            '- Giữ nguyên ảnh, video, iframe, gallery, link và thuộc tính HTML đang có trong content_html.',
+            '- Không tự bịa thông tin, giá, chính sách, cam kết hoặc thông số nếu dữ liệu không có.',
+            '- Trả về DUY NHẤT JSON hợp lệ, không markdown, không giải thích.',
+            '',
+            'Schema JSON cần trả về:',
+            JSON.stringify({
+                title: '',
+                seo_keyword: '',
+                excerpt: '',
+                meta_title: '',
+                meta_description: '',
+                meta_keywords: '',
+                content_html: '',
+            }, null, 2),
+            '',
+            'Dữ liệu hiện tại:',
+            JSON.stringify(payload, null, 2),
+        ].join('\n');
+    };
+
+    const handleCopyContentHtml = () => {
+        const content = getCurrentContentHtml();
+        if (!content || content === '<p><br></p>') {
+            showToast({ message: 'Nội dung bài viết đang trống.', type: 'warning' });
+            return;
+        }
+
+        navigator.clipboard.writeText(content).then(() => {
+            showToast({ message: 'Đã sao chép HTML bài viết.', type: 'success' });
+        }).catch(() => {
+            showToast({ message: 'Không thể sao chép HTML lúc này.', type: 'error' });
+        });
+    };
+
+    const handleApplyContentHtmlPaste = (html) => {
+        let normalizedHtml = String(html || '').trim();
+        normalizedHtml = normalizedHtml.replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/i, '').trim();
+
+        if (!normalizedHtml) {
+            showToast({ message: 'HTML đang trống.', type: 'warning' });
+            return;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            content: normalizedHtml,
+        }));
+        setContentHtmlPasteOpen(false);
+        showToast({ message: 'Đã áp dụng HTML bài viết mới.', type: 'success' });
+    };
+
+    const handleCopyFullPostForChatGpt = () => {
+        navigator.clipboard.writeText(buildFullPostPromptForChatGpt()).then(() => {
+            showToast({ message: 'Đã sao chép toàn bộ dữ liệu bài viết.', type: 'success' });
+        }).catch(() => {
+            showToast({ message: 'Không thể sao chép dữ liệu lúc này.', type: 'error' });
+        });
+    };
+
+    const handleApplyFullPostPaste = (value) => {
+        let data;
+        try {
+            data = extractJsonObjectFromText(value);
+        } catch {
+            showToast({ message: 'JSON không hợp lệ. Hãy dán đúng JSON ChatGPT trả về.', type: 'error' });
+            return;
+        }
+
+        const contentHtml = data.content_html ?? data.content ?? data.html;
+
+        setFormData((prev) => ({
+            ...prev,
+            title: String(data.title ?? prev.title ?? ''),
+            seo_keyword: String(data.seo_keyword ?? prev.seo_keyword ?? ''),
+            excerpt: String(data.excerpt ?? prev.excerpt ?? ''),
+            meta_title: String(data.meta_title ?? prev.meta_title ?? ''),
+            meta_description: String(data.meta_description ?? prev.meta_description ?? ''),
+            meta_keywords: Array.isArray(data.meta_keywords)
+                ? data.meta_keywords.join(', ')
+                : String(data.meta_keywords ?? prev.meta_keywords ?? ''),
+            featured_image: String(data.featured_image ?? prev.featured_image ?? ''),
+            content: contentHtml !== undefined ? String(contentHtml || '') : prev.content,
+        }));
+        setBulkPasteOpen(false);
+        showToast({ message: 'Đã áp dụng toàn bộ dữ liệu bài viết.', type: 'success' });
+    };
+
     return (
         <>
             <form onSubmit={handleSubmit} className="space-y-10 animate-fade-in pb-20">
@@ -679,6 +825,22 @@ const BlogForm = () => {
                     </div>
 
                     <div className="flex gap-4">
+                        <button
+                            type="button"
+                            onClick={handleCopyFullPostForChatGpt}
+                            className="border border-gold/20 px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-gold transition-colors hover:bg-gold/5"
+                            title="Copy toàn bộ title, SEO và HTML nội dung để sửa ngoài ChatGPT"
+                        >
+                            Copy tất cả
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setBulkPasteOpen(true)}
+                            className="border border-primary/20 px-6 py-3 text-[10px] font-bold uppercase tracking-widest text-primary transition-colors hover:bg-primary/5"
+                            title="Dán JSON đã sửa từ ChatGPT để cập nhật một lượt"
+                        >
+                            Dán tất cả
+                        </button>
                         {isEdit && (
                             <button
                                 type="button"
@@ -837,6 +999,27 @@ const BlogForm = () => {
                                         {aiGenerating ? 'progress_activity' : 'auto_awesome'}
                                     </span>
                                     {aiGenerating ? 'Đang viết bài...' : 'Viết bằng AI'}
+                                </button>
+                            </div>
+
+                            <div className="mb-2 flex flex-wrap justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleCopyContentHtml}
+                                    className="flex items-center gap-2 rounded-sm border border-gold/20 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-gold shadow-sm transition hover:bg-gold/5 active:scale-95"
+                                    title="Copy HTML bài viết để gửi sang ChatGPT"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                    Copy HTML
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setContentHtmlPasteOpen(true)}
+                                    className="flex items-center gap-2 rounded-sm border border-primary/20 px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-primary shadow-sm transition hover:bg-primary/5 active:scale-95"
+                                    title="Dán HTML bài viết đã được ChatGPT viết lại"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">code_blocks</span>
+                                    Dán HTML
                                 </button>
                             </div>
 
@@ -999,6 +1182,19 @@ const BlogForm = () => {
                     onRemove={inlineImageModalState.editing ? handleRemoveInlineImage : null}
                 />
             ) : null}
+
+            <ProductDescriptionHtmlPasteModal
+                open={contentHtmlPasteOpen}
+                initialHtml={getCurrentContentHtml()}
+                onApply={handleApplyContentHtmlPaste}
+                onClose={() => setContentHtmlPasteOpen(false)}
+            />
+
+            <BlogPostBulkPasteModal
+                open={bulkPasteOpen}
+                onApply={handleApplyFullPostPaste}
+                onClose={() => setBulkPasteOpen(false)}
+            />
         </>
     );
 };

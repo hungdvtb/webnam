@@ -1,12 +1,12 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
-import config from '@/lib/config';
 import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailClientShell from '@/components/ProductDetailClientShell';
+import ProductDetailTabs from '@/components/ProductDetailTabs';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
+import { getPolicyPosts } from '@/lib/policyContent';
 import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
 
 function buildRelatedViewAllHref(product, relatedMeta) {
@@ -42,6 +42,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
   let product = null;
   let relatedProducts = [];
   let relatedMeta = null;
+  let policyPosts = [];
 
   if (isBundleOptionRequest || isBundlePreviewRequest) {
     return (
@@ -66,9 +67,10 @@ export default async function ProductDetailPage({ params, searchParams }) {
   }
 
   // Fetch product detail and related products concurrently to minimize SSR latency
-  const [productResult, relatedResult] = await Promise.allSettled([
+  const [productResult, relatedResult, policyResult] = await Promise.allSettled([
     getWebProductDetail(slug),
     getWebRelatedProducts(slug),
+    getPolicyPosts(),
   ]);
 
   if (productResult.status === 'rejected') {
@@ -93,12 +95,17 @@ export default async function ProductDetailPage({ params, searchParams }) {
     console.error('Failed to fetch related products:', relatedResult.reason);
   }
 
+  if (policyResult.status === 'fulfilled') {
+    policyPosts = policyResult.value || [];
+  } else {
+    console.error('Failed to fetch product policy posts:', policyResult.reason);
+  }
+
   const images = product.images || [];
   const mainImage = images.find((img) => img.is_primary) || images[0];
   const productPageGapClass =
     product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
   const descriptionHtml = buildProductDescriptionHtml(product?.description || '');
-  const hasDescription = Boolean(descriptionHtml.trim());
   const relatedViewAllHref = buildRelatedViewAllHref(product, relatedMeta);
 
   return (
@@ -114,39 +121,16 @@ export default async function ProductDetailPage({ params, searchParams }) {
             requestedVariantId={requestedVariantId}
           />
 
-          <div className={styles.tabsSection}>
-            <div className={styles.tabHeader}>
-              <h3 className={styles.tabTitle}>Mô tả chi tiết</h3>
-            </div>
-            <div className={styles.tabContent}>
-              <div
-                className={styles.descBody}
-                dangerouslySetInnerHTML={{
-                  __html: hasDescription ? descriptionHtml : 'Đang cập nhật nội dung...',
-                }}
-              />
-              {mainImage && (mainImage.url || mainImage.path) && (
-                <div className={styles.descImage}>
-                  <Image
-                    src={
-                      mainImage.url && mainImage.url.startsWith('http')
-                        ? mainImage.url
-                        : `${config.storageUrl}/${mainImage.path}`
-                    }
-                    alt="Mô tả sản phẩm"
-                    fill
-                    unoptimized
-                    sizes="(max-width: 768px) 100vw, 80vw"
-                    style={{ objectFit: 'cover' }}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
+          <ProductDetailTabs
+            descriptionHtml={descriptionHtml}
+            mainImage={mainImage}
+            policyPosts={policyPosts}
+          />
 
           <RelatedProductsSection
             relatedProducts={relatedProducts}
             viewAllHref={relatedViewAllHref}
+            currentProduct={product}
           />
         </div>
       </main>

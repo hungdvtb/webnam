@@ -234,6 +234,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/reports')) return 'reports';
         if (path.startsWith('/admin/finance/daily-profit')) return 'reports';
         if (path.startsWith('/admin/finance/monthly-profit')) return 'reports';
+        if (path.startsWith('/admin/payroll')) return 'payroll';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
         if (path.startsWith('/admin/ai-training')) return 'orders';
@@ -664,6 +665,20 @@ const AdminLayout = () => {
                             Báo cáo lãi lỗ tháng
                         </SidebarText>
                     </Link>
+
+                    {canAccess('payroll') && (
+                        <Link
+                            to="/admin/payroll"
+                            aria-label="Công và lương"
+                            title={collapsedTitle('Công và lương')}
+                            className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/payroll') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                        >
+                            <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/payroll') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>event_available</span>
+                            <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                                Công và lương
+                            </SidebarText>
+                        </Link>
+                    )}
 
                     <Link
                         to="/admin/reports/web-analytics"

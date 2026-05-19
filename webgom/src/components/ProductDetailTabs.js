@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import config from '@/lib/config';
+import { buildBlogContentMarkup } from '@/lib/blogContent';
 import { getPolicyPosts } from '@/lib/policyContent';
+import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer';
 import styles from '@/app/product/[slug]/product.module.css';
 
 const DESCRIPTION_TAB = 'description';
@@ -137,6 +139,10 @@ export default function ProductDetailTabs({
     return policies.find((policy) => policy.id === activePolicyId) || policies[0];
   }, [activePolicyId, policies]);
   const activePolicyContent = typeof activePolicy?.content === 'string' ? activePolicy.content.trim() : '';
+  const activePolicyContentMarkup = useMemo(
+    () => buildBlogContentMarkup(activePolicyContent),
+    [activePolicyContent],
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -308,10 +314,15 @@ export default function ProductDetailTabs({
                   className={`${styles.policyDetail} ${styles.productInfoAnchor}`}
                 >
                   {activePolicyContent ? (
-                    <div
-                      className={`${styles.descBody} ${styles.policyArticle}`}
-                      dangerouslySetInnerHTML={{ __html: activePolicyContent }}
-                    />
+                    <>
+                      <div
+                        className={`${styles.descBody} ${styles.policyArticle} bdt-content`}
+                        dangerouslySetInnerHTML={activePolicyContentMarkup}
+                      />
+                      <BlogMediaGalleryEnhancer
+                        contentKey={`product-policy:${activePolicy?.id || activePolicy?.postSlug || ''}:${activePolicyContent.length}`}
+                      />
+                    </>
                   ) : (
                     <p className={styles.policyStatus}>{EMPTY_POLICIES}</p>
                   )}

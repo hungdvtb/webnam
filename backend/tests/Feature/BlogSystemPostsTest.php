@@ -211,6 +211,63 @@ class BlogSystemPostsTest extends TestCase
         ]);
     }
 
+    public function test_it_preserves_manually_cleared_system_post_excerpt(): void
+    {
+        $account = Account::create([
+            'name' => 'Policy Excerpt Store',
+            'domain' => 'policy-excerpt.local',
+            'subdomain' => 'policy-excerpt-store',
+            'site_code' => 'POLICY_EXCERPT_STORE',
+        ]);
+
+        $user = User::factory()->create();
+        $user->accounts()->attach($account->id, ['role' => 'owner']);
+        Sanctum::actingAs($user);
+
+        $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->getJson('/api/blog?per_page=20')->assertOk();
+
+        $systemPost = Post::where('account_id', $account->id)
+            ->where('slug', 'chinh-sach-bao-hanh')
+            ->firstOrFail();
+
+        $originalTitle = $systemPost->title;
+        $originalSlug = $systemPost->slug;
+        $originalContent = $systemPost->content;
+        $originalPublished = (bool) $systemPost->is_published;
+        $originalStarred = (bool) $systemPost->is_starred;
+
+        $response = $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->putJson('/api/blog/' . $systemPost->id, [
+            'excerpt' => '',
+        ]);
+
+        $response->assertOk();
+        $this->assertTrue($response->json('excerpt') === null || $response->json('excerpt') === '');
+        $this->assertTrue($systemPost->fresh()->excerpt === null || $systemPost->fresh()->excerpt === '');
+
+        $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->getJson('/api/blog?per_page=20')->assertOk();
+
+        $freshPost = $systemPost->fresh();
+        $this->assertTrue($freshPost->excerpt === null || $freshPost->excerpt === '');
+        $this->assertSame($originalTitle, $freshPost->title);
+        $this->assertSame($originalSlug, $freshPost->slug);
+        $this->assertSame($originalContent, $freshPost->content);
+        $this->assertSame($originalPublished, (bool) $freshPost->is_published);
+        $this->assertSame($originalStarred, (bool) $freshPost->is_starred);
+
+        $showResponse = $this->withHeaders([
+            'X-Account-Id' => (string) $account->id,
+        ])->getJson('/api/blog/' . $systemPost->id);
+
+        $showResponse->assertOk();
+        $this->assertTrue($showResponse->json('excerpt') === null || $showResponse->json('excerpt') === '');
+    }
+
     public function test_it_accepts_uploaded_media_asset_urls_without_variant_when_updating_featured_image(): void
     {
         $account = Account::create([

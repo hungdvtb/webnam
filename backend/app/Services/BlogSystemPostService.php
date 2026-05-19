@@ -168,9 +168,7 @@ HTML,
                 $updates['title'] = $definition['title'];
             }
 
-            if (!$this->hasMeaningfulText($post->excerpt)) {
-                $updates['excerpt'] = $definition['excerpt'];
-            }
+            // Keep manually cleared excerpts empty; definitions only seed new system posts.
 
             if (!$this->hasMeaningfulHtml($post->content)) {
                 $updates['content'] = $definition['content'];

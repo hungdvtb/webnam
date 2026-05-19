@@ -10,7 +10,7 @@ const YOUTUBE_IFRAME_PATTERN = /<iframe\b[^>]*src=(["'])([^"']+)\1[^>]*>(?:<\/if
 const STANDALONE_IMAGE_PATTERN = /<p\b[^>]*>\s*((?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?)\s*<\/p>/gi;
 const IMAGE_TAG_PATTERN = /<img\b([^>]*?)>/gi;
 const VIDEO_PLACEHOLDER_PATTERN = /__BLOG_VIDEO_EMBED_(\d+)__/g;
-const MEDIA_GALLERY_BLOCK_PATTERN = /<div\b([^>]*\bclass=(["'])[^"']*\bql-bdt-media-gallery\b[^"']*\2[^>]*)>[\s\S]*?<\/div>/gi;
+const MEDIA_GALLERY_BLOCK_PATTERN = /<([a-z0-9-]+)\b([^>]*\bclass\s*=\s*(["'])[^"']*\bql-bdt-media-gallery\b[^"']*\3[^>]*)>[\s\S]*?<\/\1>/gi;
 const MEDIA_GALLERY_PLACEHOLDER_PATTERN = /__BLOG_MEDIA_GALLERY_(\d+)__/g;
 const NON_BREAKING_SPACE_PATTERN = /(?:&nbsp;|&#160;|&#xa0;|\u00a0)/gi;
 
@@ -124,7 +124,7 @@ export function transformBlogContent(html) {
 
   output = output.replace(
     MEDIA_GALLERY_BLOCK_PATTERN,
-    (_match, attributes) => {
+    (_match, _tagName, attributes) => {
       const payload = extractGalleryPayloadFromAttributes(attributes);
       const galleryMarkup = renderMediaGalleryMarkup(decodeGalleryPayload(payload), mediaGalleryEmbeds.length);
 

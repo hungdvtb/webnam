@@ -6,6 +6,7 @@ import {
   buildGalleryStageMarkup,
   decodeGalleryPayload,
   normalizeGalleryItems,
+  renderMediaGalleryMarkup,
 } from '@/lib/blogMediaGallery';
 
 const MIN_ZOOM_SCALE = 1;
@@ -984,6 +985,32 @@ function hydrateGallery(galleryElement, openImageLightbox) {
   };
 }
 
+function upgradeRawGalleryElement(galleryElement, index) {
+  if (!galleryElement || galleryElement.classList.contains('bdt-media-gallery')) {
+    return galleryElement;
+  }
+
+  const items = normalizeGalleryItems(decodeGalleryPayload(galleryElement.getAttribute('data-gallery-payload')));
+  const galleryMarkup = renderMediaGalleryMarkup(items, `client-${index}`);
+
+  if (!galleryMarkup) {
+    galleryElement.remove();
+    return null;
+  }
+
+  const template = document.createElement('template');
+  template.innerHTML = galleryMarkup;
+  const replacement = template.content.firstElementChild;
+
+  if (!replacement) {
+    galleryElement.remove();
+    return null;
+  }
+
+  galleryElement.replaceWith(replacement);
+  return replacement;
+}
+
 function BlogImageLightbox({ image, onClose }) {
   const {
     setContainerNode,
@@ -1115,6 +1142,10 @@ function BlogMediaGalleryStyles() {
         border-radius: 1.15rem;
         background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
         box-shadow: 0 14px 30px rgba(27, 54, 93, 0.08);
+      }
+
+      .bdt-content .ql-bdt-media-gallery {
+        display: none !important;
       }
 
       .bdt-content .bdt-media-gallery-main {
@@ -1502,6 +1533,11 @@ export default function BlogMediaGalleryEnhancer({ contentKey }) {
   }, []);
 
   useEffect(() => {
+    const rawGalleries = Array.from(document.querySelectorAll('.bdt-content .ql-bdt-media-gallery[data-gallery-payload]'));
+    rawGalleries.forEach((gallery, index) => {
+      upgradeRawGalleryElement(gallery, index);
+    });
+
     const galleries = Array.from(document.querySelectorAll('.bdt-content .bdt-media-gallery'));
     const cleanups = galleries
       .map((gallery) => hydrateGallery(gallery, openImageLightbox))

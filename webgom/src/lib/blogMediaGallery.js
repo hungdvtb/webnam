@@ -25,6 +25,15 @@ function escapeAttribute(value) {
   return escapeHtml(value);
 }
 
+function decodeHtmlAttributeValue(value) {
+  return normalizeText(value)
+    .replace(/^(&quot;|&#34;|&#x22;|&apos;|&#39;)/i, '')
+    .replace(/(&quot;|&#34;|&#x22;|&apos;|&#39;)$/i, '')
+    .replace(/&quot;|&#34;|&#x22;/gi, '"')
+    .replace(/&apos;|&#39;/gi, "'")
+    .replace(/&amp;/gi, '&');
+}
+
 export function decodeGalleryPayload(value) {
   const rawValue = normalizeText(value);
 
@@ -105,8 +114,15 @@ export function encodeGalleryPayload(value) {
 }
 
 export function extractGalleryPayloadFromAttributes(attributes) {
-  const payloadMatch = String(attributes || '').match(/\bdata-gallery-payload=(["'])(.*?)\1/i);
-  return payloadMatch?.[2] || '';
+  const serializedAttributes = String(attributes || '');
+  const quotedPayloadMatch = serializedAttributes.match(/\bdata-gallery-payload\s*=\s*(["'])(.*?)\1/i);
+
+  if (quotedPayloadMatch) {
+    return decodeHtmlAttributeValue(quotedPayloadMatch[2]);
+  }
+
+  const unquotedPayloadMatch = serializedAttributes.match(/\bdata-gallery-payload\s*=\s*([^\s>]+)/i);
+  return decodeHtmlAttributeValue(unquotedPayloadMatch?.[1] || '');
 }
 
 export function buildGalleryStageMarkup(item) {

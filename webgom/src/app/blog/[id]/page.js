@@ -171,6 +171,11 @@ function getPostDateLabel(post, format = 'short') {
   return formatDate(post?.published_at || post?.created_at, format);
 }
 
+function isSystemArticle(post) {
+  const slug = String(post?.slug || '').trim().toLowerCase();
+  return Boolean(post?.is_system) || slug.startsWith('chinh-sach-');
+}
+
 export async function generateMetadata({ params }) {
   const resolvedParams = await params;
   const slugOrId = resolvedParams?.id;
@@ -279,6 +284,7 @@ export default async function BlogPostPage({ params }) {
   const hasContent = Boolean(contentMarkup.__html.trim());
   const relatedPosts = related.length > 0 ? related : FALLBACK_RELATED_POSTS;
   const currentBlogCategory = resolveCurrentCategory(post, blogCategories);
+  const isSystemPost = isSystemArticle(post);
   const articleCategory = currentBlogCategory?.name || post?.category?.name || post?.category || post?.tag
     || (Array.isArray(post?.tags) && post.tags.length > 0
       ? (typeof post.tags[0] === 'string' ? post.tags[0] : post.tags[0]?.name)
@@ -316,7 +322,10 @@ export default async function BlogPostPage({ params }) {
               <div className="bdt-category-badge">{articleCategory}</div>
             ) : null}
 
-            <ResponsiveArticleTitle className="bdt-title">
+            <ResponsiveArticleTitle
+              className={`bdt-title${isSystemPost ? ' bdt-title--system' : ''}`}
+              disableFit={isSystemPost}
+            >
               {post.title}
             </ResponsiveArticleTitle>
 
@@ -548,6 +557,10 @@ export default async function BlogPostPage({ params }) {
           overflow-wrap: anywhere;
           word-break: normal;
           text-wrap: balance;
+        }
+
+        .bdt-title--system {
+          font-size: 25px;
         }
 
         .bdt-meta {
@@ -888,29 +901,36 @@ export default async function BlogPostPage({ params }) {
             linear-gradient(135deg, #ece4d7, #f4efe7);
         }
 
-        .bdt-content .bdt-media-gallery-stage-image-wrap,
-        .bdt-content .bdt-media-gallery-stage-video {
+        .bdt-content .bdt-media-gallery-stage-image-wrap {
           display: block;
           width: 100%;
-          aspect-ratio: 16 / 9;
+          aspect-ratio: 1 / 1;
         }
 
         .bdt-content .bdt-media-gallery-stage-image-wrap {
           display: flex;
           align-items: center;
           justify-content: center;
+          overflow: hidden;
           background: rgba(255, 255, 255, 0.46);
+          cursor: zoom-in;
         }
 
         .bdt-content .bdt-media-gallery-stage-image {
+          display: block;
           width: 100%;
           height: 100% !important;
-          object-fit: contain;
+          object-fit: cover;
           object-position: center;
+          user-select: none;
+          -webkit-user-drag: none;
         }
 
         .bdt-content .bdt-media-gallery-stage-video {
           position: relative;
+          display: block;
+          width: 100%;
+          aspect-ratio: 16 / 9;
           background: #0f172a;
         }
 
@@ -979,6 +999,7 @@ export default async function BlogPostPage({ params }) {
         }
 
         .bdt-content .bdt-media-gallery-thumb-frame img {
+          display: block;
           width: 100%;
           height: 100% !important;
           object-fit: cover;
@@ -1006,6 +1027,119 @@ export default async function BlogPostPage({ params }) {
           text-align: center;
           text-transform: uppercase;
           color: rgba(27, 54, 93, 0.72);
+        }
+
+        @media (min-width: 701px) {
+          .bdt-content .bdt-media-gallery-main {
+            width: 50%;
+            margin-inline: auto;
+          }
+
+          .bdt-content .bdt-media-gallery-thumbs {
+            width: 50%;
+            margin-inline: auto;
+            justify-content: center;
+          }
+        }
+
+        .bdt-media-lightbox {
+          position: fixed;
+          inset: 0;
+          z-index: 1300;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 1rem;
+          background: rgba(8, 12, 20, 0.94);
+        }
+
+        .bdt-media-lightbox-stage {
+          position: relative;
+          width: min(96vw, 980px);
+          height: min(92vh, 980px);
+          overflow: hidden;
+        }
+
+        .bdt-media-lightbox-viewport {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          overflow: hidden;
+          touch-action: none;
+          cursor: zoom-in;
+        }
+
+        .bdt-media-lightbox-viewport.is-zoomed {
+          cursor: grab;
+        }
+
+        .bdt-media-lightbox-viewport.is-zoomed:active {
+          cursor: grabbing;
+        }
+
+        .bdt-media-lightbox-image {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          object-position: center;
+          transform-origin: top left;
+          will-change: transform;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+
+        .bdt-media-lightbox-close,
+        .bdt-media-lightbox-tool {
+          position: absolute;
+          z-index: 2;
+          width: 44px;
+          height: 44px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 0;
+          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.12);
+          color: #fff;
+          cursor: pointer;
+          backdrop-filter: blur(10px);
+          box-shadow: 0 12px 28px rgba(8, 12, 20, 0.24);
+        }
+
+        .bdt-media-lightbox-close {
+          top: 1rem;
+          right: 1rem;
+        }
+
+        .bdt-media-lightbox-tools {
+          position: absolute;
+          left: 50%;
+          bottom: 1rem;
+          z-index: 2;
+          display: flex;
+          gap: 0.55rem;
+          transform: translateX(-50%);
+        }
+
+        .bdt-media-lightbox-tool {
+          position: static;
+        }
+
+        .bdt-media-lightbox-close:hover,
+        .bdt-media-lightbox-tool:hover {
+          background: rgba(255, 255, 255, 0.18);
+        }
+
+        .bdt-media-lightbox-tool:disabled {
+          cursor: default;
+          opacity: 0.42;
+        }
+
+        .bdt-media-lightbox-close .material-symbols-outlined,
+        .bdt-media-lightbox-tool .material-symbols-outlined {
+          font-size: 1.35rem;
         }
 
         .bdt-content .highlight-section {
@@ -1327,6 +1461,10 @@ export default async function BlogPostPage({ params }) {
             letter-spacing: -0.025em;
           }
 
+          .bdt-title--system {
+            font-size: 25px;
+          }
+
           .bdt-related-card {
             grid-template-columns: 84px minmax(0, 1fr);
             gap: 0.75rem;
@@ -1404,6 +1542,30 @@ export default async function BlogPostPage({ params }) {
           .bdt-content .bdt-media-gallery-thumb-label {
             padding: 0 0.55rem 0.55rem;
             font-size: 0.66rem;
+          }
+
+          .bdt-media-lightbox {
+            padding: 0.75rem;
+          }
+
+          .bdt-media-lightbox-stage {
+            width: 100%;
+            height: min(88vh, 100vw);
+          }
+
+          .bdt-media-lightbox-close,
+          .bdt-media-lightbox-tool {
+            width: 40px;
+            height: 40px;
+          }
+
+          .bdt-media-lightbox-close {
+            top: 0.75rem;
+            right: 0.75rem;
+          }
+
+          .bdt-media-lightbox-tools {
+            bottom: 0.75rem;
           }
 
           .bdt-content .bdt-inline-media,

@@ -168,3 +168,156 @@
     box-shadow: 0 0 0 2px rgba(27, 54, 93, 0.12), 0 18px 36px rgba(27, 54, 93, 0.12);
     outline: none;
 }
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-controls {
+    position: absolute;
+    z-index: 3;
+    right: 12px;
+    top: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid rgba(197, 160, 101, 0.24);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 10px 24px rgba(27, 54, 93, 0.14);
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--admin-color-primary);
+    cursor: pointer;
+    padding: 0;
+    transition: background-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action:hover,
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action:focus {
+    background: var(--admin-color-primary);
+    color: #ffffff;
+    outline: none;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action:active {
+    transform: scale(0.94);
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action.is-drag-handle {
+    cursor: grab;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action.is-drag-handle:active {
+    cursor: grabbing;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action .material-symbols-outlined {
+    font-size: 17px;
+    line-height: 1;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action[data-media-gallery-action="delete"] {
+    color: #a5462a;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action[data-media-gallery-action="delete"]:hover,
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-action[data-media-gallery-action="delete"]:focus {
+    background: #a5462a;
+    color: #ffffff;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-summary {
+    position: relative;
+    z-index: 1;
+    display: block;
+    max-width: calc(100% - 220px);
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-card {
+    position: relative;
+    z-index: 1;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    min-height: 64px;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-thumb {
+    flex: 0 0 72px;
+    width: 72px;
+    height: 54px;
+    border-radius: 8px;
+    background:
+        linear-gradient(135deg, rgba(237, 228, 211, 0.96), rgba(197, 160, 101, 0.16)) center / cover no-repeat;
+    box-shadow: inset 0 0 0 1px rgba(197, 160, 101, 0.22);
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-body {
+    display: inline-flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-title {
+    color: var(--admin-color-primary);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-meta,
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery-compact-counts {
+    overflow: hidden;
+    color: rgba(68, 68, 68, 0.72);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-compact {
+    min-height: 108px;
+    padding: 54px 16px 16px;
+    border-radius: 12px;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-compact::before,
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-compact::after {
+    display: none;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-compact .ql-bdt-media-gallery-summary {
+    display: none;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-compact .ql-bdt-media-gallery-compact-card {
+    display: flex;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-gallery.is-dragging {
+    opacity: 0.5;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-drop-before {
+    box-shadow: 0 -3px 0 var(--admin-color-gold), 0 0 0 2px rgba(197, 160, 101, 0.16) !important;
+}
+
+.quill-premium-wrapper .ql-editor .ql-bdt-media-drop-after {
+    box-shadow: 0 3px 0 var(--admin-color-gold), 0 0 0 2px rgba(197, 160, 101, 0.16) !important;
+}
+
+.quill-premium-wrapper .ql-editor.ql-bdt-media-drag-active {
+    cursor: grabbing;
+}

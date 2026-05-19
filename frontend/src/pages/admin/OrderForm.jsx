@@ -691,6 +691,57 @@ const appendUrlVersion = (url, version) => {
     return `${baseUrl}${separator}v=${encodeURIComponent(normalizedVersion)}${hash}`;
 };
 const getQuoteTemplateImageUrl = (template) => appendUrlVersion(template?.image_url, template?.updated_at);
+const getQuoteBundleSelectionLabel = (items = []) => {
+    const seenLabels = new Set();
+    const labels = [];
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const options = item?.options || {};
+        const isBundleItem = normalizeCanvasText(options?.search_entry_kind) === SEARCH_ENTRY_BUNDLE_OPTION
+            || options?.bundle_parent_id
+            || options?.bundle_parent_name
+            || options?.bundle_option_title
+            || options?.bundle_option_post_title;
+
+        if (!isBundleItem) return;
+
+        const parentName = normalizeCanvasText(options?.bundle_parent_name);
+        const optionTitle = normalizeCanvasText(options?.bundle_option_title || options?.bundle_option_post_title);
+        const parts = [parentName, optionTitle].filter((part, index, source) => (
+            part && source.findIndex((candidate) => normalizeProductSearchText(candidate) === normalizeProductSearchText(part)) === index
+        ));
+        const label = parts.join(' - ');
+        const labelKey = normalizeProductSearchText(label);
+
+        if (!label || seenLabels.has(labelKey)) return;
+        seenLabels.add(labelKey);
+        labels.push(label);
+    });
+
+    return labels[0] || '';
+};
+const getSelectedQuoteTemplateLabel = (template, items = []) => {
+    const templateName = normalizeCanvasText(template?.name || 'Chưa đặt tên mẫu');
+    const bundleSelectionLabel = getQuoteBundleSelectionLabel(items);
+
+    if (!bundleSelectionLabel) return templateName;
+
+    const normalizedTemplateName = normalizeProductSearchText(templateName);
+    const normalizedBundleSelectionLabel = normalizeProductSearchText(bundleSelectionLabel);
+
+    if (
+        normalizedTemplateName
+        && normalizedBundleSelectionLabel
+        && (
+            normalizedBundleSelectionLabel.includes(normalizedTemplateName)
+            || normalizedTemplateName.includes(normalizedBundleSelectionLabel)
+        )
+    ) {
+        return bundleSelectionLabel;
+    }
+
+    return `${templateName} - ${bundleSelectionLabel}`;
+};
 const escapeHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -2512,6 +2563,26 @@ const fitCanvasText = (ctx, text, maxWidth) => {
     return ellipsis;
 };
 
+const drawFittedCanvasText = (ctx, text, x, y, maxWidth, {
+    fontWeight = 700,
+    maxFontSize = 24,
+    minFontSize = 9,
+    fontFamily = quoteCanvasFontFamily,
+} = {}) => {
+    const normalized = normalizeCanvasText(text);
+    if (!normalized) return;
+
+    let fontSize = maxFontSize;
+    while (fontSize > minFontSize) {
+        ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+        if (ctx.measureText(normalized).width <= maxWidth) break;
+        fontSize -= 1;
+    }
+
+    ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    ctx.fillText(normalized, x, y);
+};
+
 const drawTextLines = (ctx, lines, x, y, lineHeight, align = 'left') => {
     ctx.textAlign = align;
     ctx.textBaseline = 'top';
@@ -2530,6 +2601,44 @@ const drawImageContain = (ctx, image, x, y, width, height) => {
     const drawY = y + ((height - drawHeight) / 2);
 
     ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+};
+
+const canCopyPngToClipboard = () => {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+    if (!navigator.clipboard?.write || typeof window.ClipboardItem !== 'function') return false;
+    if (typeof window.ClipboardItem.supports === 'function') {
+        return window.ClipboardItem.supports('image/png');
+    }
+
+    return true;
+};
+
+const copyPngBlobToClipboard = async (blob) => {
+    if (!canCopyPngToClipboard()) {
+        const error = new Error('CLIPBOARD_IMAGE_UNSUPPORTED');
+        error.code = 'CLIPBOARD_IMAGE_UNSUPPORTED';
+        throw error;
+    }
+
+    const ClipboardItemConstructor = window.ClipboardItem;
+    await navigator.clipboard.write([
+        new ClipboardItemConstructor({ 'image/png': blob }),
+    ]);
+};
+
+const downloadQuoteImageBlob = (blob, customerName) => {
+    const safeCustomerName = (customerName || 'khach-le')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9-_]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase() || 'khach-le';
+
+    const link = document.createElement('a');
+    link.download = `bao-gia-${safeCustomerName}-${Date.now()}.png`;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 };
 
 const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orderId, totalQuantity, pricingSummary }) => {
@@ -6581,7 +6690,7 @@ const OrderForm = () => {
             const storeName = normalizeCanvasText(quoteSettings.quote_store_name || 'Thông tin cửa hàng / xưởng');
             const addressText = normalizeCanvasText(quoteSettings.quote_store_address || 'Bổ sung địa chỉ cửa hàng trong Cài đặt web > Báo giá');
             const phoneText = normalizeCanvasText(quoteSettings.quote_store_phone || 'Chưa có số điện thoại');
-            const selectedTemplateName = normalizeCanvasText(template.name || 'Chưa đặt tên mẫu');
+            const selectedTemplateName = getSelectedQuoteTemplateLabel(template, formData.items);
             const customerName = String(formData.customer_name || '').trim();
             const hasCustomerName = customerName !== '';
             const rightCardHeight = hasCustomerName ? 176 : 156;
@@ -6620,8 +6729,7 @@ const OrderForm = () => {
             ctx.font = `700 12px ${quoteCanvasFontFamily}`;
             ctx.fillText(normalizeCanvasText('Mẫu đã chọn'), rightCardX + 24, 126);
             ctx.fillStyle = textPrimary;
-            ctx.font = `700 24px ${quoteCanvasFontFamily}`;
-            ctx.fillText(selectedTemplateName, rightCardX + 24, 148);
+            drawFittedCanvasText(ctx, selectedTemplateName, rightCardX + 24, 148, rightCardWidth - 48);
             if (hasCustomerName) {
                 ctx.fillStyle = textPrimary;
                 ctx.font = `700 13px ${quoteCanvasFontFamily}`;
@@ -6810,27 +6918,25 @@ const OrderForm = () => {
                 throw new Error('QUOTE_CAPTURE_FAILED');
             }
 
-            try {
-                if (navigator.clipboard?.write && window.ClipboardItem) {
-                    const data = [new ClipboardItem({ 'image/png': blob })];
-                    await navigator.clipboard.write(data);
-                }
-            } catch (clipErr) {
-                console.error('Clipboard copy failed:', clipErr);
+            if (isCompactOrderMobileLayout) {
+                downloadQuoteImageBlob(blob, formData.customer_name);
+                return;
             }
 
-            const safeCustomerName = (formData.customer_name || 'khach-le')
-                .normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '')
-                .replace(/[^a-zA-Z0-9-_]+/g, '-')
-                .replace(/^-+|-+$/g, '')
-                .toLowerCase() || 'khach-le';
-
-            const link = document.createElement('a');
-            link.download = `bao-gia-${safeCustomerName}-${Date.now()}.png`;
-            link.href = URL.createObjectURL(blob);
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+            try {
+                await copyPngBlobToClipboard(blob);
+                showTransientNotification('success', 'Đã copy ảnh báo giá');
+            } catch (clipErr) {
+                console.error('Clipboard copy failed:', clipErr);
+                const isUnsupported = clipErr?.code === 'CLIPBOARD_IMAGE_UNSUPPORTED';
+                showTransientNotification(
+                    'error',
+                    isUnsupported
+                        ? 'Trình duyệt không hỗ trợ copy ảnh vào clipboard.'
+                        : 'Không thể copy ảnh báo giá vào clipboard. Hãy kiểm tra quyền clipboard hoặc dùng trình duyệt hỗ trợ.',
+                    4500
+                );
+            }
         } catch (err) {
             console.error('Quote capture failed', err);
             showModal({ title: 'Lỗi', content: 'Không thể tạo ảnh báo giá. Hãy thử lại.', type: 'error' });

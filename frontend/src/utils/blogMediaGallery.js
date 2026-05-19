@@ -299,12 +299,78 @@ export function readGalleryItemsFromNode(node) {
     return decodeGalleryPayload(node?.getAttribute?.(GALLERY_PAYLOAD_ATTRIBUTE));
 }
 
-export function renderBlogMediaGalleryNode(node, value) {
+function createGalleryActionButton(action, icon, title, options = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `ql-bdt-media-gallery-action${options.handle ? ' is-drag-handle' : ''}`;
+    button.setAttribute('data-media-gallery-action', action);
+    button.setAttribute('title', title);
+    button.setAttribute('aria-label', title);
+
+    if (options.handle) {
+        button.setAttribute('draggable', 'true');
+    }
+
+    const iconNode = document.createElement('span');
+    iconNode.className = 'material-symbols-outlined';
+    iconNode.textContent = icon;
+    button.appendChild(iconNode);
+
+    return button;
+}
+
+function renderGalleryControls(node) {
+    const controls = document.createElement('span');
+    controls.className = 'ql-bdt-media-gallery-controls';
+    controls.appendChild(createGalleryActionButton('drag', 'drag_indicator', 'Kéo để di chuyển', { handle: true }));
+    controls.appendChild(createGalleryActionButton('move-up', 'arrow_upward', 'Lên'));
+    controls.appendChild(createGalleryActionButton('move-down', 'arrow_downward', 'Xuống'));
+    controls.appendChild(createGalleryActionButton('toggle-compact', 'unfold_less', 'Thu gọn / Mở rộng'));
+    controls.appendChild(createGalleryActionButton('edit', 'edit', 'Sửa block media'));
+    controls.appendChild(createGalleryActionButton('delete', 'delete', 'Xóa block media'));
+    node.appendChild(controls);
+}
+
+function renderGalleryCompactCard(node, items, summary, previewUrl, imageCount, videoCount) {
+    const compactCard = document.createElement('span');
+    compactCard.className = 'ql-bdt-media-gallery-compact-card';
+
+    const thumbnail = document.createElement('span');
+    thumbnail.className = 'ql-bdt-media-gallery-compact-thumb';
+    if (previewUrl) {
+        thumbnail.style.backgroundImage = `url("${previewUrl.replace(/"/g, '\\"')}")`;
+    }
+
+    const body = document.createElement('span');
+    body.className = 'ql-bdt-media-gallery-compact-body';
+
+    const title = document.createElement('span');
+    title.className = 'ql-bdt-media-gallery-compact-title';
+    title.textContent = 'Block media';
+
+    const meta = document.createElement('span');
+    meta.className = 'ql-bdt-media-gallery-compact-meta';
+    meta.textContent = summary || `${items.length} media`;
+
+    const counts = document.createElement('span');
+    counts.className = 'ql-bdt-media-gallery-compact-counts';
+    counts.textContent = `${imageCount} ảnh / ${videoCount} video`;
+
+    body.appendChild(title);
+    body.appendChild(meta);
+    body.appendChild(counts);
+    compactCard.appendChild(thumbnail);
+    compactCard.appendChild(body);
+    node.appendChild(compactCard);
+}
+
+export function renderBlogMediaGalleryNode(node, value, options = {}) {
     const items = normalizeGalleryItems(Array.isArray(value) ? value : value?.items);
     const summary = buildGallerySummary(items);
     const previewUrl = getGalleryPreviewUrl(items);
     const imageCount = items.filter((item) => item.type === 'image').length;
     const videoCount = items.filter((item) => item.type === 'video').length;
+    const interactive = options.interactive !== false;
 
     node.setAttribute('contenteditable', 'false');
     node.setAttribute('role', 'button');
@@ -314,6 +380,8 @@ export function renderBlogMediaGalleryNode(node, value) {
     node.setAttribute('data-image-count', String(imageCount));
     node.setAttribute('data-video-count', String(videoCount));
     node.setAttribute('data-gallery-summary', summary);
+    node.classList.remove('is-compact', 'is-dragging', 'ql-bdt-media-drop-before', 'ql-bdt-media-drop-after');
+    node.removeAttribute('data-gallery-compact');
     node.setAttribute('aria-label', `${summary}. Nhấn để chỉnh block media gallery`);
     node.setAttribute('title', 'Nhấn để chỉnh block media gallery');
     node.textContent = `${summary} • Nhấn để chỉnh`;
@@ -323,6 +391,19 @@ export function renderBlogMediaGalleryNode(node, value) {
     } else {
         node.style.setProperty('--ql-bdt-media-gallery-preview', 'none');
     }
+
+    if (!interactive) {
+        return;
+    }
+
+    node.replaceChildren();
+    renderGalleryControls(node);
+    renderGalleryCompactCard(node, items, summary, previewUrl, imageCount, videoCount);
+
+    const summaryNode = document.createElement('span');
+    summaryNode.className = 'ql-bdt-media-gallery-summary';
+    summaryNode.textContent = `${summary} • Nhấn để chỉnh`;
+    node.appendChild(summaryNode);
 }
 
 export function registerBlogMediaGalleryBlot(Quill) {

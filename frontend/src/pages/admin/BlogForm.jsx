@@ -16,6 +16,7 @@ import {
     GALLERY_BLOCK_CLASS,
     readGalleryItemsFromNode,
     registerBlogMediaGalleryBlot,
+    renderBlogMediaGalleryNode,
 } from '../../utils/blogMediaGallery';
 import { resolveMediaUrl } from '../../utils/mediaUrl';
 import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
@@ -25,6 +26,9 @@ const Quill = ReactQuill.Quill;
 const Delta = Quill.import('delta');
 registerBlogInlineImageBlot(Quill);
 registerBlogMediaGalleryBlot(Quill);
+
+const MEDIA_GALLERY_ACTION_ATTRIBUTE = 'data-media-gallery-action';
+const MEDIA_GALLERY_DRAG_MIME = 'application/x-bdt-media-gallery';
 
 const QUILL_FORMATS = [
     'header',
@@ -43,6 +47,8 @@ const BlogForm = () => {
     const quillRef = useRef(null);
     const openMediaModalRef = useRef(() => {});
     const quillModulesRef = useRef(null);
+    const draggedMediaGalleryRef = useRef(null);
+    const dragOverMediaGalleryRef = useRef(null);
 
     const [loading, setLoading] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
@@ -93,18 +99,32 @@ const BlogForm = () => {
         }
     };
 
+    const normalizeMediaGalleryHtmlForStorage = (html) => {
+        if (typeof document === 'undefined' || !html || !String(html).includes(GALLERY_BLOCK_CLASS)) {
+            return html || '';
+        }
+
+        const template = document.createElement('template');
+        template.innerHTML = String(html || '');
+        template.content.querySelectorAll(`.${GALLERY_BLOCK_CLASS}`).forEach((node) => {
+            renderBlogMediaGalleryNode(node, readGalleryItemsFromNode(node), { interactive: false });
+        });
+
+        return template.innerHTML;
+    };
+
     const serializeEditorContent = (editorInstance) => {
         if (editorInstance?.root?.innerHTML) {
-            return editorInstance.root.innerHTML;
+            return normalizeMediaGalleryHtmlForStorage(editorInstance.root.innerHTML);
         }
 
         if (typeof editorInstance?.getHTML === 'function') {
-            return editorInstance.getHTML() || '';
+            return normalizeMediaGalleryHtmlForStorage(editorInstance.getHTML() || '');
         }
 
         try {
             const quill = getQuillEditor();
-            return quill?.root?.innerHTML || '';
+            return normalizeMediaGalleryHtmlForStorage(quill?.root?.innerHTML || '');
         } catch {
             return '';
         }
@@ -311,7 +331,276 @@ const BlogForm = () => {
         return eventElement.closest?.('img') || null;
     };
 
+    const getGalleryActionElementFromEventTarget = (target) => {
+        const eventElement = target instanceof Element ? target : target?.parentElement;
+        return eventElement?.closest?.(`[${MEDIA_GALLERY_ACTION_ATTRIBUTE}]`) || null;
+    };
+
+    const getGalleryBlot = (galleryNode) => {
+        try {
+            return galleryNode ? Quill.find(galleryNode) : null;
+        } catch {
+            return null;
+        }
+    };
+
+    const getBlotLength = (blot) => {
+        try {
+            const length = typeof blot?.length === 'function' ? blot.length() : 1;
+            return Number.isFinite(length) && length > 0 ? length : 1;
+        } catch {
+            return 1;
+        }
+    };
+
+    const getGalleryIndex = (galleryNode, quill) => {
+        const blot = getGalleryBlot(galleryNode);
+        if (!blot || !quill) {
+            return -1;
+        }
+
+        try {
+            return quill.getIndex(blot);
+        } catch {
+            return -1;
+        }
+    };
+
+    const clearMediaGalleryDropIndicator = ({ keepRootActive = false } = {}) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        root?.querySelectorAll('.ql-bdt-media-drop-before, .ql-bdt-media-drop-after').forEach((node) => {
+            node.classList.remove('ql-bdt-media-drop-before', 'ql-bdt-media-drop-after');
+        });
+
+        if (!keepRootActive) {
+            root?.classList.remove('ql-bdt-media-drag-active');
+            draggedMediaGalleryRef.current?.classList?.remove('is-dragging');
+            draggedMediaGalleryRef.current = null;
+            dragOverMediaGalleryRef.current = null;
+        }
+    };
+
+    const getMediaGalleryDropTargetFromEvent = (event) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        if (!root) {
+            return null;
+        }
+
+        const children = Array.from(root.children).filter((child) => child instanceof HTMLElement);
+
+        if (!children.length) {
+            return { targetNode: null, placement: 'after' };
+        }
+
+        const pointerY = event.clientY;
+        let targetNode = children.find((child) => {
+            const rect = child.getBoundingClientRect();
+            return pointerY >= rect.top && pointerY <= rect.bottom;
+        });
+
+        if (!targetNode) {
+            const firstNode = children[0];
+            const lastNode = children[children.length - 1];
+            targetNode = pointerY < firstNode.getBoundingClientRect().top ? firstNode : lastNode;
+        }
+
+        const rect = targetNode.getBoundingClientRect();
+        const placement = pointerY < rect.top + (rect.height / 2) ? 'before' : 'after';
+
+        return { targetNode, placement };
+    };
+
+    const showMediaGalleryDropIndicator = (dropTarget) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        clearMediaGalleryDropIndicator({ keepRootActive: true });
+        root?.classList.add('ql-bdt-media-drag-active');
+
+        if (dropTarget?.targetNode) {
+            dropTarget.targetNode.classList.add(
+                dropTarget.placement === 'before'
+                    ? 'ql-bdt-media-drop-before'
+                    : 'ql-bdt-media-drop-after'
+            );
+        }
+    };
+
+    const getInsertionIndexForDropTarget = (dropTarget, quill) => {
+        if (!quill) {
+            return -1;
+        }
+
+        if (!dropTarget?.targetNode) {
+            return Math.max(quill.getLength() - 1, 0);
+        }
+
+        const targetBlot = getGalleryBlot(dropTarget.targetNode);
+        if (!targetBlot) {
+            return Math.max(quill.getLength() - 1, 0);
+        }
+
+        const targetIndex = quill.getIndex(targetBlot);
+        return dropTarget.placement === 'after'
+            ? targetIndex + getBlotLength(targetBlot)
+            : targetIndex;
+    };
+
+    const updateMediaGalleryCompactButton = (galleryNode, isCompact) => {
+        const button = galleryNode?.querySelector?.(`[${MEDIA_GALLERY_ACTION_ATTRIBUTE}="toggle-compact"]`);
+        const icon = button?.querySelector?.('.material-symbols-outlined');
+
+        if (icon) {
+            icon.textContent = isCompact ? 'unfold_more' : 'unfold_less';
+        }
+
+        button?.setAttribute('title', isCompact ? 'Mở rộng block media' : 'Thu gọn block media');
+        button?.setAttribute('aria-label', isCompact ? 'Mở rộng block media' : 'Thu gọn block media');
+    };
+
+    const toggleMediaGalleryCompact = (galleryNode) => {
+        if (!galleryNode) {
+            return false;
+        }
+
+        const nextCompactState = !galleryNode.classList.contains('is-compact');
+        galleryNode.classList.toggle('is-compact', nextCompactState);
+        galleryNode.setAttribute('data-gallery-compact', nextCompactState ? 'true' : 'false');
+        updateMediaGalleryCompactButton(galleryNode, nextCompactState);
+        return true;
+    };
+
+    const moveMediaGalleryNode = (sourceNode, dropTarget) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        if (!sourceNode || !quill || !root?.contains(sourceNode)) {
+            return false;
+        }
+
+        const sourceBlot = getGalleryBlot(sourceNode);
+        const sourceIndex = getGalleryIndex(sourceNode, quill);
+        const sourceLength = getBlotLength(sourceBlot);
+        const items = readGalleryItemsFromNode(sourceNode);
+        let targetIndex = getInsertionIndexForDropTarget(dropTarget, quill);
+
+        if (sourceIndex < 0 || targetIndex < 0 || !items.length) {
+            return false;
+        }
+
+        if (targetIndex > sourceIndex) {
+            targetIndex -= sourceLength;
+        }
+
+        targetIndex = Math.max(0, Math.min(targetIndex, Math.max(quill.getLength() - sourceLength, 0)));
+
+        if (targetIndex === sourceIndex) {
+            return false;
+        }
+
+        quill.deleteText(sourceIndex, sourceLength, 'user');
+        targetIndex = Math.max(0, Math.min(targetIndex, Math.max(quill.getLength() - 1, 0)));
+        quill.insertEmbed(targetIndex, 'mediaGallery', items, 'user');
+        quill.setSelection(Math.min(targetIndex + 1, quill.getLength()), 0, 'silent');
+        syncEditorContentToState(quill);
+        return true;
+    };
+
+    const moveMediaGalleryByDirection = (galleryNode, direction) => {
+        const quill = getQuillEditor();
+        const root = quill?.root;
+
+        if (!galleryNode || !root?.contains(galleryNode)) {
+            return false;
+        }
+
+        const siblings = Array.from(root.children).filter((child) => child instanceof HTMLElement);
+        const currentIndex = siblings.indexOf(galleryNode);
+        const targetNode = direction < 0 ? siblings[currentIndex - 1] : siblings[currentIndex + 1];
+
+        if (!targetNode) {
+            showToast({
+                message: direction < 0 ? 'Block media đang ở đầu nội dung.' : 'Block media đang ở cuối nội dung.',
+                type: 'info',
+                duration: 1200,
+            });
+            return false;
+        }
+
+        const moved = moveMediaGalleryNode(galleryNode, {
+            targetNode,
+            placement: direction < 0 ? 'before' : 'after',
+        });
+
+        if (moved) {
+            showToast({
+                message: direction < 0 ? 'Đã chuyển block media lên.' : 'Đã chuyển block media xuống.',
+                type: 'success',
+                duration: 1200,
+            });
+        }
+
+        return moved;
+    };
+
+    const removeMediaGalleryNode = (galleryNode) => {
+        const quill = getQuillEditor();
+        const index = getGalleryIndex(galleryNode, quill);
+
+        if (!quill || index < 0) {
+            return false;
+        }
+
+        quill.deleteText(index, 1, 'user');
+        syncEditorContentToState(quill);
+        showToast({
+            message: 'Đã xóa block media khỏi nội dung bài viết.',
+            type: 'success',
+        });
+        return true;
+    };
+
+    const handleMediaGalleryAction = (action, galleryNode) => {
+        if (!galleryNode) {
+            return false;
+        }
+
+        switch (action) {
+            case 'move-up':
+                return moveMediaGalleryByDirection(galleryNode, -1);
+            case 'move-down':
+                return moveMediaGalleryByDirection(galleryNode, 1);
+            case 'toggle-compact':
+                return toggleMediaGalleryCompact(galleryNode);
+            case 'edit':
+                return openExistingMediaGallery(galleryNode);
+            case 'delete':
+                return removeMediaGalleryNode(galleryNode);
+            case 'drag':
+                return true;
+            default:
+                return false;
+        }
+    };
+
     const handleEditorClickCapture = (event) => {
+        const actionElement = getGalleryActionElementFromEventTarget(event.target);
+        if (actionElement) {
+            const galleryNode = getGalleryNodeFromEventTarget(actionElement);
+            const handled = handleMediaGalleryAction(actionElement.getAttribute(MEDIA_GALLERY_ACTION_ATTRIBUTE), galleryNode);
+
+            if (handled) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+
+            return;
+        }
+
         const galleryNode = getGalleryNodeFromEventTarget(event.target);
 
         if (openExistingMediaGallery(galleryNode)) {
@@ -333,6 +622,10 @@ const BlogForm = () => {
             return;
         }
 
+        if (getGalleryActionElementFromEventTarget(event.target)) {
+            return;
+        }
+
         const galleryNode = getGalleryNodeFromEventTarget(event.target);
 
         if (openExistingMediaGallery(galleryNode)) {
@@ -346,6 +639,80 @@ const BlogForm = () => {
         if (openExistingInlineImage(imageNode)) {
             event.preventDefault();
             event.stopPropagation();
+        }
+    };
+
+    const handleEditorDragStartCapture = (event) => {
+        const actionElement = getGalleryActionElementFromEventTarget(event.target);
+
+        if (actionElement?.getAttribute(MEDIA_GALLERY_ACTION_ATTRIBUTE) !== 'drag') {
+            return;
+        }
+
+        const galleryNode = getGalleryNodeFromEventTarget(actionElement);
+
+        if (!galleryNode) {
+            return;
+        }
+
+        draggedMediaGalleryRef.current = galleryNode;
+        galleryNode.classList.add('is-dragging');
+
+        const quill = getQuillEditor();
+        quill?.root?.classList.add('ql-bdt-media-drag-active');
+
+        event.dataTransfer?.setData(MEDIA_GALLERY_DRAG_MIME, 'move');
+        event.dataTransfer?.setData('text/plain', 'media-gallery');
+        if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+        }
+
+        event.stopPropagation();
+    };
+
+    const handleEditorDragOverCapture = (event) => {
+        if (!draggedMediaGalleryRef.current) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'move';
+        }
+
+        const dropTarget = getMediaGalleryDropTargetFromEvent(event);
+        dragOverMediaGalleryRef.current = dropTarget;
+        showMediaGalleryDropIndicator(dropTarget);
+    };
+
+    const handleEditorDropCapture = (event) => {
+        const draggedNode = draggedMediaGalleryRef.current;
+
+        if (!draggedNode) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const dropTarget = dragOverMediaGalleryRef.current || getMediaGalleryDropTargetFromEvent(event);
+        const moved = moveMediaGalleryNode(draggedNode, dropTarget);
+        clearMediaGalleryDropIndicator();
+
+        if (moved) {
+            showToast({
+                message: 'Đã cập nhật vị trí block media.',
+                type: 'success',
+                duration: 1200,
+            });
+        }
+    };
+
+    const handleEditorDragEndCapture = () => {
+        if (draggedMediaGalleryRef.current) {
+            clearMediaGalleryDropIndicator();
         }
     };
 
@@ -396,6 +763,7 @@ const BlogForm = () => {
 
         quill.updateContents(delta, 'user');
         quill.setSelection(Math.min(insertIndex + 2, quill.getLength()), 0, 'silent');
+        syncEditorContentToState(quill);
         closeMediaModal();
 
         showToast({
@@ -418,6 +786,7 @@ const BlogForm = () => {
             new Delta().retain(mediaModalState.insertIndex).delete(1),
             'user'
         );
+        syncEditorContentToState(quill);
         closeMediaModal();
 
         showToast({
@@ -538,7 +907,7 @@ const BlogForm = () => {
                 message: 'Đã cập nhật ảnh đại diện mới.',
                 type: 'success',
             });
-        } catch (error) {
+        } catch {
             showModal({
                 title: 'Upload ảnh đại diện thất bại',
                 content: 'Không thể tải ảnh đại diện lên lúc này. Bạn có thể thử lại hoặc dán link ảnh trực tiếp.',
@@ -1035,6 +1404,10 @@ const BlogForm = () => {
                                 className="quill-premium-wrapper border border-gold/20 bg-white shadow-sm"
                                 onClickCapture={handleEditorClickCapture}
                                 onKeyDownCapture={handleEditorKeyDownCapture}
+                                onDragStartCapture={handleEditorDragStartCapture}
+                                onDragOverCapture={handleEditorDragOverCapture}
+                                onDropCapture={handleEditorDropCapture}
+                                onDragEndCapture={handleEditorDragEndCapture}
                             >
                                 <ReactQuill
                                     ref={quillRef}

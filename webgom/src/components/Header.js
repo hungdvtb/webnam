@@ -2581,7 +2581,7 @@ export default function Header({
             z-index: 1199;
             display: flex;
             justify-content: center;
-            padding: 0 12px calc(env(safe-area-inset-bottom, 0px) + 10px);
+            padding: 0 10px calc(env(safe-area-inset-bottom, 0px) + 6px);
             opacity: 0;
             visibility: hidden;
             pointer-events: none;
@@ -2600,19 +2600,19 @@ export default function Header({
 
           .mobile-product-info-sheet__panel {
             width: min(100%, 460px);
-            max-height: min(72dvh, 560px);
+            max-height: min(calc(100dvh - env(safe-area-inset-bottom, 0px) - 68px), 520px);
             display: flex;
             flex-direction: column;
             overflow: hidden;
             border: 1px solid rgba(197, 160, 89, 0.18);
-            border-radius: 22px 22px 16px 16px;
+            border-radius: 20px 20px 14px 14px;
             background: rgba(255, 255, 255, 0.98);
             box-shadow: 0 -18px 46px rgba(15, 23, 42, 0.22);
             pointer-events: auto;
           }
 
           .mobile-product-info-sheet__drag-zone {
-            height: 28px;
+            height: 20px;
             display: grid;
             place-items: center;
             flex: 0 0 auto;
@@ -2625,8 +2625,8 @@ export default function Header({
           }
 
           .mobile-product-info-sheet__handle {
-            width: 42px;
-            height: 4px;
+            width: 38px;
+            height: 3px;
             border-radius: 999px;
             background: rgba(100, 116, 139, 0.36);
           }
@@ -2635,8 +2635,8 @@ export default function Header({
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
-            padding: 0 16px 12px;
+            gap: 10px;
+            padding: 0 14px 8px;
             border-bottom: 1px solid rgba(226, 232, 240, 0.92);
           }
 
@@ -2648,14 +2648,14 @@ export default function Header({
           .mobile-product-info-sheet__title {
             margin: 0;
             color: #1a2c4e;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 900;
-            line-height: 1.25;
+            line-height: 1.2;
           }
 
           .mobile-product-info-sheet__close {
-            width: 34px;
-            height: 34px;
+            width: 30px;
+            height: 30px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -2668,31 +2668,30 @@ export default function Header({
           }
 
           .mobile-product-info-sheet__close :global(.material-symbols-outlined) {
-            font-size: 18px !important;
+            font-size: 17px !important;
           }
 
           .mobile-product-info-sheet__list {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 5px;
             min-height: 0;
-            overflow-y: auto;
-            overscroll-behavior: contain;
-            padding: 12px 14px 14px;
-            scrollbar-width: thin;
+            overflow-y: visible;
+            padding: 8px 10px 10px;
+            scrollbar-width: none;
           }
 
           .mobile-product-info-sheet__item {
             box-sizing: border-box;
             width: 100%;
-            min-height: 50px;
+            min-height: 40px;
             display: grid;
             grid-template-columns: auto minmax(0, 1fr) auto;
             align-items: center;
-            gap: 11px;
-            padding: 11px 12px;
+            gap: 8px;
+            padding: 7px 9px;
             border: 1px solid rgba(226, 232, 240, 0.96);
-            border-radius: 14px;
+            border-radius: 12px;
             background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
             color: #1f2a44;
             font: inherit;
@@ -2724,33 +2723,33 @@ export default function Header({
           }
 
           .mobile-product-info-sheet__icon {
-            width: 30px;
-            height: 30px;
+            width: 27px;
+            height: 27px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 11px;
+            border-radius: 10px;
             background: rgba(197, 160, 89, 0.13);
             color: #8f6724;
             flex-shrink: 0;
           }
 
           .mobile-product-info-sheet__icon :global(.material-symbols-outlined) {
-            font-size: 17px !important;
+            font-size: 15px !important;
           }
 
           .mobile-product-info-sheet__label {
             min-width: 0;
             color: #1a2c4e;
-            font-size: 14px;
+            font-size: 12.8px;
             font-weight: 800;
-            line-height: 1.3;
+            line-height: 1.18;
             overflow-wrap: anywhere;
           }
 
           .mobile-product-info-sheet__arrow {
-            width: 25px;
-            height: 25px;
+            width: 23px;
+            height: 23px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
@@ -2761,7 +2760,7 @@ export default function Header({
           }
 
           .mobile-product-info-sheet__arrow :global(.material-symbols-outlined) {
-            font-size: 15px !important;
+            font-size: 14px !important;
           }
 
           .mobile-bottom-order-toast {
@@ -3142,29 +3141,29 @@ export default function Header({
           .mobile-product-info-sheet {
             padding-left: 8px;
             padding-right: 8px;
-            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 5px);
           }
 
           .mobile-product-info-sheet__panel {
-            max-height: min(74dvh, 540px);
-            border-radius: 20px 20px 14px 14px;
+            max-height: min(calc(100dvh - env(safe-area-inset-bottom, 0px) - 62px), 500px);
+            border-radius: 18px 18px 13px 13px;
           }
 
           .mobile-product-info-sheet__header {
-            padding-left: 14px;
-            padding-right: 14px;
+            padding-left: 12px;
+            padding-right: 12px;
           }
 
           .mobile-product-info-sheet__list {
-            gap: 7px;
-            padding: 10px 12px 12px;
+            gap: 4px;
+            padding: 7px 9px 9px;
           }
 
           .mobile-product-info-sheet__item {
-            min-height: 48px;
-            padding: 10px 11px;
-            border-radius: 13px;
-            gap: 10px;
+            min-height: 38px;
+            padding: 6px 8px;
+            border-radius: 11px;
+            gap: 7px;
           }
 
           .mobile-bottom-order-toast {

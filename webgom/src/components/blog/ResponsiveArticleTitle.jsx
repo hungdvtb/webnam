@@ -18,7 +18,7 @@ function getLineHeightPx(styles) {
   return fontSize * 1.08;
 }
 
-export default function ResponsiveArticleTitle({ children, className }) {
+export default function ResponsiveArticleTitle({ children, className, disableFit = false }) {
   const titleRef = useRef(null);
 
   const fitTitle = useEffectEvent(() => {
@@ -33,6 +33,10 @@ export default function ResponsiveArticleTitle({ children, className }) {
     titleElement.style.fontSize = '';
     titleElement.style.letterSpacing = '';
     titleElement.style.lineHeight = '';
+
+    if (disableFit) {
+      return;
+    }
 
     if (viewportWidth > MOBILE_VIEWPORT_MAX) {
       return;

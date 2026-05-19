@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { getWebSiteSettings } from '@/lib/api';
 import { getBlogPost } from '@/lib/blogApi';
+import { buildBlogContentMarkup } from '@/lib/blogContent';
+import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer';
 
 export const metadata = {
   title: 'Chính sách & Quy định | Di Sản Gốm Việt',
@@ -147,8 +149,9 @@ export default async function PolicyPage({ searchParams }) {
   }
 
   const activeContent = getPolicyContent(activePost);
+  const activeContentMarkup = buildBlogContentMarkup(activeContent);
   const hasPost = Boolean(activePost?.id);
-  const hasContent = activeContent.length > 0;
+  const hasContent = Boolean(activeContentMarkup.__html.trim());
   const supportHotline = getPhoneContact(siteSettings?.contact_phone);
   const messengerHref = getMessengerHref(siteSettings?.messenger_link);
   const openMessengerInNewTab = shouldOpenInNewTab(messengerHref);
@@ -193,10 +196,13 @@ export default async function PolicyPage({ searchParams }) {
               {activePost?.excerpt ? <p className="pol-intro">{activePost.excerpt}</p> : null}
 
               {hasPost && hasContent ? (
-                <div
-                  className="pol-article"
-                  dangerouslySetInnerHTML={{ __html: activeContent }}
-                />
+                <>
+                  <div
+                    className="pol-article bdt-content"
+                    dangerouslySetInnerHTML={activeContentMarkup}
+                  />
+                  <BlogMediaGalleryEnhancer contentKey={`policy:${activePolicy.postSlug}:${activeContent.length}`} />
+                </>
               ) : (
                 <div className="pol-fallback" role="status">
                   <div className="pol-fallback-icon-wrap">
@@ -369,7 +375,7 @@ export default async function PolicyPage({ searchParams }) {
 
         .pol-section-title {
           font-family: var(--font-roboto);
-          font-size: 1.9rem;
+          font-size: 25px;
           font-weight: 700;
           color: #0e131b;
           margin: 0 0 1.25rem;

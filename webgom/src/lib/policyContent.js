@@ -68,7 +68,8 @@ export function buildPolicyHref(item) {
 }
 
 export function getPolicyContent(post) {
-  return typeof post?.content === 'string' ? post.content.trim() : '';
+  const content = typeof post?.content === 'string' ? post.content : post?.body;
+  return typeof content === 'string' ? content.trim() : '';
 }
 
 export function normalizePolicyPost(item, post) {

@@ -456,6 +456,8 @@ export default async function BlogPostPage({ params }) {
           font-family: var(--font-roboto);
           color: #1a1a1a;
           padding-bottom: 4rem;
+          overflow-x: hidden;
+          overflow-x: clip;
         }
 
         .bdt-container {
@@ -464,6 +466,8 @@ export default async function BlogPostPage({ params }) {
           max-width: 960px;
           margin: 0 auto;
           padding: 1.7rem 1.5rem 3rem;
+          overflow-x: hidden;
+          overflow-x: clip;
         }
 
         article {
@@ -643,12 +647,18 @@ export default async function BlogPostPage({ params }) {
         .bdt-content {
           width: 100%;
           min-width: 0;
+          max-width: 100%;
           color: rgba(27, 54, 93, 0.92);
           font-size: 16px;
           line-height: 1.65;
           overflow-wrap: anywhere;
           word-break: break-word;
           word-wrap: break-word;
+        }
+
+        .bdt-content,
+        .bdt-content * {
+          box-sizing: border-box;
         }
 
         .bdt-content > :first-child {
@@ -673,6 +683,7 @@ export default async function BlogPostPage({ params }) {
           em
         ) {
           max-width: 100% !important;
+          min-width: 0;
           white-space: normal !important;
           overflow-wrap: anywhere;
           word-break: break-word;
@@ -693,9 +704,13 @@ export default async function BlogPostPage({ params }) {
           pre,
           ul,
           ol,
-          blockquote
+          blockquote,
+          .bdt-inline-media,
+          .bdt-embedded-video,
+          .bdt-media-gallery
         ) {
           max-width: 100% !important;
+          min-width: 0 !important;
         }
 
         .bdt-content p {
@@ -801,11 +816,14 @@ export default async function BlogPostPage({ params }) {
 
         .bdt-content .bdt-inline-media,
         .bdt-content .bdt-embedded-video {
+          width: 100%;
+          max-width: 100%;
           margin: clamp(1rem, 2.2vw, 1.4rem) 0;
           padding: clamp(0.32rem, 0.8vw, 0.5rem);
           border-radius: 1rem;
           background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(241, 234, 223, 0.92));
           box-shadow: 0 12px 28px rgba(27, 54, 93, 0.07);
+          overflow: hidden;
         }
 
         .bdt-content .bdt-inline-media-frame,
@@ -851,6 +869,7 @@ export default async function BlogPostPage({ params }) {
           display: block;
           width: 100% !important;
           max-width: 100% !important;
+          min-width: 0 !important;
           border: 0;
         }
 

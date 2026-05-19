@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { getWebSiteSettings } from '@/lib/api';
 import { getBlogPost } from '@/lib/blogApi';
 import { buildBlogContentMarkup } from '@/lib/blogContent';
-import BlogMediaGalleryEnhancer from '@/components/blog/BlogMediaGalleryEnhancer';
+import BlogArticleContent from '@/components/blog/BlogArticleContent';
 
 export const metadata = {
   title: 'Chính sách & Quy định | Di Sản Gốm Việt',
@@ -78,8 +78,8 @@ function buildPolicyHref(item) {
 }
 
 function getPolicyContent(post) {
-  const content = typeof post?.content === 'string' ? post.content.trim() : '';
-  return content;
+  const content = typeof post?.content === 'string' ? post.content : post?.body;
+  return typeof content === 'string' ? content.trim() : '';
 }
 
 function getPhoneContact(value) {
@@ -196,13 +196,11 @@ export default async function PolicyPage({ searchParams }) {
               {activePost?.excerpt ? <p className="pol-intro">{activePost.excerpt}</p> : null}
 
               {hasPost && hasContent ? (
-                <>
-                  <div
-                    className="pol-article bdt-content"
-                    dangerouslySetInnerHTML={activeContentMarkup}
-                  />
-                  <BlogMediaGalleryEnhancer contentKey={`policy:${activePolicy.postSlug}:${activeContent.length}`} />
-                </>
+                <BlogArticleContent
+                  html={activeContent}
+                  className="pol-article"
+                  contentKey={`policy:${activePolicy.postSlug}:${activeContent.length}`}
+                />
               ) : (
                 <div className="pol-fallback" role="status">
                   <div className="pol-fallback-icon-wrap">
@@ -260,6 +258,8 @@ export default async function PolicyPage({ searchParams }) {
           background: #f6f7f8;
           min-height: 100vh;
           font-family: var(--font-roboto);
+          overflow-x: hidden;
+          overflow-x: clip;
         }
 
         .pol-hero {
@@ -298,20 +298,27 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-container {
+          width: 100%;
           max-width: 1200px;
           margin: 0 auto;
           padding: 2.5rem 1.5rem 4rem;
+          overflow-x: hidden;
+          overflow-x: clip;
         }
 
         .pol-layout {
           display: flex;
           gap: 3rem;
           align-items: flex-start;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
         }
 
         .pol-sidebar {
           width: 260px;
           flex-shrink: 0;
+          max-width: 100%;
         }
 
         .pol-sidebar-sticky {
@@ -366,10 +373,14 @@ export default async function PolicyPage({ searchParams }) {
 
         .pol-content {
           flex: 1;
+          width: 100%;
+          max-width: 100%;
           min-width: 0;
         }
 
         .pol-section {
+          width: 100%;
+          max-width: 100%;
           margin-bottom: 2rem;
         }
 
@@ -389,16 +400,79 @@ export default async function PolicyPage({ searchParams }) {
           line-height: 1.8;
           margin: 0 0 2rem;
           font-style: normal;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .pol-article {
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
           font-size: 1rem;
           color: #374151;
           line-height: 1.85;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          word-wrap: break-word;
+        }
+
+        .pol-article,
+        .pol-article * {
+          box-sizing: border-box;
         }
 
         .pol-article > :first-child {
           margin-top: 0;
+        }
+
+        .pol-article :where(
+          p,
+          h1,
+          h2,
+          h3,
+          h4,
+          h5,
+          h6,
+          li,
+          blockquote,
+          figcaption,
+          td,
+          th,
+          a,
+          span,
+          strong,
+          em
+        ) {
+          max-width: 100% !important;
+          min-width: 0;
+          white-space: normal !important;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .pol-article :where(
+          div,
+          section,
+          article,
+          aside,
+          figure,
+          picture,
+          img,
+          svg,
+          canvas,
+          video,
+          iframe,
+          table,
+          pre,
+          ul,
+          ol,
+          blockquote,
+          .bdt-inline-media,
+          .bdt-embedded-video,
+          .bdt-media-gallery
+        ) {
+          max-width: 100% !important;
+          min-width: 0 !important;
         }
 
         .pol-article :where(h2, h3, h4) {
@@ -414,7 +488,9 @@ export default async function PolicyPage({ searchParams }) {
           font-weight: 600;
           display: flex;
           align-items: center;
+          flex-wrap: wrap;
           gap: 0.5rem;
+          min-width: 0;
         }
 
         .pol-article h3 {
@@ -435,6 +511,7 @@ export default async function PolicyPage({ searchParams }) {
           padding-left: 1.5rem;
           margin: 0.75rem 0 1rem;
           color: #506d95;
+          width: auto;
         }
 
         .pol-article li {
@@ -453,16 +530,72 @@ export default async function PolicyPage({ searchParams }) {
         }
 
         .pol-article img {
-          max-width: 100%;
-          height: auto;
+          max-width: 100% !important;
+          height: auto !important;
           display: block;
           margin: 1rem 0;
           border-radius: 0.375rem;
         }
 
+        .pol-article :where(video, iframe) {
+          display: block;
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+
+        .pol-article :where(.bdt-inline-media, .bdt-embedded-video, figure) {
+          width: 100%;
+          margin-left: 0;
+          margin-right: 0;
+          overflow: hidden;
+        }
+
+        .pol-article :where(.bdt-inline-media-frame, .bdt-video-frame, .bdt-media-gallery-main) {
+          width: 100%;
+          max-width: 100%;
+          overflow: hidden;
+        }
+
+        .pol-article .bdt-video-frame {
+          position: relative;
+          aspect-ratio: 16 / 9;
+        }
+
+        .pol-article .bdt-video-frame iframe {
+          position: absolute;
+          inset: 0;
+          height: 100% !important;
+        }
+
+        .pol-article table {
+          display: block;
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          border-collapse: collapse;
+          white-space: normal !important;
+        }
+
+        .pol-article th,
+        .pol-article td {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          white-space: normal !important;
+        }
+
+        .pol-article pre {
+          max-width: 100%;
+          overflow-x: auto;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+        }
+
         .pol-article a {
           color: #1855aa;
           text-decoration: underline;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .pol-fallback {
@@ -517,6 +650,7 @@ export default async function PolicyPage({ searchParams }) {
           justify-content: space-between;
           flex-wrap: wrap;
           gap: 1.5rem;
+          max-width: 100%;
         }
 
         .pol-support-title {
@@ -543,6 +677,7 @@ export default async function PolicyPage({ searchParams }) {
           display: inline-flex;
           align-items: center;
           gap: 0.4rem;
+          max-width: 100%;
           padding: 0.6rem 1.5rem;
           border-radius: 0.4rem;
           font-weight: 600;
@@ -550,6 +685,8 @@ export default async function PolicyPage({ searchParams }) {
           transition: all 0.2s;
           font-family: var(--font-roboto);
           cursor: pointer;
+          white-space: normal;
+          overflow-wrap: anywhere;
         }
 
         .pol-support-btn .material-symbols-outlined {
@@ -608,9 +745,58 @@ export default async function PolicyPage({ searchParams }) {
             min-height: 220px;
           }
 
+          .pol-hero-inner {
+            padding: 2rem 1rem 2.4rem;
+          }
+
+          .pol-container {
+            padding: 1.5rem 1rem 7.25rem;
+          }
+
+          .pol-layout {
+            gap: 1.5rem;
+          }
+
+          .pol-section-title {
+            font-size: 22px;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+          }
+
+          .pol-article {
+            font-size: 16px;
+            line-height: 1.7;
+          }
+
+          .pol-article h2 {
+            display: block;
+            font-size: 18px;
+          }
+
+          .pol-article h3,
+          .pol-article h4 {
+            font-size: 18px;
+          }
+
+          .pol-article ul,
+          .pol-article ol {
+            padding-left: 1.2rem;
+          }
+
           .pol-support-cta {
             flex-direction: column;
             align-items: flex-start;
+            padding: 1.25rem;
+          }
+
+          .pol-support-btns,
+          .pol-support-btn {
+            width: 100%;
+          }
+
+          .pol-support-btn {
+            justify-content: center;
+            padding-inline: 1rem;
           }
 
           .pol-fallback {

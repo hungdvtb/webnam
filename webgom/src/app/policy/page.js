@@ -5,9 +5,9 @@ import { buildBlogContentMarkup } from '@/lib/blogContent';
 import BlogArticleContent from '@/components/blog/BlogArticleContent';
 
 export const metadata = {
-  title: 'Chính sách & Quy định | Di Sản Gốm Việt',
+  title: 'Chính sách & Quy định | Gốm Đại Thành',
   description:
-    'Chính sách bán hàng, vận chuyển, đổi trả và bảo mật thông tin tại Di Sản Gốm Việt. Cam kết minh bạch và chất lượng trong mọi giao dịch.',
+    'Chính sách bán hàng, vận chuyển, đổi trả và bảo mật thông tin tại Gốm Đại Thành. Cam kết minh bạch và chất lượng trong mọi giao dịch.',
 };
 
 const POLICY_MENU_ITEMS = [
@@ -162,7 +162,7 @@ export default async function PolicyPage({ searchParams }) {
         <div className="pol-hero-inner">
           <h1 className="pol-hero-title">Chính sách &amp; Quy định</h1>
           <p className="pol-hero-sub">
-            Cam kết về chất lượng và sự minh bạch trong mọi giao dịch tại Di Sản Gốm Việt.
+            Cam kết về chất lượng và sự minh bạch trong mọi giao dịch tại Gốm Đại Thành.
           </p>
         </div>
       </div>

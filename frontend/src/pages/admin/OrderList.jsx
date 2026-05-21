@@ -4420,9 +4420,16 @@ const OrderList = () => {
         if (!selectedIds.length) return;
         try {
             setLoading(true);
-            await orderApi.bulkConvert(selectedIds, targetKind);
-            const targetView = getTargetListView(targetKind);
-            setNotification({ type: 'success', message: targetView === 'draft' ? `Đã chuyển ${selectedIds.length} đơn sang đơn nháp` : `Đã chốt ${selectedIds.length} đơn thành đơn chính` });
+            const response = await orderApi.bulkConvert(selectedIds, targetKind);
+            const keptOfficialCount = Number(response?.data?.kept_official_count || 0);
+            const convertedCount = Number(response?.data?.converted_count ?? selectedIds.length);
+            const targetView = isDraftOrder(targetKind) && convertedCount === 0 && keptOfficialCount > 0
+                ? 'main'
+                : getTargetListView(targetKind);
+            setNotification({
+                type: 'success',
+                message: response?.data?.message || (targetView === 'draft' ? `Đã chuyển ${selectedIds.length} đơn sang đơn nháp` : `Đã chốt ${selectedIds.length} đơn thành đơn chính`),
+            });
             setSelectedIds([]);
             navigateToListView(targetView);
         } catch (e) {

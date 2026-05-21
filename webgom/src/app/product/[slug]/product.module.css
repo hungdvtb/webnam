@@ -1717,6 +1717,10 @@
   min-width: 0;
 }
 
+.tabsSectionPolicyActive {
+  --policy-gallery-horizontal-bleed: 0rem;
+}
+
 .tabHeader {
   display: flex;
   align-items: flex-end;
@@ -2409,7 +2413,110 @@
 }
 
 .policyArticle :global(.bdt-media-gallery) {
-  margin: clamp(1.15rem, 2.3vw, 1.6rem) 0;
+  width: 100% !important;
+  margin: clamp(0.95rem, 2vw, 1.25rem) 0 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0.9rem !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.policyArticle :global(.bdt-media-gallery-main) {
+  width: 100% !important;
+  margin-inline: 0 !important;
+  border-radius: 0.9rem !important;
+  background: #f7f1e8 !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  touch-action: pan-y;
+}
+
+.policyArticle :global(.bdt-media-gallery-stage-image-wrap) {
+  aspect-ratio: 1 / 1;
+  border-radius: inherit !important;
+  background: #f8f2e9 !important;
+  cursor: grab;
+  overflow: hidden !important;
+  touch-action: pan-y;
+}
+
+.policyArticle :global(.bdt-media-gallery-main.is-dragging) :global(.bdt-media-gallery-stage-image-wrap) {
+  cursor: grabbing;
+}
+
+.policyArticle :global(.bdt-media-gallery-stage-image) {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  object-fit: contain !important;
+  object-position: center !important;
+}
+
+.policyArticle :global(.bdt-media-gallery-transition-layer) {
+  border-radius: inherit;
+}
+
+.policyArticle :global(.bdt-media-gallery-thumbs) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(min(4.2rem, 100%), 1fr));
+  gap: 0.48rem;
+  width: 100% !important;
+  margin: 0.58rem 0 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  scrollbar-width: none;
+}
+
+.policyArticle :global(.bdt-media-gallery-thumbs)::-webkit-scrollbar {
+  display: none;
+}
+
+.policyArticle :global(.bdt-media-gallery-thumb) {
+  display: flex !important;
+  flex: initial !important;
+  min-width: 0 !important;
+  width: 100% !important;
+  gap: 0.28rem !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0.68rem !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+  transform: none !important;
+}
+
+.policyArticle :global(.bdt-media-gallery-thumb-frame) {
+  border: 1px solid rgba(27, 54, 93, 0.1);
+  border-radius: 0.62rem;
+  background: #f7f1e8;
+  box-shadow: 0 5px 12px rgba(27, 54, 93, 0.04);
+}
+
+.policyArticle :global(.bdt-media-gallery-thumb.is-active) :global(.bdt-media-gallery-thumb-frame) {
+  border-color: rgba(197, 160, 89, 0.92);
+  box-shadow: 0 0 0 2px rgba(197, 160, 89, 0.2);
+}
+
+.policyArticle :global(.bdt-media-gallery-thumb-frame img) {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  object-fit: cover !important;
+}
+
+.policyArticle :global(.bdt-media-gallery-thumb-label) {
+  padding: 0 !important;
+  color: rgba(27, 54, 93, 0.7) !important;
+  font-size: 0.62rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.12em !important;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .policyArticle :where(:global(.bdt-inline-media), :global(.bdt-embedded-video), :global(.bdt-media-gallery)) + :where(h2, h3, h4, p, ul, ol, blockquote, figure) {
@@ -4184,6 +4291,13 @@
     box-shadow: 0 16px 30px rgba(27, 54, 93, 0.06);
   }
 
+  .tabsSectionPolicyActive {
+    --policy-gallery-horizontal-bleed: 0.85rem;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
   .tabHeader {
     gap: 1rem;
     margin-bottom: 0;
@@ -4346,6 +4460,26 @@
   .policyDetail {
     padding: 0.9rem 0.85rem 1rem;
     border-radius: 1rem;
+  }
+
+  .tabsSectionPolicyActive .policyDetail {
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .tabsSectionPolicyActive .policyArticle :global(.bdt-media-gallery) {
+    width: calc(100% + (var(--policy-gallery-horizontal-bleed) * 2)) !important;
+    max-width: calc(100% + (var(--policy-gallery-horizontal-bleed) * 2)) !important;
+    margin-right: calc(var(--policy-gallery-horizontal-bleed) * -1) !important;
+    margin-left: calc(var(--policy-gallery-horizontal-bleed) * -1) !important;
+    overflow: hidden !important;
+  }
+
+  .tabsSectionPolicyActive .policyArticle :global(.bdt-media-gallery-main),
+  .tabsSectionPolicyActive .policyArticle :global(.bdt-media-gallery-stage-image-wrap) {
+    background: transparent !important;
+    box-shadow: none !important;
   }
 
   .policyArticle {

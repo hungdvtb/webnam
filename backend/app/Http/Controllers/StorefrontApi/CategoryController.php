@@ -8,6 +8,7 @@ use App\Support\Utf8Sanitizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class CategoryController extends Controller
 {
@@ -42,6 +43,113 @@ class CategoryController extends Controller
         
         $account = \App\Models\Account::where('site_code', $siteCode)->first();
         return $account ? $account->id : null;
+    }
+
+    private function normalizeBundleOptionUid($value): string
+    {
+        $uid = trim((string) $value);
+
+        return preg_match('/^[A-Za-z0-9:_-]{1,64}$/', $uid) === 1 ? $uid : '';
+    }
+
+    private function bundleOptionAssignmentKeys(object $row): array
+    {
+        $uid = $this->normalizeBundleOptionUid($row->bundle_option_uid ?? null);
+        $title = trim((string) ($row->bundle_option_title ?? ''));
+        $key = trim((string) ($row->bundle_option_key ?? ''));
+        $keys = [];
+
+        if ($uid !== '') {
+            $keys[] = 'uid:' . $uid;
+            $keys[] = $uid;
+        }
+
+        if ($key !== '') {
+            $keys[] = $key;
+        }
+
+        if (filled($row->bundle_option_post_id ?? null)) {
+            $keys[] = 'post:' . (int) $row->bundle_option_post_id;
+        }
+
+        if ($title !== '') {
+            $keys[] = 'title:' . strtolower($title);
+        }
+
+        return collect($keys)
+            ->filter(fn ($candidate) => trim((string) $candidate) !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function buildVisibleBundleOptionLookup($assignmentRows): array
+    {
+        $productIds = collect($assignmentRows)
+            ->filter(function ($row) {
+                return (string) ($row->item_type ?? '') === 'bundle_option'
+                    || trim((string) ($row->bundle_option_uid ?? '')) !== ''
+                    || trim((string) ($row->bundle_option_key ?? '')) !== ''
+                    || filled($row->bundle_option_post_id ?? null)
+                    || trim((string) ($row->bundle_option_title ?? '')) !== '';
+            })
+            ->pluck('product_id')
+            ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return [];
+        }
+
+        $hasUidColumn = Schema::hasColumn('product_links', 'bundle_option_uid');
+        $rows = DB::table('product_links')
+            ->where('link_type', 'bundle')
+            ->whereIn('product_id', $productIds->all())
+            ->when(Schema::hasColumn('product_links', 'bundle_option_status'), function ($query) {
+                $query->where(function ($visibleQuery) {
+                    $visibleQuery
+                        ->whereNull('bundle_option_status')
+                        ->orWhere('bundle_option_status', '<>', 'internal');
+                });
+            })
+            ->select('product_id', 'option_post_id', 'option_title')
+            ->selectRaw($hasUidColumn ? 'bundle_option_uid' : 'NULL as bundle_option_uid')
+            ->get();
+
+        $lookup = [];
+        foreach ($rows as $row) {
+            $productId = (int) $row->product_id;
+            $lookup[$productId] ??= [];
+
+            foreach ($this->bundleOptionAssignmentKeys((object) [
+                'bundle_option_uid' => $row->bundle_option_uid ?? null,
+                'bundle_option_key' => null,
+                'bundle_option_post_id' => $row->option_post_id ?? null,
+                'bundle_option_title' => $row->option_title ?? null,
+            ]) as $key) {
+                $lookup[$productId][$key] = true;
+            }
+        }
+
+        return $lookup;
+    }
+
+    private function isVisibleBundleOptionAssignment(object $row, array $visibleBundleOptionsByProduct): bool
+    {
+        $productId = (int) ($row->product_id ?? 0);
+        if ($productId <= 0 || empty($visibleBundleOptionsByProduct[$productId])) {
+            return false;
+        }
+
+        foreach ($this->bundleOptionAssignmentKeys($row) as $key) {
+            if (!empty($visibleBundleOptionsByProduct[$productId][$key])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function applyStorefrontCategoryItemCounts($categories, $accountId = null): void
@@ -92,11 +200,13 @@ class CategoryController extends Controller
                 'super_links.product_id as parent_product_id',
             ]);
 
+        $visibleBundleOptionsByProduct = $this->buildVisibleBundleOptionLookup($assignmentRows);
+
         $itemKeysByCategory = $assignmentRows
             ->groupBy(fn ($row) => (int) $row->category_id)
-            ->map(function ($rows) {
+            ->map(function ($rows) use ($visibleBundleOptionsByProduct) {
                 return $rows
-                    ->map(function ($row) {
+                    ->map(function ($row) use ($visibleBundleOptionsByProduct) {
                         $bundleOptionKey = trim((string) ($row->bundle_option_key ?? ''));
                         $bundleOptionTitle = trim((string) ($row->bundle_option_title ?? ''));
                         $bundleOptionUid = trim((string) ($row->bundle_option_uid ?? ''));
@@ -105,6 +215,11 @@ class CategoryController extends Controller
                             || $bundleOptionKey !== ''
                             || filled($row->bundle_option_post_id ?? null)
                             || $bundleOptionTitle !== '';
+
+                        if ($isBundleOption && !$this->isVisibleBundleOptionAssignment($row, $visibleBundleOptionsByProduct)) {
+                            return null;
+                        }
+
                         $productId = $isBundleOption
                             ? (int) $row->product_id
                             : (int) ($row->parent_product_id ?: $row->product_id);
@@ -120,6 +235,7 @@ class CategoryController extends Controller
                             ? "bundle_option:{$productId}:{$optionKey}"
                             : "product:{$productId}";
                     })
+                    ->filter()
                     ->unique()
                     ->values();
             });

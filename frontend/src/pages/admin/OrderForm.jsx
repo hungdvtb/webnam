@@ -6221,8 +6221,9 @@ const OrderForm = () => {
             });
             const convertedOrder = response?.data;
             if (convertedOrder?.id) {
-                setOrderKind(normalizedTargetKind);
-                navigate(buildOrderListUrl(normalizedTargetKind));
+                const savedOrderKind = getNormalizedOrderKind(convertedOrder.order_kind || normalizedTargetKind);
+                setOrderKind(savedOrderKind);
+                navigate(buildOrderListUrl(savedOrderKind));
             }
         } catch (error) {
             alert(error.response?.data?.message || 'Không thể chuyển loại đơn hiện tại.');

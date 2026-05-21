@@ -799,7 +799,7 @@ const DailyProfitReport = () => {
             }
         } catch (error) {
             console.error(error);
-            alert("Không thể kết nối Google Ads API. Vui lòng kiểm tra lại cấu hình.");
+            alert(error?.response?.data?.message || "Không thể kết nối Google Ads API. Vui lòng kiểm tra lại cấu hình.");
         } finally {
             setFetchingGoogleAccounts(false);
         }
@@ -807,6 +807,12 @@ const DailyProfitReport = () => {
 
     const toggleGoogleCustomer = (customerId) => {
         if (!customerId) return;
+        const account = googleAccounts.find(acc => String(acc.id || '').replace(/\D+/g, '') === String(customerId).replace(/\D+/g, ''));
+        if (account?.manager) {
+            alert("Tài khoản MCC chỉ dùng ở ô Login Customer ID, không chọn để đồng bộ chi phí.");
+            return;
+        }
+
         const currentIds = config.google_customer_ids
             ? config.google_customer_ids.split(',').map(id => id.trim()).filter(Boolean)
             : [];
@@ -1497,20 +1503,26 @@ const DailyProfitReport = () => {
                                     {googleAccounts.map(acc => {
                                         const normalizedId = String(acc.id || '').replace(/\D+/g, '');
                                         const isChecked = (config.google_customer_ids || '').split(',').map(id => id.trim()).includes(normalizedId);
+                                        const isManager = Boolean(acc.manager);
                                         return (
                                             <div
                                                 key={normalizedId}
                                                 onClick={() => toggleGoogleCustomer(normalizedId)}
-                                                className={`flex items-center gap-3 p-3 cursor-pointer transition-all ${isChecked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
+                                                className={`flex items-center gap-3 p-3 transition-all ${isManager ? 'cursor-not-allowed opacity-60 bg-gray-50' : 'cursor-pointer'} ${isChecked ? 'bg-emerald-50/60' : 'hover:bg-gray-50'}`}
                                             >
                                                 <div className={`w-5 h-5 rounded-lg border-2 flex items-center justify-center transition-all ${
-                                                    isChecked ? 'bg-emerald-600 border-emerald-600 shadow-sm' : 'bg-white border-gray-200'
+                                                    isChecked ? 'bg-emerald-600 border-emerald-600 shadow-sm' : isManager ? 'bg-gray-100 border-gray-200' : 'bg-white border-gray-200'
                                                 }`}>
                                                     {isChecked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><path d="M20 6L9 17l-5-5"/></svg>}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className={`text-[13px] font-bold truncate ${isChecked ? 'text-emerald-700' : 'text-gray-700'}`}>
                                                         {acc.name || normalizedId}
+                                                        {isManager && (
+                                                            <span className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold text-gray-600">
+                                                                MCC
+                                                            </span>
+                                                        )}
                                                     </p>
                                                     <p className="text-[11px] text-gray-400 font-medium">
                                                         ID: {normalizedId}{acc.currency_code ? ` · ${acc.currency_code}` : ''}

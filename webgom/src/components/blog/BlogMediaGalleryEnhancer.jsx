@@ -90,6 +90,44 @@ function releasePointerCapture(target, pointerId) {
   }
 }
 
+function getScopedGalleryElements(rootSelector, targetSelector) {
+  if (typeof document === 'undefined') {
+    return [];
+  }
+
+  const normalizedRootSelector = typeof rootSelector === 'string' && rootSelector.trim()
+    ? rootSelector.trim()
+    : '.bdt-content';
+  let roots = [];
+
+  try {
+    roots = Array.from(document.querySelectorAll(normalizedRootSelector));
+  } catch {
+    roots = Array.from(document.querySelectorAll('.bdt-content'));
+  }
+
+  const elements = [];
+  const seen = new Set();
+  const addElement = (element) => {
+    if (!element || seen.has(element)) {
+      return;
+    }
+
+    seen.add(element);
+    elements.push(element);
+  };
+
+  roots.forEach((root) => {
+    if (typeof root.matches === 'function' && root.matches(targetSelector)) {
+      addElement(root);
+    }
+
+    root.querySelectorAll?.(targetSelector).forEach(addElement);
+  });
+
+  return elements;
+}
+
 function getTouchPoint(touch) {
   return {
     x: touch?.clientX || 0,
@@ -565,11 +603,12 @@ function useBlogImageZoom({ enabled }) {
   };
 }
 
-function hydrateGallery(galleryElement, openImageLightbox) {
+function hydrateGallery(galleryElement, openImageLightbox, options = {}) {
   if (!galleryElement) {
     return undefined;
   }
 
+  const enableTouchSwipeFallback = Boolean(options.enableTouchSwipeFallback);
   const items = normalizeGalleryItems(decodeGalleryPayload(galleryElement.getAttribute('data-gallery-payload')));
 
   if (!items.length) {
@@ -753,6 +792,9 @@ function hydrateGallery(galleryElement, openImageLightbox) {
       }, 140);
     };
 
+    let touchGesture = null;
+    let lastPointerTouchAt = 0;
+
     const finishPointerGesture = (event) => {
       if (!pointerGesture) {
         return null;
@@ -773,6 +815,14 @@ function hydrateGallery(galleryElement, openImageLightbox) {
     };
 
     const handlePointerDown = (event) => {
+      if (event.pointerType === 'touch') {
+        lastPointerTouchAt = Date.now();
+
+        if (touchGesture) {
+          return;
+        }
+      }
+
       if (
         items.length < 2
         || event.isPrimary === false
@@ -903,6 +953,18 @@ function hydrateGallery(galleryElement, openImageLightbox) {
       }
     };
 
+    const handleLostPointerCapture = (event) => {
+      if (!pointerGesture || pointerGesture.pointerId !== (event.pointerId ?? 1)) {
+        return;
+      }
+
+      if (pointerGesture.pointerType === 'touch' && enableTouchSwipeFallback) {
+        return;
+      }
+
+      handlePointerCancel(event);
+    };
+
     const handleClickCapture = (event) => {
       if (!suppressNextClick) {
         return;
@@ -913,12 +975,169 @@ function hydrateGallery(galleryElement, openImageLightbox) {
       suppressNextClick = false;
     };
 
+    const getMatchingTouch = (touchList, identifier) => {
+      const touches = Array.from(touchList || []);
+      return touches.find((touch) => touch.identifier === identifier) || touches[0] || null;
+    };
+
+    const handleTouchStart = (event) => {
+      if (
+        !enableTouchSwipeFallback
+        || pointerGesture
+        || Date.now() - lastPointerTouchAt < 500
+        || items.length < 2
+        || (event.touches?.length || 0) !== 1
+        || !event.target?.closest?.('.bdt-media-gallery-stage-image-wrap')
+      ) {
+        return;
+      }
+
+      const currentItem = items[activeIndex] || items[0];
+
+      if (currentItem?.type !== 'image') {
+        return;
+      }
+
+      const touch = event.touches[0];
+      clearDragVisual();
+      touchGesture = {
+        identifier: touch.identifier,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        lastX: touch.clientX,
+        lastY: touch.clientY,
+        horizontal: false,
+        vertical: false,
+      };
+    };
+
+    const handleTouchMove = (event) => {
+      if (!enableTouchSwipeFallback || !touchGesture) {
+        return;
+      }
+
+      if ((event.touches?.length || 0) > 1) {
+        const wasHorizontal = touchGesture.horizontal;
+        touchGesture = null;
+
+        if (wasHorizontal) {
+          resetDragVisual();
+        }
+
+        return;
+      }
+
+      const touch = getMatchingTouch(event.touches, touchGesture.identifier);
+
+      if (!touch) {
+        return;
+      }
+
+      const gesture = touchGesture;
+      const deltaX = touch.clientX - gesture.startX;
+      const deltaY = touch.clientY - gesture.startY;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
+
+      gesture.lastX = touch.clientX;
+      gesture.lastY = touch.clientY;
+
+      if (!gesture.horizontal && !gesture.vertical) {
+        if (absY > GALLERY_POINTER_LOCK_DISTANCE && absY > absX * GALLERY_AXIS_LOCK_RATIO) {
+          gesture.vertical = true;
+          touchGesture = null;
+          clearDragVisual();
+          return;
+        }
+
+        if (absX > GALLERY_POINTER_LOCK_DISTANCE && absX > absY * GALLERY_AXIS_LOCK_RATIO) {
+          gesture.horizontal = true;
+          stage.classList.add('is-dragging');
+        } else {
+          return;
+        }
+      }
+
+      if (!gesture.horizontal) {
+        return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
+      const width = stage.getBoundingClientRect().width || 1;
+      const dragLimit = width * GALLERY_DRAG_LIMIT_RATIO;
+      const offset = Math.sign(deltaX) * Math.min(absX * 0.72, dragLimit);
+      stage.style.setProperty('--bdt-gallery-drag-offset', `${offset}px`);
+    };
+
+    const handleTouchEnd = (event) => {
+      if (!enableTouchSwipeFallback || !touchGesture) {
+        return;
+      }
+
+      const touch = getMatchingTouch(event.changedTouches, touchGesture.identifier);
+      const gesture = touchGesture;
+      touchGesture = null;
+
+      if (!gesture.horizontal) {
+        return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
+      const deltaX = (touch?.clientX ?? gesture.lastX) - gesture.startX;
+      const deltaY = (touch?.clientY ?? gesture.lastY) - gesture.startY;
+      const width = stage.getBoundingClientRect().width || 1;
+      const threshold = getSwipeThreshold(width);
+      suppressClickAfterDrag();
+
+      if (Math.abs(deltaX) >= threshold && Math.abs(deltaX) > Math.abs(deltaY) * GALLERY_AXIS_LOCK_RATIO) {
+        const direction = deltaX < 0 ? 1 : -1;
+        clearDragVisual();
+        setActiveIndex(activeIndex + direction, {
+          animate: true,
+          direction,
+          scrollThumb: true,
+          wrap: true,
+        });
+      } else {
+        resetDragVisual();
+      }
+    };
+
+    const handleTouchCancel = () => {
+      if (!enableTouchSwipeFallback || !touchGesture) {
+        return;
+      }
+
+      const wasHorizontal = touchGesture.horizontal;
+      touchGesture = null;
+
+      if (wasHorizontal) {
+        resetDragVisual();
+      }
+    };
+
+    const passiveTouchOptions = { passive: true };
+    const activeTouchOptions = { passive: false };
+
     stage.addEventListener('pointerdown', handlePointerDown);
     stage.addEventListener('pointermove', handlePointerMove);
     stage.addEventListener('pointerup', handlePointerEnd);
     stage.addEventListener('pointercancel', handlePointerCancel);
-    stage.addEventListener('lostpointercapture', handlePointerCancel);
+    stage.addEventListener('lostpointercapture', handleLostPointerCapture);
     stage.addEventListener('click', handleClickCapture, true);
+
+    if (enableTouchSwipeFallback) {
+      stage.addEventListener('touchstart', handleTouchStart, passiveTouchOptions);
+      stage.addEventListener('touchmove', handleTouchMove, activeTouchOptions);
+      stage.addEventListener('touchend', handleTouchEnd, activeTouchOptions);
+      stage.addEventListener('touchcancel', handleTouchCancel, activeTouchOptions);
+    }
 
     stage.ondblclick = (event) => {
       const target = event.target;
@@ -947,12 +1166,20 @@ function hydrateGallery(galleryElement, openImageLightbox) {
       }
 
       pointerGesture = null;
+      touchGesture = null;
       stage.removeEventListener('pointerdown', handlePointerDown);
       stage.removeEventListener('pointermove', handlePointerMove);
       stage.removeEventListener('pointerup', handlePointerEnd);
       stage.removeEventListener('pointercancel', handlePointerCancel);
-      stage.removeEventListener('lostpointercapture', handlePointerCancel);
+      stage.removeEventListener('lostpointercapture', handleLostPointerCapture);
       stage.removeEventListener('click', handleClickCapture, true);
+
+      if (enableTouchSwipeFallback) {
+        stage.removeEventListener('touchstart', handleTouchStart, passiveTouchOptions);
+        stage.removeEventListener('touchmove', handleTouchMove, activeTouchOptions);
+        stage.removeEventListener('touchend', handleTouchEnd, activeTouchOptions);
+        stage.removeEventListener('touchcancel', handleTouchCancel, activeTouchOptions);
+      }
     };
   }
 
@@ -1523,7 +1750,11 @@ function BlogMediaGalleryStyles() {
   );
 }
 
-export default function BlogMediaGalleryEnhancer({ contentKey }) {
+export default function BlogMediaGalleryEnhancer({
+  contentKey,
+  galleryScopeSelector = '',
+  enableTouchSwipeFallback = false,
+}) {
   const [lightboxImage, setLightboxImage] = useState(null);
   const openImageLightbox = useCallback((image) => {
     setLightboxImage(image);
@@ -1533,20 +1764,23 @@ export default function BlogMediaGalleryEnhancer({ contentKey }) {
   }, []);
 
   useEffect(() => {
-    const rawGalleries = Array.from(document.querySelectorAll('.bdt-content .ql-bdt-media-gallery[data-gallery-payload]'));
+    const rawGalleries = getScopedGalleryElements(
+      galleryScopeSelector,
+      '.ql-bdt-media-gallery[data-gallery-payload]',
+    );
     rawGalleries.forEach((gallery, index) => {
       upgradeRawGalleryElement(gallery, index);
     });
 
-    const galleries = Array.from(document.querySelectorAll('.bdt-content .bdt-media-gallery'));
+    const galleries = getScopedGalleryElements(galleryScopeSelector, '.bdt-media-gallery');
     const cleanups = galleries
-      .map((gallery) => hydrateGallery(gallery, openImageLightbox))
+      .map((gallery) => hydrateGallery(gallery, openImageLightbox, { enableTouchSwipeFallback }))
       .filter(Boolean);
 
     return () => {
       cleanups.forEach((cleanup) => cleanup());
     };
-  }, [contentKey, openImageLightbox]);
+  }, [contentKey, enableTouchSwipeFallback, galleryScopeSelector, openImageLightbox]);
 
   return (
     <>

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
 use Carbon\CarbonPeriod;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -89,9 +90,51 @@ class GoogleAdsSyncService
             ->isNotEmpty();
     }
 
-    private function accessToken(array $credentials): ?string
+    private function oauthFailureContext(Response $response): array
+    {
+        return [
+            'status' => $response->status(),
+            'oauth_error' => (string) $response->json('error', ''),
+            'oauth_error_description' => (string) $response->json('error_description', ''),
+        ];
+    }
+
+    private function oauthFailureMessage(Response $response): string
+    {
+        $context = $this->oauthFailureContext($response);
+        $error = strtolower($context['oauth_error']);
+        $description = strtolower($context['oauth_error_description']);
+
+        if ($error === 'invalid_client' && str_contains($description, 'client secret')) {
+            return 'Google OAuth bao loi Client Secret khong hop le. Hay kiem tra OAuth Client Secret dung voi OAuth Client ID dang nhap.';
+        }
+
+        if ($error === 'invalid_client') {
+            return 'Google OAuth bao loi OAuth Client ID hoac Client Secret khong hop le.';
+        }
+
+        if ($error === 'invalid_grant') {
+            return 'Google OAuth bao loi Refresh Token khong hop le, da bi thu hoi, hoac khong duoc tao tu OAuth Client ID nay.';
+        }
+
+        if ($error === 'unauthorized_client') {
+            return 'Google OAuth bao loi OAuth Client chua duoc phep lay access token.';
+        }
+
+        $details = trim($context['oauth_error'] . ($context['oauth_error_description'] !== '' ? ': ' . $context['oauth_error_description'] : ''));
+
+        return $details !== ''
+            ? 'Google OAuth tra loi ' . $details
+            : 'Khong lay duoc access token tu Google OAuth (HTTP ' . $context['status'] . ').';
+    }
+
+    private function accessToken(array $credentials, bool $throwOnFailure = false): ?string
     {
         if (!$this->hasRequiredCredentials($credentials)) {
+            if ($throwOnFailure) {
+                throw new RuntimeException('Chua cau hinh du thong tin Google Ads.');
+            }
+
             return null;
         }
 
@@ -105,15 +148,33 @@ class GoogleAdsSyncService
             ]);
 
         if ($response->failed()) {
-            Log::error('Google Ads Sync: OAuth token refresh failed.', [
-                'status' => $response->status(),
-                'body' => $response->body(),
+            $message = $this->oauthFailureMessage($response);
+            Log::error('Google Ads Sync: OAuth token refresh failed.', $this->oauthFailureContext($response) + [
+                'message' => $message,
             ]);
+
+            if ($throwOnFailure) {
+                throw new RuntimeException($message);
+            }
 
             return null;
         }
 
-        return trim((string) $response->json('access_token')) ?: null;
+        $accessToken = trim((string) $response->json('access_token'));
+        if ($accessToken === '') {
+            $message = 'Google OAuth khong tra access token.';
+            Log::error('Google Ads Sync: OAuth token response did not include an access token.', [
+                'status' => $response->status(),
+            ]);
+
+            if ($throwOnFailure) {
+                throw new RuntimeException($message);
+            }
+
+            return null;
+        }
+
+        return $accessToken;
     }
 
     private function headers(array $credentials, string $accessToken): array
@@ -158,12 +219,59 @@ class GoogleAdsSyncService
         return $results;
     }
 
-    public function syncRange(string $startDate, string $endDate)
+    private function firstGoogleAdsErrorCode(array $errorCode): string
+    {
+        foreach ($errorCode as $value) {
+            if (trim((string) $value) !== '') {
+                return (string) $value;
+            }
+        }
+
+        return '';
+    }
+
+    private function googleAdsFailureMessage(Response $response, string $customerId): string
+    {
+        $payload = $response->json();
+        $items = is_array($payload) && array_is_list($payload) ? $payload : [$payload];
+        $messages = [];
+
+        foreach ($items as $item) {
+            $status = (string) data_get($item, 'error.status', '');
+            $topMessage = (string) data_get($item, 'error.message', $response->body());
+
+            foreach ((array) data_get($item, 'error.details', []) as $detail) {
+                foreach ((array) data_get($detail, 'errors', []) as $error) {
+                    $code = $this->firstGoogleAdsErrorCode((array) data_get($error, 'errorCode', []));
+                    $message = (string) data_get($error, 'message', $topMessage);
+
+                    $messages[] = match ($code) {
+                        'REQUESTED_METRICS_FOR_MANAGER' => "Customer ID {$customerId} la tai khoan MCC/manager nen khong the lay chi phi. Hay bo ID nay khoi Customer ID dang chon va chi de no o Login Customer ID.",
+                        'CUSTOMER_NOT_ENABLED' => "Customer ID {$customerId} chua kich hoat hoac da bi vo hieu hoa. Hay chon tai khoan Google Ads con dang active.",
+                        'USER_PERMISSION_DENIED' => "Tai khoan Google dang ket noi khong co quyen truy cap Customer ID {$customerId}.",
+                        default => trim("Customer ID {$customerId}: {$code} {$message}"),
+                    };
+                }
+            }
+
+            if ($messages === []) {
+                $messages[] = trim("Customer ID {$customerId}: {$status} {$topMessage}");
+            }
+        }
+
+        return implode(' | ', array_values(array_unique(array_filter($messages))));
+    }
+
+    public function syncRange(string $startDate, string $endDate, bool $throwOnFailure = false)
     {
         $config = FinDailyReportConfig::first();
 
         if (!$config) {
             Log::warning('Google Ads Sync: Missing configuration.');
+            if ($throwOnFailure) {
+                throw new RuntimeException('Chua cau hinh Google Ads.');
+            }
+
             return false;
         }
 
@@ -173,18 +281,30 @@ class GoogleAdsSyncService
                 Log::warning('Google Ads Sync: Missing OAuth/developer token configuration.');
             }
 
+            if ($throwOnFailure) {
+                throw new RuntimeException('Chua cau hinh du Developer Token, OAuth Client ID, OAuth Client Secret va Refresh Token.');
+            }
+
             return false;
         }
 
         $customerIds = $this->configuredCustomerIds($config);
         if ($customerIds === []) {
             Log::warning('Google Ads Sync: No customer IDs configured.');
+            if ($throwOnFailure) {
+                throw new RuntimeException('Chua chon Customer ID Google Ads de dong bo.');
+            }
+
             return false;
         }
 
         $accessToken = $this->accessToken($credentials);
         if (!$accessToken) {
             Log::warning('Google Ads Sync: Could not obtain access token.');
+            if ($throwOnFailure) {
+                throw new RuntimeException('Khong lay duoc access token tu Google.');
+            }
+
             return false;
         }
 
@@ -200,6 +320,7 @@ class GoogleAdsSyncService
         $minFetchDate = min($allDates);
         $maxFetchDate = max($allDates);
         $successfulRequestCount = 0;
+        $failureMessages = [];
 
         foreach ($customerIds as $customerId) {
             $storageAccountId = $this->normalizeStorageAccountId($customerId);
@@ -241,15 +362,25 @@ class GoogleAdsSyncService
                         );
                     }
                 } else {
-                    Log::error("Google Ads Sync Error for {$customerId}: " . $response->body());
+                    $failureMessage = $this->googleAdsFailureMessage($response, $customerId);
+                    $failureMessages[] = $failureMessage;
+                    Log::error("Google Ads Sync Error for {$customerId}: " . $response->body(), [
+                        'message' => $failureMessage,
+                    ]);
                 }
             } catch (\Exception $exception) {
+                $failureMessages[] = "Customer ID {$customerId}: " . $exception->getMessage();
                 Log::error('Google Ads Sync Exception: ' . $exception->getMessage());
             }
         }
 
         if ($successfulRequestCount === 0) {
             Log::warning('Google Ads Sync: No successful responses received; existing spend data was left unchanged.');
+
+            if ($throwOnFailure) {
+                $message = implode(' ', array_values(array_unique(array_filter($failureMessages))));
+                throw new RuntimeException($message !== '' ? $message : 'Khong dong bo duoc du lieu Google Ads.');
+            }
 
             return false;
         }
@@ -293,7 +424,7 @@ class GoogleAdsSyncService
             throw new RuntimeException('Chua cau hinh du thong tin Google Ads.');
         }
 
-        $accessToken = $this->accessToken($credentials);
+        $accessToken = $this->accessToken($credentials, true);
         if (!$accessToken) {
             throw new RuntimeException('Khong lay duoc access token tu Google.');
         }
@@ -328,12 +459,13 @@ class GoogleAdsSyncService
             'name' => $customerId,
             'currency_code' => '',
             'time_zone' => '',
+            'manager' => false,
         ];
 
         try {
             $response = $this->searchStream(
                 $customerId,
-                'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone FROM customer LIMIT 1',
+                'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer LIMIT 1',
                 $credentials,
                 $accessToken
             );
@@ -352,6 +484,7 @@ class GoogleAdsSyncService
                 'name' => (string) (data_get($row, 'customer.descriptiveName') ?: data_get($row, 'customer.descriptive_name') ?: $customerId),
                 'currency_code' => (string) (data_get($row, 'customer.currencyCode') ?: data_get($row, 'customer.currency_code') ?: ''),
                 'time_zone' => (string) (data_get($row, 'customer.timeZone') ?: data_get($row, 'customer.time_zone') ?: ''),
+                'manager' => (bool) data_get($row, 'customer.manager', false),
             ];
         } catch (\Exception) {
             return $fallback;

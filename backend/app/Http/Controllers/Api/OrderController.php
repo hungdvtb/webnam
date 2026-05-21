@@ -1218,6 +1218,60 @@ class OrderController extends Controller
             : self::ORDER_KIND_OFFICIAL;
     }
 
+    private function hasCompleteCustomerDraftPromotionInfo(array $payload): bool
+    {
+        return trim((string) ($payload['customer_name'] ?? '')) !== ''
+            && trim((string) ($payload['customer_phone'] ?? '')) !== ''
+            && trim((string) ($payload['shipping_address'] ?? '')) !== '';
+    }
+
+    private function resolveDraftPromotionOrderKind(string $orderKind, array $payload): string
+    {
+        $orderKind = $this->normalizeOrderKind($orderKind);
+
+        if (
+            $orderKind === self::ORDER_KIND_DRAFT
+            && $this->hasCompleteCustomerDraftPromotionInfo($payload)
+        ) {
+            return self::ORDER_KIND_OFFICIAL;
+        }
+
+        return $orderKind;
+    }
+
+    private function orderClassificationPayload(Request $request, ?Order $order = null): array
+    {
+        return [
+            'customer_name' => $request->has('customer_name')
+                ? $request->input('customer_name')
+                : ($order?->customer_name ?? ''),
+            'customer_phone' => $request->has('customer_phone')
+                ? $request->input('customer_phone')
+                : ($order?->customer_phone ?? ''),
+            'shipping_address' => $request->has('shipping_address')
+                ? $request->input('shipping_address')
+                : ($order?->shipping_address ?? ''),
+        ];
+    }
+
+    private function resolveRequestedOrderKindForMutation(
+        Request $request,
+        ?Order $order = null,
+        ?string $forcedTargetKind = null
+    ): string {
+        $explicitKind = $forcedTargetKind ?? ($request->has('order_kind') ? $request->input('order_kind') : null);
+        $requestedKind = $this->normalizeOrderKind($explicitKind ?? $order?->order_kind);
+
+        if ($explicitKind === null) {
+            return $requestedKind;
+        }
+
+        return $this->resolveDraftPromotionOrderKind(
+            $requestedKind,
+            $this->orderClassificationPayload($request, $order)
+        );
+    }
+
     private function normalizeOrderType(?string $orderType): string
     {
         $normalized = Str::lower(trim((string) $orderType));
@@ -2779,8 +2833,17 @@ class OrderController extends Controller
 
     private function convertOrderToKind(Order $order, string $targetKind, array $payload = []): Order
     {
-        $targetKind = $this->normalizeOrderKind($targetKind);
+        $requestedTargetKind = $this->normalizeOrderKind($targetKind);
+        $targetKind = $this->resolveDraftPromotionOrderKind($requestedTargetKind, [
+            'customer_name' => array_key_exists('customer_name', $payload) ? $payload['customer_name'] : $order->customer_name,
+            'customer_phone' => array_key_exists('customer_phone', $payload) ? $payload['customer_phone'] : $order->customer_phone,
+            'shipping_address' => array_key_exists('shipping_address', $payload) ? $payload['shipping_address'] : $order->shipping_address,
+        ]);
         $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+
+        if ($currentKind === $targetKind && $requestedTargetKind !== $targetKind) {
+            return $order;
+        }
 
         $this->guardConvertOrderKind($order, $targetKind);
 
@@ -4527,7 +4590,7 @@ class OrderController extends Controller
             'source' => 'nullable|string|max:80',
         ]);
 
-        $orderKind = $this->normalizeOrderKind($validated['order_kind'] ?? null);
+        $orderKind = $this->resolveRequestedOrderKindForMutation($request);
         $orderType = $this->normalizeOrderType($validated['order_type'] ?? null);
         $regionType = (string) ($validated['region_type'] ?? 'new');
         $hasSupplementItems = collect((array) $request->input('supplement_items', []))
@@ -4805,7 +4868,7 @@ class OrderController extends Controller
 
     private function persistOrderMutation(Order $order, Request $request, ?string $forcedTargetKind = null): Order
     {
-        $requestedKind = $this->normalizeOrderKind($forcedTargetKind ?? $request->input('order_kind', $order->order_kind));
+        $requestedKind = $this->resolveRequestedOrderKindForMutation($request, $order, $forcedTargetKind);
         $requestedOrderType = $this->normalizeOrderType($request->input('order_type', $order->order_type));
         $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
         $hasSupplementItems = collect((array) $request->input('supplement_items', []))
@@ -5159,7 +5222,14 @@ class OrderController extends Controller
             ->with(['items', 'attributeValues', 'shipments', 'inventoryDocuments'])
             ->findOrFail($id);
         $targetKind = $this->normalizeOrderKind((string) $request->input('target_kind'));
-        $this->guardConvertOrderKind($order, $targetKind);
+        $resolvedTargetKind = $this->resolveRequestedOrderKindForMutation($request, $order, $targetKind);
+        $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+
+        if ($currentKind !== $resolvedTargetKind) {
+            $this->guardConvertOrderKind($order, $resolvedTargetKind);
+        } elseif ($targetKind === $resolvedTargetKind) {
+            $this->guardConvertOrderKind($order, $resolvedTargetKind);
+        }
 
         return DB::transaction(function () use ($request, $order, $targetKind) {
             return response()->json($this->mutationResponsePayload(
@@ -5466,15 +5536,38 @@ class OrderController extends Controller
         }
 
         $convertedCount = 0;
-        DB::transaction(function () use ($orders, $validated, &$convertedCount) {
+        $keptOfficialCount = 0;
+        $requestedTargetKind = $this->normalizeOrderKind((string) $validated['target_kind']);
+
+        DB::transaction(function () use ($orders, $validated, $requestedTargetKind, &$convertedCount, &$keptOfficialCount) {
             foreach ($orders as $order) {
-                $this->convertOrderToKind($order, $validated['target_kind'], $validated);
-                $convertedCount++;
+                $currentKind = $this->normalizeOrderKind((string) $order->order_kind);
+                $convertedOrder = $this->convertOrderToKind($order, $validated['target_kind'], $validated);
+                $nextKind = $this->normalizeOrderKind((string) $convertedOrder->order_kind);
+
+                if ($nextKind !== $currentKind) {
+                    $convertedCount++;
+                } elseif (
+                    $requestedTargetKind === self::ORDER_KIND_DRAFT
+                    && $nextKind === self::ORDER_KIND_OFFICIAL
+                ) {
+                    $keptOfficialCount++;
+                }
             }
         });
 
+        $message = "Đã chuyển nhóm {$convertedCount} đơn hàng thành công.";
+        if ($requestedTargetKind === self::ORDER_KIND_DRAFT && $keptOfficialCount > 0) {
+            $message = $convertedCount > 0
+                ? "{$message} {$keptOfficialCount} đơn đủ thông tin khách hàng được giữ ở đơn chính."
+                : "{$keptOfficialCount} đơn đủ thông tin khách hàng được giữ ở đơn chính.";
+        }
+
         return response()->json([
-            'message' => "Đã chuyển nhóm {$convertedCount} đơn hàng thành công.",
+            'message' => $message,
+            'converted_count' => $convertedCount,
+            'kept_official_count' => $keptOfficialCount,
+            'requested_target_kind' => $requestedTargetKind,
         ]);
     }
 

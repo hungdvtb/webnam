@@ -177,8 +177,10 @@ class Product extends Model
 
     protected function productLinksPivotColumns(array $columns): array
     {
-        if (Schema::hasColumn('product_links', 'bundle_option_uid')) {
-            $columns[] = 'bundle_option_uid';
+        foreach (['bundle_option_uid', 'bundle_option_status'] as $optionalColumn) {
+            if (Schema::hasColumn('product_links', $optionalColumn) && !in_array($optionalColumn, $columns, true)) {
+                $columns[] = $optionalColumn;
+            }
         }
 
         return $columns;

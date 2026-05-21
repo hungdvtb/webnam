@@ -215,12 +215,26 @@ const buildProductImageSignature = (items = []) => (
         .join('|')
 );
 
+const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
+const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
+
+const normalizeBundleOptionStatus = (value) => (
+    String(value || '').trim().toLowerCase() === BUNDLE_OPTION_STATUS_INTERNAL
+        ? BUNDLE_OPTION_STATUS_INTERNAL
+        : BUNDLE_OPTION_STATUS_VISIBLE
+);
+
+const isInternalBundleOption = (option) => (
+    normalizeBundleOptionStatus(option?.status ?? option?.bundle_option_status) === BUNDLE_OPTION_STATUS_INTERNAL
+);
+
 const normalizeBundleSignatureValue = (value) => String(value ?? '').trim();
 
 const buildBundleOptionSignature = (options = []) => JSON.stringify(
     (Array.isArray(options) ? options : []).map((option, optionIndex) => ({
         index: optionIndex,
         title: normalizeBundleSignatureValue(option?.title),
+        status: normalizeBundleOptionStatus(option?.status ?? option?.bundle_option_status),
         post_id: normalizeBundleSignatureValue(option?.post_id),
         image_url: normalizeBundleSignatureValue(option?.image_url),
         video_url: normalizeBundleSignatureValue(option?.video_url),
@@ -765,6 +779,7 @@ const DraggableBundleOptionRow = ({
     const linkedPostTitle = option?.post_title || 'Chua lien ket bai viet';
     const isFirst = index === 0;
     const isLast = index === optionCount - 1;
+    const optionIsInternal = isInternalBundleOption(option);
 
     const [, drop] = useDrop({
         accept: 'bundle_option_group',
@@ -801,7 +816,7 @@ const DraggableBundleOptionRow = ({
     return (
         <tr
             ref={ref}
-            className={`border-b border-stone/10 transition-colors ${isDragging ? 'bg-gold/5 opacity-40' : 'hover:bg-gold/[0.03]'}`}
+            className={`border-b border-stone/10 transition-colors ${isDragging ? 'bg-gold/5 opacity-40' : optionIsInternal ? 'bg-amber-50/65 hover:bg-amber-50' : 'hover:bg-gold/[0.03]'}`}
         >
             <td className="w-[88px] px-4 py-3 border-r border-stone/10">
                 <div className="flex items-center justify-center gap-2">
@@ -818,9 +833,16 @@ const DraggableBundleOptionRow = ({
                     <p className="truncate text-[13px] font-black text-primary" title={option?.title || `Tuy chon ${index + 1}`}>
                         {option?.title || `Tuy chon ${index + 1}`}
                     </p>
-                    <p className="mt-1 truncate text-[11px] text-stone/55" title={defaultItem?.name || 'Chua co san pham mac dinh'}>
-                        {defaultItem?.name ? `Mac dinh: ${defaultItem.name}` : 'Chua co san pham trong tuy chon nay'}
-                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                        {optionIsInternal && (
+                            <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800">
+                                {'N\u1ed9i b\u1ed9'}
+                            </span>
+                        )}
+                        <p className="truncate text-[11px] text-stone/55" title={defaultItem?.name || 'Chua co san pham mac dinh'}>
+                            {defaultItem?.name ? `Mac dinh: ${defaultItem.name}` : 'Chua co san pham trong tuy chon nay'}
+                        </p>
+                    </div>
                 </div>
             </td>
             <td className="px-4 py-3 border-r border-stone/10">
@@ -2140,6 +2162,7 @@ const flattenBundleOptionsToCompositeItems = (options = []) => (
             option_title: option.title,
             option_post_id: option.post_id || '',
             bundle_option_uid: option.uid || option.bundle_option_uid || '',
+            bundle_option_status: normalizeBundleOptionStatus(option.status ?? option.bundle_option_status),
             option_image_url: normalizePersistedImageUrl(option.image_url),
             option_video_url: option.video_url || '',
             option_video_source: option.video_source || '',
@@ -2175,6 +2198,8 @@ const normalizeCompositeItemForSubmit = (item = {}) => {
     if (item.bundle_option_uid) {
         payload.bundle_option_uid = String(item.bundle_option_uid);
     }
+
+    payload.bundle_option_status = normalizeBundleOptionStatus(item.bundle_option_status);
 
     if (item.option_post_id) {
         payload.option_post_id = item.option_post_id;
@@ -4809,6 +4834,7 @@ const ProductForm = () => {
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
                     bundle_option_uid: item.pivot?.bundle_option_uid || '',
+                    bundle_option_status: normalizeBundleOptionStatus(item.pivot?.bundle_option_status),
                     option_video_url: item.pivot?.option_video_url || '',
                     option_video_source: item.pivot?.option_video_source || '',
                     is_default: !!(item.pivot?.is_default),
@@ -4862,10 +4888,12 @@ const ProductForm = () => {
                     const title = item.pivot?.option_title || 'Tùy chọn';
                     const optionMapKey = optionUid ? `uid:${optionUid}` : title;
                     const optionImageUrl = normalizePersistedImageUrl(item.pivot?.option_image_url);
+                    const optionStatus = normalizeBundleOptionStatus(item.pivot?.bundle_option_status);
                     if (!optionsMap[optionMapKey]) {
                         optionsMap[optionMapKey] = {
                             uid: optionUid,
                             title,
+                            status: optionStatus,
                             post_id: item.pivot?.option_post_id || '',
                             post_title: item.pivot?.option_post_title || '',
                             image_url: optionImageUrl,
@@ -4873,6 +4901,8 @@ const ProductForm = () => {
                             video_source: item.pivot?.option_video_source || '',
                             items: []
                         };
+                    } else if (optionStatus === BUNDLE_OPTION_STATUS_INTERNAL) {
+                        optionsMap[optionMapKey].status = BUNDLE_OPTION_STATUS_INTERNAL;
                     } else if (!optionsMap[optionMapKey].post_id && item.pivot?.option_post_id) {
                         optionsMap[optionMapKey].post_id = item.pivot.option_post_id;
                         optionsMap[optionMapKey].post_title = item.pivot?.option_post_title || '';
@@ -4915,6 +4945,8 @@ const ProductForm = () => {
                     uid: optionData.uid || '',
                     bundle_option_uid: optionData.uid || '',
                     title: optionData.title ?? '',
+                    status: normalizeBundleOptionStatus(optionData.status),
+                    bundle_option_status: normalizeBundleOptionStatus(optionData.status),
                     post_id: optionData.post_id || '',
                     post_title: optionData.post_title || '',
                     image_url: optionData.image_url || '',
@@ -6507,6 +6539,8 @@ const ProductForm = () => {
     const handleAddBundleOption = () => {
         setBundleOptions(prev => [{
             id: createBundleOptionId(),
+            status: BUNDLE_OPTION_STATUS_VISIBLE,
+            bundle_option_status: BUNDLE_OPTION_STATUS_VISIBLE,
             title: 'Tùy chọn mới',
             post_id: '',
             post_title: '',
@@ -6757,6 +6791,19 @@ const ProductForm = () => {
 
     const handleUpdateOptionTitle = (optionId, title) => {
         setBundleOptions(prev => prev.map(o => o.id === optionId ? { ...o, title } : o));
+    };
+
+    const handleUpdateBundleOptionStatus = (optionId, status) => {
+        const normalizedStatus = normalizeBundleOptionStatus(status);
+        setBundleOptions(prev => prev.map(option => (
+            option.id === optionId
+                ? {
+                    ...option,
+                    status: normalizedStatus,
+                    bundle_option_status: normalizedStatus,
+                }
+                : option
+        )));
     };
 
     const handleSelectBundleOptionPost = (optionId, post) => {
@@ -9419,9 +9466,9 @@ const ProductForm = () => {
                                             <div
                                                 key={option.id}
                                                 ref={(node) => registerBundleOptionCardRef(option.id, node)}
-                                                className={`border border-gold/15 rounded-sm shadow-sm bg-[#fcfaf7]/30 ${(showBundleSearch === option.id || bundleOptionVideoPicker === option.id || bundleOptionImagePicker.optionId === option.id) ? 'relative z-[140]' : 'relative z-10'}`}
+                                                className={`rounded-sm border shadow-sm ${isInternalBundleOption(option) ? 'border-amber-300 bg-amber-50/45' : 'border-gold/15 bg-[#fcfaf7]/30'} ${(showBundleSearch === option.id || bundleOptionVideoPicker === option.id || bundleOptionImagePicker.optionId === option.id) ? 'relative z-[140]' : 'relative z-10'}`}
                                             >
-                                                <div className="bg-[#f2eddf]/40 px-5 py-3 flex items-center gap-4 border-b border-gold/10 rounded-t-sm">
+                                                <div className={`${isInternalBundleOption(option) ? 'bg-amber-100/70 border-amber-200' : 'bg-[#f2eddf]/40 border-gold/10'} px-5 py-3 flex items-center gap-4 border-b rounded-t-sm`}>
                                                      <div
                                                          className="size-8 rounded-full bg-gold/10 flex items-center justify-center shrink-0 cursor-pointer hover:bg-gold/20 hover:scale-105 transition-all text-gold flex-col"
                                                          onClick={() => toggleBundleOptionExpanded(option.id)}
@@ -9447,6 +9494,12 @@ const ProductForm = () => {
                                                                 <span className="inline-flex items-center rounded-full border border-brick/10 bg-brick/[0.08] px-2.5 py-1 font-black text-brick shadow-sm">
                                                                     {'T\u1ed5ng ti\u1ec1n: '}{formatNumberOutput(calculateBundleOptionSubtotal(option))}{"\u20ab"}
                                                                 </span>
+                                                                {isInternalBundleOption(option) && (
+                                                                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 font-black text-amber-800 shadow-sm">
+                                                                        <span className="material-symbols-outlined text-[13px]">lock</span>
+                                                                        {'N\u1ed9i b\u1ed9'}
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                         </div>
                                                         <BundleOptionPostSelector
@@ -9586,6 +9639,32 @@ const ProductForm = () => {
                                                             <span className="material-symbols-outlined text-[18px]">delete</span>
                                                          </button>
                                                      </div>
+                                                </div>
+
+                                                <div className={`${isInternalBundleOption(option) ? 'border-amber-200 bg-amber-50/70' : 'border-gold/10 bg-white'} flex flex-wrap items-center gap-2 border-b px-5 py-2`}>
+                                                    <span className="text-[10px] font-black uppercase tracking-widest text-stone/45">
+                                                        {'Tr\u1ea1ng th\u00e1i t\u00f9y ch\u1ecdn'}
+                                                    </span>
+                                                    <div className="inline-flex overflow-hidden rounded-sm border border-stone/15 bg-white shadow-sm">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleUpdateBundleOptionStatus(option.id, BUNDLE_OPTION_STATUS_VISIBLE)}
+                                                            className={`inline-flex h-8 items-center gap-1.5 px-3 text-[10px] font-black uppercase transition ${!isInternalBundleOption(option) ? 'bg-emerald-600 text-white' : 'text-stone/55 hover:bg-emerald-50 hover:text-emerald-700'}`}
+                                                            title="Hien thi ngoai website"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">visibility</span>
+                                                            {'Hi\u1ec3n th\u1ecb website'}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleUpdateBundleOptionStatus(option.id, BUNDLE_OPTION_STATUS_INTERNAL)}
+                                                            className={`inline-flex h-8 items-center gap-1.5 border-l border-stone/10 px-3 text-[10px] font-black uppercase transition ${isInternalBundleOption(option) ? 'bg-amber-600 text-white' : 'text-stone/55 hover:bg-amber-50 hover:text-amber-700'}`}
+                                                            title="Chi dung noi bo admin"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">lock</span>
+                                                            {'N\u1ed9i b\u1ed9'}
+                                                        </button>
+                                                    </div>
                                                 </div>
 
                                                 {showBundleSearch === option.id && (

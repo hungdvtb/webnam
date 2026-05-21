@@ -12,6 +12,8 @@ export default function BlogArticleContent({
   html = '',
   className = '',
   contentKey = '',
+  galleryScopeSelector = '',
+  enableTouchSwipeFallback = false,
 }) {
   const rawHtml = typeof html === 'string' ? html : '';
   const contentMarkup = useMemo(() => buildBlogContentMarkup(rawHtml), [rawHtml]);
@@ -23,7 +25,11 @@ export default function BlogArticleContent({
         className={joinClassNames('bdt-content', className)}
         dangerouslySetInnerHTML={contentMarkup}
       />
-      <BlogMediaGalleryEnhancer contentKey={resolvedContentKey} />
+      <BlogMediaGalleryEnhancer
+        contentKey={resolvedContentKey}
+        galleryScopeSelector={galleryScopeSelector}
+        enableTouchSwipeFallback={enableTouchSwipeFallback}
+      />
     </>
   );
 }

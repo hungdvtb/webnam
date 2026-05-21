@@ -22,6 +22,7 @@ class ProductController extends Controller
 {
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
     private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
+    private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
 
     private function calculateFullBundleDiscountedPrice(float $totalPrice): array
     {
@@ -76,6 +77,29 @@ class ProductController extends Controller
     private function hasProductLinksBundleOptionUid(): bool
     {
         return Schema::hasColumn('product_links', 'bundle_option_uid');
+    }
+
+    private function hasProductLinksBundleOptionStatus(): bool
+    {
+        return Schema::hasColumn('product_links', 'bundle_option_status');
+    }
+
+    private function isInternalBundleOptionStatus($value): bool
+    {
+        return Str::lower(Str::squish((string) $value)) === self::BUNDLE_OPTION_STATUS_INTERNAL;
+    }
+
+    private function applyVisibleBundleOptionConstraint($query): void
+    {
+        if (!$this->hasProductLinksBundleOptionStatus()) {
+            return;
+        }
+
+        $query->where(function ($visibleQuery) {
+            $visibleQuery
+                ->whereNull('product_links.bundle_option_status')
+                ->orWhere('product_links.bundle_option_status', '<>', self::BUNDLE_OPTION_STATUS_INTERNAL);
+        });
     }
 
     private function getBundleOptionKeyCandidates($bundleOptionKey = null, $bundleOptionPostId = null, $bundleOptionTitle = null, $bundleOptionUid = null): array
@@ -207,6 +231,13 @@ class ProductController extends Controller
         $optionRows = DB::table('product_links')
             ->where('product_id', $product->id)
             ->where('link_type', 'bundle')
+            ->when($this->hasProductLinksBundleOptionStatus(), function ($query) {
+                $query->where(function ($visibleQuery) {
+                    $visibleQuery
+                        ->whereNull('bundle_option_status')
+                        ->orWhere('bundle_option_status', '<>', self::BUNDLE_OPTION_STATUS_INTERNAL);
+                });
+            })
             ->selectRaw($bundleOptionUidSelectSql)
             ->addSelect('option_post_id', 'option_title')
             ->selectRaw('MIN(position) as first_position')
@@ -491,6 +522,29 @@ class ProductController extends Controller
                     ->whereIn('category_product.item_type', ['product', 'bundle_option'])
                     ->orWhereNull('category_product.item_type');
             })
+            ->when($this->hasProductLinksBundleOptionStatus(), function ($categoryQuery) use ($bundleOptionAssignmentSql, $hasBundleOptionUid) {
+                $categoryQuery->where(function ($visibilityQuery) use ($bundleOptionAssignmentSql, $hasBundleOptionUid) {
+                    $visibilityQuery
+                        ->whereRaw("NOT ({$bundleOptionAssignmentSql})")
+                        ->orWhereNotExists(function ($hiddenQuery) use ($hasBundleOptionUid) {
+                            $hiddenQuery
+                                ->selectRaw('1')
+                                ->from('product_links as hidden_bundle_options')
+                                ->whereColumn('hidden_bundle_options.product_id', 'category_product.product_id')
+                                ->where('hidden_bundle_options.link_type', 'bundle')
+                                ->where('hidden_bundle_options.bundle_option_status', self::BUNDLE_OPTION_STATUS_INTERNAL)
+                                ->where(function ($matchQuery) use ($hasBundleOptionUid) {
+                                    if ($hasBundleOptionUid) {
+                                        $matchQuery->whereRaw("(COALESCE(category_product.bundle_option_uid, '') <> '' AND hidden_bundle_options.bundle_option_uid = category_product.bundle_option_uid)");
+                                    }
+
+                                    $matchQuery
+                                        ->orWhereRaw('(category_product.bundle_option_post_id IS NOT NULL AND hidden_bundle_options.option_post_id = category_product.bundle_option_post_id)')
+                                        ->orWhereRaw("(COALESCE(category_product.bundle_option_title, '') <> '' AND LOWER(TRIM(COALESCE(hidden_bundle_options.option_title, ''))) = LOWER(TRIM(COALESCE(category_product.bundle_option_title, ''))))");
+                                });
+                        });
+                });
+            })
             ->groupByRaw("{$resolvedProductIdSql}, {$itemTypeSql}{$bundleOptionUidGroupSql}, category_product.bundle_option_key, category_product.bundle_option_post_id, category_product.bundle_option_title");
 
         $query
@@ -756,6 +810,10 @@ class ProductController extends Controller
 
         foreach ($bundleItems as $bundleItem) {
             if (!$bundleItem instanceof Product) {
+                continue;
+            }
+
+            if ($this->isInternalBundleOptionStatus($bundleItem->pivot?->bundle_option_status ?? null)) {
                 continue;
             }
 
@@ -1167,8 +1225,10 @@ class ProductController extends Controller
                 ->whereIn('id', $bundleOptionProductIds->all())
                 ->with([
                     'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
-                    'bundleItems' => fn ($query) => $query
-                        ->where('status', true),
+                    'bundleItems' => function ($query) {
+                        $query->where('status', true);
+                        $this->applyVisibleBundleOptionConstraint($query);
+                    },
                 ])
                 ->get();
 
@@ -1390,6 +1450,10 @@ class ProductController extends Controller
                     );
                 $primaryImage = $product['primary_image'] ?? null;
 
+                if ($itemType === 'bundle_option' && !is_array($optionMeta)) {
+                    return [];
+                }
+
                 if (!is_array($optionMeta)) {
                     return [[
                         ...$product,
@@ -1470,6 +1534,7 @@ class ProductController extends Controller
                 $product->load([
                     'bundleItems' => function ($query) {
                         $query->where('products.status', true);
+                        $this->applyVisibleBundleOptionConstraint($query);
                     },
                     'bundleItems.images',
                     'bundleItems.attributeValues.attribute',
@@ -1719,6 +1784,7 @@ class ProductController extends Controller
                     'images',
                     'attributeValues.attribute',
                 ]);
+            $this->applyVisibleBundleOptionConstraint($bundleItemsQuery);
 
             if ($optionMatch && filled($optionMatch['option_uid'] ?? null)) {
                 $bundleItemsQuery->wherePivot('bundle_option_uid', $optionMatch['option_uid']);

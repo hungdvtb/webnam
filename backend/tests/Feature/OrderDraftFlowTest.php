@@ -35,7 +35,7 @@ class OrderDraftFlowTest extends TestCase
                 'customer_name' => 'Khach draft',
                 'customer_phone' => '0912345678',
                 'customer_email' => 'draft@example.com',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'notes' => 'Ban nhap dau tien',
                 'source' => 'Website',
                 'type' => 'Le',
@@ -90,6 +90,155 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame('Khach draft da sua', $order->customer_name);
         $this->assertCount(1, $order->items);
         $this->assertSame(3, (int) $order->items()->first()->quantity);
+    }
+
+    public function test_save_draft_with_complete_customer_info_stores_official_order(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham auto official',
+            'sku' => 'AUTO-OFFICIAL-001',
+            'price' => 150000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach du thong tin',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '123 Nguyen Trai',
+                'notes' => 'Bam nham luu nhap',
+                'source' => 'Website',
+                'shipping_fee' => 35000,
+                'discount' => 10000,
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 2,
+                        'price' => 150000,
+                    ],
+                ],
+            ]);
+
+        $response
+            ->assertCreated()
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL)
+            ->assertJsonPath('customer_name', 'Khach du thong tin')
+            ->assertJsonPath('customer_phone', '0912345678')
+            ->assertJsonPath('source', 'Website')
+            ->assertJsonPath('notes', 'Bam nham luu nhap')
+            ->assertJsonPath('shipping_fee', 35000)
+            ->assertJsonPath('discount', 10000);
+
+        $order = Order::query()->findOrFail((int) $response->json('id'));
+
+        $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
+        $this->assertContains($order->id, collect($this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders')
+            ->assertOk()
+            ->json('data'))->pluck('id')->all());
+        $this->assertNotContains($order->id, collect($this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?order_kind=draft')
+            ->assertOk()
+            ->json('data'))->pluck('id')->all());
+    }
+
+    public function test_update_draft_with_complete_customer_info_converts_to_official_order(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham update auto official',
+            'sku' => 'AUTO-OFFICIAL-UPD-001',
+            'price' => 175000,
+        ]);
+
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'customer_name' => 'Khach draft thieu dia chi',
+            'customer_phone' => '0901111222',
+            'shipping_address' => '',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->putJson("/api/orders/{$order->id}", [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach draft da du',
+                'customer_phone' => '0901111222',
+                'shipping_address' => '456 Le Loi',
+                'notes' => 'Sua nhap thanh don chinh',
+                'source' => 'FB',
+                'shipping_fee' => 25000,
+                'discount' => 5000,
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 1,
+                        'price' => 175000,
+                    ],
+                ],
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $order->id)
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL)
+            ->assertJsonPath('customer_name', 'Khach draft da du')
+            ->assertJsonPath('shipping_address', '456 Le Loi')
+            ->assertJsonPath('notes', 'Sua nhap thanh don chinh')
+            ->assertJsonPath('source', 'FB')
+            ->assertJsonPath('shipping_fee', 25000)
+            ->assertJsonPath('discount', 5000);
+
+        $order->refresh();
+
+        $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
+        $this->assertSame('456 Le Loi', $order->shipping_address);
+        $this->assertNotNull($order->officialized_at);
+    }
+
+    public function test_convert_to_draft_keeps_complete_official_order_in_main_orders(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham keep official',
+            'sku' => 'KEEP-OFFICIAL-001',
+            'price' => 210000,
+        ]);
+
+        $storeResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product));
+
+        $storeResponse->assertCreated();
+        $orderId = (int) $storeResponse->json('id');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/orders/{$orderId}/convert", [
+                'target_kind' => Order::KIND_DRAFT,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('id', $orderId)
+            ->assertJsonPath('order_kind', Order::KIND_OFFICIAL);
+
+        $order = Order::query()->findOrFail($orderId);
+
+        $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
+        $this->assertContains($orderId, collect($this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders')
+            ->assertOk()
+            ->json('data'))->pluck('id')->all());
+        $this->assertNotContains($orderId, collect($this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?order_kind=draft')
+            ->assertOk()
+            ->json('data'))->pluck('id')->all());
     }
 
     public function test_store_draft_order_with_only_customer_name_and_no_items(): void
@@ -295,6 +444,7 @@ class OrderDraftFlowTest extends TestCase
             ->postJson("/api/orders/{$orderId}/convert", [
                 'target_kind' => Order::KIND_DRAFT,
                 'region_type' => 'old',
+                'shipping_address' => '',
                 'custom_attributes' => [
                     'region_type' => 'Dia gioi cu',
                     'full_region_path' => 'Xa cu, Huyen cu, Tinh cu',
@@ -345,7 +495,7 @@ class OrderDraftFlowTest extends TestCase
                 'order_kind' => Order::KIND_DRAFT,
                 'customer_name' => 'Khach thu tu',
                 'customer_phone' => '0912345678',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'items' => [
                     $this->buildOrderItemPayload($productC, 1),
                     $this->buildOrderItemPayload($productA, 2),
@@ -368,7 +518,7 @@ class OrderDraftFlowTest extends TestCase
                 'order_kind' => Order::KIND_DRAFT,
                 'customer_name' => 'Khach thu tu lan 2',
                 'customer_phone' => '0912345678',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'items' => [
                     $this->buildOrderItemPayload($productB, 1),
                     $this->buildOrderItemPayload($productD, 2),
@@ -389,7 +539,7 @@ class OrderDraftFlowTest extends TestCase
                 'order_kind' => Order::KIND_DRAFT,
                 'customer_name' => 'Khach thu tu lan 3',
                 'customer_phone' => '0912345678',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'items' => [
                     $this->buildOrderItemPayload($productA, 2),
                     $this->buildOrderItemPayload($productC, 1),
@@ -430,7 +580,7 @@ class OrderDraftFlowTest extends TestCase
                 'order_kind' => Order::KIND_DRAFT,
                 'customer_name' => 'Khach duplicate',
                 'customer_phone' => '0912345678',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'items' => [
                     $this->buildOrderItemPayload($productB, 1),
                     $this->buildOrderItemPayload($productC, 2),
@@ -477,7 +627,7 @@ class OrderDraftFlowTest extends TestCase
                 'order_kind' => Order::KIND_DRAFT,
                 'customer_name' => 'Khach lam tron len',
                 'customer_phone' => '0911111111',
-                'shipping_address' => '123 Nguyen Trai',
+                'shipping_address' => '',
                 'items' => [
                     [
                         'product_id' => $product->id,
@@ -728,6 +878,7 @@ class OrderDraftFlowTest extends TestCase
             ->withHeaders($this->headers($account))
             ->postJson("/api/orders/{$order->id}/convert", [
                 'target_kind' => Order::KIND_DRAFT,
+                'shipping_address' => '',
             ]);
 
         $response

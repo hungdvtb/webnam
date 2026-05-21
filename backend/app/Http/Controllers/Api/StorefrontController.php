@@ -14,10 +14,24 @@ use App\Services\Analytics\MetaConversionsApiService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class StorefrontController extends Controller
 {
+    protected function applyVisibleBundleOptionConstraint($query): void
+    {
+        if (!Schema::hasColumn('product_links', 'bundle_option_status')) {
+            return;
+        }
+
+        $query->where(function ($visibleQuery) {
+            $visibleQuery
+                ->whereNull('product_links.bundle_option_status')
+                ->orWhere('product_links.bundle_option_status', '<>', 'internal');
+        });
+    }
+
     protected function normalizeStorefrontBundleOptionKey($optionPostId, ?string $optionTitle): string
     {
         if (filled($optionPostId) && is_numeric($optionPostId)) {
@@ -32,6 +46,95 @@ class StorefrontController extends Controller
             ->value();
 
         return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
+    protected function bundleOptionListKeys($optionPostId, ?string $optionTitle, ?string $optionKey = null): array
+    {
+        $title = Str::squish((string) $optionTitle);
+        $keys = [
+            trim((string) $optionKey),
+            $this->normalizeStorefrontBundleOptionKey($optionPostId, $title),
+            filled($optionPostId) && is_numeric($optionPostId) ? 'post:' . (int) $optionPostId : '',
+            $title !== '' ? 'title:' . Str::lower($title) : '',
+        ];
+
+        return collect($keys)
+            ->map(fn ($key) => trim((string) $key))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function buildVisibleBundleOptionLookup($products): array
+    {
+        $productIds = collect($products)
+            ->filter(function ($product) {
+                return ($product->item_type ?? '') === 'bundle_option'
+                    || trim((string) ($product->bundle_option_key ?? '')) !== ''
+                    || filled($product->bundle_option_post_id ?? null)
+                    || Str::squish((string) ($product->bundle_option_title ?? '')) !== '';
+            })
+            ->pluck('id')
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return [];
+        }
+
+        $rows = DB::table('product_links')
+            ->where('link_type', 'bundle')
+            ->whereIn('product_id', $productIds->all())
+            ->when(Schema::hasColumn('product_links', 'bundle_option_status'), function ($query) {
+                $query->where(function ($visibleQuery) {
+                    $visibleQuery
+                        ->whereNull('bundle_option_status')
+                        ->orWhere('bundle_option_status', '<>', 'internal');
+                });
+            })
+            ->get(['product_id', 'option_post_id', 'option_title']);
+
+        $lookup = [];
+        foreach ($rows as $row) {
+            $productId = (int) $row->product_id;
+            $lookup[$productId] ??= [];
+
+            foreach ($this->bundleOptionListKeys($row->option_post_id ?? null, $row->option_title ?? null) as $key) {
+                $lookup[$productId][$key] = true;
+            }
+        }
+
+        return $lookup;
+    }
+
+    protected function isVisibleBundleOptionListProduct(Product $product, array $visibleBundleOptions): bool
+    {
+        $bundleOptionKey = trim((string) ($product->bundle_option_key ?? ''));
+        $bundleOptionTitle = Str::squish((string) ($product->bundle_option_title ?? ''));
+        $isBundleOption = ($product->item_type ?? '') === 'bundle_option'
+            || $bundleOptionKey !== ''
+            || filled($product->bundle_option_post_id ?? null)
+            || $bundleOptionTitle !== '';
+
+        if (!$isBundleOption) {
+            return true;
+        }
+
+        $productId = (int) $product->id;
+        if (empty($visibleBundleOptions[$productId])) {
+            return false;
+        }
+
+        foreach ($this->bundleOptionListKeys($product->bundle_option_post_id ?? null, $bundleOptionTitle, $bundleOptionKey) as $key) {
+            if (!empty($visibleBundleOptions[$productId][$key])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function getOrderedCategoryIds(Category $category, $accountId = null): array
@@ -389,7 +492,9 @@ class StorefrontController extends Controller
 
         return Product::query()
             ->whereIn('id', $productIds->all())
-            ->with('bundleItems')
+            ->with(['bundleItems' => function ($query) {
+                $this->applyVisibleBundleOptionConstraint($query);
+            }])
             ->get(['id'])
             ->mapWithKeys(function (Product $product) {
                 $optionImages = [];
@@ -634,6 +739,12 @@ class StorefrontController extends Controller
 
         $perPage = min((int) $request->get('per_page', 20), 60);
         $products = $query->paginate($perPage);
+        $visibleBundleOptions = $this->buildVisibleBundleOptionLookup($products->getCollection());
+        $products->setCollection(
+            $products->getCollection()
+                ->filter(fn (Product $product) => $this->isVisibleBundleOptionListProduct($product, $visibleBundleOptions))
+                ->values()
+        );
 
         $bundleOptionImages = $this->collectBundleOptionImages($products->getCollection());
 
@@ -698,15 +809,19 @@ class StorefrontController extends Controller
                 'approvedReviews' => fn($q) => $q->latest()->limit(20),
                 'superAttributes.options',
                 'linkedProducts' => fn($q) => $q->where('status', true)->with(['images', 'attributeValues.attribute']),
-                'bundleItems' => fn($q) => $q->where('status', true)->with([
-                    'images',
-                    'category',
-                    'attributeValues.attribute',
-                    'superAttributes.options',
-                    'variations' => fn($variantQuery) => $variantQuery
-                        ->where('status', true)
-                        ->with(['images', 'attributeValues.attribute']),
-                ]),
+                'bundleItems' => function ($q) {
+                    $q->where('status', true);
+                    $this->applyVisibleBundleOptionConstraint($q);
+                    $q->with([
+                        'images',
+                        'category',
+                        'attributeValues.attribute',
+                        'superAttributes.options',
+                        'variations' => fn($variantQuery) => $variantQuery
+                            ->where('status', true)
+                            ->with(['images', 'attributeValues.attribute']),
+                    ]);
+                },
                 'groupedItems' => fn($q) => $q->where('status', true)->with(['images', 'category', 'attributeValues.attribute']),
             ]);
 

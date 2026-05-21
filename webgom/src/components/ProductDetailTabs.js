@@ -221,7 +221,7 @@ export default function ProductDetailTabs({
   }, [activePolicy?.id, activeTab, policies.length, policyStatus]);
 
   return (
-    <div className={styles.tabsSection}>
+    <div className={`${styles.tabsSection} ${showPolicies ? styles.tabsSectionPolicyActive : ''}`}>
       <div className={styles.tabHeader} role="tablist" aria-label={'Th\u00f4ng tin s\u1ea3n ph\u1ea9m'}>
         <button
           type="button"
@@ -312,6 +312,8 @@ export default function ProductDetailTabs({
                     <BlogArticleContent
                       html={activePolicyContent}
                       className={styles.policyArticle}
+                      galleryScopeSelector={`.${styles.policyArticle}`}
+                      enableTouchSwipeFallback
                       contentKey={`product-policy:${activePolicy?.id || activePolicy?.postSlug || ''}:${activePolicyContent.length}`}
                     />
                   ) : (

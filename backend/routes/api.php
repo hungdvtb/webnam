@@ -418,7 +418,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('fb-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFacebookAdAccounts']);
         Route::post('sync-fb', [\App\Http\Controllers\FinDailyProfitReportController::class, 'syncFacebookAds']);
         Route::get('fb-split', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getFbAdSpendSplit']);
-        Route::get('google-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getGoogleAdAccounts']);
+        Route::match(['get', 'post'], 'google-accounts', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getGoogleAdAccounts']);
         Route::post('sync-google', [\App\Http\Controllers\FinDailyProfitReportController::class, 'syncGoogleAds']);
         Route::get('google-split', [\App\Http\Controllers\FinDailyProfitReportController::class, 'getGoogleAdSpendSplit']);
     });

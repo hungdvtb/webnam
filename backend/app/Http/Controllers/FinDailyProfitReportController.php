@@ -1475,12 +1475,20 @@ class FinDailyProfitReportController extends Controller
         $endDate = $request->end_date ?: date('Y-m-d');
 
         $syncService = app(GoogleAdsSyncService::class);
-        $success = $syncService->syncRange($startDate, $endDate);
+        try {
+            $success = $syncService->syncRange($startDate, $endDate, true);
+        } catch (\Exception $exception) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+                'data' => [],
+            ], 422);
+        }
 
         if (!$success) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Khong dong bo duoc du lieu Google Ads. Vui long kiem tra cau hinh va log he thong.',
+                'message' => 'Khong dong bo duoc du lieu Google Ads.',
                 'data' => [],
             ], 422);
         }

@@ -39,6 +39,17 @@ use Throwable;
 class ProductController extends Controller
 {
     private const PRODUCT_DETAIL_PATH = '/san-pham';
+    private const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
+    private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
+
+    private function normalizeBundleOptionStatus($value): string
+    {
+        $status = Str::lower(Str::squish((string) $value));
+
+        return $status === self::BUNDLE_OPTION_STATUS_INTERNAL
+            ? self::BUNDLE_OPTION_STATUS_INTERNAL
+            : self::BUNDLE_OPTION_STATUS_VISIBLE;
+    }
 
     private function normalizeBundleOptionUid($value): ?string
     {
@@ -3047,7 +3058,7 @@ class ProductController extends Controller
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
                 $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
-                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
+                    ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
                         'images:id,product_id,image_url,is_primary,sort_order',
@@ -5722,6 +5733,8 @@ class ProductController extends Controller
                     ?? $firstItem->pivot?->option_title
                     ?? 'Mặc định'));
 
+                $optionStatus = $this->normalizeBundleOptionStatus($firstItem->pivot?->bundle_option_status ?? null);
+
                 $resolvedItems = $items->map(function (Product $bundleItem) {
                     $selectedVariantId = filled($bundleItem->pivot?->variant_id ?? null)
                         ? (int) $bundleItem->pivot->variant_id
@@ -5764,6 +5777,7 @@ class ProductController extends Controller
                     'key' => $groupKey,
                     'uid' => $optionUid,
                     'bundle_option_uid' => $optionUid,
+                    'bundle_option_status' => $optionStatus,
                     'option_title' => $optionTitle,
                     'option_post_id' => $optionPostId,
                     'option_post_title' => filled($firstItem->pivot?->option_post_title ?? null)
@@ -9185,6 +9199,7 @@ class ProductController extends Controller
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
             'grouped_items.*.bundle_option_uid' => 'nullable|string|max:64',
+            'grouped_items.*.bundle_option_status' => 'nullable|string|in:visible,internal',
             'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_source' => 'nullable|string|max:32',
@@ -9346,6 +9361,9 @@ class ProductController extends Controller
                             'option_title' => $item['option_title'] ?? null,
                             'option_post_id' => $item['option_post_id'] ?? null,
                             'bundle_option_uid' => $bundleOptionUid,
+                            'bundle_option_status' => $product->type === 'bundle'
+                                ? $this->normalizeBundleOptionStatus($item['bundle_option_status'] ?? null)
+                                : self::BUNDLE_OPTION_STATUS_VISIBLE,
                             'option_image_url' => $item['option_image_url'] ?? null,
                             'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
                             'option_video_source' => $item['option_video_source'] ?? null,
@@ -9864,6 +9882,7 @@ class ProductController extends Controller
             'grouped_items.*.option_title' => 'nullable|string',
             'grouped_items.*.option_post_id' => 'nullable|exists:posts,id',
             'grouped_items.*.bundle_option_uid' => 'nullable|string|max:64',
+            'grouped_items.*.bundle_option_status' => 'nullable|string|in:visible,internal',
             'grouped_items.*.option_image_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_url' => 'nullable|string|max:2048',
             'grouped_items.*.option_video_source' => 'nullable|string|max:32',
@@ -10106,6 +10125,9 @@ class ProductController extends Controller
                     'option_title' => $item['option_title'] ?? null,
                     'option_post_id' => $item['option_post_id'] ?? null,
                     'bundle_option_uid' => $bundleOptionUid,
+                    'bundle_option_status' => $product->type === 'bundle'
+                        ? $this->normalizeBundleOptionStatus($item['bundle_option_status'] ?? null)
+                        : self::BUNDLE_OPTION_STATUS_VISIBLE,
                     'option_image_url' => $item['option_image_url'] ?? null,
                     'option_video_url' => $this->normalizeVideoUrl($item['option_video_url'] ?? null),
                     'option_video_source' => $item['option_video_source'] ?? null,
@@ -10398,6 +10420,7 @@ class ProductController extends Controller
                         'option_title' => $bundleItem->pivot->option_title ?? null,
                         'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
                         'bundle_option_uid' => $bundleItem->pivot->bundle_option_uid ?? null,
+                        'bundle_option_status' => $this->normalizeBundleOptionStatus($bundleItem->pivot->bundle_option_status ?? null),
                         'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
                         'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
                         'option_video_source' => $bundleItem->pivot->option_video_source ?? null,
@@ -10530,6 +10553,7 @@ class ProductController extends Controller
                     'option_title' => $bundleItem->pivot->option_title ?? null,
                     'option_post_id' => $bundleItem->pivot->option_post_id ?? null,
                     'bundle_option_uid' => $bundleItem->pivot->bundle_option_uid ?? null,
+                    'bundle_option_status' => $this->normalizeBundleOptionStatus($bundleItem->pivot->bundle_option_status ?? null),
                     'option_image_url' => $bundleItem->pivot->option_image_url ?? null,
                     'option_video_url' => $bundleItem->pivot->option_video_url ?? null,
                     'option_video_source' => $bundleItem->pivot->option_video_source ?? null,

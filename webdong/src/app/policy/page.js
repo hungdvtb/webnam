@@ -1,0 +1,809 @@
+import Link from 'next/link';
+import { getWebSiteSettings } from '@/lib/api';
+import { getBlogPost } from '@/lib/blogApi';
+import { buildBlogContentMarkup } from '@/lib/blogContent';
+import BlogArticleContent from '@/components/blog/BlogArticleContent';
+
+export const metadata = {
+  title: 'Chính sách & Quy định | Gốm Đại Thành',
+  description:
+    'Chính sách bán hàng, vận chuyển, đổi trả và bảo mật thông tin tại Gốm Đại Thành. Cam kết minh bạch và chất lượng trong mọi giao dịch.',
+};
+
+const POLICY_MENU_ITEMS = [
+  {
+    id: 'ban-hang',
+    icon: 'shopping_bag',
+    label: 'Chính sách bán hàng',
+    postSlug: 'chinh-sach-bao-hanh',
+    legacyTabs: ['ban-hang'],
+  },
+  {
+    id: 'van-chuyen',
+    icon: 'local_shipping',
+    label: 'Vận chuyển & Giao hàng',
+    postSlug: 'chinh-sach-giao-hang',
+    legacyTabs: ['van-chuyen'],
+  },
+  {
+    id: 'doi-tra',
+    icon: 'assignment_return',
+    label: 'Đổi trả & Hoàn tiền',
+    postSlug: 'chinh-sach-doi-tra-hang-va-hoan-tien',
+    legacyTabs: ['doi-tra'],
+  },
+  {
+    id: 'bao-mat',
+    icon: 'verified_user',
+    label: 'Bảo mật thông tin',
+    postSlug: 'chinh-sach-bao-mat',
+    legacyTabs: ['bao-mat'],
+  },
+];
+
+function normalizeValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function getPolicyBySlug(postSlug) {
+  const normalizedSlug = normalizeValue(postSlug);
+  return POLICY_MENU_ITEMS.find((item) => item.postSlug === normalizedSlug) || null;
+}
+
+function getPolicyByLegacyTab(tab) {
+  const normalizedTab = normalizeValue(tab);
+  return (
+    POLICY_MENU_ITEMS.find(
+      (item) => item.id === normalizedTab || item.legacyTabs?.includes(normalizedTab)
+    ) || null
+  );
+}
+
+function resolveActivePolicy(searchParams) {
+  const fromSlug = getPolicyBySlug(searchParams?.slug);
+  if (fromSlug) {
+    return fromSlug;
+  }
+
+  const fromLegacyTab = getPolicyByLegacyTab(searchParams?.tab);
+  if (fromLegacyTab) {
+    return fromLegacyTab;
+  }
+
+  return POLICY_MENU_ITEMS[0];
+}
+
+function buildPolicyHref(item) {
+  return `/policy?slug=${encodeURIComponent(item.postSlug)}`;
+}
+
+function getPolicyContent(post) {
+  const content = typeof post?.content === 'string' ? post.content : post?.body;
+  return typeof content === 'string' ? content.trim() : '';
+}
+
+function getPhoneContact(value) {
+  const rawValue = normalizeValue(value);
+
+  if (!rawValue) {
+    return null;
+  }
+
+  const label = rawValue.replace(/^tel:/i, '').trim();
+  const hrefNumber = label.replace(/[^\d+]/g, '');
+
+  if (!hrefNumber) {
+    return null;
+  }
+
+  return {
+    label,
+    href: `tel:${hrefNumber}`,
+  };
+}
+
+function getMessengerHref(value) {
+  const href = normalizeValue(value);
+
+  if (!href) {
+    return '';
+  }
+
+  if (/^[a-z][a-z\d+.-]*:/i.test(href)) {
+    return href;
+  }
+
+  if (href.startsWith('//')) {
+    return `https:${href}`;
+  }
+
+  if (href.startsWith('/')) {
+    return href;
+  }
+
+  return `https://${href}`;
+}
+
+function shouldOpenInNewTab(href) {
+  return /^(https?:)?\/\//i.test(href);
+}
+
+export default async function PolicyPage({ searchParams }) {
+  const resolvedSearchParams = await searchParams;
+  const activePolicy = resolveActivePolicy(resolvedSearchParams);
+
+  let activePost = null;
+  let siteSettings = null;
+
+  const [activePostResult, siteSettingsResult] = await Promise.allSettled([
+    getBlogPost(activePolicy.postSlug),
+    getWebSiteSettings(),
+  ]);
+
+  if (activePostResult.status === 'fulfilled') {
+    activePost = activePostResult.value;
+  }
+
+  if (siteSettingsResult.status === 'fulfilled') {
+    siteSettings = siteSettingsResult.value;
+  }
+
+  const activeContent = getPolicyContent(activePost);
+  const activeContentMarkup = buildBlogContentMarkup(activeContent);
+  const hasPost = Boolean(activePost?.id);
+  const hasContent = Boolean(activeContentMarkup.__html.trim());
+  const supportHotline = getPhoneContact(siteSettings?.contact_phone);
+  const messengerHref = getMessengerHref(siteSettings?.messenger_link);
+  const openMessengerInNewTab = shouldOpenInNewTab(messengerHref);
+
+  return (
+    <main className="pol-page">
+      <div className="pol-hero">
+        <div className="pol-hero-inner">
+          <h1 className="pol-hero-title">Chính sách &amp; Quy định</h1>
+          <p className="pol-hero-sub">
+            Cam kết về chất lượng và sự minh bạch trong mọi giao dịch tại Gốm Đại Thành.
+          </p>
+        </div>
+      </div>
+
+      <div className="pol-container">
+        <div className="pol-layout">
+          <aside className="pol-sidebar">
+            <div className="pol-sidebar-sticky">
+              <h3 className="pol-sidebar-heading">Danh mục chính sách</h3>
+              <nav className="pol-sidebar-nav">
+                {POLICY_MENU_ITEMS.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={buildPolicyHref(item)}
+                    className={`pol-nav-item${
+                      activePolicy.id === item.id ? ' pol-nav-item--active' : ''
+                    }`}
+                  >
+                    <span className="material-symbols-outlined">{item.icon}</span>
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+            </div>
+          </aside>
+
+          <div className="pol-content">
+            <section className="pol-section">
+              <h2 className="pol-section-title">{activePost?.title || activePolicy.label}</h2>
+
+              {activePost?.excerpt ? <p className="pol-intro">{activePost.excerpt}</p> : null}
+
+              {hasPost && hasContent ? (
+                <BlogArticleContent
+                  html={activeContent}
+                  className="pol-article"
+                  contentKey={`policy:${activePolicy.postSlug}:${activeContent.length}`}
+                />
+              ) : (
+                <div className="pol-fallback" role="status">
+                  <div className="pol-fallback-icon-wrap">
+                    <span className="material-symbols-outlined pol-fallback-icon">article</span>
+                  </div>
+                  <h3 className="pol-fallback-title">
+                    {hasPost ? 'Bài viết chưa có nội dung' : 'Chưa tìm thấy bài viết'}
+                  </h3>
+                  <p className="pol-fallback-text">
+                    {hasPost
+                      ? 'Bài viết đã được gắn với menu này nhưng chưa có nội dung để hiển thị.'
+                      : (
+                        <>
+                          Menu này đang gắn tới slug{' '}
+                          <strong className="pol-fallback-slug">{activePolicy.postSlug}</strong> nhưng hệ
+                          thống chưa tìm thấy bài viết tương ứng.
+                        </>
+                      )}
+                  </p>
+                </div>
+              )}
+            </section>
+
+            <div className="pol-support-cta">
+              <div className="pol-support-left">
+                <h4 className="pol-support-title">Cần hỗ trợ thêm?</h4>
+                <p className="pol-support-sub">
+                  Đội ngũ tư vấn của chúng tôi luôn sẵn sàng giải đáp mọi thắc mắc.
+                </p>
+              </div>
+              <div className="pol-support-btns">
+                {supportHotline ? (
+                  <a href={supportHotline.href} className="pol-support-btn pol-support-btn--primary">
+                    <span className="material-symbols-outlined">call</span> Gọi ngay: {supportHotline.label}
+                  </a>
+                ) : null}
+                {messengerHref ? (
+                  <a
+                    href={messengerHref}
+                    target={openMessengerInNewTab ? '_blank' : undefined}
+                    rel={openMessengerInNewTab ? 'noopener noreferrer' : undefined}
+                    className="pol-support-btn pol-support-btn--ghost"
+                  >
+                    <span className="material-symbols-outlined">chat</span> Chat với chúng tôi
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        .pol-page {
+          background: #f6f7f8;
+          min-height: 100vh;
+          font-family: var(--font-roboto);
+          overflow-x: hidden;
+          overflow-x: clip;
+        }
+
+        .pol-hero {
+          background:
+            linear-gradient(0deg, rgba(14, 19, 27, 0.82) 0%, rgba(14, 19, 27, 0.2) 65%),
+            url('https://lh3.googleusercontent.com/aida-public/AB6AXuD1v6f0GytbOKFckdkE5YkP0gsNIWLjmpXfQTJ7R6Jk98hPNYLZ06GgYoR02eZKSplubI8119qNfwJpLrl39blQE8fWDVHOaZl77ShsF3zV18Ta8Ct_Uomqf9hM3hLthV8DriWKMZciKO4FrkxTywkFdmFffzgcPrmla_PUqa3d6zHymNKQVzDXIZXSj-W7lNAp8arkN02lsxrVE8-RK4JuLmBX5kjGxvqEfcUSWEGKtmaxizWUL1wuZBsNDmCn2qN4T7bSfZldkdo')
+              center/cover no-repeat;
+          min-height: 280px;
+          display: flex;
+          align-items: flex-end;
+          padding: 0;
+        }
+
+        .pol-hero-inner {
+          max-width: 1200px;
+          width: 100%;
+          margin: 0 auto;
+          padding: 2.5rem 2rem 3rem;
+        }
+
+        .pol-hero-title {
+          font-family: var(--font-roboto);
+          font-size: clamp(2rem, 5vw, 3.2rem);
+          font-weight: 700;
+          color: white;
+          margin: 0 0 0.75rem;
+        }
+
+        .pol-hero-sub {
+          font-family: var(--font-roboto);
+          font-size: 1.1rem;
+          color: #cbd5e1;
+          font-style: italic;
+          margin: 0;
+          max-width: 600px;
+        }
+
+        .pol-container {
+          width: 100%;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 2.5rem 1.5rem 4rem;
+          overflow-x: hidden;
+          overflow-x: clip;
+        }
+
+        .pol-layout {
+          display: flex;
+          gap: 3rem;
+          align-items: flex-start;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+        }
+
+        .pol-sidebar {
+          width: 260px;
+          flex-shrink: 0;
+          max-width: 100%;
+        }
+
+        .pol-sidebar-sticky {
+          position: sticky;
+          top: 6rem;
+        }
+
+        .pol-sidebar-heading {
+          font-size: 0.7rem;
+          font-weight: 700;
+          letter-spacing: 0.2em;
+          text-transform: uppercase;
+          color: #506d95;
+          margin: 0 0 1rem;
+          padding: 0 1rem;
+        }
+
+        .pol-sidebar-nav {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .pol-nav-item {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.75rem 1rem;
+          border-radius: 0.375rem;
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: #506d95;
+          transition: all 0.2s;
+          font-family: var(--font-roboto);
+        }
+
+        .pol-nav-item:hover {
+          background: rgba(24, 85, 170, 0.06);
+          color: #1855aa;
+        }
+
+        .pol-nav-item--active {
+          background: #1855aa;
+          color: white !important;
+          box-shadow: 0 2px 8px rgba(24, 85, 170, 0.25);
+        }
+
+        .pol-nav-item .material-symbols-outlined {
+          font-size: 1.1rem;
+          flex-shrink: 0;
+        }
+
+        .pol-content {
+          flex: 1;
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+        }
+
+        .pol-section {
+          width: 100%;
+          max-width: 100%;
+          margin-bottom: 2rem;
+        }
+
+        .pol-section-title {
+          font-family: var(--font-roboto);
+          font-size: 25px;
+          font-weight: 700;
+          color: #0e131b;
+          margin: 0 0 1.25rem;
+          padding-bottom: 1rem;
+          border-bottom: 1px solid rgba(24, 85, 170, 0.12);
+        }
+
+        .pol-intro {
+          font-size: 1.05rem;
+          color: #506d95;
+          line-height: 1.8;
+          margin: 0 0 2rem;
+          font-style: normal;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .pol-article {
+          width: 100%;
+          max-width: 100%;
+          min-width: 0;
+          font-size: 1rem;
+          color: #374151;
+          line-height: 1.85;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          word-wrap: break-word;
+        }
+
+        .pol-article,
+        .pol-article * {
+          box-sizing: border-box;
+        }
+
+        .pol-article > :first-child {
+          margin-top: 0;
+        }
+
+        .pol-article :where(
+          p,
+          h1,
+          h2,
+          h3,
+          h4,
+          h5,
+          h6,
+          li,
+          blockquote,
+          figcaption,
+          td,
+          th,
+          a,
+          span,
+          strong,
+          em
+        ) {
+          max-width: 100% !important;
+          min-width: 0;
+          white-space: normal !important;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .pol-article :where(
+          div,
+          section,
+          article,
+          aside,
+          figure,
+          picture,
+          img,
+          svg,
+          canvas,
+          video,
+          iframe,
+          table,
+          pre,
+          ul,
+          ol,
+          blockquote,
+          .bdt-inline-media,
+          .bdt-embedded-video,
+          .bdt-media-gallery
+        ) {
+          max-width: 100% !important;
+          min-width: 0 !important;
+        }
+
+        .pol-article :where(h2, h3, h4) {
+          font-family: var(--font-roboto);
+          color: #1855aa;
+          margin-top: 2rem;
+          margin-bottom: 0.85rem;
+          line-height: 1.35;
+        }
+
+        .pol-article h2 {
+          font-size: 1.15rem;
+          font-weight: 600;
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+          min-width: 0;
+        }
+
+        .pol-article h3 {
+          font-size: 1.05rem;
+          font-weight: 600;
+        }
+
+        .pol-article p {
+          margin: 0 0 0.85rem;
+        }
+
+        .pol-article strong {
+          color: #0e131b;
+        }
+
+        .pol-article ul,
+        .pol-article ol {
+          padding-left: 1.5rem;
+          margin: 0.75rem 0 1rem;
+          color: #506d95;
+          width: auto;
+        }
+
+        .pol-article li {
+          margin-bottom: 0.5rem;
+        }
+
+        .pol-article blockquote {
+          background: rgba(24, 85, 170, 0.05);
+          border-left: 4px solid #1855aa;
+          padding: 1rem 1.25rem;
+          margin: 1rem 0;
+          font-style: italic;
+          color: #0e131b;
+          font-size: 0.98rem;
+          line-height: 1.7;
+        }
+
+        .pol-article img {
+          max-width: 100% !important;
+          height: auto !important;
+          display: block;
+          margin: 1rem 0;
+          border-radius: 0.375rem;
+        }
+
+        .pol-article :where(video, iframe) {
+          display: block;
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+
+        .pol-article :where(.bdt-inline-media, .bdt-embedded-video, figure) {
+          width: 100%;
+          margin-left: 0;
+          margin-right: 0;
+          overflow: hidden;
+        }
+
+        .pol-article :where(.bdt-inline-media-frame, .bdt-video-frame, .bdt-media-gallery-main) {
+          width: 100%;
+          max-width: 100%;
+          overflow: hidden;
+        }
+
+        .pol-article .bdt-video-frame {
+          position: relative;
+          aspect-ratio: 16 / 9;
+        }
+
+        .pol-article .bdt-video-frame iframe {
+          position: absolute;
+          inset: 0;
+          height: 100% !important;
+        }
+
+        .pol-article table {
+          display: block;
+          width: 100% !important;
+          max-width: 100% !important;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          border-collapse: collapse;
+          white-space: normal !important;
+        }
+
+        .pol-article th,
+        .pol-article td {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          white-space: normal !important;
+        }
+
+        .pol-article pre {
+          max-width: 100%;
+          overflow-x: auto;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+        }
+
+        .pol-article a {
+          color: #1855aa;
+          text-decoration: underline;
+          overflow-wrap: anywhere;
+          word-break: break-word;
+        }
+
+        .pol-fallback {
+          background: white;
+          border: 1px dashed rgba(24, 85, 170, 0.25);
+          border-radius: 0.5rem;
+          padding: 2rem;
+          text-align: center;
+          color: #506d95;
+        }
+
+        .pol-fallback-icon-wrap {
+          width: 4rem;
+          height: 4rem;
+          margin: 0 auto 1rem;
+          border-radius: 999px;
+          background: rgba(24, 85, 170, 0.08);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .pol-fallback-icon {
+          font-size: 2rem;
+          color: #1855aa;
+        }
+
+        .pol-fallback-title {
+          font-family: var(--font-roboto);
+          font-size: 1.35rem;
+          color: #0e131b;
+          margin: 0 0 0.75rem;
+        }
+
+        .pol-fallback-text {
+          margin: 0;
+          line-height: 1.8;
+        }
+
+        .pol-fallback-slug {
+          color: #0e131b;
+        }
+
+        .pol-support-cta {
+          background: #0e131b;
+          color: white;
+          padding: 2rem 2.5rem;
+          border-radius: 0.5rem;
+          margin-top: 3rem;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-wrap: wrap;
+          gap: 1.5rem;
+          max-width: 100%;
+        }
+
+        .pol-support-title {
+          font-family: var(--font-roboto);
+          font-size: 1.3rem;
+          font-weight: 700;
+          margin: 0 0 0.4rem;
+        }
+
+        .pol-support-sub {
+          font-size: 0.9rem;
+          color: #94a3b8;
+          margin: 0;
+          font-style: italic;
+        }
+
+        .pol-support-btns {
+          display: flex;
+          gap: 0.75rem;
+          flex-wrap: wrap;
+        }
+
+        .pol-support-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          max-width: 100%;
+          padding: 0.6rem 1.5rem;
+          border-radius: 0.4rem;
+          font-weight: 600;
+          font-size: 0.9rem;
+          transition: all 0.2s;
+          font-family: var(--font-roboto);
+          cursor: pointer;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+
+        .pol-support-btn .material-symbols-outlined {
+          font-size: 1rem;
+        }
+
+        .pol-support-btn--primary {
+          background: #1855aa;
+          color: white;
+          border: none;
+        }
+
+        .pol-support-btn--primary:hover {
+          background: #1245a0;
+        }
+
+        .pol-support-btn--ghost {
+          background: rgba(255, 255, 255, 0.1);
+          color: white;
+          border: none;
+        }
+
+        .pol-support-btn--ghost:hover {
+          background: rgba(255, 255, 255, 0.18);
+        }
+
+        @media (max-width: 900px) {
+          .pol-layout {
+            flex-direction: column;
+          }
+
+          .pol-sidebar {
+            width: 100%;
+          }
+
+          .pol-sidebar-sticky {
+            position: static;
+          }
+
+          .pol-sidebar-nav {
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+          }
+
+          .pol-nav-item {
+            flex: 1;
+            min-width: 140px;
+            justify-content: center;
+            font-size: 0.85rem;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .pol-hero {
+            min-height: 220px;
+          }
+
+          .pol-hero-inner {
+            padding: 2rem 1rem 2.4rem;
+          }
+
+          .pol-container {
+            padding: 1.5rem 1rem 7.25rem;
+          }
+
+          .pol-layout {
+            gap: 1.5rem;
+          }
+
+          .pol-section-title {
+            font-size: 22px;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+          }
+
+          .pol-article {
+            font-size: 16px;
+            line-height: 1.7;
+          }
+
+          .pol-article h2 {
+            display: block;
+            font-size: 18px;
+          }
+
+          .pol-article h3,
+          .pol-article h4 {
+            font-size: 18px;
+          }
+
+          .pol-article ul,
+          .pol-article ol {
+            padding-left: 1.2rem;
+          }
+
+          .pol-support-cta {
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 1.25rem;
+          }
+
+          .pol-support-btns,
+          .pol-support-btn {
+            width: 100%;
+          }
+
+          .pol-support-btn {
+            justify-content: center;
+            padding-inline: 1rem;
+          }
+
+          .pol-fallback {
+            padding: 1.5rem;
+          }
+        }
+      `}</style>
+    </main>
+  );
+}

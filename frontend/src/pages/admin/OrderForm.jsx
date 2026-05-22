@@ -922,26 +922,110 @@ const getStoredProductQuickSetupStore = () => {
         return {};
     }
 };
-const normalizeStoredProductQuickSetupItems = (items = []) => {
-    const seenProductIds = new Set();
+const getProductQuickSetupEntryKey = (entry) => {
+    const entryKind = String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
 
-    return (Array.isArray(items) ? items : [])
+    if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION) {
+        const explicitEntryId = normalizeCanvasText(entry?.entry_id || entry?.id);
+        if (explicitEntryId && !/^\d+$/.test(explicitEntryId)) {
+            return explicitEntryId;
+        }
+
+        const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
+        const optionKey = normalizeCanvasText(
+            entry?.bundle_option_key
+            || entry?.key
+            || entry?.option_key
+            || resolveBundleOptionKey(entry)
+        );
+
+        return parentProductId > 0 && optionKey
+            ? `${SEARCH_ENTRY_BUNDLE_OPTION}-${parentProductId}-${optionKey}`
+            : '';
+    }
+
+    const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.id ?? 0);
+    return Number.isFinite(productId) && productId > 0 ? String(productId) : '';
+};
+const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
+    (Array.isArray(items) ? items : [])
         .map((item) => {
             const productId = Number(item?.product_id ?? item?.target_product_id ?? item?.id ?? 0);
             if (!Number.isFinite(productId) || productId <= 0) return null;
-            if (seenProductIds.has(productId)) return null;
-            seenProductIds.add(productId);
-
-            const parentProductId = Number(item?.parent_product_id ?? 0);
 
             return {
+                ...item,
                 id: productId,
+                product_id: productId,
+                target_product_id: productId,
+                base_product_id: Number(item?.base_product_id ?? 0) || undefined,
+                sku: String(item?.sku ?? '').trim(),
+                display_sku: String(item?.display_sku ?? item?.sku ?? '').trim(),
+                name: String(item?.name ?? '').trim(),
+                display_name: String(item?.display_name ?? item?.name ?? '').trim(),
+                quantity: Math.max(1, Number(item?.quantity) || 1),
+                price: Number(item?.price ?? 0) || 0,
+                expected_cost: parseMoneyNumber(item?.expected_cost),
+                cost_price: resolveProductCostPrice(item),
+                unit_name: resolveOrderUnitLabel(item),
+                ...resolveInventorySnapshot(item),
+                main_image: String(item?.main_image ?? '').trim(),
+                option_label: normalizeCanvasText(item?.option_label || item?.variant_label),
+                variant_name: normalizeCanvasText(item?.variant_name),
+            };
+        })
+        .filter(Boolean)
+);
+const normalizeStoredProductQuickSetupItems = (items = []) => {
+    const seenEntryKeys = new Set();
+
+    return (Array.isArray(items) ? items : [])
+        .map((item) => {
+            const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+            const productId = Number(
+                item?.target_product_id
+                ?? item?.product_id
+                ?? item?.bundle_parent_id
+                ?? item?.id
+                ?? 0
+            );
+            if (!Number.isFinite(productId) || productId <= 0) return null;
+
+            const entryKey = getProductQuickSetupEntryKey({
+                ...item,
+                entry_kind: entryKind,
+                product_id: productId,
+                target_product_id: productId,
+            });
+            if (!entryKey || seenEntryKeys.has(entryKey)) return null;
+            seenEntryKeys.add(entryKey);
+
+            const parentProductId = Number(item?.parent_product_id ?? 0);
+            const bundleItems = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? normalizeStoredProductQuickSetupBundleItems(item?.bundle_items)
+                : [];
+            if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION && bundleItems.length === 0) return null;
+
+            const bundleParentId = Number(item?.bundle_parent_id ?? productId) || productId;
+            const bundleOptionTitle = normalizeCanvasText(item?.bundle_option_title || resolveBundleOptionTitle(item));
+            const bundleParentName = normalizeCanvasText(item?.bundle_parent_name || item?.parent_product_name || item?.name);
+            const displayName = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? (
+                    normalizeCanvasText(item?.display_name)
+                    || [bundleParentName, bundleOptionTitle].filter(Boolean).join(' - ')
+                    || normalizeCanvasText(item?.name)
+                )
+                : String(item?.display_name ?? item?.name ?? '').trim();
+
+            return {
+                id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : productId,
+                entry_id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : normalizeCanvasText(item?.entry_id),
                 product_id: productId,
                 target_product_id: productId,
                 sku: String(item?.sku ?? '').trim(),
                 display_sku: String(item?.display_sku ?? item?.sku ?? '').trim(),
                 name: String(item?.name ?? '').trim(),
-                display_name: String(item?.display_name ?? item?.name ?? '').trim(),
+                display_name: displayName,
                 price: Number(item?.price ?? 0) || 0,
                 expected_cost: parseMoneyNumber(item?.expected_cost),
                 cost_price: resolveProductCostPrice(item),
@@ -949,10 +1033,25 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 ...resolveInventorySnapshot(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
-                entry_kind: String(item?.entry_kind ?? SEARCH_ENTRY_PRODUCT).trim(),
+                entry_kind: entryKind,
                 parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
                 parent_product_name: String(item?.parent_product_name ?? '').trim(),
                 option_label: String(item?.option_label ?? '').trim(),
+                ...(entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? {
+                    bundle_parent_id: bundleParentId,
+                    bundle_parent_name: bundleParentName,
+                    bundle_option_key: normalizeCanvasText(item?.bundle_option_key || resolveBundleOptionKey(item)),
+                    bundle_option_title: bundleOptionTitle,
+                    raw_bundle_option_title: normalizeCanvasText(item?.raw_bundle_option_title || item?.option_title),
+                    bundle_option_status: normalizeCanvasText(item?.bundle_option_status || 'visible'),
+                    bundle_title: normalizeCanvasText(item?.bundle_title || item?.bundle_config_title),
+                    bundle_config_title: normalizeCanvasText(item?.bundle_config_title || item?.bundle_title),
+                    option_post_id: Number(item?.option_post_id) || undefined,
+                    option_post_title: normalizeCanvasText(item?.option_post_title),
+                    bundle_items: bundleItems,
+                    bundle_item_count: bundleItems.length,
+                    bundle_quantity_total: bundleItems.reduce((sum, bundleItem) => sum + (Number(bundleItem.quantity) || 0), 0),
+                } : {}),
             };
         })
         .filter(Boolean);
@@ -2615,7 +2714,6 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
 };
 const buildProductQuickSetupEntries = (products = []) => (
     buildProductSearchEntries(products, { includeNested: true })
-        .filter((entry) => String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION)
         .filter((entry) => canAddSearchEntry([], entry))
 );
 const buildStoredQuickSetupSearchEntries = (items = []) => {
@@ -2682,6 +2780,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
 const getProductQuickSetupEntryId = (entry) => Number(
     entry?.target_product_id
     ?? entry?.product_id
+    ?? entry?.bundle_parent_id
     ?? entry?.id
     ?? 0
 ) || 0;
@@ -2690,19 +2789,19 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
     const fetchedMap = new Map();
 
     fetchedEntries.forEach((entry) => {
-        const entryId = getProductQuickSetupEntryId(entry);
-        if (entryId > 0 && !fetchedMap.has(entryId)) {
-            fetchedMap.set(entryId, entry);
+        const entryKey = getProductQuickSetupEntryKey(entry);
+        if (entryKey && !fetchedMap.has(entryKey)) {
+            fetchedMap.set(entryKey, entry);
         }
     });
 
     const mergedEntries = [];
-    const seenEntryIds = new Set();
+    const seenEntryKeys = new Set();
     const pushEntry = (entry) => {
-        const entryId = getProductQuickSetupEntryId(entry);
-        if (entryId <= 0 || seenEntryIds.has(entryId)) return;
+        const entryKey = getProductQuickSetupEntryKey(entry);
+        if (!entryKey || seenEntryKeys.has(entryKey)) return;
 
-        seenEntryIds.add(entryId);
+        seenEntryKeys.add(entryKey);
         mergedEntries.push(entry);
     };
 
@@ -2713,10 +2812,13 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
     (Array.isArray(selectedItems) ? selectedItems : []).forEach((item) => {
         const entryId = getProductQuickSetupEntryId(item);
         if (entryId <= 0) return;
+        const entryKey = getProductQuickSetupEntryKey(item);
+        if (!entryKey) return;
 
         const fallbackEntry = normalizeProductPickerEntry({
             ...item,
-            id: entryId,
+            id: item?.id || entryId,
+            entry_id: item?.entry_id || entryKey,
             product_id: entryId,
             target_product_id: entryId,
             entry_kind: item?.entry_kind || SEARCH_ENTRY_PRODUCT,
@@ -2724,7 +2826,7 @@ const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
             display_sku: item?.display_sku || item?.sku,
         });
 
-        pushEntry(fetchedMap.get(entryId) || fallbackEntry);
+        pushEntry(fetchedMap.get(entryKey) || fallbackEntry);
     });
 
     return mergedEntries;
@@ -4001,8 +4103,8 @@ const OrderForm = () => {
     useEffect(() => {
         setDiscountInputValue(formatSignedMoneyInputValue(formData.discount));
     }, [formData.discount]);
-    const selectedQuickSetupProductIds = useMemo(
-        () => new Set(activeProductQuickSetupItems.map((item) => Number(item.product_id)).filter(Boolean)),
+    const selectedQuickSetupEntryKeys = useMemo(
+        () => new Set(activeProductQuickSetupItems.map(getProductQuickSetupEntryKey).filter(Boolean)),
         [activeProductQuickSetupItems]
     );
     const visibleProductQuickSetupProducts = useMemo(() => {
@@ -5779,14 +5881,25 @@ const OrderForm = () => {
     const handleAddProductToQuickSetup = useCallback((product) => {
         if (!product) return;
 
+        const entryKind = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
         const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id ?? 0);
         if (!Number.isFinite(targetProductId) || targetProductId <= 0) {
             return;
         }
 
+        const entryKey = getProductQuickSetupEntryKey({
+            ...product,
+            entry_kind: entryKind,
+            product_id: targetProductId,
+            target_product_id: targetProductId,
+        });
+        if (!entryKey) return;
+
         const nextItems = normalizeStoredProductQuickSetupItems([
             ...activeProductQuickSetupItems,
             {
+                id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : targetProductId,
+                entry_id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : product.entry_id,
                 product_id: targetProductId,
                 target_product_id: targetProductId,
                 sku: product.sku,
@@ -5800,10 +5913,25 @@ const OrderForm = () => {
                 ...resolveInventorySnapshot(product),
                 main_image: product.main_image,
                 type: product.type,
-                entry_kind: product.entry_kind ?? SEARCH_ENTRY_PRODUCT,
+                entry_kind: entryKind,
                 parent_product_id: Number(product?.parent_product_id ?? 0) || null,
                 parent_product_name: product.parent_product_name ?? '',
                 option_label: product.option_label ?? '',
+                ...(entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? {
+                    bundle_parent_id: Number(product?.bundle_parent_id ?? targetProductId) || targetProductId,
+                    bundle_parent_name: product.bundle_parent_name ?? product.parent_product_name ?? product.name ?? '',
+                    bundle_option_key: product.bundle_option_key ?? resolveBundleOptionKey(product),
+                    bundle_option_title: product.bundle_option_title ?? resolveBundleOptionTitle(product),
+                    raw_bundle_option_title: product.raw_bundle_option_title ?? product.option_title ?? '',
+                    bundle_option_status: product.bundle_option_status ?? 'visible',
+                    bundle_title: product.bundle_title ?? product.bundle_config_title ?? '',
+                    bundle_config_title: product.bundle_config_title ?? product.bundle_title ?? '',
+                    option_post_id: Number(product?.option_post_id) || undefined,
+                    option_post_title: product.option_post_title ?? '',
+                    bundle_items: normalizeStoredProductQuickSetupBundleItems(product.bundle_items),
+                    bundle_item_count: Number(product?.bundle_item_count) || undefined,
+                    bundle_quantity_total: Number(product?.bundle_quantity_total) || undefined,
+                } : {}),
             },
         ]);
 
@@ -5811,17 +5939,20 @@ const OrderForm = () => {
         setProductQuickModeEnabled(true);
     }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
 
-    const handleRemoveProductFromQuickSetup = useCallback((productId) => {
+    const handleRemoveProductFromQuickSetup = useCallback((entryKey) => {
+        const normalizedEntryKey = String(entryKey ?? '').trim();
+        if (!normalizedEntryKey) return;
+
         saveActiveProductQuickSetupItems(
-            activeProductQuickSetupItems.filter((item) => Number(item.product_id) !== Number(productId))
+            activeProductQuickSetupItems.filter((item) => getProductQuickSetupEntryKey(item) !== normalizedEntryKey)
         );
     }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
 
-    const handleToggleProductQuickSetupSelection = useCallback((product, productId, isSelected) => {
+    const handleToggleProductQuickSetupSelection = useCallback((product, entryKey, isSelected) => {
         captureProductQuickSetupViewport();
 
         if (isSelected) {
-            handleRemoveProductFromQuickSetup(productId);
+            handleRemoveProductFromQuickSetup(entryKey);
             return;
         }
 
@@ -8214,15 +8345,18 @@ const OrderForm = () => {
                                         <div ref={productQuickSetupListRef} className="custom-scrollbar mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-1">
                                             {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
                                                 const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
+                                                const setupEntryKey = getProductQuickSetupEntryKey(product);
+                                                const entryKind = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT);
                                                 const isVariation = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_VARIATION;
-                                                const isSelected = selectedQuickSetupProductIds.has(targetProductId);
+                                                const isBundleOption = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                                const isSelected = selectedQuickSetupEntryKeys.has(setupEntryKey);
 
                                                 return (
                                                     <button
-                                                        key={`setup-product-${product.entry_kind || SEARCH_ENTRY_PRODUCT}-${targetProductId}`}
+                                                        key={`setup-product-${setupEntryKey || targetProductId}`}
                                                         type="button"
                                                         onMouseDown={(event) => event.preventDefault()}
-                                                        onClick={() => handleToggleProductQuickSetupSelection(product, targetProductId, isSelected)}
+                                                        onClick={() => handleToggleProductQuickSetupSelection(product, setupEntryKey, isSelected)}
                                                         className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
                                                     >
                                                         <div className="flex items-center justify-between gap-3">
@@ -8237,6 +8371,11 @@ const OrderForm = () => {
                                                                     {isVariation && product.option_label && (
                                                                         <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
                                                                             {product.option_label}
+                                                                        </span>
+                                                                    )}
+                                                                    {isBundleOption && product.bundle_option_title && (
+                                                                        <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                            Bundle: {product.bundle_option_title}
                                                                         </span>
                                                                     )}
                                                                 </div>
@@ -8772,15 +8911,18 @@ const OrderForm = () => {
                                                                 <div ref={productQuickSetupListRef} className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
                                                                     {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
                                                                         const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
+                                                                        const setupEntryKey = getProductQuickSetupEntryKey(product);
+                                                                        const entryKind = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT);
                                                                         const isVariation = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT) === SEARCH_ENTRY_VARIATION;
-                                                                        const isSelected = selectedQuickSetupProductIds.has(targetProductId);
+                                                                        const isBundleOption = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                                                        const isSelected = selectedQuickSetupEntryKeys.has(setupEntryKey);
 
                                                                         return (
                                                                             <button
-                                                                                key={`setup-product-${product.entry_kind || SEARCH_ENTRY_PRODUCT}-${targetProductId}`}
+                                                                                key={`setup-product-${setupEntryKey || targetProductId}`}
                                                                                 type="button"
                                                                                 onMouseDown={(event) => event.preventDefault()}
-                                                                                onClick={() => handleToggleProductQuickSetupSelection(product, targetProductId, isSelected)}
+                                                                                onClick={() => handleToggleProductQuickSetupSelection(product, setupEntryKey, isSelected)}
                                                                                 className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
                                                                             >
                                                                                 <div className="flex items-center justify-between gap-3">
@@ -8795,6 +8937,11 @@ const OrderForm = () => {
                                                                                             {isVariation && product.option_label && (
                                                                                                 <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
                                                                                                     {product.option_label}
+                                                                                                </span>
+                                                                                            )}
+                                                                                            {isBundleOption && product.bundle_option_title && (
+                                                                                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                                                    Bundle: {product.bundle_option_title}
                                                                                                 </span>
                                                                                             )}
                                                                                         </div>

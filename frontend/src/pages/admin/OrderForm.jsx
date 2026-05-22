@@ -1066,6 +1066,9 @@ const getProductAttributeDisplayValues = (product, attributeId) => {
     const productAttributeValues = Array.isArray(product?.attribute_values)
         ? product.attribute_values
         : (Array.isArray(product?.attributeValues) ? product.attributeValues : []);
+    const inheritedAttributeValues = Array.isArray(product?.parent_attribute_values)
+        ? product.parent_attribute_values
+        : (Array.isArray(product?.parentAttributeValues) ? product.parentAttributeValues : []);
     const variationAttributeValues = Array.isArray(product?.variations)
         ? product.variations.flatMap((variation) => (
             Array.isArray(variation?.attribute_values)
@@ -1094,6 +1097,7 @@ const getProductAttributeDisplayValues = (product, attributeId) => {
 
     return Array.from(new Set(
         [
+            ...inheritedAttributeValues,
             ...productAttributeValues,
             ...variationAttributeValues,
             ...bundleItemAttributeValues,
@@ -2523,6 +2527,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 type: normalizeCanvasText(variation?.type || 'simple'),
                 main_image: getPickerPrimaryImage(variation) || baseEntry.main_image,
                 attribute_values: getPickerAttributeValues(variation),
+                parent_attribute_values: baseEntry.attribute_values,
                 search_keywords: [
                     baseEntry.name,
                     normalizeCanvasText(variation?.name),

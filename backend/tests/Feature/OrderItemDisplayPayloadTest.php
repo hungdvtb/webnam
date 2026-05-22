@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\InventoryUnit;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
@@ -52,9 +53,11 @@ class OrderItemDisplayPayloadTest extends TestCase
     public function test_print_data_keeps_snapshot_identity_for_history_documents(): void
     {
         [$account, $user] = $this->authenticate();
+        $unit = $this->createInventoryUnit($account, 'Bo');
         $product = $this->createProduct($account, [
             'name' => 'Chen su cu',
             'sku' => 'CHEN-SU-CU',
+            'inventory_unit_id' => $unit->id,
         ]);
         $order = $this->createDraftOrder($account, $user, $product);
 
@@ -74,6 +77,7 @@ class OrderItemDisplayPayloadTest extends TestCase
 
         $this->assertSame('Chen su cu', data_get($printedItem, 'name'));
         $this->assertSame('CHEN-SU-CU', data_get($printedItem, 'sku'));
+        $this->assertSame('Bo', data_get($printedItem, 'unit_name'));
     }
 
     public function test_order_list_exposes_actual_product_override_fields(): void
@@ -199,6 +203,16 @@ class OrderItemDisplayPayloadTest extends TestCase
             'stock_quantity' => 0,
             'status' => true,
         ], $overrides));
+    }
+
+    private function createInventoryUnit(Account $account, string $name): InventoryUnit
+    {
+        return InventoryUnit::query()->create([
+            'account_id' => $account->id,
+            'name' => $name,
+            'normalized_name' => Str::slug($name),
+            'sort_order' => 1,
+        ]);
     }
 
     private function createDraftOrder(Account $account, User $user, Product $product, array $itemOverrides = []): Order

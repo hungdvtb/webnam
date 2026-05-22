@@ -930,7 +930,9 @@ class OrderController extends Controller
                 ->orderBy('sort_order')
                 ->orderBy('id')
                 ->with([
-                    'product:id,name,sku',
+                    'product' => fn ($productQuery) => $productQuery
+                        ->select(['id', 'name', 'sku', 'inventory_unit_id'])
+                        ->with(['unit:id,name']),
                     'actualProduct:id,name,sku',
                 ]),
         ];
@@ -3966,6 +3968,7 @@ class OrderController extends Controller
                         ->map(function (OrderItem $item) {
                             $productName = trim((string) ($item->product_name_snapshot ?: $item->product?->name ?: ('Sản phẩm #' . $item->product_id)));
                             $productSku = trim((string) ($item->product_sku_snapshot ?: $item->product?->sku ?: ''));
+                            $unitName = trim((string) ($item->product?->unit?->name ?: ''));
                             $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
                             $unitPrice = (float) $item->price;
 
@@ -3973,6 +3976,7 @@ class OrderController extends Controller
                                 'id' => (int) $item->id,
                                 'name' => $productName,
                                 'sku' => $productSku !== '' ? $productSku : null,
+                                'unit_name' => $unitName !== '' ? $unitName : null,
                                 'quantity' => $quantity,
                                 'unit_price' => $unitPrice,
                                 'line_total' => round($quantity * $unitPrice, 2),

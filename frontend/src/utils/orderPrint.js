@@ -55,10 +55,12 @@ const getOrderItems = (order = {}) =>
         const quantity = Number(item?.quantity ?? 0);
         const unitPrice = Number(item?.unit_price ?? item?.price ?? 0);
         const lineTotal = Number(item?.line_total ?? (quantity * unitPrice) ?? 0);
+        const unitName = String(item?.unit_name ?? item?.unit?.name ?? item?.product?.unit?.name ?? '').trim();
 
         return {
             name: item?.name || '-',
             sku: item?.sku || '',
+            unit_name: unitName,
             quantity,
             unit_price: unitPrice,
             line_total: lineTotal,
@@ -185,7 +187,7 @@ const loadHtmlIntoIframe = async (iframe, html) => {
 
 const renderOrderRows = (items = [], startIndex = 0, measurement = false) => {
     if (!items.length) {
-        return `<tr><td colspan="5" class="empty-state">Don hang khong co san pham.</td></tr>`;
+        return `<tr><td colspan="6" class="empty-state">Don hang khong co san pham.</td></tr>`;
     }
 
     return items
@@ -199,6 +201,7 @@ const renderOrderRows = (items = [], startIndex = 0, measurement = false) => {
                 </div>
             </td>
             <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
+            <td class="col-unit"><div class="cell-center"><span class="cell-text">${escapeHtml(item.unit_name || '-')}</span></div></td>
             <td class="col-money"><div class="cell-money"><span class="cell-text">${escapeHtml(formatCurrency(item.unit_price))}</span></div></td>
             <td class="col-money"><div class="cell-money cell-money--total"><span class="cell-text">${escapeHtml(formatCurrency(item.line_total))}</span></div></td>
         </tr>`)
@@ -211,6 +214,7 @@ const renderTableHead = (measurement = false) => `
             <th class="col-index"><div class="head-cell"><span class="head-text">STT</span></div></th>
             <th class="col-name"><div class="head-cell"><span class="head-text">San pham</span></div></th>
             <th class="col-qty"><div class="head-cell"><span class="head-text">So luong</span></div></th>
+            <th class="col-unit"><div class="head-cell"><span class="head-text">&#272;VT</span></div></th>
             <th class="col-money"><div class="head-cell"><span class="head-text">Don gia</span></div></th>
             <th class="col-money"><div class="head-cell"><span class="head-text">Thanh tien</span></div></th>
         </tr>
@@ -658,11 +662,16 @@ const getOrderPrintStyles = () => `
     }
 
     .col-name {
-        width: 50.5%;
+        width: 42.5%;
     }
 
     .col-qty {
         width: 11.5%;
+        text-align: center;
+    }
+
+    .col-unit {
+        width: 8%;
         text-align: center;
     }
 
@@ -891,6 +900,7 @@ const getOrderPrintStyles = () => `
         .col-index,
         .col-name,
         .col-qty,
+        .col-unit,
         .col-money {
             width: auto;
         }

@@ -3794,6 +3794,122 @@ class OrderController extends Controller
             ->toArray();
     }
 
+    private function loadOrderProductQuickFilterAttributes(int $accountId): array
+    {
+        return array_values(array_merge(
+            $this->loadOrderAttributes('product'),
+            $this->loadBundleQuickFilterAttributes($accountId)
+        ));
+    }
+
+    private function loadBundleQuickFilterAttributes(int $accountId): array
+    {
+        $bundleOptionTitles = DB::table('product_links')
+            ->join('products as bundle_products', 'bundle_products.id', '=', 'product_links.product_id')
+            ->leftJoin('posts as option_posts', 'option_posts.id', '=', 'product_links.option_post_id')
+            ->where('bundle_products.account_id', $accountId)
+            ->where('bundle_products.type', 'bundle')
+            ->where('product_links.link_type', 'bundle')
+            ->get([
+                'product_links.option_title',
+                'option_posts.title as option_post_title',
+            ])
+            ->map(fn ($row) => Str::squish((string) (
+                $row->option_post_title
+                ?: $row->option_title
+                ?: 'Mặc định'
+            )))
+            ->filter()
+            ->unique(fn ($value) => Str::lower($value))
+            ->sort(fn ($left, $right) => strnatcasecmp($left, $right))
+            ->values()
+            ->all();
+
+        $bundleConfigTitles = Product::query()
+            ->where('account_id', $accountId)
+            ->where('type', 'bundle')
+            ->whereNotNull('bundle_title')
+            ->where('bundle_title', '<>', '')
+            ->pluck('bundle_title')
+            ->map(fn ($value) => Str::squish((string) $value))
+            ->filter()
+            ->unique(fn ($value) => Str::lower($value))
+            ->sort(fn ($left, $right) => strnatcasecmp($left, $right))
+            ->values()
+            ->all();
+
+        $attributes = array_filter([
+            $this->makeBundleQuickFilterAttribute(
+                '__bundle_option_title',
+                'Tùy chọn bundle',
+                'bundle_option_title',
+                $this->formatBundleQuickFilterOptions('__bundle_option_title', $bundleOptionTitles)
+            ),
+            $this->makeBundleQuickFilterAttribute(
+                '__bundle_config_title',
+                'Tên cấu hình bundle',
+                'bundle_title',
+                $this->formatBundleQuickFilterOptions('__bundle_config_title', $bundleConfigTitles)
+            ),
+        ]);
+
+        if (
+            Schema::hasColumn('product_links', 'bundle_option_status')
+            && DB::table('product_links')
+                ->join('products as bundle_products', 'bundle_products.id', '=', 'product_links.product_id')
+                ->where('bundle_products.account_id', $accountId)
+                ->where('bundle_products.type', 'bundle')
+                ->where('product_links.link_type', 'bundle')
+                ->exists()
+        ) {
+            $attributes[] = $this->makeBundleQuickFilterAttribute(
+                '__bundle_option_status',
+                'Trạng thái tùy chọn',
+                'bundle_option_status',
+                [
+                    ['id' => '__bundle_option_status_visible', 'value' => 'visible', 'label' => 'Hiển thị website'],
+                    ['id' => '__bundle_option_status_internal', 'value' => 'internal', 'label' => 'Nội bộ'],
+                ]
+            );
+        }
+
+        return array_values($attributes);
+    }
+
+    private function makeBundleQuickFilterAttribute(string $id, string $name, string $kind, array $options): ?array
+    {
+        if (empty($options)) {
+            return null;
+        }
+
+        return [
+            'id' => $id,
+            'code' => $id,
+            'name' => $name,
+            'frontend_type' => 'select',
+            'is_filterable' => true,
+            'is_filterable_backend' => true,
+            'is_filterable_frontend' => true,
+            'quick_filter_kind' => $kind,
+            'options' => $options,
+        ];
+    }
+
+    private function formatBundleQuickFilterOptions(string $prefix, array $values): array
+    {
+        return collect($values)
+            ->map(fn ($value) => Str::squish((string) $value))
+            ->filter()
+            ->unique(fn ($value) => Str::lower($value))
+            ->values()
+            ->map(fn ($value, $index) => [
+                'id' => $prefix . '_' . ($index + 1) . '_' . substr(md5($value), 0, 10),
+                'value' => $value,
+                'label' => $value,
+            ])
+            ->all();
+    }
+
     private function loadOrderStatuses(int $accountId): array
     {
         OrderStatusCatalog::ensureDefaultSystemStatuses($accountId);
@@ -4061,7 +4177,7 @@ class OrderController extends Controller
                     return [
                         'order_statuses' => $this->loadOrderStatuses($accountId),
                         'order_attributes' => $this->loadOrderAttributes('order'),
-                        'product_attributes' => $this->loadOrderAttributes('product'),
+                        'product_attributes' => $this->loadOrderProductQuickFilterAttributes($accountId),
                         'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
                         'quote_settings' => $this->loadQuoteSettings($accountId),
                         'quote_templates' => QuoteTemplate::query()

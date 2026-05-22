@@ -5193,6 +5193,118 @@ class ProductController extends Controller
         }
     }
 
+    protected function applyProductBundleQuickFilters(Builder $query, $inputFilters): void
+    {
+        if (!is_array($inputFilters) || empty($inputFilters)) {
+            return;
+        }
+
+        $optionTitleValues = $this->normalizeBundleQuickFilterTextValues(
+            $inputFilters['option_title']
+            ?? $inputFilters['bundle_option_title']
+            ?? null
+        );
+
+        if (!empty($optionTitleValues)) {
+            $optionTitleExpr = DB::raw("LOWER(TRIM(COALESCE(NULLIF(product_links.option_title, ''), 'Mặc định')))");
+            $postTitleExpr = DB::raw("LOWER(TRIM(COALESCE(posts.title, '')))");
+
+            $query
+                ->where('products.type', 'bundle')
+                ->whereHas('bundleItems', function (Builder $bundleItemQuery) use ($optionTitleValues, $optionTitleExpr, $postTitleExpr) {
+                    $bundleItemQuery->where(function (Builder $matchQuery) use ($optionTitleValues, $optionTitleExpr, $postTitleExpr) {
+                        $matchQuery
+                            ->whereIn($optionTitleExpr, $optionTitleValues)
+                            ->orWhereExists(function ($postQuery) use ($optionTitleValues, $postTitleExpr) {
+                                $postQuery
+                                    ->selectRaw('1')
+                                    ->from('posts')
+                                    ->whereColumn('posts.id', 'product_links.option_post_id')
+                                    ->whereIn($postTitleExpr, $optionTitleValues);
+                            });
+                    });
+                });
+        }
+
+        $bundleTitleValues = $this->normalizeBundleQuickFilterTextValues(
+            $inputFilters['bundle_title']
+            ?? $inputFilters['bundle_config_title']
+            ?? null
+        );
+
+        if (!empty($bundleTitleValues)) {
+            $bundleTitleExpr = DB::raw("LOWER(TRIM(COALESCE(products.bundle_title, '')))");
+
+            $query
+                ->where('products.type', 'bundle')
+                ->whereIn($bundleTitleExpr, $bundleTitleValues);
+        }
+
+        $statusValues = $this->normalizeBundleQuickFilterStatusValues(
+            $inputFilters['option_status']
+            ?? $inputFilters['bundle_option_status']
+            ?? null
+        );
+
+        if (!empty($statusValues) && Schema::hasColumn('product_links', 'bundle_option_status')) {
+            $statusExpr = DB::raw("LOWER(COALESCE(NULLIF(TRIM(product_links.bundle_option_status), ''), '" . self::BUNDLE_OPTION_STATUS_VISIBLE . "'))");
+
+            $query
+                ->where('products.type', 'bundle')
+                ->whereHas('bundleItems', function (Builder $bundleItemQuery) use ($statusValues, $statusExpr) {
+                    $bundleItemQuery->whereIn($statusExpr, $statusValues);
+                });
+        }
+    }
+
+    protected function normalizeBundleQuickFilterTextValues($values): array
+    {
+        return collect(is_array($values) ? $values : explode(',', (string) $values))
+            ->map(function ($value) {
+                if (!is_scalar($value)) {
+                    return null;
+                }
+
+                $normalized = Str::lower(Str::squish((string) $value));
+
+                return $normalized !== '' ? $normalized : null;
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function normalizeBundleQuickFilterStatusValues($values): array
+    {
+        return collect(is_array($values) ? $values : explode(',', (string) $values))
+            ->map(function ($value) {
+                if (!is_scalar($value)) {
+                    return null;
+                }
+
+                $normalized = Str::of((string) $value)
+                    ->lower()
+                    ->ascii()
+                    ->squish()
+                    ->toString();
+
+                if (in_array($normalized, ['visible', 'hien thi website', 'hien thi', 'website'], true)) {
+                    return self::BUNDLE_OPTION_STATUS_VISIBLE;
+                }
+
+                if (in_array($normalized, ['internal', 'noi bo'], true)) {
+                    return self::BUNDLE_OPTION_STATUS_INTERNAL;
+                }
+
+                return null;
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     protected function normalizedSortExpression(string $expression): string
     {
         $expression = "COALESCE({$expression}, '')";
@@ -5729,6 +5841,7 @@ class ProductController extends Controller
                     ? (int) $firstItem->pivot->option_post_id
                     : null;
                 $optionUid = $this->normalizeBundleOptionUid($firstItem->pivot?->bundle_option_uid ?? null);
+                $rawOptionTitle = trim((string) ($firstItem->pivot?->option_title ?? ''));
                 $optionTitle = trim((string) ($firstItem->pivot?->option_post_title
                     ?? $firstItem->pivot?->option_title
                     ?? 'Mặc định'));
@@ -5779,6 +5892,7 @@ class ProductController extends Controller
                     'bundle_option_uid' => $optionUid,
                     'bundle_option_status' => $optionStatus,
                     'option_title' => $optionTitle,
+                    'raw_option_title' => $rawOptionTitle,
                     'option_post_id' => $optionPostId,
                     'option_post_title' => filled($firstItem->pivot?->option_post_title ?? null)
                         ? (string) $firstItem->pivot->option_post_title
@@ -5803,6 +5917,7 @@ class ProductController extends Controller
             'products.expected_cost',
             'products.stock_quantity',
             'products.type',
+            'products.bundle_title',
             'products.category_id',
             'products.inventory_unit_id',
         ]);
@@ -5829,6 +5944,7 @@ class ProductController extends Controller
             'include_variations' => true,
             'include_bundle_items' => true,
         ]);
+        $this->applyProductBundleQuickFilters($query, $request->input('bundle_filters'));
 
         if ($request->filled('search')) {
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
@@ -5901,6 +6017,7 @@ class ProductController extends Controller
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                 'stock_quantity' => (float) ($product->stock_quantity ?? 0),
                 'type' => $product->type,
+                'bundle_title' => $product->bundle_title,
                 'category_id' => $product->category_id !== null ? (int) $product->category_id : null,
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),

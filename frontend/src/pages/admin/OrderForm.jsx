@@ -104,8 +104,18 @@ const defaultQuoteSettings = {
 const productSearchHistoryStorageKey = 'order_form_product_search_history';
 const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_attribute_id';
 const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
+const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
+const PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE = 'attribute';
+const PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE = 'bundle_option_title';
+const PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE = 'bundle_title';
+const PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS = 'bundle_option_status';
+const bundleProductQuickFilterKinds = new Set([
+    PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE,
+    PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE,
+    PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS,
+]);
 const SEARCH_ENTRY_PRODUCT = 'product';
 const SEARCH_ENTRY_VARIATION = 'variation';
 const SEARCH_ENTRY_BUNDLE_OPTION = 'bundle_option';
@@ -803,35 +813,90 @@ const getStoredProductSearchHistory = () => {
         return [];
     }
 };
-const getStoredProductQuickFilterAttributeId = () => {
-    if (typeof window === 'undefined') return '';
+const getStoredUserStorageId = (user = null) => {
+    const directUserId = user?.id ?? user?.user_id ?? user?.email ?? user?.username;
+    if (directUserId) return String(directUserId);
+
+    if (typeof window === 'undefined') return 'anonymous';
 
     try {
-        return window.localStorage.getItem(productQuickFilterAttributeStorageKey) || '';
+        const storedUser = JSON.parse(window.localStorage.getItem('user') || 'null');
+        const storedUserId = storedUser?.id ?? storedUser?.user_id ?? storedUser?.email ?? storedUser?.username;
+        return storedUserId ? String(storedUserId) : 'anonymous';
     } catch (error) {
-        console.error('Unable to read product quick filter attribute', error);
-        return '';
+        return 'anonymous';
     }
 };
-const getStoredProductQuickFilterAttribute2Map = () => {
-    if (typeof window === 'undefined') return {};
+const getProductQuickFilterStorageKey = (user = null) => {
+    if (typeof window === 'undefined') {
+        return `${productQuickFilterStateStorageKey}::anonymous::default::default::order-form`;
+    }
+
+    const userId = getStoredUserStorageId(user);
+    const activeAccountId = window.localStorage.getItem('activeAccountId') || 'default';
+    const activeSiteCode = window.localStorage.getItem('activeSiteCode') || 'default';
+
+    return `${productQuickFilterStateStorageKey}::${userId}::${activeAccountId}::${activeSiteCode}::order-form`;
+};
+const normalizeStoredQuickFilterValues = (values = []) => (
+    Array.isArray(values)
+        ? values.map(normalizeQuickFilterOptionValue).filter(Boolean).slice(0, 1)
+        : []
+);
+const normalizeStoredProductQuickFilterState = (value = {}) => {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+    return {
+        searchTerm: String(source.searchTerm ?? source.search_term ?? '').trim(),
+        attributeId: String(source.attributeId ?? source.attribute_id ?? '').trim(),
+        values: normalizeStoredQuickFilterValues(source.values),
+        attributeId2: String(source.attributeId2 ?? source.attribute_id_2 ?? '').trim(),
+        values2: normalizeStoredQuickFilterValues(source.values2),
+        quickModeEnabled: Boolean(source.quickModeEnabled ?? source.quick_mode_enabled),
+    };
+};
+const getStoredProductQuickFilterState = (user = null) => {
+    if (typeof window === 'undefined') return normalizeStoredProductQuickFilterState();
 
     try {
-        const raw = window.localStorage.getItem(productQuickFilterAttribute2MapStorageKey);
-        return raw ? JSON.parse(raw) : {};
+        const raw = window.localStorage.getItem(getProductQuickFilterStorageKey(user));
+        return normalizeStoredProductQuickFilterState(raw ? JSON.parse(raw) : {});
     } catch (error) {
-        console.error('Unable to read product quick filter attribute 2 map', error);
-        return {};
+        console.error('Unable to read product quick filter state', error);
+        return normalizeStoredProductQuickFilterState();
+    }
+};
+const persistProductQuickFilterState = (storageKey, state) => {
+    if (typeof window === 'undefined' || !storageKey) return;
+
+    const normalizedState = normalizeStoredProductQuickFilterState(state);
+    const hasPersistedState = Boolean(
+        normalizedState.searchTerm
+        || normalizedState.values.length > 0
+        || normalizedState.values2.length > 0
+        || normalizedState.quickModeEnabled
+    );
+
+    try {
+        if (!hasPersistedState) {
+            window.localStorage.removeItem(storageKey);
+            return;
+        }
+
+        window.localStorage.setItem(storageKey, JSON.stringify(normalizedState));
+    } catch (error) {
+        console.error('Unable to persist product quick filter state', error);
     }
 };
 const resolveProductQuickSetupNamespace = () => {
     if (typeof window === 'undefined') return 'server';
 
     try {
+        const userId = getStoredUserStorageId();
         const activeAccountId = window.localStorage.getItem('activeAccountId') || 'default';
         const activeSiteCode = window.localStorage.getItem('activeSiteCode') || 'default';
 
-        return `${activeAccountId}::${activeSiteCode}`;
+        return `${userId}::${activeAccountId}::${activeSiteCode}::order-form`;
     } catch (error) {
         console.error('Unable to resolve product quick setup namespace', error);
         return 'default::default';
@@ -925,8 +990,16 @@ const buildProductQuickFilterAttributes = (attributes = []) => {
         .filter((attribute) => supportedProductQuickFilterTypes.has(attribute?.frontend_type))
         .map((attribute) => ({
             ...attribute,
+            quick_filter_kind: attribute?.quick_filter_kind || PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE,
             options: (attribute.options || [])
-                .map((option) => ({ ...option, value: normalizeQuickFilterOptionValue(option?.value) }))
+                .map((option) => {
+                    const value = normalizeQuickFilterOptionValue(option?.value);
+                    return {
+                        ...option,
+                        value,
+                        label: normalizeQuickFilterOptionValue(option?.label) || value,
+                    };
+                })
                 .filter((option) => option.value !== '')
         }))
         .filter((attribute) => attribute.options.length > 0);
@@ -937,6 +1010,55 @@ const buildProductQuickFilterAttributes = (attributes = []) => {
 
     return (backendPreferredAttributes.length > 0 ? backendPreferredAttributes : normalizedAttributes)
         .sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''), 'vi'));
+};
+const getProductQuickFilterKind = (attribute) => (
+    attribute?.quick_filter_kind || PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE
+);
+const isBundleProductQuickFilterAttribute = (attribute) => (
+    bundleProductQuickFilterKinds.has(getProductQuickFilterKind(attribute))
+);
+const getQuickFilterOptionLabel = (attribute, value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value);
+    if (!attribute || !normalizedValue) return normalizedValue;
+
+    const option = (attribute.options || []).find(
+        (candidate) => normalizeQuickFilterOptionValue(candidate?.value) === normalizedValue
+    );
+
+    return normalizeQuickFilterOptionValue(option?.label) || normalizedValue;
+};
+const getBundleQuickFilterStatusLabel = (value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value).toLowerCase();
+    if (normalizedValue === 'visible') return 'Hiển thị website';
+    if (normalizedValue === 'internal') return 'Nội bộ';
+    return value;
+};
+const getBundleQuickFilterDisplayValues = (product, attribute) => {
+    if (!product || !attribute) return [];
+
+    const kind = getProductQuickFilterKind(attribute);
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE) {
+        return [
+            product?.bundle_option_title,
+            product?.option_post_title,
+            product?.raw_bundle_option_title,
+        ].map(normalizeQuickFilterOptionValue).filter(Boolean);
+    }
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE) {
+        return [product?.bundle_title || product?.bundle_config_title]
+            .map(normalizeQuickFilterOptionValue)
+            .filter(Boolean);
+    }
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS) {
+        return [getBundleQuickFilterStatusLabel(product?.bundle_option_status)]
+            .map(normalizeQuickFilterOptionValue)
+            .filter(Boolean);
+    }
+
+    return [];
 };
 const getProductAttributeDisplayValues = (product, attributeId) => {
     if (!attributeId || !product) return [];
@@ -981,6 +1103,140 @@ const getProductAttributeDisplayValues = (product, attributeId) => {
             .flatMap((attributeValue) => parseProductAttributeValueList(attributeValue?.value))
             .filter(Boolean)
     ));
+};
+const getProductQuickFilterDisplayValues = (product, attribute) => {
+    if (!attribute || !product) return [];
+
+    if (isBundleProductQuickFilterAttribute(attribute)) {
+        return Array.from(new Set(getBundleQuickFilterDisplayValues(product, attribute)));
+    }
+
+    return getProductAttributeDisplayValues(product, attribute?.id);
+};
+const appendProductQuickFilterParams = (params, attribute, values = []) => {
+    const normalizedValues = (Array.isArray(values) ? values : [])
+        .map(normalizeQuickFilterOptionValue)
+        .filter(Boolean);
+
+    if (!attribute || normalizedValues.length === 0) return;
+
+    const kind = getProductQuickFilterKind(attribute);
+    const paramValue = normalizedValues.join(',');
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE) {
+        params['bundle_filters[option_title]'] = paramValue;
+        return;
+    }
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE) {
+        params['bundle_filters[bundle_title]'] = paramValue;
+        return;
+    }
+
+    if (kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS) {
+        params['bundle_filters[option_status]'] = paramValue;
+        return;
+    }
+
+    if (attribute.id) {
+        params[`attributes[${attribute.id}]`] = paramValue;
+    }
+};
+const buildProductQuickFilterCriterion = (attribute, value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value);
+    if (!attribute || !normalizedValue || !isBundleProductQuickFilterAttribute(attribute)) return null;
+
+    return {
+        kind: getProductQuickFilterKind(attribute),
+        value: normalizedValue,
+        compareValue: normalizeProductSearchText(normalizedValue),
+    };
+};
+const productMatchesBundleQuickFilterCriteria = (entry, criteria = []) => {
+    if (!Array.isArray(criteria) || criteria.length === 0) return true;
+    if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) return false;
+
+    return criteria.every((criterion) => {
+        if (!criterion?.kind || !criterion?.compareValue) return true;
+
+        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE) {
+            const values = [
+                entry?.bundle_option_title,
+                entry?.option_post_title,
+                entry?.raw_bundle_option_title,
+            ];
+            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
+        }
+
+        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE) {
+            const values = [entry?.bundle_title, entry?.bundle_config_title];
+            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
+        }
+
+        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS) {
+            const values = [
+                entry?.bundle_option_status,
+                getBundleQuickFilterStatusLabel(entry?.bundle_option_status),
+            ];
+            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
+        }
+
+        return true;
+    });
+};
+const productMatchesQuickFilterValue = (product, attribute, value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value);
+    if (!product || !attribute || !normalizedValue) return false;
+
+    const selectedValues = new Set([
+        normalizeProductSearchText(normalizedValue),
+        normalizeProductSearchText(getQuickFilterOptionLabel(attribute, normalizedValue)),
+    ].filter(Boolean));
+
+    if (selectedValues.size === 0) return false;
+
+    return getProductQuickFilterDisplayValues(product, attribute)
+        .some((displayValue) => selectedValues.has(normalizeProductSearchText(displayValue)));
+};
+const buildDependentProductQuickFilterOptions = (products, primaryAttribute, primaryValue, secondaryAttribute) => {
+    if (!primaryAttribute || !primaryValue || !secondaryAttribute) {
+        return secondaryAttribute?.options || [];
+    }
+
+    const availableValues = new Map();
+
+    buildProductSearchEntries(products, { includeNested: true })
+        .filter((entry) => productMatchesQuickFilterValue(entry, primaryAttribute, primaryValue))
+        .forEach((entry) => {
+            getProductQuickFilterDisplayValues(entry, secondaryAttribute).forEach((value) => {
+                const normalizedValue = normalizeQuickFilterOptionValue(value);
+                const valueKey = normalizeProductSearchText(normalizedValue);
+                if (normalizedValue && valueKey && !availableValues.has(valueKey)) {
+                    availableValues.set(valueKey, normalizedValue);
+                }
+            });
+        });
+
+    if (availableValues.size === 0) return [];
+
+    const existingOptions = secondaryAttribute.options || [];
+    const existingOptionKeys = new Set();
+    const filteredOptions = existingOptions.filter((option) => {
+        const optionKey = normalizeProductSearchText(option?.value);
+        if (!optionKey || !availableValues.has(optionKey)) return false;
+        existingOptionKeys.add(optionKey);
+        return true;
+    });
+
+    const dynamicOptions = Array.from(availableValues.entries())
+        .filter(([valueKey]) => !existingOptionKeys.has(valueKey))
+        .map(([valueKey, value]) => ({
+            id: `${secondaryAttribute.id}-${valueKey}`,
+            value,
+            label: value,
+        }));
+
+    return [...filteredOptions, ...dynamicOptions];
 };
 const scoreProductSearchResult = (product, rawTerm) => {
     const query = normalizeProductSearchText(rawTerm);
@@ -2216,6 +2472,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             unit_name: resolveOrderUnitLabel(product),
             ...resolveInventorySnapshot(product),
             type: normalizeCanvasText(product?.type),
+            bundle_title: normalizeCanvasText(product?.bundle_title),
             main_image: getPickerPrimaryImage(product),
             attribute_values: getPickerAttributeValues(product),
             search_keywords: [
@@ -2223,6 +2480,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 baseDisplayName,
                 baseSku,
                 baseDisplaySku,
+                normalizeCanvasText(product?.bundle_title),
                 buildAttributeValueSummary(product),
             ].filter(Boolean),
         };
@@ -2317,6 +2575,10 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 bundle_parent_name: baseEntry.name,
                 bundle_option_key: bundleOptionKey,
                 bundle_option_title: bundleOptionTitle,
+                raw_bundle_option_title: normalizeCanvasText(bundleOption?.raw_option_title || bundleOption?.option_title),
+                bundle_option_status: normalizeCanvasText(bundleOption?.bundle_option_status || 'visible'),
+                bundle_title: baseEntry.bundle_title,
+                bundle_config_title: baseEntry.bundle_title,
                 option_post_id: Number(bundleOption?.option_post_id) || undefined,
                 option_post_title: normalizeCanvasText(bundleOption?.option_post_title),
                 name: baseEntry.name,
@@ -2335,7 +2597,9 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 search_keywords: [
                     baseEntry.name,
                     baseEntry.sku,
+                    baseEntry.bundle_title,
                     bundleOptionTitle,
+                    normalizeCanvasText(bundleOption?.raw_option_title),
                     normalizeCanvasText(bundleOption?.option_post_title),
                 ].filter(Boolean),
             });
@@ -2747,7 +3011,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
     const [isHovered, setIsHovered] = useState(false);
     const displayName = product?.display_name || product?.name || '---';
     const quickFilterValues = useMemo(
-        () => getProductAttributeDisplayValues(product, quickFilterAttribute?.id),
+        () => getProductQuickFilterDisplayValues(product, quickFilterAttribute),
         [product, quickFilterAttribute]
     );
     const secondaryMeta = useMemo(() => {
@@ -3093,6 +3357,8 @@ const OrderForm = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
     const { showModal } = useUI();
+    const productQuickFilterStorageKey = getProductQuickFilterStorageKey(user);
+    const initialProductQuickFilterState = getStoredProductQuickFilterState(user);
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
@@ -3104,7 +3370,7 @@ const OrderForm = () => {
     const [attributes, setAttributes] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
 
-    const [searchTerm, setSearchTerm] = useState('');
+    const [searchTerm, setSearchTerm] = useState(() => initialProductQuickFilterState.searchTerm);
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
     const [showSearchDropdown, setShowSearchDropdown] = useState(false);
     const [showSearchHistory, setShowSearchHistory] = useState(false);
@@ -3139,21 +3405,18 @@ const OrderForm = () => {
     const [selectedOrderLineId, setSelectedOrderLineId] = useState('');
     const [showActualProductSection, setShowActualProductSection] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
-    const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => getStoredProductQuickFilterAttributeId());
-    const [productQuickFilterValues, setProductQuickFilterValues] = useState([]);
-    const [productQuickFilterAttributeId2, setProductQuickFilterAttributeId2] = useState(() => {
-        const primaryId = getStoredProductQuickFilterAttributeId();
-        if (!primaryId) return '';
-        const map = getStoredProductQuickFilterAttribute2Map();
-        return map[primaryId] || '';
-    });
-    const [productQuickFilterValues2, setProductQuickFilterValues2] = useState([]);
+    const [productQuickFilterAttributeId, setProductQuickFilterAttributeId] = useState(() => initialProductQuickFilterState.attributeId);
+    const [productQuickFilterValues, setProductQuickFilterValues] = useState(() => initialProductQuickFilterState.values);
+    const [productQuickFilterAttributeId2, setProductQuickFilterAttributeId2] = useState(() => initialProductQuickFilterState.attributeId2);
+    const [productQuickFilterValues2, setProductQuickFilterValues2] = useState(() => initialProductQuickFilterState.values2);
     const [productQuickSetupStore, setProductQuickSetupStore] = useState(() => getStoredProductQuickSetupStore());
-    const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(false);
+    const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(() => initialProductQuickFilterState.quickModeEnabled);
     const [showProductQuickSetupPanel, setShowProductQuickSetupPanel] = useState(false);
     const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
+    const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
+    const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
     const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
@@ -3191,6 +3454,10 @@ const OrderForm = () => {
     const previousShowSearchDropdownRef = useRef(false);
     const productSearchAbortRef = useRef(null);
     const productSearchCacheRef = useRef(new Map());
+    const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
+    const skipNextProductQuickFilterPersistRef = useRef(false);
+    const productQuickFilterScopeAbortRef = useRef(null);
+    const productQuickFilterScopeCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
     const productQuickSetupListRef = useRef(null);
@@ -3250,14 +3517,53 @@ const OrderForm = () => {
     const activeProductQuickFilterSummary = useMemo(() => {
         if (!activeProductQuickFilterAttribute || normalizedProductQuickFilterValues.length === 0) return '';
 
-        let summary = `${activeProductQuickFilterAttribute.name}: ${normalizedProductQuickFilterValues[0]}`;
+        let summary = `${activeProductQuickFilterAttribute.name}: ${getQuickFilterOptionLabel(activeProductQuickFilterAttribute, normalizedProductQuickFilterValues[0])}`;
         if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2.length > 0) {
-            summary += ` | ${activeProductQuickFilterAttribute2.name}: ${normalizedProductQuickFilterValues2[0]}`;
+            summary += ` | ${activeProductQuickFilterAttribute2.name}: ${getQuickFilterOptionLabel(activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2[0])}`;
         }
         return summary;
     }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
 
     const hasActiveProductQuickFilter = normalizedProductQuickFilterValues.length > 0;
+    const activeProductQuickFilterScopeKey = useMemo(() => (
+        activeProductQuickFilterAttribute && normalizedProductQuickFilterValues[0]
+            ? buildProductQuickSetupKey(activeProductQuickFilterAttribute.id, normalizedProductQuickFilterValues[0])
+            : ''
+    ), [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
+    const isProductQuickFilterScopeReady = Boolean(activeProductQuickFilterScopeKey)
+        && productQuickFilterScopeKey === activeProductQuickFilterScopeKey;
+    const activeProductQuickFilterAttribute2Options = useMemo(() => {
+        if (!activeProductQuickFilterAttribute2) return [];
+        if (!activeProductQuickFilterScopeKey) {
+            return activeProductQuickFilterAttribute2.options || [];
+        }
+        if (!isProductQuickFilterScopeReady) return [];
+
+        return buildDependentProductQuickFilterOptions(
+            productQuickFilterScopeProducts,
+            activeProductQuickFilterAttribute,
+            normalizedProductQuickFilterValues[0],
+            activeProductQuickFilterAttribute2
+        );
+    }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        activeProductQuickFilterScopeKey,
+        isProductQuickFilterScopeReady,
+        normalizedProductQuickFilterValues,
+        productQuickFilterScopeProducts,
+    ]);
+    const activeProductQuickFilterCount = normalizedProductQuickFilterValues.length + normalizedProductQuickFilterValues2.length;
+    const activeProductBundleQuickFilterCriteria = useMemo(() => ([
+        buildProductQuickFilterCriterion(activeProductQuickFilterAttribute, normalizedProductQuickFilterValues[0]),
+        buildProductQuickFilterCriterion(activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2[0]),
+    ].filter(Boolean)), [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
+    const hasActiveProductBundleQuickFilter = activeProductBundleQuickFilterCriteria.length > 0;
     const activeProductQuickSetupKey = useMemo(() => {
         if (!hasActiveProductQuickFilter) return '';
 
@@ -3275,7 +3581,8 @@ const OrderForm = () => {
             productQuickSetupStore?.[namespace]?.[activeProductQuickSetupKey] || []
         );
     }, [activeProductQuickSetupKey, productQuickSetupStore]);
-    const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0;
+    const isProductQuickModeToggleDisabled = activeProductQuickSetupItems.length === 0 || hasActiveProductBundleQuickFilter;
+    const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0 && !hasActiveProductBundleQuickFilter;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
     const syncLatestProductsIntoLocalSources = useCallback((latestMap) => {
         if (!(latestMap instanceof Map) || latestMap.size === 0) return;
@@ -3292,7 +3599,15 @@ const OrderForm = () => {
         };
 
         syncCacheRef(productSearchCacheRef);
+        syncCacheRef(productQuickFilterScopeCacheRef);
         syncCacheRef(productQuickSetupCacheRef);
+
+        setProductQuickFilterScopeProducts((prev) => (
+            (Array.isArray(prev) ? prev : []).map((product) => {
+                const latest = latestMap.get(Number(product?.id ?? product?.product_id));
+                return latest ? normalizeProductPickerEntry({ ...product, ...latest }) : normalizeProductPickerEntry(product);
+            })
+        ));
 
         setProductQuickSetupStore((prev) => {
             let hasChanged = false;
@@ -3689,15 +4004,20 @@ const OrderForm = () => {
         let filtered = productQuickSetupProducts;
 
         if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2[0]) {
-            const attrId2 = String(activeProductQuickFilterAttribute2.id);
             const attrValue2 = String(normalizedProductQuickFilterValues2[0]);
+            const selectedValue = normalizeProductSearchText(attrValue2);
+            const selectedLabel = normalizeProductSearchText(
+                getQuickFilterOptionLabel(activeProductQuickFilterAttribute2, attrValue2)
+            );
 
             filtered = productQuickSetupProducts.filter((product) => {
-                const productAttrs = product.custom_attributes || {};
-                const val = productAttrs[attrId2];
+                const values = getProductQuickFilterDisplayValues(product, activeProductQuickFilterAttribute2);
 
-                // Logic: Match if value is exact OR if value is missing (shared item)
-                return !val || String(val) === attrValue2;
+                // Match if value is exact OR if value is missing (shared item).
+                return values.length === 0 || values.some((value) => {
+                    const comparableValue = normalizeProductSearchText(value);
+                    return comparableValue === selectedValue || comparableValue === selectedLabel;
+                });
             });
         }
 
@@ -3834,29 +4154,96 @@ const OrderForm = () => {
         if (!hasCurrentAttribute && fallbackAttributeId) {
             setProductQuickFilterAttributeId(fallbackAttributeId);
             setProductQuickFilterValues([]);
-        }
-    }, [productQuickFilterAttributeId, productQuickFilterAttributes]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-
-        if (productQuickFilterAttributeId) {
-            window.localStorage.setItem(productQuickFilterAttributeStorageKey, String(productQuickFilterAttributeId));
+            setProductQuickFilterAttributeId2('');
+            setProductQuickFilterValues2([]);
             return;
         }
 
-        window.localStorage.removeItem(productQuickFilterAttributeStorageKey);
-    }, [productQuickFilterAttributeId]);
+        const currentAttribute = productQuickFilterAttributes.find(
+            (attribute) => String(attribute.id) === String(productQuickFilterAttributeId)
+        );
+        if (
+            currentAttribute
+            && normalizedProductQuickFilterValues[0]
+            && !currentAttribute.options.some((option) => option.value === normalizedProductQuickFilterValues[0])
+        ) {
+            setProductQuickFilterValues([]);
+            setProductQuickFilterValues2([]);
+            setProductQuickFilterAttributeId2('');
+            return;
+        }
+
+        if (productQuickFilterAttributeId2) {
+            const secondaryAttribute = productQuickFilterAttributes.find(
+                (attribute) => String(attribute.id) === String(productQuickFilterAttributeId2)
+            );
+
+            if (!secondaryAttribute || String(productQuickFilterAttributeId2) === String(productQuickFilterAttributeId)) {
+                setProductQuickFilterAttributeId2('');
+                setProductQuickFilterValues2([]);
+                return;
+            }
+
+            if (
+                normalizedProductQuickFilterValues2[0]
+                && !(isProductQuickFilterScopeReady ? activeProductQuickFilterAttribute2Options : secondaryAttribute.options)
+                    .some((option) => option.value === normalizedProductQuickFilterValues2[0])
+            ) {
+                setProductQuickFilterValues2([]);
+            }
+        }
+    }, [
+        activeProductQuickFilterAttribute2Options,
+        isProductQuickFilterScopeReady,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+        productQuickFilterAttributeId,
+        productQuickFilterAttributeId2,
+        productQuickFilterAttributes,
+    ]);
 
     useEffect(() => {
-        if (typeof window === 'undefined' || !productQuickFilterAttributeId || !productQuickFilterAttributeId2) return;
+        if (productQuickFilterStorageKeyRef.current === productQuickFilterStorageKey) return;
 
-        const map = getStoredProductQuickFilterAttribute2Map();
-        if (map[productQuickFilterAttributeId] === productQuickFilterAttributeId2) return;
+        const storedState = getStoredProductQuickFilterState(user);
+        productQuickFilterStorageKeyRef.current = productQuickFilterStorageKey;
+        skipNextProductQuickFilterPersistRef.current = true;
 
-        const nextMap = { ...map, [productQuickFilterAttributeId]: productQuickFilterAttributeId2 };
-        window.localStorage.setItem(productQuickFilterAttribute2MapStorageKey, JSON.stringify(nextMap));
-    }, [productQuickFilterAttributeId, productQuickFilterAttributeId2]);
+        setSearchTerm(storedState.searchTerm);
+        setProductQuickFilterAttributeId(storedState.attributeId);
+        setProductQuickFilterValues(storedState.values);
+        setProductQuickFilterAttributeId2(storedState.attributeId2);
+        setProductQuickFilterValues2(storedState.values2);
+        setProductQuickModeEnabled(storedState.quickModeEnabled);
+        setShowProductQuickFilterPanel(false);
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+    }, [productQuickFilterStorageKey, user]);
+
+    useEffect(() => {
+        if (skipNextProductQuickFilterPersistRef.current) {
+            skipNextProductQuickFilterPersistRef.current = false;
+            return;
+        }
+
+        persistProductQuickFilterState(productQuickFilterStorageKey, {
+            searchTerm,
+            attributeId: productQuickFilterAttributeId,
+            values: normalizedProductQuickFilterValues,
+            attributeId2: productQuickFilterAttributeId2,
+            values2: normalizedProductQuickFilterValues2,
+            quickModeEnabled: productQuickModeEnabled,
+        });
+    }, [
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+        productQuickFilterAttributeId,
+        productQuickFilterAttributeId2,
+        productQuickFilterStorageKey,
+        productQuickModeEnabled,
+        searchTerm,
+    ]);
 
     useEffect(() => {
         const nextProvinces = sortRegionObjects(VN_REGIONS[regionType] || []);
@@ -5208,14 +5595,13 @@ const OrderForm = () => {
         };
         if (term) params.search = term;
 
-        const activeFilterAttributeId = filterOverrides.attributeId ?? productQuickFilterAttributeId;
+        const activeFilterAttribute = filterOverrides.attribute || activeProductQuickFilterAttribute;
         const activeFilterValues = Array.isArray(filterOverrides.values)
             ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
             : normalizedProductQuickFilterValues;
 
-        if (activeFilterAttributeId && activeFilterValues.length > 0) {
-            params[`attributes[${activeFilterAttributeId}]`] = activeFilterValues.join(',');
-        }
+        appendProductQuickFilterParams(params, activeFilterAttribute, activeFilterValues);
+        appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
 
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
@@ -5252,7 +5638,12 @@ const OrderForm = () => {
                 productSearchAbortRef.current = null;
             }
         }
-    }, [normalizedProductQuickFilterValues, productQuickFilterAttributeId]);
+    }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
 
     const pushSearchHistory = useCallback((term) => {
         const trimmedTerm = normalizeCanvasText(term);
@@ -5277,11 +5668,8 @@ const OrderForm = () => {
     const handleProductQuickFilterAttributeChange = useCallback((nextAttributeId) => {
         setProductQuickFilterAttributeId(nextAttributeId);
         setProductQuickFilterValues([]);
-
-        // Restore secondary attribute for this primary attribute
-        const map = getStoredProductQuickFilterAttribute2Map();
-        setProductQuickFilterAttributeId2(map[nextAttributeId] || '');
         setProductQuickFilterValues2([]);
+        setProductQuickFilterAttributeId2('');
 
         setShowProductQuickFilterPanel(true);
         setShowProductQuickSetupPanel(false);
@@ -5337,14 +5725,24 @@ const OrderForm = () => {
     }, [normalizedProductQuickFilterValues2]);
 
     const clearProductQuickFilterValues = useCallback(() => {
+        setSearchTerm('');
+        setDebouncedSearchTerm('');
         setProductQuickFilterValues([]);
         setProductQuickFilterValues2([]);
         setProductQuickFilterAttributeId2('');
+        setProductQuickModeEnabled(false);
         setShowProductQuickFilterPanel(false);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, []);
+        productSearchCacheRef.current.clear();
+
+        if (typeof window !== 'undefined') {
+            window.localStorage.removeItem(productQuickFilterStorageKey);
+            window.localStorage.removeItem(productQuickFilterAttributeStorageKey);
+            window.localStorage.removeItem(productQuickFilterAttribute2MapStorageKey);
+        }
+    }, [productQuickFilterStorageKey]);
 
     const saveActiveProductQuickSetupItems = useCallback((items) => {
         if (!activeProductQuickSetupKey) return;
@@ -5426,12 +5824,12 @@ const OrderForm = () => {
     }, [captureProductQuickSetupViewport, handleAddProductToQuickSetup, handleRemoveProductFromQuickSetup]);
 
     const toggleProductQuickMode = useCallback(() => {
-        if (activeProductQuickSetupItems.length === 0) return;
+        if (isProductQuickModeToggleDisabled) return;
 
         setProductQuickModeEnabled((prev) => !prev);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [activeProductQuickSetupItems.length]);
+    }, [isProductQuickModeToggleDisabled]);
 
     const disableProductQuickMode = useCallback((event) => {
         event?.stopPropagation?.();
@@ -5448,10 +5846,71 @@ const OrderForm = () => {
         setShowSearchHistory(false);
     }, []);
 
-    const fetchProductQuickSetupProducts = useCallback(async (term = '') => {
-        const activeFilterAttributeId = activeProductQuickFilterAttribute?.id;
+    const fetchProductQuickFilterScopeProducts = useCallback(async () => {
+        const activeFilterAttribute = activeProductQuickFilterAttribute;
         const activeFilterValue = normalizedProductQuickFilterValues[0];
-        if (!activeFilterAttributeId || !activeFilterValue) {
+        if (!activeFilterAttribute || !activeFilterValue || !activeProductQuickFilterScopeKey) {
+            setProductQuickFilterScopeProducts([]);
+            setProductQuickFilterScopeKey('');
+            return;
+        }
+
+        const params = {
+            per_page: 200,
+            picker: 1,
+        };
+        appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
+
+        const activeAccountId = typeof window === 'undefined'
+            ? 'default'
+            : (window.localStorage.getItem('activeAccountId') || 'default');
+        const cacheKey = JSON.stringify({
+            quick_filter_scope: true,
+            account_id: activeAccountId,
+            scope_key: activeProductQuickFilterScopeKey,
+            ...params,
+        });
+        const cachedProducts = productQuickFilterScopeCacheRef.current.get(cacheKey);
+        if (cachedProducts) {
+            setProductQuickFilterScopeProducts(cachedProducts);
+            setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
+            return;
+        }
+
+        productQuickFilterScopeAbortRef.current?.abort();
+        const controller = new AbortController();
+        productQuickFilterScopeAbortRef.current = controller;
+
+        try {
+            const response = await productApi.getAll(params, controller.signal);
+            if (controller.signal.aborted) return;
+
+            const nextProducts = Array.isArray(response.data.data)
+                ? response.data.data.map((product) => normalizeProductPickerEntry(product))
+                : [];
+            productQuickFilterScopeCacheRef.current.set(cacheKey, nextProducts);
+            setProductQuickFilterScopeProducts(nextProducts);
+            setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
+        } catch (error) {
+            if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+            console.error('Error fetching quick filter scope products', error);
+            setProductQuickFilterScopeProducts([]);
+            setProductQuickFilterScopeKey(activeProductQuickFilterScopeKey);
+        } finally {
+            if (productQuickFilterScopeAbortRef.current === controller) {
+                productQuickFilterScopeAbortRef.current = null;
+            }
+        }
+    }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterScopeKey,
+        normalizedProductQuickFilterValues,
+    ]);
+
+    const fetchProductQuickSetupProducts = useCallback(async (term = '') => {
+        const activeFilterAttribute = activeProductQuickFilterAttribute;
+        const activeFilterValue = normalizedProductQuickFilterValues[0];
+        if (!activeFilterAttribute || !activeFilterValue) {
             setProductQuickSetupProducts([]);
             return;
         }
@@ -5459,8 +5918,8 @@ const OrderForm = () => {
         const params = {
             per_page: 24,
             picker: 1,
-            [`attributes[${activeFilterAttributeId}]`]: activeFilterValue,
         };
+        appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
 
         if (term) {
             params.search = term;
@@ -5498,7 +5957,10 @@ const OrderForm = () => {
                 productQuickSetupAbortRef.current = null;
             }
         }
-    }, [activeProductQuickFilterAttribute, normalizedProductQuickFilterValues]);
+    }, [
+        activeProductQuickFilterAttribute,
+        normalizedProductQuickFilterValues,
+    ]);
 
     const quickModeSearchEntries = useMemo(
         () => buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems),
@@ -5509,9 +5971,14 @@ const OrderForm = () => {
         const searchableEntries = isProductQuickModeActive
             ? quickModeSearchEntries
             : buildProductSearchEntries(products, {
-                includeNested: Boolean(searchTerm.trim()),
+                includeNested: Boolean(searchTerm.trim()) || hasActiveProductBundleQuickFilter,
             });
         const preparedProducts = searchableEntries
+            .filter((product) => (
+                hasActiveProductBundleQuickFilter
+                    ? productMatchesBundleQuickFilterCriteria(product, activeProductBundleQuickFilterCriteria)
+                    : true
+            ))
             .map((product) => ({
                 ...product,
                 __alreadyInOrder: isSearchEntryAlreadyInOrder(formData.items, product),
@@ -5537,7 +6004,15 @@ const OrderForm = () => {
                 || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
             ))
             .slice(0, 50);
-    }, [formData.items, isProductQuickModeActive, products, quickModeSearchEntries, searchTerm]);
+    }, [
+        activeProductBundleQuickFilterCriteria,
+        formData.items,
+        hasActiveProductBundleQuickFilter,
+        isProductQuickModeActive,
+        products,
+        quickModeSearchEntries,
+        searchTerm,
+    ]);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -5573,6 +6048,32 @@ const OrderForm = () => {
         productQuickFilterAttributeId,
         normalizedProductQuickFilterValues,
         showSearchDropdown
+    ]);
+
+    useEffect(() => {
+        if (!hasActiveProductQuickFilter) {
+            productQuickFilterScopeAbortRef.current?.abort();
+            setProductQuickFilterScopeProducts([]);
+            setProductQuickFilterScopeKey('');
+            return;
+        }
+
+        const shouldFetchScope = Boolean(
+            showSearchDropdown
+            || showProductQuickSetupPanel
+            || productQuickFilterAttributeId2
+            || normalizedProductQuickFilterValues2[0]
+        );
+        if (!shouldFetchScope) return;
+
+        fetchProductQuickFilterScopeProducts();
+    }, [
+        fetchProductQuickFilterScopeProducts,
+        hasActiveProductQuickFilter,
+        normalizedProductQuickFilterValues2,
+        productQuickFilterAttributeId2,
+        showProductQuickSetupPanel,
+        showSearchDropdown,
     ]);
 
     useEffect(() => {
@@ -5616,7 +6117,7 @@ const OrderForm = () => {
 
         if (lastVisitedProductQuickSetupKeyRef.current !== activeProductQuickSetupKey) {
             lastVisitedProductQuickSetupKeyRef.current = activeProductQuickSetupKey;
-            setProductQuickModeEnabled(activeProductQuickSetupItems.length > 0);
+            setProductQuickModeEnabled((prev) => prev && activeProductQuickSetupItems.length > 0);
             setShowProductQuickSetupPanel(false);
             return;
         }
@@ -5675,6 +6176,7 @@ const OrderForm = () => {
 
     useEffect(() => () => {
         productSearchAbortRef.current?.abort();
+        productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
     }, []);
 
@@ -7398,16 +7900,16 @@ const OrderForm = () => {
                                                     className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[14px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-primary/[0.03] text-primary/70 hover:border-primary/25 hover:bg-white'}`}
                                                 >
                                                     <span className="material-symbols-outlined text-[16px]">{isSelected ? 'check' : 'add'}</span>
-                                                    <span>{option.value}</span>
+                                                    <span>{option.label || option.value}</span>
                                                 </button>
                                             );
                                         })}
                                     </div>
                                 )}
 
-                                {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2Options.length > 0 && (
                                     <div className="custom-scrollbar mt-1.5 flex items-center gap-1.5 border-t border-primary/5 overflow-x-auto pt-1.5 pb-1">
-                                        {activeProductQuickFilterAttribute2.options.map((option) => {
+                                        {activeProductQuickFilterAttribute2Options.map((option) => {
                                             const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
 
                                             return (
@@ -7418,7 +7920,7 @@ const OrderForm = () => {
                                                     className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[14px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-brick/10 bg-brick/[0.03] text-brick/70 hover:border-brick/25 hover:bg-white'}`}
                                                 >
                                                     <span className="material-symbols-outlined text-[16px]">{isSelected ? 'check' : 'add'}</span>
-                                                    <span>{option.value}</span>
+                                                    <span>{option.label || option.value}</span>
                                                 </button>
                                             );
                                         })}
@@ -7442,7 +7944,7 @@ const OrderForm = () => {
                                     <button
                                         type="button"
                                         onClick={toggleProductQuickMode}
-                                        disabled={activeProductQuickSetupItems.length === 0}
+                                        disabled={isProductQuickModeToggleDisabled}
                                         className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-full border px-3 text-[12px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
                                     >
                                         <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
@@ -7565,7 +8067,7 @@ const OrderForm = () => {
                                 <span className="material-symbols-outlined text-[15px]">tune</span>
                                 {hasActiveProductQuickFilter && (
                                     <span className="absolute -right-1.5 -top-1.5 min-w-[16px] rounded-full bg-primary px-1 text-center text-[9px] font-black leading-4 text-white">
-                                        {normalizedProductQuickFilterValues.length}
+                                        {activeProductQuickFilterCount}
                                     </span>
                                 )}
                             </button>
@@ -7644,7 +8146,7 @@ const OrderForm = () => {
                                         <button
                                             type="button"
                                             onClick={toggleProductQuickMode}
-                                            disabled={activeProductQuickSetupItems.length === 0}
+                                            disabled={isProductQuickModeToggleDisabled}
                                             className={`inline-flex h-9 shrink-0 items-center gap-1 rounded-full border px-3 text-[12px] font-semibold shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
                                         >
                                             <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
@@ -7663,7 +8165,7 @@ const OrderForm = () => {
                                             <button
                                                 type="button"
                                                 onClick={toggleProductQuickMode}
-                                                disabled={activeProductQuickSetupItems.length === 0}
+                                                disabled={isProductQuickModeToggleDisabled}
                                                 className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
                                             >
                                                 <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
@@ -7837,16 +8339,16 @@ const OrderForm = () => {
                                                             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
                                                         >
                                                             <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
-                                                            <span>{option.value}</span>
+                                                            <span>{option.label || option.value}</span>
                                                         </button>
                                                     );
                                                 })}
                                             </div>
                                         )}
 
-                                        {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                        {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2Options.length > 0 && (
                                             <div className="mt-2 flex flex-wrap gap-2 border-t border-primary/5 pt-2">
-                                                {activeProductQuickFilterAttribute2.options.map((option) => {
+                                                {activeProductQuickFilterAttribute2Options.map((option) => {
                                                     const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
 
                                                     return (
@@ -7857,7 +8359,7 @@ const OrderForm = () => {
                                                             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-brick/25 hover:bg-brick/5'}`}
                                                         >
                                                             <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
-                                                            <span>{option.value}</span>
+                                                            <span>{option.label || option.value}</span>
                                                         </button>
                                                     );
                                                 })}
@@ -8138,7 +8640,7 @@ const OrderForm = () => {
                                                     <span className="material-symbols-outlined text-[15px]">tune</span>
                                                     {hasActiveProductQuickFilter && (
                                                         <span className="absolute -right-1.5 -top-1.5 min-w-[16px] rounded-full bg-primary px-1 text-center text-[9px] font-black leading-4 text-white">
-                                                            {normalizedProductQuickFilterValues.length}
+                                                            {activeProductQuickFilterCount}
                                                         </span>
                                                     )}
                                                 </button>
@@ -8222,7 +8724,7 @@ const OrderForm = () => {
                                                                 <button
                                                                     type="button"
                                                                     onClick={toggleProductQuickMode}
-                                                                    disabled={activeProductQuickSetupItems.length === 0}
+                                                                    disabled={isProductQuickModeToggleDisabled}
                                                                     className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'} disabled:cursor-not-allowed disabled:opacity-40`}
                                                                 >
                                                                     <span className="material-symbols-outlined text-[12px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
@@ -8395,16 +8897,16 @@ const OrderForm = () => {
                                                                                 className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
                                                                             >
                                                                                 <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
-                                                                                <span>{option.value}</span>
+                                                                                <span>{option.label || option.value}</span>
                                                                             </button>
                                                                         );
                                                                     })}
                                                                 </div>
                                                             )}
 
-                                                            {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2?.options?.length > 0 && (
+                                                            {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2Options.length > 0 && (
                                                                 <div className="mt-2 flex flex-wrap gap-2 border-t border-primary/5 pt-2">
-                                                                    {activeProductQuickFilterAttribute2.options.map((option) => {
+                                                                    {activeProductQuickFilterAttribute2Options.map((option) => {
                                                                         const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
 
                                                                         return (
@@ -8415,7 +8917,7 @@ const OrderForm = () => {
                                                                                 className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-brick/25 hover:bg-brick/5'}`}
                                                                             >
                                                                                 <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
-                                                                                <span>{option.value}</span>
+                                                                                <span>{option.label || option.value}</span>
                                                                             </button>
                                                                         );
                                                                     })}

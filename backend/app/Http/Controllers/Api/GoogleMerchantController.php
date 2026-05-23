@@ -190,7 +190,11 @@ class GoogleMerchantController extends Controller
             $query = Product::query()
                 ->where(function ($productQuery) {
                     $productQuery
-                        ->where('status', true)
+                        ->where(function ($sellableProductQuery) {
+                            $sellableProductQuery
+                                ->where('status', true)
+                                ->whereDoesntHave('parentConfigurable');
+                        })
                         ->orWhereNotNull('google_merchant_offer_id')
                         ->orWhereNotNull('google_merchant_product_input_name')
                         ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);

@@ -21,6 +21,10 @@ class GoogleMerchantProductSyncService
     private const DELETE_ENDPOINT = 'https://merchantapi.googleapis.com/products/v1/%s';
     private const DATA_SOURCES_ENDPOINT = 'https://merchantapi.googleapis.com/datasources/v1/accounts/%s/dataSources';
     private const REGISTER_GCP_ENDPOINT = 'https://merchantapi.googleapis.com/accounts/v1/accounts/%s/developerRegistration:registerGcp';
+    private const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
+    private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
+    private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
+    private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
 
     public function __construct(
         private readonly GoogleMerchantSettingsService $settingsService,
@@ -43,20 +47,46 @@ class GoogleMerchantProductSyncService
             ];
         }
 
+        $this->loadProductMerchantRelations($product);
+
+        if ($parent = $this->variantParent($product)) {
+            return $this->syncVariantChildThroughParent($product, $parent, $action);
+        }
+
         $accountId = $this->accountId($settings);
         $dataSourceName = $this->dataSourceName($settings, $accountId);
         $offerId = $this->resolveOfferId($product, $settings);
         $resolvedAction = $this->resolveSyncAction($product, $settings, $action);
 
-        if ($resolvedAction === 'delete') {
-            $result = $this->deleteProductInput($product, $settings, $accountId, $dataSourceName, $offerId);
-            $bundleOptionResults = $this->deleteBundleOptionInputs($product, $settings, $accountId, $dataSourceName, $offerId);
+        if (Str::startsWith($resolvedAction, 'delete')) {
+            return $this->deleteProductAndBundleOptionInputs(
+                $product,
+                $settings,
+                $accountId,
+                $dataSourceName,
+                $offerId,
+                $resolvedAction,
+                $this->productInactiveReason($product)
+            );
+        }
 
-            if (!empty($bundleOptionResults)) {
-                $result['bundle_options'] = $bundleOptionResults;
+        $eligibilityFailures = $this->productInputEligibilityFailures($product, $settings);
+        if (!empty($eligibilityFailures)) {
+            $reason = implode(' ', $eligibilityFailures);
+
+            if ($this->hasMerchantSyncState($product) || in_array((string) $product->type, ['bundle', 'configurable'], true)) {
+                return $this->deleteProductAndBundleOptionInputs(
+                    $product,
+                    $settings,
+                    $accountId,
+                    $dataSourceName,
+                    $offerId,
+                    'delete_ineligible',
+                    $reason
+                );
             }
 
-            return $result;
+            return $this->markProductSkipped($product, $offerId, $reason);
         }
 
         $payload = $this->buildProductInputPayload($product, $settings, [
@@ -77,6 +107,13 @@ class GoogleMerchantProductSyncService
 
             $body = $response->json() ?: [];
             $bundleOptionResults = $this->syncBundleOptionInputs($product, $settings, $accountId, $dataSourceName, $offerId);
+            $variantChildDeleteResults = $this->deleteVariantChildInputs(
+                $product,
+                $settings,
+                $accountId,
+                $dataSourceName,
+                'Bien the con khong con duoc day rieng len Google Merchant.'
+            );
             $this->markProductSuccess($product, $resolvedAction, $offerId, $payloadHash, $body);
 
             $result = [
@@ -91,6 +128,10 @@ class GoogleMerchantProductSyncService
                 $result['bundle_options'] = $bundleOptionResults;
             }
 
+            if (!empty($variantChildDeleteResults)) {
+                $result['variant_child_deletes'] = $variantChildDeleteResults;
+            }
+
             return $result;
         } catch (Throwable $exception) {
             $this->markProductFailure($product, $resolvedAction, $offerId, $exception);
@@ -98,7 +139,76 @@ class GoogleMerchantProductSyncService
         }
     }
 
-    public function deleteProductInput(Product $product, array $settings, string $accountId, string $dataSourceName, string $offerId): array
+    private function syncVariantChildThroughParent(Product $variant, Product $parent, ?string $action = null): array
+    {
+        $this->recordLocalLog(
+            $variant,
+            $this->resolveOfferId($variant, $this->settingsService->settingsFor((int) $variant->account_id ?: null)),
+            'variant_child_redirect',
+            'skipped',
+            'Bien the con khong duoc day rieng; dong bo lai san pham cha.'
+        );
+
+        $result = $this->syncProduct($parent, null);
+        $result['redirected_from_variant_id'] = (int) $variant->id;
+        $result['redirected_from_variant_action'] = $action;
+
+        return $result;
+    }
+
+    private function deleteProductAndBundleOptionInputs(
+        Product $product,
+        array $settings,
+        string $accountId,
+        string $dataSourceName,
+        string $offerId,
+        string $action = 'delete',
+        ?string $reason = null
+    ): array {
+        $result = $this->deleteProductInput($product, $settings, $accountId, $dataSourceName, $offerId, $action, $reason);
+        $bundleOptionResults = $this->deleteBundleOptionInputs(
+            $product,
+            $settings,
+            $accountId,
+            $dataSourceName,
+            $offerId,
+            null,
+            'bundle_option_delete',
+            $reason
+        );
+
+        if ($reason !== null && $reason !== '') {
+            $result['reason'] = $reason;
+        }
+
+        if (!empty($bundleOptionResults)) {
+            $result['bundle_options'] = $bundleOptionResults;
+        }
+
+        $variantChildDeleteResults = $this->deleteVariantChildInputs(
+            $product,
+            $settings,
+            $accountId,
+            $dataSourceName,
+            $reason ?: 'San pham cha khong con du dieu kien nen bien the con cung phai go khoi Google Merchant.'
+        );
+
+        if (!empty($variantChildDeleteResults)) {
+            $result['variant_child_deletes'] = $variantChildDeleteResults;
+        }
+
+        return $result;
+    }
+
+    public function deleteProductInput(
+        Product $product,
+        array $settings,
+        string $accountId,
+        string $dataSourceName,
+        string $offerId,
+        string $action = 'delete',
+        ?string $reason = null
+    ): array
     {
         if ($offerId === '') {
             throw new GoogleMerchantProductSyncException('Product has no stable offer ID.');
@@ -109,26 +219,32 @@ class GoogleMerchantProductSyncService
         $url = sprintf(self::DELETE_ENDPOINT, $name)
             . '?dataSource=' . rawurlencode($dataSourceName);
 
-        $this->markProductAttempt($product, 'delete', $offerId, null);
+        $this->markProductAttempt($product, $action, $offerId, null);
 
         try {
-            $response = $this->sendMerchantRequest('delete', $url, null, $product, $offerId, 'delete', $settings);
+            $response = $this->sendMerchantRequest('delete', $url, null, $product, $offerId, $action, $settings);
 
             if ($response->failed() && $response->status() !== 404) {
                 throw new GoogleMerchantProductSyncException($this->responseErrorMessage($response, 'Google Merchant API rejected the product delete request.'));
             }
 
-            $this->markProductDeleted($product, $offerId);
+            $this->markProductDeleted($product, $offerId, $action);
 
-            return [
+            $result = [
                 'status' => 'deleted',
-                'action' => 'delete',
+                'action' => $action,
                 'product_id' => (int) $product->id,
                 'offer_id' => $offerId,
                 'response' => $response->json() ?: [],
             ];
+
+            if ($reason !== null && $reason !== '') {
+                $result['reason'] = $reason;
+            }
+
+            return $result;
         } catch (Throwable $exception) {
-            $this->markProductFailure($product, 'delete', $offerId, $exception);
+            $this->markProductFailure($product, $action, $offerId, $exception);
             throw $exception;
         }
     }
@@ -203,6 +319,10 @@ class GoogleMerchantProductSyncService
 
         $this->loadProductMerchantRelations($product);
 
+        if ($parent = $this->variantParent($product)) {
+            return $this->buildProductInputPayload($parent, $settings, $options);
+        }
+
         $offerId = $this->resolveOfferId($product, $settings);
         $title = $this->cleanText((string) $product->name, 150);
         $description = $this->resolveDescription($product);
@@ -214,24 +334,18 @@ class GoogleMerchantProductSyncService
         $googleProductCategory = $this->resolveGoogleProductCategory($product, $settings);
         $productTypes = $this->resolveProductTypes($product);
 
-        if ($offerId === '') {
-            throw new GoogleMerchantProductSyncException('Product has no stable offer ID.');
-        }
+        $eligibilityFailures = $this->productInputEligibilityFailures($product, $settings, [
+            'offer_id' => $offerId,
+            'title' => $title,
+            'link' => $link,
+            'image_link' => $imageLink,
+            'regular_price' => $regularPrice,
+        ]);
 
-        if ($title === '') {
-            throw new GoogleMerchantProductSyncException('Product title is empty.');
-        }
-
-        if ($link === '') {
-            throw new GoogleMerchantProductSyncException('Product link is empty.');
-        }
-
-        if ($imageLink === '') {
-            throw new GoogleMerchantProductSyncException('Product image link is empty.');
-        }
-
-        if ($regularPrice <= 0) {
-            throw new GoogleMerchantProductSyncException('Product price must be greater than 0.');
+        if (!empty($eligibilityFailures)) {
+            throw new GoogleMerchantProductSyncException(
+                'San pham khong du dieu kien dong bo Google Merchant: ' . implode(' ', $eligibilityFailures)
+            );
         }
 
         $attributes = [
@@ -276,6 +390,12 @@ class GoogleMerchantProductSyncService
     public function buildProductInputPayloads(Product $product, ?array $settings = null): array
     {
         $settings ??= $this->settingsService->settingsFor((int) $product->account_id ?: null);
+        $this->loadProductMerchantRelations($product);
+
+        if ($parent = $this->variantParent($product)) {
+            return $this->buildProductInputPayloads($parent, $settings);
+        }
+
         $parentPayload = $this->buildProductInputPayload($product, $settings);
         $payloads = [$parentPayload];
 
@@ -289,7 +409,27 @@ class GoogleMerchantProductSyncService
     private function syncBundleOptionInputs(Product $product, array $settings, string $accountId, string $dataSourceName, string $parentOfferId): array
     {
         $results = [];
-        foreach ($this->bundleOptionPayloadEntries($product, $settings, $parentOfferId) as $entry) {
+        foreach ($this->bundleOptionGroups($product, self::BUNDLE_OPTION_STATUS_VISIBLE) as $option) {
+            $eligibilityFailures = $this->bundleOptionEligibilityFailures($product, $option, $settings);
+            if (!empty($eligibilityFailures)) {
+                $results[] = $this->deleteBundleOptionInput(
+                    $product,
+                    $settings,
+                    $accountId,
+                    $dataSourceName,
+                    $parentOfferId,
+                    $option,
+                    'bundle_option_delete_ineligible',
+                    implode(' ', $eligibilityFailures)
+                );
+
+                continue;
+            }
+
+            $entry = [
+                ...$option,
+                'payload' => $this->buildBundleOptionInputPayload($product, $option, $settings, $parentOfferId),
+            ];
             $payload = $entry['payload'];
             $offerId = (string) $payload['offerId'];
             $url = sprintf(self::INSERT_ENDPOINT, rawurlencode($accountId))
@@ -310,43 +450,119 @@ class GoogleMerchantProductSyncService
             ];
         }
 
-        return $results;
+        return array_merge(
+            $results,
+            $this->deleteBundleOptionInputs(
+                $product,
+                $settings,
+                $accountId,
+                $dataSourceName,
+                $parentOfferId,
+                self::BUNDLE_OPTION_STATUS_INTERNAL,
+                'bundle_option_delete_internal',
+                'Tuy chon bundle dang o trang thai Noi bo va khong duoc xuat hien tren Google Merchant.'
+            )
+        );
     }
 
-    private function deleteBundleOptionInputs(Product $product, array $settings, string $accountId, string $dataSourceName, string $parentOfferId): array
+    private function deleteBundleOptionInputs(
+        Product $product,
+        array $settings,
+        string $accountId,
+        string $dataSourceName,
+        string $parentOfferId,
+        ?string $visibility = null,
+        string $action = 'bundle_option_delete',
+        ?string $reason = null
+    ): array
     {
         $results = [];
-        foreach ($this->bundleOptionGroups($product) as $option) {
-            $offerId = $this->bundleOptionOfferId($parentOfferId, $option);
-            $name = $this->productInputName(
+        foreach ($this->bundleOptionGroups($product, $visibility) as $option) {
+            $results[] = $this->deleteBundleOptionInput(
+                $product,
+                $settings,
                 $accountId,
-                (string) $settings['content_language'],
-                (string) $settings['feed_label'],
-                $offerId
+                $dataSourceName,
+                $parentOfferId,
+                $option,
+                $action,
+                $reason
             );
-            $url = sprintf(self::DELETE_ENDPOINT, $name)
-                . '?dataSource=' . rawurlencode($dataSourceName);
-            $response = $this->sendMerchantRequest('delete', $url, null, $product, $offerId, 'bundle_option_delete', $settings);
-
-            if ($response->failed() && $response->status() !== 404) {
-                throw new GoogleMerchantProductSyncException($this->responseErrorMessage($response, 'Google Merchant API rejected the bundle option delete request.'));
-            }
-
-            $results[] = [
-                'status' => 'deleted',
-                'action' => 'bundle_option_delete',
-                'offer_id' => $offerId,
-                'title' => $option['title'],
-                'response' => $response->json() ?: [],
-            ];
         }
 
         return $results;
     }
 
+    private function deleteBundleOptionInput(
+        Product $product,
+        array $settings,
+        string $accountId,
+        string $dataSourceName,
+        string $parentOfferId,
+        array $option,
+        string $action,
+        ?string $reason = null
+    ): array {
+        $offerId = $this->bundleOptionOfferId($parentOfferId, $option);
+        $name = $this->productInputName(
+            $accountId,
+            (string) $settings['content_language'],
+            (string) $settings['feed_label'],
+            $offerId
+        );
+        $url = sprintf(self::DELETE_ENDPOINT, $name)
+            . '?dataSource=' . rawurlencode($dataSourceName);
+        $response = $this->sendMerchantRequest('delete', $url, null, $product, $offerId, $action, $settings);
+
+        if ($response->failed() && $response->status() !== 404) {
+            throw new GoogleMerchantProductSyncException($this->responseErrorMessage($response, 'Google Merchant API rejected the bundle option delete request.'));
+        }
+
+        $result = [
+            'status' => 'deleted',
+            'action' => $action,
+            'offer_id' => $offerId,
+            'title' => $option['title'],
+            'response' => $response->json() ?: [],
+        ];
+
+        if ($reason !== null && $reason !== '') {
+            $result['reason'] = $reason;
+        }
+
+        return $result;
+    }
+
+    private function deleteVariantChildInputs(
+        Product $product,
+        array $settings,
+        string $accountId,
+        string $dataSourceName,
+        string $reason
+    ): array {
+        if ((string) $product->type !== 'configurable') {
+            return [];
+        }
+
+        return $this->configurableProductVariants($product)
+            ->map(function (Product $variant) use ($settings, $accountId, $dataSourceName, $reason) {
+                return $this->deleteProductInput(
+                    $variant,
+                    $settings,
+                    $accountId,
+                    $dataSourceName,
+                    $this->resolveOfferId($variant, $settings),
+                    'variant_child_delete',
+                    $reason
+                );
+            })
+            ->values()
+            ->all();
+    }
+
     private function bundleOptionPayloadEntries(Product $product, array $settings, string $parentOfferId): array
     {
-        return collect($this->bundleOptionGroups($product))
+        return collect($this->bundleOptionGroups($product, self::BUNDLE_OPTION_STATUS_VISIBLE))
             ->map(function (array $option) use ($product, $settings, $parentOfferId) {
                 return [
                     ...$option,
@@ -361,27 +577,24 @@ class GoogleMerchantProductSyncService
     {
         $title = $this->cleanText((string) $option['title'], 150);
         $description = $this->resolveDescription($product);
-        $link = $this->resolveProductUrl($product, $settings);
+        $link = $this->resolveBundleOptionProductUrl($product, $option, $settings);
         $imageLink = $this->resolveImageUrl($product);
         $additionalImages = $this->resolveAdditionalImageUrls($product, $imageLink);
         $price = (float) $option['price'];
         $googleProductCategory = $this->resolveGoogleProductCategory($product, $settings);
         $productTypes = $this->resolveProductTypes($product);
 
-        if ($title === '') {
-            throw new GoogleMerchantProductSyncException('Bundle option title is empty.');
-        }
+        $eligibilityFailures = $this->bundleOptionEligibilityFailures($product, $option, $settings, [
+            'title' => $title,
+            'link' => $link,
+            'image_link' => $imageLink,
+            'price' => $price,
+        ]);
 
-        if ($link === '') {
-            throw new GoogleMerchantProductSyncException('Bundle option product link is empty.');
-        }
-
-        if ($imageLink === '') {
-            throw new GoogleMerchantProductSyncException('Bundle option image link is empty.');
-        }
-
-        if ($price <= 0) {
-            throw new GoogleMerchantProductSyncException("Bundle option price must be greater than 0: {$title}");
+        if (!empty($eligibilityFailures)) {
+            throw new GoogleMerchantProductSyncException(
+                'Tuy chon bundle khong du dieu kien dong bo Google Merchant: ' . implode(' ', $eligibilityFailures)
+            );
         }
 
         $attributes = [
@@ -415,7 +628,7 @@ class GoogleMerchantProductSyncService
         ];
     }
 
-    private function bundleOptionGroups(Product $product): array
+    private function bundleOptionGroups(Product $product, ?string $visibility = null): array
     {
         if ((string) $product->type !== 'bundle') {
             return [];
@@ -429,6 +642,10 @@ class GoogleMerchantProductSyncService
             ->map(function ($optionItems, string $key) use ($product) {
                 $first = $optionItems->first();
                 $uid = trim((string) ($first?->pivot?->bundle_option_uid ?? ''));
+                $status = $this->resolveBundleOptionGroupStatus($optionItems);
+                $postId = filled($first?->pivot?->option_post_id ?? null)
+                    ? (int) $first->pivot->option_post_id
+                    : null;
                 $title = $optionItems
                     ->map(fn (Product $item) => trim((string) ($item->pivot?->option_title ?? '')))
                     ->first(fn (string $value) => $value !== '')
@@ -438,11 +655,30 @@ class GoogleMerchantProductSyncService
                     'key' => $key,
                     'uid' => $uid,
                     'title' => $title,
+                    'post_id' => $postId,
+                    'public_key' => $this->bundleOptionPublicKey($postId, $title),
+                    'status' => $status,
+                    'has_inactive_item' => collect($optionItems)
+                        ->contains(fn (Product $item) => !$this->isProductBusinessActive($item)),
                     'price' => $this->resolveBundleOptionPrice($optionItems),
                 ];
             })
+            ->filter(fn (array $option) => $visibility === null || $option['status'] === $visibility)
             ->values()
             ->all();
+    }
+
+    private function resolveBundleOptionGroupStatus($optionItems): string
+    {
+        $hasInternalItem = collect($optionItems)
+            ->contains(fn (Product $item) => $this->isInternalBundleOptionStatus($item->pivot?->bundle_option_status ?? null));
+
+        return $hasInternalItem ? self::BUNDLE_OPTION_STATUS_INTERNAL : self::BUNDLE_OPTION_STATUS_VISIBLE;
+    }
+
+    private function isInternalBundleOptionStatus(mixed $value): bool
+    {
+        return Str::lower(Str::squish((string) $value)) === self::BUNDLE_OPTION_STATUS_INTERNAL;
     }
 
     private function bundleOptionGroupKey(Product $item): string
@@ -460,7 +696,7 @@ class GoogleMerchantProductSyncService
 
     private function resolveBundleOptionPrice($items): float
     {
-        return (float) collect($items)->sum(function (Product $item) {
+        $total = (float) collect($items)->sum(function (Product $item) {
             $quantity = (float) ($item->pivot?->quantity ?? 1);
             $quantity = $quantity > 0 ? $quantity : 1;
             $pivotPrice = $item->pivot?->price;
@@ -470,6 +706,20 @@ class GoogleMerchantProductSyncService
 
             return $unitPrice * $quantity;
         });
+
+        return $this->discountFullBundleTotal($total);
+    }
+
+    private function discountFullBundleTotal(float $total): float
+    {
+        $normalizedTotal = max(round($total, 2), 0);
+        if ($normalizedTotal <= 0) {
+            return 0.0;
+        }
+
+        $discountedSubtotal = max($normalizedTotal - round($normalizedTotal * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0), 0);
+
+        return floor($discountedSubtotal / self::BUNDLE_TOTAL_ROUNDING_UNIT) * self::BUNDLE_TOTAL_ROUNDING_UNIT;
     }
 
     private function bundleOptionOfferId(string $parentOfferId, array $option): string
@@ -532,6 +782,9 @@ class GoogleMerchantProductSyncService
                 'parentConfigurable.images',
                 'parentConfigurable.categories',
                 'bundleItems',
+                'variations.images',
+                'variations.categories',
+                'variations.attributeValues.attribute',
             ]);
         } catch (Throwable $exception) {
             if (!app()->runningUnitTests()) {
@@ -730,12 +983,18 @@ class GoogleMerchantProductSyncService
 
     private function resolveSyncAction(Product $product, array $settings, ?string $action): string
     {
+        $action = Str::lower(trim((string) $action));
+
         if ($action === 'delete') {
             return 'delete';
         }
 
-        if (!$this->isProductBusinessActive($product)) {
-            return 'delete';
+        if ($this->productInactiveReason($product) !== null) {
+            return 'delete_inactive';
+        }
+
+        if ($action === 'out_of_stock') {
+            return 'out_of_stock';
         }
 
         return 'upsert';
@@ -815,11 +1074,70 @@ class GoogleMerchantProductSyncService
         return $this->normalizeUrl($baseUrl, '/san-pham/' . rawurlencode($identifier));
     }
 
+    private function resolveBundleOptionProductUrl(Product $product, array $option, array $settings): string
+    {
+        $url = $this->resolveProductUrl($product, $settings);
+        if ($url === '') {
+            return '';
+        }
+
+        $query = [];
+        $uid = trim((string) ($option['uid'] ?? ''));
+        if ($uid !== '') {
+            $query['bundle_option_uid'] = $uid;
+        }
+
+        $publicKey = trim((string) ($option['public_key'] ?? ''));
+        if ($publicKey !== '') {
+            $query['bundle_option_key'] = $publicKey;
+        }
+
+        $title = trim((string) ($option['title'] ?? ''));
+        if ($title !== '') {
+            $query['bundle_option'] = $title;
+        }
+
+        if (empty($query)) {
+            return $url;
+        }
+
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url . $separator . http_build_query($query, '', '&', PHP_QUERY_RFC3986);
+    }
+
+    private function bundleOptionPublicKey($postId, ?string $title): string
+    {
+        if (filled($postId) && is_numeric($postId)) {
+            return 'post:' . (int) $postId;
+        }
+
+        $normalizedTitle = Str::of((string) $title)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish()
+            ->value();
+
+        return 'title:' . ($normalizedTitle !== '' ? $normalizedTitle : 'mac dinh');
+    }
+
     private function productUrlOwner(Product $product): Product
     {
         $parent = $product->parentConfigurable->first();
 
         return $parent instanceof Product ? $parent : $product;
+    }
+
+    private function variantParent(Product $product): ?Product
+    {
+        if ((string) $product->type === 'configurable') {
+            return null;
+        }
+
+        $parent = $product->parentConfigurable->first();
+
+        return $parent instanceof Product ? $parent : null;
     }
 
     private function resolveProductBaseUrl(Product $product, array $settings): string
@@ -937,6 +1255,20 @@ class GoogleMerchantProductSyncService
 
     private function resolveRegularPrice(Product $product): float
     {
+        if ((string) $product->type === 'configurable') {
+            $variant = $this->cheapestEligibleVariant($product);
+            if (!$variant) {
+                return 0.0;
+            }
+
+            $price = (float) ($variant->price ?: 0);
+            if ($price > 0) {
+                return $price;
+            }
+
+            return $this->variantSellingPrice($variant);
+        }
+
         $price = (float) ($product->price ?: 0);
 
         return $price > 0 ? $price : (float) ($product->current_price ?: 0);
@@ -944,6 +1276,20 @@ class GoogleMerchantProductSyncService
 
     private function resolveSalePrice(Product $product, float $regularPrice): ?float
     {
+        if ((string) $product->type === 'configurable') {
+            $variant = $this->cheapestEligibleVariant($product);
+            if (!$variant) {
+                return null;
+            }
+
+            $currentPrice = $this->variantSellingPrice($variant);
+            if ($currentPrice > 0 && $regularPrice > 0 && $currentPrice < $regularPrice) {
+                return $currentPrice;
+            }
+
+            return null;
+        }
+
         $currentPrice = (float) ($product->current_price ?: 0);
         if ($currentPrice > 0 && $regularPrice > 0 && $currentPrice < $regularPrice) {
             return $currentPrice;
@@ -952,9 +1298,179 @@ class GoogleMerchantProductSyncService
         return null;
     }
 
+    private function cheapestEligibleVariant(Product $product): ?Product
+    {
+        if ((string) $product->type !== 'configurable' || !$this->isProductBusinessActive($product)) {
+            return null;
+        }
+
+        return $this->configurableProductVariants($product)
+            ->filter(fn (Product $variant) => $this->isEligibleVariantForParentOffer($variant))
+            ->sortBy(fn (Product $variant) => $this->variantSellingPrice($variant))
+            ->first();
+    }
+
+    private function configurableProductVariants(Product $product)
+    {
+        if ((string) $product->type !== 'configurable') {
+            return collect();
+        }
+
+        if ($product->relationLoaded('variations')) {
+            return $product->variations;
+        }
+
+        return $product->variations()->get();
+    }
+
+    private function isEligibleVariantForParentOffer(Product $variant): bool
+    {
+        if (method_exists($variant, 'trashed') && $variant->trashed()) {
+            return false;
+        }
+
+        if (!$this->isProductBusinessActive($variant)) {
+            return false;
+        }
+
+        return $this->variantSellingPrice($variant) > 0;
+    }
+
+    private function variantSellingPrice(Product $variant): float
+    {
+        $currentPrice = (float) ($variant->current_price ?: 0);
+        if ($currentPrice > 0) {
+            return $currentPrice;
+        }
+
+        return (float) ($variant->price ?: 0);
+    }
+
     private function resolveAvailability(Product $product): string
     {
         return 'IN_STOCK';
+    }
+
+    private function productInputEligibilityFailures(Product $product, array $settings, array $resolved = []): array
+    {
+        $this->loadProductMerchantRelations($product);
+
+        $failures = [];
+        $inactiveReason = $this->productInactiveReason($product);
+        if ($inactiveReason !== null) {
+            $failures[] = $inactiveReason;
+        }
+
+        if ((string) $product->type === 'configurable' && !$this->cheapestEligibleVariant($product)) {
+            $failures[] = 'San pham co bien the chua co bien the hop le de lay gia ban.';
+        }
+
+        $offerId = array_key_exists('offer_id', $resolved)
+            ? trim((string) $resolved['offer_id'])
+            : $this->resolveOfferId($product, $settings);
+        if ($offerId === '') {
+            $failures[] = 'San pham chua co ma offer on dinh.';
+        }
+
+        $title = array_key_exists('title', $resolved)
+            ? trim((string) $resolved['title'])
+            : $this->cleanText((string) $product->name, 150);
+        if ($title === '') {
+            $failures[] = 'Ten san pham dang trong.';
+        }
+
+        $link = array_key_exists('link', $resolved)
+            ? trim((string) $resolved['link'])
+            : $this->resolveProductUrl($product, $settings);
+        if (!$this->isValidPublicUrl($link)) {
+            $failures[] = 'Link cong khai cua san pham dang trong hoac khong hop le.';
+        }
+
+        $domain = $this->productUrlOwner($product)->siteDomain;
+        if ($domain instanceof SiteDomain && !(bool) $domain->is_active) {
+            $failures[] = 'Ten mien website cua san pham dang tat.';
+        }
+
+        $imageLink = array_key_exists('image_link', $resolved)
+            ? trim((string) $resolved['image_link'])
+            : $this->resolveImageUrl($product);
+        if (!$this->isValidPublicUrl($imageLink)) {
+            $failures[] = 'Anh dai dien cua san pham dang trong hoac khong hop le.';
+        }
+
+        $regularPrice = array_key_exists('regular_price', $resolved)
+            ? (float) $resolved['regular_price']
+            : $this->resolveRegularPrice($product);
+        if ($regularPrice <= 0) {
+            $failures[] = 'Gia ban san pham phai lon hon 0.';
+        }
+
+        if (!$this->hasProductCategory($product)) {
+            $failures[] = 'San pham chua co danh muc.';
+        }
+
+        return $failures;
+    }
+
+    private function bundleOptionEligibilityFailures(Product $product, array $option, array $settings, array $resolved = []): array
+    {
+        $failures = [];
+
+        if (!empty($option['has_inactive_item'])) {
+            $failures[] = 'Tuy chon bundle co san pham thanh phan dang tat trang thai kinh doanh.';
+        }
+
+        $title = array_key_exists('title', $resolved)
+            ? trim((string) $resolved['title'])
+            : $this->cleanText((string) ($option['title'] ?? ''), 150);
+        if ($title === '') {
+            $failures[] = 'Ten tuy chon bundle dang trong.';
+        }
+
+        $link = array_key_exists('link', $resolved)
+            ? trim((string) $resolved['link'])
+            : $this->resolveProductUrl($product, $settings);
+        if (!$this->isValidPublicUrl($link)) {
+            $failures[] = 'Link cong khai cua tuy chon bundle dang trong hoac khong hop le.';
+        }
+
+        $imageLink = array_key_exists('image_link', $resolved)
+            ? trim((string) $resolved['image_link'])
+            : $this->resolveImageUrl($product);
+        if (!$this->isValidPublicUrl($imageLink)) {
+            $failures[] = 'Anh dai dien cua tuy chon bundle dang trong hoac khong hop le.';
+        }
+
+        $price = array_key_exists('price', $resolved)
+            ? (float) $resolved['price']
+            : (float) ($option['price'] ?? 0);
+        if ($price <= 0) {
+            $failures[] = "Gia ban tuy chon bundle phai lon hon 0: {$title}";
+        }
+
+        if (!$this->hasProductCategory($product)) {
+            $failures[] = 'San pham bundle chua co danh muc.';
+        }
+
+        return $failures;
+    }
+
+    private function productInactiveReason(Product $product): ?string
+    {
+        if (method_exists($product, 'trashed') && $product->trashed()) {
+            return 'San pham da bi xoa va phai duoc go khoi Google Merchant.';
+        }
+
+        if (!$this->isProductBusinessActive($product)) {
+            return 'Trang thai kinh doanh khong phai "Dang mo ban tren toan he thong".';
+        }
+
+        $owner = $this->productUrlOwner($product);
+        if ((int) $owner->id !== (int) $product->id && !$this->isProductBusinessActive($owner)) {
+            return 'Trang thai kinh doanh cua san pham cha dang tat.';
+        }
+
+        return null;
     }
 
     private function isProductBusinessActive(Product $product): bool
@@ -964,6 +1480,49 @@ class GoogleMerchantProductSyncService
         }
 
         return (bool) $product->status;
+    }
+
+    private function isValidPublicUrl(string $url): bool
+    {
+        $url = trim($url);
+
+        return $url !== ''
+            && filter_var($url, FILTER_VALIDATE_URL) !== false
+            && Str::startsWith(Str::lower($url), ['http://', 'https://']);
+    }
+
+    private function hasProductCategory(Product $product): bool
+    {
+        if ($this->modelHasProductCategory($product)) {
+            return true;
+        }
+
+        $owner = $this->productUrlOwner($product);
+        if ((int) $owner->id !== (int) $product->id) {
+            return $this->modelHasProductCategory($owner);
+        }
+
+        return false;
+    }
+
+    private function modelHasProductCategory(Product $product): bool
+    {
+        if ($product->relationLoaded('category') && $product->category) {
+            return true;
+        }
+
+        if ($product->relationLoaded('categories') && $product->categories->isNotEmpty()) {
+            return true;
+        }
+
+        return (int) ($product->category_id ?? 0) > 0;
+    }
+
+    private function hasMerchantSyncState(Product $product): bool
+    {
+        return trim((string) $product->google_merchant_offer_id) !== ''
+            || trim((string) $product->google_merchant_product_input_name) !== ''
+            || (string) $product->google_merchant_sync_status === 'synced';
     }
 
     private function resolveGoogleProductCategory(Product $product, array $settings): string
@@ -980,8 +1539,10 @@ class GoogleMerchantProductSyncService
 
     private function resolveProductTypes(Product $product): array
     {
-        $primaryCategory = $product->relationLoaded('category') ? $product->category : null;
-        $categories = $product->relationLoaded('categories') ? $product->categories : collect();
+        $owner = $this->productUrlOwner($product);
+        $categorySource = $this->modelHasProductCategory($product) ? $product : $owner;
+        $primaryCategory = $categorySource->relationLoaded('category') ? $categorySource->category : null;
+        $categories = $categorySource->relationLoaded('categories') ? $categorySource->categories : collect();
 
         return collect([$primaryCategory])
             ->merge($categories)
@@ -1084,7 +1645,7 @@ class GoogleMerchantProductSyncService
         ])->saveQuietly();
     }
 
-    private function markProductDeleted(Product $product, string $offerId): void
+    private function markProductDeleted(Product $product, string $offerId, string $action = 'delete'): void
     {
         $product->forceFill([
             'google_merchant_sync_status' => 'not_synced',
@@ -1094,8 +1655,38 @@ class GoogleMerchantProductSyncService
             'google_merchant_offer_id' => $offerId,
             'google_merchant_product_input_name' => null,
             'google_merchant_last_payload_hash' => null,
-            'google_merchant_last_action' => 'delete',
+            'google_merchant_last_action' => $action,
         ])->saveQuietly();
+    }
+
+    private function markProductSkipped(Product $product, ?string $offerId, string $reason): array
+    {
+        $product->forceFill([
+            'google_merchant_sync_status' => 'not_synced',
+            'google_merchant_last_attempted_at' => now(),
+            'google_merchant_last_error' => Str::limit($reason, 5000, ''),
+            'google_merchant_offer_id' => $offerId,
+            'google_merchant_product_input_name' => null,
+            'google_merchant_last_payload_hash' => null,
+            'google_merchant_last_action' => 'skip_ineligible',
+        ])->saveQuietly();
+
+        $this->recordLocalLog($product, $offerId, 'skip_ineligible', 'skipped', $reason);
+
+        Log::info('Google Merchant product sync skipped.', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'offer_id' => $offerId,
+            'reason' => $reason,
+        ]);
+
+        return [
+            'status' => 'skipped',
+            'action' => 'skip_ineligible',
+            'product_id' => (int) $product->id,
+            'offer_id' => $offerId,
+            'reason' => $reason,
+        ];
     }
 
     private function markProductFailure(Product $product, string $action, ?string $offerId, Throwable $exception): void
@@ -1126,7 +1717,7 @@ class GoogleMerchantProductSyncService
                 'product_id' => $product?->id,
                 'offer_id' => $offerId,
                 'action' => $action,
-                'status' => $error ? 'error' : ($response?->successful() ? 'success' : 'error'),
+                'status' => $this->logStatusForMerchantResponse($method, $response, $error),
                 'request_method' => $method,
                 'request_url' => $url,
                 'request_payload' => $payload,
@@ -1134,6 +1725,43 @@ class GoogleMerchantProductSyncService
                 'response_body' => $this->loggableResponseBody($response),
                 'error_message' => $error?->getMessage() ?: ($response?->failed() ? $this->responseErrorMessage($response, 'Google Merchant API error.') : null),
                 'duration_ms' => $durationMs,
+            ]);
+        } catch (Throwable $loggingException) {
+            Log::warning('Unable to write Google Merchant sync log.', [
+                'product_id' => $product?->id,
+                'offer_id' => $offerId,
+                'message' => $loggingException->getMessage(),
+            ]);
+        }
+    }
+
+    private function logStatusForMerchantResponse(string $method, ?Response $response, ?Throwable $error): string
+    {
+        if ($error !== null) {
+            return 'error';
+        }
+
+        if ($response?->successful()) {
+            return 'success';
+        }
+
+        if ($method === 'DELETE' && $response?->status() === 404) {
+            return 'success';
+        }
+
+        return 'error';
+    }
+
+    private function recordLocalLog(?Product $product, ?string $offerId, string $action, string $status, ?string $message = null): void
+    {
+        try {
+            GoogleMerchantSyncLog::create([
+                'account_id' => $product?->account_id,
+                'product_id' => $product?->id,
+                'offer_id' => $offerId,
+                'action' => $action,
+                'status' => $status,
+                'error_message' => $message,
             ]);
         } catch (Throwable $loggingException) {
             Log::warning('Unable to write Google Merchant sync log.', [

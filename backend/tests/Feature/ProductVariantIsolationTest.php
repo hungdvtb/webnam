@@ -314,7 +314,7 @@ class ProductVariantIsolationTest extends TestCase
         $this->assertSame(0, $variant->images()->count());
     }
 
-    public function test_updating_a_variant_directly_changes_only_that_variant(): void
+    public function test_updating_a_variant_directly_resyncs_parent_retail_price_only(): void
     {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
@@ -356,13 +356,94 @@ class ProductVariantIsolationTest extends TestCase
         ]);
         $this->assertDatabaseHas('products', [
             'id' => $parent->id,
-            'price' => 500000,
+            'price' => 135000,
             'expected_cost' => 250000,
         ]);
         $this->assertDatabaseHas('products', [
             'id' => $variantB->id,
             'price' => 135000,
             'expected_cost' => 80000,
+        ]);
+    }
+
+    public function test_inactive_variants_are_excluded_from_parent_retail_price_sync(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $response = $this->postJson('/api/products', [
+            'type' => 'configurable',
+            'name' => 'Parent Lowest Variant',
+            'sku' => 'PARENT-LOWEST',
+            'price' => 500000,
+            'variants' => [
+                [
+                    'name' => 'Hidden Cheap Variant',
+                    'sku' => 'PARENT-LOWEST-HIDDEN',
+                    'price' => 80000,
+                    'status' => false,
+                ],
+                [
+                    'name' => 'Visible Lowest Variant',
+                    'sku' => 'PARENT-LOWEST-90',
+                    'price' => 90000,
+                    'status' => true,
+                ],
+                [
+                    'name' => 'Visible Higher Variant',
+                    'sku' => 'PARENT-LOWEST-140',
+                    'price' => 140000,
+                    'status' => true,
+                ],
+            ],
+        ])->assertCreated();
+
+        $parentId = (int) $response->json('id');
+
+        $this->assertDatabaseHas('products', [
+            'id' => $parentId,
+            'price' => 90000,
+        ]);
+        $this->assertDatabaseHas('products', [
+            'sku' => 'PARENT-LOWEST-HIDDEN',
+            'price' => 80000,
+            'status' => false,
+        ]);
+    }
+
+    public function test_trashing_variant_resyncs_parent_retail_price_to_next_lowest_active_variant(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $parent = $this->createProduct([
+            'name' => 'Parent Delete Variant',
+            'slug' => 'parent-delete-variant',
+            'sku' => 'PARENT-DELETE',
+            'type' => 'configurable',
+            'price' => 90000,
+        ]);
+        $variantA = $this->createProduct([
+            'name' => 'Variant Cheapest',
+            'slug' => 'variant-cheapest-delete',
+            'sku' => 'PARENT-DELETE-90',
+            'price' => 90000,
+        ]);
+        $variantB = $this->createProduct([
+            'name' => 'Variant Remaining',
+            'slug' => 'variant-remaining-delete',
+            'sku' => 'PARENT-DELETE-140',
+            'price' => 140000,
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, ['link_type' => 'super_link', 'position' => 0]);
+        $parent->linkedProducts()->attach($variantB->id, ['link_type' => 'super_link', 'position' => 1]);
+
+        $this->deleteJson("/api/products/{$variantA->id}")
+            ->assertOk();
+
+        $this->assertSoftDeleted('products', ['id' => $variantA->id]);
+        $this->assertDatabaseHas('products', [
+            'id' => $parent->id,
+            'price' => 140000,
         ]);
     }
 

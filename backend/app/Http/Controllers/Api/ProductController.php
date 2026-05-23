@@ -21,6 +21,7 @@ use App\Services\Inventory\ProductPricingService;
 use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
+use App\Services\ProductParentRetailPriceSyncService;
 use App\Services\ProductSkuService;
 use App\Support\InventoryQuantity;
 use App\Support\OrderStatusCatalog;
@@ -155,7 +156,8 @@ class ProductController extends Controller
         protected ProductSkuService $productSkuService,
         protected ProductPricingService $productPricingService,
         protected OrderInventorySlipService $orderInventorySlipService,
-        protected MediaService $mediaService
+        protected MediaService $mediaService,
+        protected ProductParentRetailPriceSyncService $productParentRetailPriceSyncService
     )
     {
     }
@@ -1750,6 +1752,8 @@ class ProductController extends Controller
                 $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
             }
 
+            $this->productParentRetailPriceSyncService->syncProductAndParents($product);
+
             return [
                 'status' => 'updated',
                 'errors' => $errors,
@@ -1824,6 +1828,8 @@ class ProductController extends Controller
         if (!empty($variantPayload['provided'])) {
             $errors = array_merge($errors, $this->syncImportedVariantsToProductV2($product, $variantPayload, $context['attributes'], $rowNumber, $summary));
         }
+
+        $this->productParentRetailPriceSyncService->syncProductAndParents($product);
 
         return [
             'status' => 'created',
@@ -2657,6 +2663,8 @@ class ProductController extends Controller
             $product->superAttributes()->sync($syncPayload);
         }
 
+        $this->productParentRetailPriceSyncService->syncProductAndParents($product);
+
         return $errors;
     }
 
@@ -2760,6 +2768,7 @@ class ProductController extends Controller
         }
 
         $this->syncCompositeAutoPrice($product);
+        $this->productParentRetailPriceSyncService->syncProductAndParents($product);
 
         return [];
     }
@@ -9560,6 +9569,8 @@ class ProductController extends Controller
                 }
 
                 $this->syncSuppliersToVariants($product, $supplierIds);
+                $this->productParentRetailPriceSyncService->syncProductAndParents($product);
+                $product->refresh();
 
                 return $product;
             });
@@ -9725,7 +9736,6 @@ class ProductController extends Controller
                 ];
             }
         }
-
         return response()->json([
             'items' => $items,
             'issues' => $issues,
@@ -9932,6 +9942,8 @@ class ProductController extends Controller
                 ]);
             }
 
+            $this->productParentRetailPriceSyncService->syncProductAndParents($parent);
+
             return $this->loadProductResource($parent->fresh());
         });
 
@@ -10092,8 +10104,10 @@ class ProductController extends Controller
             $this->validateGroupedOrBundleItemVariants($validated['grouped_items']);
         }
 
+        $originalRetailPrice = $product->price;
+
         try {
-            $product = DB::transaction(function () use ($request, $validated, $product, $incomingCategoryIds, $categoryIds, $incomingSupplierIds, $supplierIds) {
+            $product = DB::transaction(function () use ($request, $validated, $product, $incomingCategoryIds, $categoryIds, $incomingSupplierIds, $supplierIds, $originalRetailPrice) {
                 $this->prepareProductSku($validated, $product);
                 $resolvedType = $validated['type'] ?? $product->type;
                 $preparedVariants = ($request->has('variants') && $resolvedType === 'configurable')
@@ -10441,6 +10455,17 @@ class ProductController extends Controller
                     $this->syncSuppliersToVariants($product, $supplierIds);
                 }
 
+                $retailPriceSync = $this->productParentRetailPriceSyncService->syncProductAndParents($product);
+                if (
+                    $product->type === 'bundle'
+                    && $product->price_type === 'sum'
+                    && $request->has('grouped_items')
+                    && empty($retailPriceSync['self_synced'])
+                ) {
+                    $product->forceFill(['price' => $originalRetailPrice])->saveQuietly();
+                }
+                $product->refresh();
+
                 return $product;
             });
         } catch (QueryException $exception) {
@@ -10549,6 +10574,8 @@ class ProductController extends Controller
                 }
 
                 $this->syncProductCategories($clone, $original->categories->pluck('id')->toArray());
+                $this->productParentRetailPriceSyncService->syncProductAndParents($clone);
+                $clone->refresh();
 
                 return $this->loadProductResource($clone);
             });
@@ -10739,21 +10766,23 @@ class ProductController extends Controller
         return $targetIds;
     }
 
-    protected function restoreProductsWithVariants(array $productIds): void
+    protected function restoreProductsWithVariants(array $productIds): array
     {
         $targetIds = $this->resolveProductTrashCascadeIds($productIds);
 
         if (!empty($targetIds)) {
             Product::onlyTrashed()->whereIn('id', $targetIds)->restore();
         }
+
+        return $targetIds;
     }
 
-    protected function forceDeleteProductsWithVariants(array $productIds): void
+    protected function forceDeleteProductsWithVariants(array $productIds): array
     {
         $targetIds = $this->resolveProductTrashCascadeIds($productIds);
 
         if (empty($targetIds)) {
-            return;
+            return [];
         }
 
         DB::table('product_links')
@@ -10768,6 +10797,8 @@ class ProductController extends Controller
         $this->deleteProductImageCollection($images);
 
         Product::onlyTrashed()->whereIn('id', $targetIds)->forceDelete();
+
+        return $targetIds;
     }
 
     /**
@@ -10780,6 +10811,7 @@ class ProductController extends Controller
         DB::transaction(function () use ($product, &$trashedIds) {
             $trashedIds = $this->trashProductsWithVariants([$product->id]);
         });
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds($trashedIds);
         $this->queueGoogleMerchantInactiveSyncForIds($trashedIds);
 
         return response()->json(['message' => 'Sản phẩm đã được chuyển vào thùng rác']);
@@ -10791,9 +10823,11 @@ class ProductController extends Controller
     public function restore($id)
     {
         $product = Product::onlyTrashed()->findOrFail($id);
-        DB::transaction(function () use ($product) {
-            $this->restoreProductsWithVariants([$product->id]);
+        $restoredIds = [];
+        DB::transaction(function () use ($product, &$restoredIds) {
+            $restoredIds = $this->restoreProductsWithVariants([$product->id]);
         });
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds($restoredIds);
 
         return response()->json(['message' => 'Sản phẩm đã được khôi phục thành công']);
     }
@@ -10804,9 +10838,12 @@ class ProductController extends Controller
     public function forceDelete($id)
     {
         $product = Product::onlyTrashed()->findOrFail($id);
+        $targetIds = $this->resolveProductTrashCascadeIds([$product->id]);
+        $affectedParentIds = $this->productParentRetailPriceSyncService->affectedParentIdsForProductIds($targetIds);
         DB::transaction(function () use ($product) {
             $this->forceDeleteProductsWithVariants([$product->id]);
         });
+        $this->productParentRetailPriceSyncService->syncParentProductsByIds($affectedParentIds);
 
         return response()->json(['message' => 'Sản phẩm đã được xóa vĩnh viễn']);
     }
@@ -10823,9 +10860,11 @@ class ProductController extends Controller
             ->values()
             ->all();
 
-        DB::transaction(function () use ($ids) {
-            $this->restoreProductsWithVariants($ids);
+        $restoredIds = [];
+        DB::transaction(function () use ($ids, &$restoredIds) {
+            $restoredIds = $this->restoreProductsWithVariants($ids);
         });
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds($restoredIds);
         return response()->json(['message' => 'Đã khôi phục các sản phẩm đã chọn']);
     }
 
@@ -10841,9 +10880,12 @@ class ProductController extends Controller
             ->values()
             ->all();
 
+        $targetIds = $this->resolveProductTrashCascadeIds($ids);
+        $affectedParentIds = $this->productParentRetailPriceSyncService->affectedParentIdsForProductIds($targetIds);
         DB::transaction(function () use ($ids) {
             $this->forceDeleteProductsWithVariants($ids);
         });
+        $this->productParentRetailPriceSyncService->syncParentProductsByIds($affectedParentIds);
         return response()->json(['message' => 'Đã xóa vĩnh viễn các sản phẩm đã chọn']);
     }
 
@@ -10863,6 +10905,7 @@ class ProductController extends Controller
         DB::transaction(function () use ($ids, &$trashedIds) {
             $trashedIds = $this->trashProductsWithVariants($ids);
         });
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds($trashedIds);
         $this->queueGoogleMerchantInactiveSyncForIds($trashedIds);
         return response()->json(['message' => 'Đã chuyển các sản phẩm đã chọn vào thùng rác']);
     }
@@ -11069,6 +11112,8 @@ class ProductController extends Controller
             }
         }
 
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds($ids);
+
         return response()->json([
             'message' => 'Cập nhật hàng loạt thành công',
             'log_id' => $log->id
@@ -11134,6 +11179,9 @@ class ProductController extends Controller
 
         // Optional: delete the log after undoing
         $log->delete();
+        $this->productParentRetailPriceSyncService->syncAffectedParentsForProductIds(
+            collect($originalData)->pluck('id')->all()
+        );
         collect($originalData)
             ->pluck('id')
             ->each(function ($productId) {

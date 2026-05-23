@@ -51,6 +51,16 @@ class AuthController extends Controller
             ->whereRaw('LOWER(email) = ?', [$credentials['email']])
             ->firstOrFail();
 
+        if ((int) ($user->status ?? 1) !== 1) {
+            Auth::logout();
+
+            return response()->json([
+                'message' => 'Tài khoản đã bị khóa.',
+            ], 403);
+        }
+
+        $user->load('accounts');
+
         return response()->json([
             'token' => $user->createToken('auth_token')->plainTextToken,
             'user' => $user,
@@ -68,7 +78,7 @@ class AuthController extends Controller
 
     public function user(Request $request)
     {
-        return response()->json($request->user());
+        return response()->json($request->user()->load('accounts'));
     }
 
     private function ensureLocalAdminAccessUser(string $normalizedEmail): void

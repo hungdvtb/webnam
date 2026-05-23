@@ -18,8 +18,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
         $middleware->prepend(\App\Http\Middleware\ForceCorsHeaders::class);
         $middleware->append(\App\Http\Middleware\IdentifyAccount::class);
+        $middleware->append(\App\Http\Middleware\AuditAdminAction::class);
+        $middleware->append(\App\Http\Middleware\FilterSensitiveAdminData::class);
         $middleware->alias([
             'admin' => \App\Http\Middleware\EnsureAdmin::class,
+            'admin-permission' => \App\Http\Middleware\EnsureAdminPermission::class,
         ]);
         $middleware->redirectGuestsTo(function (Request $request) {
             return '/old/login';

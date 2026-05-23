@@ -58,7 +58,7 @@ Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\A
 
 
 // Protected routes
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::get('/user', [AuthController::class , 'user']);
     Route::post('/logout', [AuthController::class , 'logout']);
     Route::get('/user-settings', [\App\Http\Controllers\Api\UserSettingController::class, 'show']);

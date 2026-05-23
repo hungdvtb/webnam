@@ -152,7 +152,7 @@ class CategoryController extends Controller
         return false;
     }
 
-    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null): void
+    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null, bool $includeLinkOnlyDescendants = false): void
     {
         $normalizedCategories = collect($categories)->filter();
         $categoryIds = $normalizedCategories
@@ -166,7 +166,7 @@ class CategoryController extends Controller
             return;
         }
 
-        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId);
+        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId, $includeLinkOnlyDescendants);
         $queryCategoryIds = collect($categoryDescendantIdMap)
             ->flatten()
             ->map(fn ($categoryId) => (int) $categoryId)
@@ -249,7 +249,7 @@ class CategoryController extends Controller
         });
     }
 
-    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null): array
+    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null, bool $includeLinkOnlyDescendants = false): array
     {
         $rootIds = collect($categoryIds)
             ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
@@ -264,6 +264,7 @@ class CategoryController extends Controller
         $allCategories = Category::query()
             ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
             ->where('status', true)
+            ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->get(['id', 'parent_id']);
 
         $childrenByParent = $allCategories->groupBy(fn ($category) => (int) ($category->parent_id ?? 0));
@@ -294,6 +295,7 @@ class CategoryController extends Controller
             $categories = Category::query()
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->where('status', true)
+                ->publiclyListed()
                 ->orderBy('order', 'asc')
                 ->orderBy('id', 'asc') // Stable sorting
                 ->get();
@@ -320,13 +322,14 @@ class CategoryController extends Controller
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->where('slug', $slug)
                 ->with(['children' => function($q) {
-                    $q->where('status', true)->orderBy('order');
+                    $q->where('status', true)->publiclyListed()->orderBy('order');
                 }])
                 ->firstOrFail();
 
             $this->applyStorefrontCategoryItemCounts(
                 collect([$category])->merge($category->children),
-                $accountId
+                $accountId,
+                $category->isLinkOnly()
             );
 
             return $category->toArray();

@@ -15,6 +15,9 @@ class Category extends Model
     use \App\Traits\BelongsToAccount;
     use \App\Models\Concerns\OptionalSoftDeletes;
 
+    public const VISIBILITY_PUBLIC = 'public';
+    public const VISIBILITY_LINK_ONLY = 'link_only';
+
     protected $fillable = [
         'name',
         'code',
@@ -30,10 +33,15 @@ class Category extends Model
         'logo_path',
         'logo_media_asset_id',
         'status',
+        'visibility',
         'order',
         'account_id',
         'display_layout',
         'filterable_attribute_ids',
+    ];
+
+    protected $attributes = [
+        'visibility' => self::VISIBILITY_PUBLIC,
     ];
 
     protected $casts = [
@@ -42,6 +50,7 @@ class Category extends Model
         'filterable_attribute_ids' => 'array',
         'site_domain_id' => 'integer',
         'status' => 'integer',
+        'visibility' => 'string',
         'order' => 'integer',
         'deleted_at' => 'datetime',
         'deleted_by' => 'integer',
@@ -147,6 +156,24 @@ class Category extends Model
         return $this->hasMany(Category::class, 'parent_id')
             ->orderBy('order')
             ->orderBy('id');
+    }
+
+    public function scopePubliclyListed($query)
+    {
+        if (!Schema::hasColumn($this->getTable(), 'visibility')) {
+            return $query;
+        }
+
+        return $query->where(function ($visibilityQuery) {
+            $visibilityQuery
+                ->whereNull('visibility')
+                ->orWhere('visibility', self::VISIBILITY_PUBLIC);
+        });
+    }
+
+    public function isLinkOnly(): bool
+    {
+        return $this->visibility === self::VISIBILITY_LINK_ONLY;
     }
 
     public function products()

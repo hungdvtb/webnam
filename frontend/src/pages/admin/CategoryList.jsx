@@ -17,6 +17,19 @@ import {
     normalizeCategoryAssignmentItem,
 } from '../../utils/categoryAssignments';
 
+const CATEGORY_VISIBILITY_PUBLIC = 'public';
+const CATEGORY_VISIBILITY_LINK_ONLY = 'link_only';
+
+const normalizeCategoryVisibility = (value) => (
+    value === CATEGORY_VISIBILITY_LINK_ONLY ? CATEGORY_VISIBILITY_LINK_ONLY : CATEGORY_VISIBILITY_PUBLIC
+);
+
+const isCategoryLinkOnly = (category = {}) => normalizeCategoryVisibility(category?.visibility) === CATEGORY_VISIBILITY_LINK_ONLY;
+
+const getCategoryVisibilityLabel = (category = {}) => (
+    isCategoryLinkOnly(category) ? 'Chỉ truy cập bằng link' : 'Hiển thị công khai'
+);
+
 const CustomNode = ({
     node,
     depth,
@@ -36,10 +49,12 @@ const CustomNode = ({
     onOrderChange,
     orderDisabled,
 }) => {
+    const linkOnly = isCategoryLinkOnly(node.data);
+
     return (
         <div 
             style={{ paddingLeft: depth * 24 }} 
-            className={`flex items-center gap-2 w-full py-2 hover:bg-gold/5 pr-4 border-b border-gold/10 group transition-all relative ${isSelected ? 'bg-gold/10 active-node' : ''} ${isDropTarget ? 'bg-primary/5' : ''}`}
+            className={`flex items-center gap-2 w-full py-2 hover:bg-gold/5 pr-4 border-b border-gold/10 group transition-all relative ${linkOnly ? 'bg-amber-50/70 hover:bg-amber-50 border-l-2 border-amber-300' : ''} ${isSelected ? 'bg-gold/10 active-node' : ''} ${isDropTarget ? 'bg-primary/5' : ''}`}
             onClick={() => onSelect(node.id)}
         >
             {isSelected && <div className="absolute left-0 top-0 bottom-0 w-1 bg-gold shadow-[0_0_10px_rgba(212,175,55,0.5)]"></div>}
@@ -88,6 +103,12 @@ const CustomNode = ({
                     {node.droppable ? (isOpen ? 'folder_open' : 'folder') : 'inventory_2'}
                 </span>
                 <span className={`font-ui text-primary transition-all ${isSelected ? 'font-black scale-[1.02] translate-x-1' : 'font-bold'}`}>{node.text}</span>
+                {linkOnly ? (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700" title={getCategoryVisibilityLabel(node.data)}>
+                        <span className="material-symbols-outlined text-[12px]">link</span>
+                        Chỉ link
+                    </span>
+                ) : null}
             </div>
             {showOrderInput ? (
                 <div className="flex shrink-0 items-center gap-2" onClick={(event) => event.stopPropagation()}>
@@ -193,6 +214,7 @@ const INITIAL_FORM_DATA = {
     meta_keywords: '',
     parent_id: '',
     status: 1,
+    visibility: CATEGORY_VISIBILITY_PUBLIC,
     logo: null,
     logo_url: null,
     banner: null,
@@ -223,6 +245,7 @@ const buildCategoryFormData = (category = {}, categoryItems = []) => {
         meta_keywords: category.meta_keywords || '',
         parent_id: category.parent_id ? String(category.parent_id) : '',
         status: Number(category.status ?? 1),
+        visibility: normalizeCategoryVisibility(category.visibility),
         logo: category.logo_path ?? '',
         logo_url: logoUrl,
         banner: category.banner_path ?? '',
@@ -1899,6 +1922,7 @@ const CategoryList = () => {
             }
             
             data.append('status', formData.status);
+            data.append('visibility', normalizeCategoryVisibility(formData.visibility));
             // Handle array of attributes
             if (formData.filterable_attribute_ids && formData.filterable_attribute_ids.length > 0) {
                 formData.filterable_attribute_ids.forEach((attrId) => {
@@ -2882,6 +2906,15 @@ const CategoryList = () => {
                                         </div>
                                         <span className="mx-1 h-3 w-px bg-gold/10" />
                                         <span className="text-[10px] font-black uppercase tracking-[0.14em] text-stone/35">ID: {selectedCategoryNode.id}</span>
+                                        {isCategoryLinkOnly(selectedCategoryNode.data) ? (
+                                            <>
+                                                <span className="mx-1 h-3 w-px bg-gold/10" />
+                                                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-amber-700">
+                                                    <span className="material-symbols-outlined text-[12px]">link</span>
+                                                    Chỉ truy cập bằng link
+                                                </span>
+                                            </>
+                                        ) : null}
                                         {selectedChildNodes.length > 0 && (
                                             <>
                                                 <span className="mx-1 h-3 w-px bg-gold/10" />
@@ -3031,7 +3064,7 @@ const CategoryList = () => {
                                                 {formData.id ? 'Chỉnh sửa danh mục đang chọn' : 'Tạo mới danh mục'}
                                             </p>
                                         </div>
-                                        <div className="flex shrink-0 items-center gap-2">
+                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                                         <button
                                             type="button"
                                             onClick={handleOpenCategoryLinkManager}
@@ -3129,6 +3162,39 @@ const CategoryList = () => {
                                                     return renderOptions();
                                                 })()}
                                             </select>
+                                        </div>
+                                        <div className={`space-y-3 rounded-sm border p-4 ${isCategoryLinkOnly(formData) ? 'border-amber-200 bg-amber-50/70' : 'border-gold/10 bg-white'}`}>
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <label className="text-[10px] font-black uppercase tracking-widest text-primary">Trạng thái hiển thị</label>
+                                                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${isCategoryLinkOnly(formData) ? 'bg-amber-100 text-amber-700' : 'bg-primary/5 text-primary'}`}>
+                                                    <span className="material-symbols-outlined text-[12px]">{isCategoryLinkOnly(formData) ? 'link' : 'public'}</span>
+                                                    {getCategoryVisibilityLabel(formData)}
+                                                </span>
+                                            </div>
+                                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setFormData({ ...formData, visibility: CATEGORY_VISIBILITY_PUBLIC })}
+                                                    className={`flex items-start gap-2 rounded-sm border p-3 text-left transition-all ${!isCategoryLinkOnly(formData) ? 'border-primary bg-primary/5 text-primary shadow-sm' : 'border-gold/10 bg-white text-stone/65 hover:border-primary/30'}`}
+                                                >
+                                                    <span className="material-symbols-outlined mt-0.5 text-[18px]">public</span>
+                                                    <span>
+                                                        <span className="block text-[11px] font-black uppercase tracking-[0.12em]">Hiển thị công khai</span>
+                                                        <span className="mt-1 block text-[10px] leading-relaxed">Hiện trong menu, bộ lọc và các block danh mục.</span>
+                                                    </span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setFormData({ ...formData, visibility: CATEGORY_VISIBILITY_LINK_ONLY })}
+                                                    className={`flex items-start gap-2 rounded-sm border p-3 text-left transition-all ${isCategoryLinkOnly(formData) ? 'border-amber-300 bg-amber-100 text-amber-800 shadow-sm' : 'border-gold/10 bg-white text-stone/65 hover:border-amber-300'}`}
+                                                >
+                                                    <span className="material-symbols-outlined mt-0.5 text-[18px]">link</span>
+                                                    <span>
+                                                        <span className="block text-[11px] font-black uppercase tracking-[0.12em]">Chỉ truy cập bằng link</span>
+                                                        <span className="mt-1 block text-[10px] leading-relaxed">Ẩn khỏi khu vực công khai, vẫn mở được URL trực tiếp.</span>
+                                                    </span>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div className="space-y-1.5">
                                             <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Mô tả chi tiết</label>
@@ -3642,6 +3708,12 @@ const CategoryList = () => {
                                     }`}>
                                         {Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1 ? 'Đang hiển thị' : 'Đang ẩn'}
                                     </span>
+                                    {isCategoryLinkOnly({ visibility: selectedCategoryMeta?.visibility ?? selectedCategoryNode.data?.visibility }) ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
+                                            <span className="material-symbols-outlined text-[12px]">link</span>
+                                            Chỉ truy cập bằng link
+                                        </span>
+                                    ) : null}
                                     {categoryProductsDirty ? (
                                         <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-amber-700">
                                             Chưa lưu thay đổi

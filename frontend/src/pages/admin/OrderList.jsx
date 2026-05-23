@@ -61,6 +61,10 @@ import {
     formatWholeMoneyInput,
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
+import {
+    hasAdminDataPermission,
+    hasAdminPermission,
+} from '../../utils/adminPermissions';
 
 const DEFAULT_COLUMNS = [
     { id: 'order_number', label: 'Mã Đơn', minWidth: '140px', fixed: true },
@@ -2492,6 +2496,10 @@ const OrderList = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const [activeAccountId, setActiveAccountId] = useState(() => readActiveAccountId());
+    const canViewCost = hasAdminDataPermission(user, 'cost.view', activeAccountId);
+    const canCreateOrders = hasAdminPermission(user, 'orders.create', activeAccountId);
+    const canDeleteOrders = hasAdminPermission(user, 'orders.delete_soft', activeAccountId);
+    const canDeleteOrdersPermanently = hasAdminPermission(user, 'orders.delete_permanent', activeAccountId);
     const activeAccountStorageKey = activeAccountId || 'default';
     const activeSiteStorageKey = typeof window === 'undefined'
         ? 'default'
@@ -2510,6 +2518,10 @@ const OrderList = () => {
     const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
     const [allAttributes, setAllAttributes] = useState([]);
     const [tableColumns, setTableColumns] = useState(() => ORDER_TABLE_COLUMNS);
+    const permittedTableColumns = useMemo(
+        () => (canViewCost ? tableColumns : tableColumns.filter((column) => column.id !== ORDER_COST_TOTAL_COLUMN_ID)),
+        [canViewCost, tableColumns]
+    );
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIdsState] = useState([]);
     const selectedIdsRef = useRef(selectedIds);
@@ -2713,7 +2725,11 @@ const OrderList = () => {
         resetDefault,
         saveAsDefault,
         setAvailableColumns
-    } = useTableColumns(orderColumnStorageKey, tableColumns, { resetDefaultToSystem: true });
+    } = useTableColumns(
+        orderColumnStorageKey,
+        permittedTableColumns,
+        { resetDefaultToSystem: true }
+    );
 
     const [hasLoadedOrdersOnce, setHasLoadedOrdersOnce] = useState(false);
     const isTrashView = currentView === 'trash';
@@ -4639,7 +4655,7 @@ const OrderList = () => {
 
                 <div className="flex flex-col gap-3 rounded-[22px] border border-primary/10 bg-white p-3 shadow-sm lg:flex-row lg:items-center lg:gap-2 lg:rounded-sm lg:p-2">
                     <div className="grid grid-cols-2 gap-2 lg:hidden">
-                        {!isTrashView && (
+                        {!isTrashView && canCreateOrders && (
                             <>
                                 <button
                                     type="button"
@@ -4711,7 +4727,7 @@ const OrderList = () => {
                                         Chọn nhanh
                                     </button>
                                 )}
-                                {isMainView && (
+                                {isMainView && canViewCost && (
                                     <button
                                         type="button"
                                         onClick={openImportCostRefreshModal}
@@ -4730,7 +4746,7 @@ const OrderList = () => {
                     </div>
 
                     <div className="hidden flex-wrap items-center gap-2 lg:flex">
-                        {!isTrashView && (
+                        {!isTrashView && canCreateOrders && (
                             <button type="button" onClick={handleCreateOrder} title={createTitle} className="bg-brick text-white p-1.5 rounded-sm w-9 h-9 flex items-center justify-center transition-all hover:bg-umber">
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                             </button>
@@ -4782,7 +4798,7 @@ const OrderList = () => {
                                 <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
                             </button>
                         )}
-                        {isMainView && (
+                        {isMainView && canViewCost && (
                             <button
                                 type="button"
                                 onClick={openImportCostRefreshModal}
@@ -4816,7 +4832,7 @@ const OrderList = () => {
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 <button onClick={handleBulkRestore} disabled={selectedIds.length === 0} title="Khôi phục" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-green-600/10 text-green-600 border-green-600/20 hover:bg-green-600 hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">restore_from_trash</span></button>
-                                <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
+                                {canDeleteOrdersPermanently && <button onClick={handleBulkForceDelete} disabled={selectedIds.length === 0} title="Xóa vĩnh viễn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>}
                             </>
                         ) : (
                             <>
@@ -4924,7 +4940,7 @@ const OrderList = () => {
                                         </div>
                                     )}
                                 </div>
-                                <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>
+                                {canDeleteOrders && <button onClick={handleBulkDelete} disabled={selectedIds.length === 0} title="Chuyển vào thùng rác" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick border-brick/20 hover:bg-brick hover:text-white shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">delete_sweep</span></button>}
                                 {canCreateBatchReturn && (
                                     <button
                                         type="button"
@@ -6354,10 +6370,10 @@ const OrderList = () => {
                                     <span className="material-symbols-outlined text-[18px]">content_copy</span>
                                     Nhân bản
                                 </button>
-                                <button type="button" onClick={handleBulkForceDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
+                                {canDeleteOrdersPermanently && <button type="button" onClick={handleBulkForceDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
                                     <span className="material-symbols-outlined text-[18px]">delete_forever</span>
                                     Xóa hẳn
-                                </button>
+                                </button>}
                             </>
                         ) : (
                             <>
@@ -6370,12 +6386,12 @@ const OrderList = () => {
                                         <span className="material-symbols-outlined text-[18px]">published_with_changes</span>
                                         Chốt đơn
                                     </button>
-                                ) : (
+                                ) : canDeleteOrders ? (
                                     <button type="button" onClick={handleBulkDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
                                         <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
                                         Bỏ vào rác
                                     </button>
-                                )}
+                                ) : null}
                                 <button type="button" onClick={handleToggleSelectedOnly} className={`inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border text-[10px] font-black uppercase tracking-[0.12em] transition-all ${showSelectedOnly ? 'border-primary bg-primary text-white' : 'border-primary/10 bg-white text-primary'}`}>
                                     <span className="material-symbols-outlined text-[18px]">{showSelectedOnly ? 'filter_alt_off' : 'filter_alt'}</span>
                                     {showSelectedOnly ? 'Tắt lọc' : 'Lọc chọn'}

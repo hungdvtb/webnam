@@ -467,8 +467,25 @@ export const productImageApi = {
     reorder: (ids) => api.post('/product-images/reorder', { ids }),
 };
 
+const isAdminRoute = () => (
+    typeof window !== 'undefined' && window.location?.pathname?.startsWith('/admin')
+);
+
+const withAdminCategoryListParams = (params) => {
+    const nextParams = { ...(params || {}) };
+
+    if (isAdminRoute()) {
+        nextParams.include_link_only = 1;
+    }
+
+    return Object.keys(nextParams).length > 0 ? nextParams : undefined;
+};
+
 export const categoryApi = {
-    getAll: (params) => api.get('/categories', params ? { params } : {}),
+    getAll: (params) => {
+        const nextParams = withAdminCategoryListParams(params);
+        return api.get('/categories', nextParams ? { params: nextParams } : {});
+    },
     getOne: (id) => api.get(`/categories/${id}`),
     getProducts: (id) => api.get(`/categories/${id}/products`),
     downloadExcel: (params) => api.get('/categories/export', { params, responseType: 'blob' }),

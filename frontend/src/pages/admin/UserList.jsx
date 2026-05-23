@@ -1,51 +1,90 @@
-import React, { useState, useEffect } from 'react';
-import { userApi, accountApi } from '../../services/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { accountApi, userApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { ADMIN_PERMISSION_OPTIONS, normalizeAdminPermissions } from '../../utils/adminPermissions';
+import {
+    ADMIN_ACTION_OPTIONS,
+    ADMIN_DATA_PERMISSION_OPTIONS,
+    ADMIN_PERMISSION_OPTIONS,
+    ADMIN_ROLE_OPTIONS,
+    accountAccessesFromUser,
+    dataPermissionsForRole,
+    hasAdminPermission,
+    normalizeAdminPermissions,
+    permissionsForRole,
+} from '../../utils/adminPermissions';
 
-const PAGE_PERMISSIONS = [
-    { id: 'dashboard', label: 'Tổng quan' },
-    { id: 'accounts', label: 'Danh sách cửa hàng' },
-    { id: 'products', label: 'Quản lý sản phẩm' },
-    { id: 'categories', label: 'Danh mục sản phẩm' },
-    { id: 'orders', label: 'Quản lý đơn hàng (Đơn hàng)' },
-    { id: 'customers', label: 'Quản lý khách hàng' },
-    { id: 'inventory', label: 'Quản lý Tồn kho' },
-    { id: 'warehouses', label: 'Quản lý Kho vận' },
-    { id: 'attributes', label: 'Thuộc tính' },
-    { id: 'settings', label: 'Cấu hình Website' },
-    { id: 'menus', label: 'Menu & Điều hướng' },
-    { id: 'users', label: 'Quản lý Người dùng' },
-];
+const emptyFormData = {
+    id: null,
+    name: '',
+    email: '',
+    password: '',
+    status: 1,
+    account_accesses: [],
+};
+
+const labelForModule = (moduleId) => (
+    ADMIN_PERMISSION_OPTIONS.find((module) => module.id === moduleId)?.label || moduleId
+);
+
+const labelForRole = (role) => (
+    ADMIN_ROLE_OPTIONS.find((option) => option.id === role)?.label || role || 'Tùy chỉnh'
+);
+
+const permissionId = (moduleId, actionId) => `${moduleId}.${actionId}`;
+
+const moduleIdsFromDetailedPermissions = (permissions = []) => Array.from(new Set(
+    permissions
+        .map((permission) => String(permission || '').split('.')[0])
+        .filter((moduleId) => ADMIN_PERMISSION_OPTIONS.some((module) => module.id === moduleId))
+));
+
+const normalizeAccessPayload = (access) => ({
+    account_id: Number(access.account_id),
+    role: access.role || 'custom',
+    status: Number(access.status ?? 1) === 1 ? 1 : 0,
+    permissions: Array.isArray(access.permissions) ? access.permissions : [],
+    data_permissions: Array.isArray(access.data_permissions) ? access.data_permissions : [],
+});
+
+const accessForAccount = (account, role = 'sale') => ({
+    account_id: Number(account.id),
+    role,
+    status: 1,
+    permissions: permissionsForRole(role),
+    data_permissions: dataPermissionsForRole(role),
+});
 
 const UserList = () => {
     const { user: currentUser } = useAuth();
     const [users, setUsers] = useState([]);
     const [accounts, setAccounts] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [formMode, setFormMode] = useState('create');
+    const [formData, setFormData] = useState(emptyFormData);
 
-    const [formData, setFormData] = useState({
-        id: null,
-        name: '',
-        email: '',
-        password: '',
-        status: 1,
-        permissions: [],
-        account_ids: []
-    });
+    const canManageUsers = currentUser?.is_admin || hasAdminPermission(currentUser, 'users.manage');
+
+    const selectedAccessMap = useMemo(() => {
+        const map = new Map();
+        formData.account_accesses.forEach((access) => {
+            map.set(Number(access.account_id), normalizeAccessPayload(access));
+        });
+        return map;
+    }, [formData.account_accesses]);
 
     useEffect(() => {
         fetchInitialData();
     }, []);
 
     useEffect(() => {
-        const handleKeyDown = (e) => {
-            if (e.key === 'Escape' && isFormOpen) {
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape' && isFormOpen) {
                 setIsFormOpen(false);
             }
         };
+
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isFormOpen]);
@@ -53,358 +92,453 @@ const UserList = () => {
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [uRes, aRes] = await Promise.all([
+            const [usersResponse, accountsResponse] = await Promise.all([
                 userApi.getAll(),
-                accountApi.getAll()
+                accountApi.getAll(),
             ]);
-            setUsers(uRes.data);
-            setAccounts(aRes.data);
+            setUsers(Array.isArray(usersResponse.data) ? usersResponse.data : []);
+            setAccounts(Array.isArray(accountsResponse.data) ? accountsResponse.data : []);
         } catch (error) {
-            console.error('Error fetching data:', error);
+            console.error('Error fetching users/accounts:', error);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleFormSubmit = async (e) => {
-        e.preventDefault();
-        try {
-            if (formMode === 'create') {
-                await userApi.store(formData);
-            } else {
-                await userApi.update(formData.id, formData);
-            }
-            setIsFormOpen(false);
-            fetchInitialData();
-        } catch (error) {
-            console.error('Lỗi khi lưu user:', error);
-            alert('Lỗi: ' + (error.response?.data?.message || 'Có lỗi xảy ra. Vui lòng kiểm tra lại email.'));
-        }
+    const openNewForm = () => {
+        setFormData(emptyFormData);
+        setFormMode('create');
+        setIsFormOpen(true);
     };
 
-    const handleEdit = (u) => {
-        const perms = normalizeAdminPermissions(u);
-
+    const handleEdit = (user) => {
         setFormData({
-            id: u.id,
-            name: u.name,
-            email: u.email,
-            password: '', // blank password on edit means no change
-            status: u.status,
-            permissions: perms,
-            account_ids: u.accounts?.map(acc => acc.id) || []
+            id: user.id,
+            name: user.name || '',
+            email: user.email || '',
+            password: '',
+            status: Number(user.status ?? 1) === 1 ? 1 : 0,
+            account_accesses: accountAccessesFromUser(user).map(normalizeAccessPayload),
         });
         setFormMode('edit');
         setIsFormOpen(true);
     };
 
-    const openNewForm = () => {
-        setFormData({
-            id: null,
-            name: '',
-            email: '',
-            password: '',
-            status: 1,
-            permissions: [],
-            account_ids: []
-        });
-        setFormMode('create');
-        setIsFormOpen(true);
+    const updateAccess = (accountId, updater) => {
+        const numericAccountId = Number(accountId);
+        setFormData((current) => ({
+            ...current,
+            account_accesses: current.account_accesses.map((access) => (
+                Number(access.account_id) === numericAccountId
+                    ? normalizeAccessPayload(updater(normalizeAccessPayload(access)))
+                    : access
+            )),
+        }));
     };
 
-    const handleDelete = async (id, name) => {
-        if (window.confirm(`Bạn có chắc muốn xoá tài khoản: ${name}?`)) {
-            try {
-                await userApi.destroy(id);
-                fetchInitialData();
-            } catch (error) {
-                console.error('Lỗi khi xoá user:', error);
-                alert('Lỗi: ' + (error.response?.data?.message || 'Không thể xoá tài khoản này.'));
+    const toggleAccount = (account) => {
+        const accountId = Number(account.id);
+        setFormData((current) => {
+            const exists = current.account_accesses.some((access) => Number(access.account_id) === accountId);
+            return {
+                ...current,
+                account_accesses: exists
+                    ? current.account_accesses.filter((access) => Number(access.account_id) !== accountId)
+                    : [...current.account_accesses, accessForAccount(account)],
+            };
+        });
+    };
+
+    const changeRole = (accountId, role) => {
+        updateAccess(accountId, (access) => ({
+            ...access,
+            role,
+            permissions: role === 'custom' ? access.permissions : permissionsForRole(role),
+            data_permissions: role === 'custom' ? access.data_permissions : dataPermissionsForRole(role),
+        }));
+    };
+
+    const togglePermission = (accountId, permission) => {
+        updateAccess(accountId, (access) => ({
+            ...access,
+            role: 'custom',
+            permissions: access.permissions.includes(permission)
+                ? access.permissions.filter((item) => item !== permission)
+                : [...access.permissions, permission],
+        }));
+    };
+
+    const toggleModule = (accountId, moduleId) => {
+        updateAccess(accountId, (access) => {
+            const modulePermissions = ADMIN_ACTION_OPTIONS.map((action) => permissionId(moduleId, action.id));
+            const hasAll = modulePermissions.every((permission) => access.permissions.includes(permission));
+            return {
+                ...access,
+                role: 'custom',
+                permissions: hasAll
+                    ? access.permissions.filter((permission) => !modulePermissions.includes(permission))
+                    : Array.from(new Set([...access.permissions, ...modulePermissions])),
+            };
+        });
+    };
+
+    const toggleDataPermission = (accountId, permission) => {
+        updateAccess(accountId, (access) => ({
+            ...access,
+            role: 'custom',
+            data_permissions: access.data_permissions.includes(permission)
+                ? access.data_permissions.filter((item) => item !== permission)
+                : [...access.data_permissions, permission],
+        }));
+    };
+
+    const submitForm = async (event) => {
+        event.preventDefault();
+        if (saving) return;
+
+        setSaving(true);
+        try {
+            const allDetailedPermissions = formData.account_accesses.flatMap((access) => access.permissions || []);
+            const payload = {
+                ...formData,
+                account_ids: formData.account_accesses.map((access) => Number(access.account_id)),
+                account_accesses: formData.account_accesses.map(normalizeAccessPayload),
+                permissions: moduleIdsFromDetailedPermissions(allDetailedPermissions),
+            };
+
+            if (formMode === 'create') {
+                await userApi.store(payload);
+            } else {
+                await userApi.update(formData.id, payload);
             }
+
+            setIsFormOpen(false);
+            await fetchInitialData();
+        } catch (error) {
+            console.error('Error saving user:', error);
+            alert(error.response?.data?.message || 'Không thể lưu tài khoản.');
+        } finally {
+            setSaving(false);
         }
     };
 
-    const togglePermission = (permId) => {
-        setFormData(prev => ({
-            ...prev,
-            permissions: prev.permissions.includes(permId)
-                ? prev.permissions.filter(p => p !== permId)
-                : [...prev.permissions, permId]
-        }));
+    const handleDelete = async (id, name) => {
+        if (!window.confirm(`Xóa tài khoản ${name}?`)) {
+            return;
+        }
+
+        try {
+            await userApi.destroy(id);
+            await fetchInitialData();
+        } catch (error) {
+            console.error('Error deleting user:', error);
+            alert(error.response?.data?.message || 'Không thể xóa tài khoản.');
+        }
     };
 
-    const toggleAccount = (accId) => {
-        setFormData(prev => ({
-            ...prev,
-            account_ids: prev.account_ids.includes(accId)
-                ? prev.account_ids.filter(id => id !== accId)
-                : [...prev.account_ids, accId]
-        }));
-    };
-
-    if (!currentUser?.is_admin) {
+    if (!canManageUsers) {
         return <div className="p-8 text-center text-brick">Bạn không có quyền truy cập trang này.</div>;
     }
 
     return (
-        <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
-            <style>
-                {`
-                    .custom-scrollbar::-webkit-scrollbar {
-                        width: 8px;
-                        height: 8px;
-                    }
-                    .custom-scrollbar::-webkit-scrollbar-track {
-                        background: rgba(182, 143, 84, 0.05);
-                    }
-                    .custom-scrollbar::-webkit-scrollbar-thumb {
-                        background: rgba(182, 143, 84, 0.2);
-                        border-radius: 4px;
-                        border: 2px solid transparent;
-                        background-clip: content-box;
-                    }
-                    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-                        background: rgba(182, 143, 84, 0.4);
-                    }
-                `}
-            </style>
-
-            {/* Header Area */}
+        <div className="absolute inset-0 z-10 flex h-full w-full flex-col overflow-hidden bg-[#fcfcfa] p-6 animate-fade-in">
             <div className="flex-none bg-[#fcfcfa] pb-4">
-                <div className="flex justify-between items-center mb-4">
-                    <div className="flex flex-col">
-                        <h1 className="text-2xl font-display font-bold text-primary italic">Danh sách quản trị</h1>
-                        <p className="text-[10px] font-black text-stone/40 uppercase tracking-[0.2em] leading-none mt-1">Phân quyền người dùng và phạm vi quản lý cửa hàng</p>
+                <div className="mb-4 flex items-center justify-between">
+                    <div>
+                        <h1 className="font-display text-2xl font-bold italic text-primary">Danh sách quản trị</h1>
+                        <p className="mt-1 text-[10px] font-black uppercase leading-none tracking-[0.2em] text-stone/40">
+                            Phân quyền người dùng theo từng cửa hàng
+                        </p>
                     </div>
                 </div>
 
-                {/* Toolbar */}
-                <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
-                    <div className="flex gap-1.5 items-center">
+                <div className="flex items-center justify-between rounded-sm border border-gold/10 bg-white p-2 shadow-sm">
+                    <div className="flex items-center gap-1.5">
                         <button
+                            type="button"
                             onClick={openNewForm}
-                            className="bg-primary text-white p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 shadow-sm"
+                            className="flex h-9 w-9 items-center justify-center rounded-sm bg-primary p-1.5 text-white shadow-sm transition-all hover:bg-umber"
                             title="Thêm quản trị viên"
                         >
                             <span className="material-symbols-outlined text-[18px]">person_add</span>
                         </button>
                         <button
+                            type="button"
                             onClick={fetchInitialData}
-                            className={`bg-primary text-white border border-primary p-1.5 hover:bg-umber transition-all flex items-center justify-center rounded-sm w-9 h-9 ${loading ? 'opacity-70' : ''}`}
+                            className={`flex h-9 w-9 items-center justify-center rounded-sm border border-primary bg-primary p-1.5 text-white transition-all hover:bg-umber ${loading ? 'opacity-70' : ''}`}
                             title="Làm mới"
                             disabled={loading}
                         >
                             <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
                         </button>
                     </div>
-                    <div className="text-[11px] font-bold text-stone/40 uppercase tracking-[0.1em]">
-                        {users.length} tài quản quản trị hệ thống
+                    <div className="text-[11px] font-bold uppercase tracking-[0.1em] text-stone/40">
+                        {users.length} tài khoản quản trị
                     </div>
                 </div>
             </div>
 
-            {/* Content Area - User Table */}
-            <div className="flex-1 overflow-auto custom-scrollbar bg-white border border-gold/10 rounded-sm shadow-sm relative">
-                <table className="w-full text-left border-collapse table-fixed">
+            <div className="relative flex-1 overflow-auto rounded-sm border border-gold/10 bg-white shadow-sm">
+                <table className="w-full table-fixed border-collapse text-left">
                     <thead className="sticky top-0 z-20 bg-[#fcf8f1] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                         <tr className="border-b border-gold/20">
-                            <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-[25%]">Nhân sự</th>
-                            <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-[25%]">Phạm vi quyền hạn</th>
-                            <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-[20%]">Token / Cửa hàng</th>
-                            <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-[15%] text-center">Trạng thái</th>
-                            <th className="px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary w-[15%] text-right text-gold/60">#</th>
+                            <th className="w-[26%] px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary">Nhân sự</th>
+                            <th className="w-[24%] px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary">Quyền chức năng</th>
+                            <th className="w-[28%] px-4 py-3 font-ui text-[11px] font-black uppercase tracking-widest text-primary">Cửa hàng</th>
+                            <th className="w-[12%] px-4 py-3 text-center font-ui text-[11px] font-black uppercase tracking-widest text-primary">Trạng thái</th>
+                            <th className="w-[10%] px-4 py-3 text-right font-ui text-[11px] font-black uppercase tracking-widest text-gold/60">#</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gold/5">
                         {loading ? (
                             <tr>
                                 <td colSpan="5" className="py-20 text-center">
-                                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+                                    <div className="mx-auto h-8 w-8 animate-spin rounded-full border-b-2 border-primary" />
                                 </td>
                             </tr>
                         ) : users.length === 0 ? (
                             <tr>
-                                <td colSpan="5" className="py-20 text-center text-stone/40 font-bold uppercase tracking-widest italic text-xs">Chưa có quản trị viên</td>
+                                <td colSpan="5" className="py-20 text-center text-xs font-bold uppercase tracking-widest text-stone/40">
+                                    Chưa có quản trị viên
+                                </td>
                             </tr>
-                        ) : (
-                            users.map(u => {
-                                const perms = normalizeAdminPermissions(u);
-                                return (
-                                    <tr key={u.id} className="hover:bg-gold/5 transition-all group active:bg-gold/10">
-                                        <td className="px-4 py-3.5">
-                                            <div className="flex items-center gap-3">
-                                                <div className="size-9 rounded-full bg-gold/5 border border-gold/20 flex items-center justify-center text-gold font-black text-xs shrink-0 group-hover:bg-gold group-hover:text-white transition-all">
-                                                    {u.name.charAt(0).toUpperCase()}
-                                                </div>
-                                                <div className="flex flex-col min-w-0">
-                                                    <span className="font-bold text-[14px] text-primary truncate group-hover:text-umber transition-colors leading-tight">{u.name}</span>
-                                                    <span className="text-[10px] text-stone/40 font-ui truncate mt-0.5">{u.email}</span>
-                                                </div>
+                        ) : users.map((item) => {
+                            const modules = normalizeAdminPermissions(item);
+                            const accesses = accountAccessesFromUser(item);
+
+                            return (
+                                <tr key={item.id} className="group transition-all hover:bg-gold/5">
+                                    <td className="px-4 py-3.5">
+                                        <div className="flex items-center gap-3">
+                                            <div className="flex size-9 shrink-0 items-center justify-center rounded-full border border-gold/20 bg-gold/5 text-xs font-black text-gold transition-all group-hover:bg-gold group-hover:text-white">
+                                                {String(item.name || '?').charAt(0).toUpperCase()}
                                             </div>
-                                        </td>
-                                        <td className="px-4 py-3.5">
-                                            {u.is_admin ? (
-                                                <span className="px-2 py-0.5 bg-gold/10 text-gold text-[9px] font-black uppercase tracking-widest border border-gold/20 rounded-[2px]">Super Administrator</span>
-                                            ) : (
-                                                <div className="flex flex-wrap gap-1 max-w-[220px]">
-                                                    {perms.length > 0 ? perms.slice(0,3).map(p => (
-                                                        <span key={p} className="px-1.5 py-0.5 bg-[#fcf8f1] border border-gold/10 text-[8px] font-black uppercase tracking-tighter text-stone/50 hover:bg-gold/10 transition-colors">
-                                                            {ADMIN_PERMISSION_OPTIONS.find(o => o.id === p)?.label || p}
-                                                        </span>
-                                                    )) : <span className="text-brick/50 text-[10px] font-bold italic">Chưa cấp quyền</span>}
-                                                    {perms.length > 3 && <span className="text-[9px] font-ui font-black text-gold/40">+{perms.length - 3}</span>}
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3.5">
-                                            {u.is_admin ? (
-                                                <span className="text-[11px] text-stone/30 italic font-medium uppercase tracking-tighter">Toàn quyền hệ thống</span>
-                                            ) : (
-                                                <div className="flex flex-col gap-0.5 max-h-12 overflow-hidden">
-                                                    {u.accounts?.length > 0 ? u.accounts.slice(0, 2).map(acc => (
-                                                        <div key={acc.id} className="flex items-center gap-1">
-                                                            <div className="size-1 bg-gold/40 rounded-full shrink-0"></div>
-                                                            <span className="text-[11px] font-bold text-primary/70 truncate">{acc.name}</span>
-                                                        </div>
-                                                    )) : <span className="text-brick/50 text-[10px] italic">Chưa gắn cửa hàng</span>}
-                                                    {u.accounts?.length > 2 && <span className="text-[9px] text-stone/30 font-black pl-2">+{u.accounts.length - 2} more...</span>}
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3.5 text-center">
-                                            <span className={`px-2 py-1 text-[9px] font-black uppercase tracking-widest border rounded-[2px] ${u.status === 1 ? 'bg-primary/5 text-primary border-primary/20' : 'bg-brick/5 text-brick border-brick/20'}`}>
-                                                {u.status === 1 ? 'Active' : 'Locked'}
+                                            <div className="min-w-0">
+                                                <div className="truncate text-[14px] font-bold leading-tight text-primary">{item.name}</div>
+                                                <div className="mt-0.5 truncate text-[10px] text-stone/40">{item.email}</div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td className="px-4 py-3.5">
+                                        {item.is_admin ? (
+                                            <span className="rounded-[2px] border border-gold/20 bg-gold/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-gold">
+                                                Quản trị hệ thống
                                             </span>
-                                        </td>
-                                        <td className="px-4 py-3.5 text-right">
-                                            {!u.is_admin ? (
-                                                <div className="flex items-center justify-end gap-1">
-                                                    <button onClick={() => handleEdit(u)} className="size-8 flex items-center justify-center text-stone/30 hover:text-primary hover:bg-primary/5 rounded-sm transition-all active:scale-90" title="Phân quyền">
-                                                        <span className="material-symbols-outlined text-[18px]">rule_settings</span>
-                                                    </button>
-                                                    <button onClick={() => handleDelete(u.id, u.name)} className="size-8 flex items-center justify-center text-stone/30 hover:text-brick hover:bg-brick/5 rounded-sm transition-all active:scale-90" title="Xóa tài khoản">
-                                                        <span className="material-symbols-outlined text-[18px]">delete_forever</span>
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <span className="text-[10px] text-stone/20 font-black uppercase tracking-widest italic pr-2">Readonly</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                );
-                            })
-                        )}
+                                        ) : (
+                                            <div className="flex max-w-[260px] flex-wrap gap-1">
+                                                {modules.length > 0 ? modules.slice(0, 4).map((moduleId) => (
+                                                    <span key={moduleId} className="border border-gold/10 bg-[#fcf8f1] px-1.5 py-0.5 text-[8px] font-black uppercase tracking-tighter text-stone/50">
+                                                        {labelForModule(moduleId)}
+                                                    </span>
+                                                )) : (
+                                                    <span className="text-[10px] font-bold italic text-brick/50">Chưa cấp quyền</span>
+                                                )}
+                                                {modules.length > 4 && <span className="text-[9px] font-black text-gold/50">+{modules.length - 4}</span>}
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3.5">
+                                        {item.is_admin ? (
+                                            <span className="text-[11px] font-medium uppercase tracking-tighter text-stone/30">Toàn bộ hệ thống</span>
+                                        ) : (
+                                            <div className="flex max-h-16 flex-col gap-0.5 overflow-hidden">
+                                                {accesses.length > 0 ? accesses.slice(0, 3).map((access) => {
+                                                    const account = item.accounts?.find((accountItem) => Number(accountItem.id) === Number(access.account_id));
+                                                    return (
+                                                        <div key={access.account_id} className="flex items-center gap-1.5">
+                                                            <span className="size-1 shrink-0 rounded-full bg-gold/40" />
+                                                            <span className="truncate text-[11px] font-bold text-primary/70">{account?.name || `Cửa hàng #${access.account_id}`}</span>
+                                                            <span className="shrink-0 text-[9px] font-black uppercase text-stone/30">{labelForRole(access.role)}</span>
+                                                        </div>
+                                                    );
+                                                }) : (
+                                                    <span className="text-[10px] italic text-brick/50">Chưa gắn cửa hàng</span>
+                                                )}
+                                                {accesses.length > 3 && <span className="pl-2 text-[9px] font-black text-stone/30">+{accesses.length - 3} cửa hàng</span>}
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3.5 text-center">
+                                        <span className={`rounded-[2px] border px-2 py-1 text-[9px] font-black uppercase tracking-widest ${Number(item.status ?? 1) === 1 ? 'border-primary/20 bg-primary/5 text-primary' : 'border-brick/20 bg-brick/5 text-brick'}`}>
+                                            {Number(item.status ?? 1) === 1 ? 'Đang hoạt động' : 'Đã khóa'}
+                                        </span>
+                                    </td>
+                                    <td className="px-4 py-3.5 text-right">
+                                        {!item.is_admin ? (
+                                            <div className="flex items-center justify-end gap-1">
+                                                <button type="button" onClick={() => handleEdit(item)} className="flex size-8 items-center justify-center rounded-sm text-stone/30 transition-all hover:bg-primary/5 hover:text-primary" title="Phân quyền">
+                                                    <span className="material-symbols-outlined text-[18px]">rule_settings</span>
+                                                </button>
+                                                <button type="button" onClick={() => handleDelete(item.id, item.name)} className="flex size-8 items-center justify-center rounded-sm text-stone/30 transition-all hover:bg-brick/5 hover:text-brick" title="Xóa tài khoản">
+                                                    <span className="material-symbols-outlined text-[18px]">delete_forever</span>
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <span className="pr-2 text-[10px] font-black uppercase tracking-widest text-stone/20">Không chỉnh sửa</span>
+                                        )}
+                                    </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
 
-            {/* Form Modal Overlay */}
             {isFormOpen && (
-                <div className="fixed inset-0 z-[100] bg-stone-900/60 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-200">
-                    <div className="bg-[#fcfcfa] border border-gold/30 shadow-[0_20px_50px_rgba(0,0,0,0.3)] w-full max-w-4xl rounded-sm overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
-                        <div className="px-8 py-5 bg-primary text-white flex justify-between items-center shrink-0">
-                            <div className="flex flex-col">
-                                <h3 className="font-display font-bold text-xl uppercase italic leading-none">{formMode === 'edit' ? 'Hiệu chỉnh đặc quyền' : 'Khai báo nhân sự mới'}</h3>
-                                <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em] mt-1.5">Phân định vai trò và phạm vi quản trị</p>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-stone-900/60 p-6 backdrop-blur-sm">
+                    <form onSubmit={submitForm} className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-sm border border-gold/30 bg-[#fcfcfa] shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+                        <div className="flex shrink-0 items-center justify-between bg-primary px-8 py-5 text-white">
+                            <div>
+                                <h3 className="font-display text-xl font-bold uppercase italic leading-none">
+                                    {formMode === 'edit' ? 'Cập nhật phân quyền' : 'Tạo nhân sự mới'}
+                                </h3>
+                                <p className="mt-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
+                                    Quyền theo từng cửa hàng và dữ liệu nhạy cảm
+                                </p>
                             </div>
-                            <button onClick={() => setIsFormOpen(false)} className="size-10 flex items-center justify-center text-white/50 hover:text-white hover:bg-white/10 rounded-full transition-all">
+                            <button type="button" onClick={() => setIsFormOpen(false)} className="flex size-10 items-center justify-center rounded-full text-white/50 transition-all hover:bg-white/10 hover:text-white">
                                 <span className="material-symbols-outlined">close</span>
                             </button>
                         </div>
-                        
-                        <form onSubmit={handleFormSubmit} className="flex-1 overflow-auto custom-scrollbar p-8 space-y-10">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8">
-                                <div className="space-y-1.5">
-                                    <label className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Họ tên nhân sự</label>
-                                    <input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-stone/5 border border-gold/20 p-3 text-[14px] font-bold text-primary focus:outline-none focus:border-gold rounded-sm transition-all focus:bg-white" placeholder="VD: Nguyễn Thành Nam" />
+
+                        <div className="flex-1 space-y-8 overflow-auto p-8">
+                            <div className="grid grid-cols-1 gap-x-8 gap-y-5 md:grid-cols-2">
+                                <label className="space-y-1.5">
+                                    <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Họ tên</span>
+                                    <input required type="text" value={formData.name} onChange={(event) => setFormData({ ...formData, name: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                                </label>
+                                <label className="space-y-1.5">
+                                    <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Email</span>
+                                    <input required type="email" value={formData.email} onChange={(event) => setFormData({ ...formData, email: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                                </label>
+                                <label className="space-y-1.5">
+                                    <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Mật khẩu {formMode === 'edit' ? '(bỏ trống nếu giữ nguyên)' : ''}</span>
+                                    <input required={formMode === 'create'} minLength="6" type="text" value={formData.password} onChange={(event) => setFormData({ ...formData, password: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                                </label>
+                                <label className="flex items-end">
+                                    <span className="flex w-full cursor-pointer items-center gap-3 rounded-sm border border-gold/20 bg-stone/5 p-3 transition-all hover:border-gold">
+                                        <span className={`flex size-5 items-center justify-center rounded-sm border-2 ${formData.status === 1 ? 'border-primary bg-primary' : 'border-gold/20 bg-white'}`}>
+                                            {formData.status === 1 && <span className="material-symbols-outlined text-[16px] text-white">check</span>}
+                                        </span>
+                                        <input type="checkbox" checked={formData.status === 1} onChange={(event) => setFormData({ ...formData, status: event.target.checked ? 1 : 0 })} className="hidden" />
+                                        <span className="font-ui text-[11px] font-black uppercase tracking-widest text-primary/60">Cho phép hoạt động</span>
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center gap-4">
+                                    <h4 className="shrink-0 font-display text-sm font-bold uppercase italic text-primary">Cửa hàng và quyền chi tiết</h4>
+                                    <div className="h-px flex-1 bg-gold/20" />
                                 </div>
 
-                                <div className="space-y-1.5">
-                                    <label className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Email / Account</label>
-                                    <input required type="email" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} className="w-full bg-stone/5 border border-gold/20 p-3 text-[14px] font-bold text-primary focus:outline-none focus:border-gold rounded-sm transition-all focus:bg-white" placeholder="VD: nam.nt@webnam.vn" />
-                                </div>
+                                <div className="space-y-4">
+                                    {accounts.map((account) => {
+                                        const access = selectedAccessMap.get(Number(account.id));
+                                        const isSelected = Boolean(access);
 
-                                <div className="space-y-1.5">
-                                    <label className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">
-                                        Mật mã truy cập {formMode === 'edit' && <span className="text-[9px] text-stone/30 font-black italic lowercase">(Để trống nếu giữ nguyên)</span>}
-                                    </label>
-                                    <input required={formMode === 'create'} minLength="6" type="text" value={formData.password} onChange={e => setFormData({ ...formData, password: e.target.value })} className="w-full bg-stone/5 border border-gold/20 p-3 text-[14px] font-bold text-primary focus:outline-none focus:border-gold rounded-sm transition-all focus:bg-white" placeholder="Min. 6 chars" />
-                                </div>
+                                        return (
+                                            <section key={account.id} className={`rounded-sm border ${isSelected ? 'border-primary/25 bg-white' : 'border-gold/10 bg-white/70'}`}>
+                                                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gold/10 p-4">
+                                                    <label className="flex min-w-0 cursor-pointer items-center gap-3">
+                                                        <span className={`flex size-5 shrink-0 items-center justify-center rounded-sm border-2 ${isSelected ? 'border-primary bg-primary' : 'border-gold/30 bg-white'}`}>
+                                                            {isSelected && <span className="material-symbols-outlined text-[16px] text-white">check</span>}
+                                                        </span>
+                                                        <input type="checkbox" checked={isSelected} onChange={() => toggleAccount(account)} className="hidden" />
+                                                        <span className="min-w-0">
+                                                            <span className="block truncate text-[14px] font-black text-primary">{account.name}</span>
+                                                            <span className="block text-[10px] font-mono uppercase tracking-widest text-stone/35">{account.site_code || 'NO-CODE'}</span>
+                                                        </span>
+                                                    </label>
 
-                                <div className="space-y-1.5 flex flex-col justify-end">
-                                    <label className="flex items-center gap-3 cursor-pointer group bg-stone/5 border border-gold/20 p-3 rounded-sm hover:border-gold transition-all select-none">
-                                        <div className={`size-5 border-2 rounded-sm flex items-center justify-center transition-all ${formData.status === 1 ? 'bg-primary border-primary' : 'bg-white border-gold/20'}`}>
-                                            {formData.status === 1 && <span className="material-symbols-outlined text-white text-[16px] font-black">check</span>}
+                                                    {isSelected && (
+                                                        <select value={access.role} onChange={(event) => changeRole(account.id, event.target.value)} className="h-9 rounded-sm border border-gold/20 bg-[#fcfcfa] px-3 text-[11px] font-black uppercase tracking-wider text-primary focus:border-gold focus:outline-none">
+                                                            {ADMIN_ROLE_OPTIONS.map((role) => (
+                                                                <option key={role.id} value={role.id}>{role.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    )}
+                                                </div>
+
+                                                {isSelected && (
+                                                    <div className="space-y-5 p-4">
+                                                        <div className="overflow-x-auto">
+                                                            <table className="w-full min-w-[780px] border-collapse text-left">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th className="w-[210px] border-b border-gold/10 pb-2 text-[10px] font-black uppercase tracking-widest text-primary/45">Nhóm quyền</th>
+                                                                        {ADMIN_ACTION_OPTIONS.map((action) => (
+                                                                            <th key={action.id} className="border-b border-gold/10 px-2 pb-2 text-center text-[10px] font-black uppercase tracking-widest text-primary/45">
+                                                                                {action.label}
+                                                                            </th>
+                                                                        ))}
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {ADMIN_PERMISSION_OPTIONS.map((module) => {
+                                                                        const moduleActionIds = ADMIN_ACTION_OPTIONS.map((action) => permissionId(module.id, action.id));
+                                                                        const selectedCount = moduleActionIds.filter((id) => access.permissions.includes(id)).length;
+
+                                                                        return (
+                                                                            <tr key={module.id} className="border-b border-gold/5 last:border-0">
+                                                                                <td className="py-2 pr-3">
+                                                                                    <button type="button" onClick={() => toggleModule(account.id, module.id)} className="flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-gold/5">
+                                                                                        <span className="truncate text-[12px] font-bold text-primary">{module.label}</span>
+                                                                                        <span className="text-[9px] font-black text-stone/35">{selectedCount}/{ADMIN_ACTION_OPTIONS.length}</span>
+                                                                                    </button>
+                                                                                </td>
+                                                                                {ADMIN_ACTION_OPTIONS.map((action) => {
+                                                                                    const id = permissionId(module.id, action.id);
+                                                                                    const checked = access.permissions.includes(id);
+                                                                                    return (
+                                                                                        <td key={id} className="px-2 py-2 text-center">
+                                                                                            <button type="button" onClick={() => togglePermission(account.id, id)} className={`mx-auto flex size-7 items-center justify-center rounded-sm border transition-all ${checked ? 'border-primary bg-primary text-white' : 'border-gold/20 bg-white text-transparent hover:border-gold'}`} title={`${module.label} - ${action.label}`}>
+                                                                                                <span className="material-symbols-outlined text-[15px]">check</span>
+                                                                                            </button>
+                                                                                        </td>
+                                                                                    );
+                                                                                })}
+                                                                            </tr>
+                                                                        );
+                                                                    })}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+
+                                                        <div className="flex flex-wrap gap-2 border-t border-gold/10 pt-4">
+                                                            {ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => {
+                                                                const checked = access.data_permissions.includes(permission.id);
+                                                                return (
+                                                                    <button key={permission.id} type="button" onClick={() => toggleDataPermission(account.id, permission.id)} className={`rounded-sm border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-all ${checked ? 'border-primary bg-primary text-white' : 'border-gold/20 bg-white text-primary/55 hover:border-gold'}`}>
+                                                                        {permission.label}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </section>
+                                        );
+                                    })}
+
+                                    {accounts.length === 0 && (
+                                        <div className="rounded-sm border border-dashed border-gold/30 py-8 text-center text-[11px] font-bold uppercase tracking-[0.2em] text-stone/30">
+                                            Hệ thống chưa có cửa hàng
                                         </div>
-                                        <input 
-                                            type="checkbox" 
-                                            checked={formData.status === 1} 
-                                            onChange={e => setFormData({...formData, status: e.target.checked ? 1 : 0})} 
-                                            className="hidden"
-                                        />
-                                        <span className="font-ui text-[11px] font-black uppercase tracking-widest text-primary/60 group-hover:text-primary transition-colors">Cho phép hoạt động</span>
-                                    </label>
+                                    )}
                                 </div>
                             </div>
+                        </div>
 
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-4">
-                                    <h4 className="font-display font-bold text-primary uppercase text-sm italic shrink-0">Phân quyền chức năng</h4>
-                                    <div className="h-px bg-gold/20 flex-1"></div>
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                                    {ADMIN_PERMISSION_OPTIONS.map(perm => (
-                                        <label key={perm.id} className={`flex items-center gap-2.5 p-2.5 rounded-sm border transition-all cursor-pointer group ${formData.permissions.includes(perm.id) ? 'bg-gold/5 border-gold/30' : 'bg-white border-gold/10 hover:border-gold/30'}`}>
-                                            <div className={`size-4 border rounded-[2px] flex items-center justify-center transition-all ${formData.permissions.includes(perm.id) ? 'bg-primary border-primary text-white scale-110' : 'bg-white border-gold/20'}`}>
-                                                {formData.permissions.includes(perm.id) && <span className="material-symbols-outlined text-[10px] font-black">check</span>}
-                                            </div>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={formData.permissions.includes(perm.id)}
-                                                onChange={() => togglePermission(perm.id)}
-                                                className="hidden"
-                                            />
-                                            <span className={`text-[11px] font-bold uppercase tracking-tight transition-colors ${formData.permissions.includes(perm.id) ? 'text-primary' : 'text-stone/40 group-hover:text-stone/60'}`}>{perm.label}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-4">
-                                    <h4 className="font-display font-bold text-primary uppercase text-sm italic shrink-0">Phạm vi dữ liệu (Cửa hàng)</h4>
-                                    <div className="h-px bg-gold/20 flex-1"></div>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                    {accounts.map(acc => (
-                                        <label key={acc.id} className={`flex items-center gap-3 p-4 border rounded-sm transition-all cursor-pointer group shadow-sm ${formData.account_ids.includes(acc.id) ? 'bg-primary text-white border-primary ring-2 ring-primary/10' : 'bg-white text-primary border-gold/10 hover:border-gold'}`}>
-                                            <div className={`size-5 border-2 rounded-full flex items-center justify-center transition-all ${formData.account_ids.includes(acc.id) ? 'bg-white border-white scale-110' : 'bg-white border-gold/20'}`}>
-                                                {formData.account_ids.includes(acc.id) && <span className="material-symbols-outlined text-primary text-[14px] font-black">check</span>}
-                                            </div>
-                                            <input 
-                                                type="checkbox" 
-                                                checked={formData.account_ids.includes(acc.id)}
-                                                onChange={() => toggleAccount(acc.id)}
-                                                className="hidden"
-                                            />
-                                            <div className="flex flex-col min-w-0">
-                                                <span className={`text-[13px] font-bold truncate ${formData.account_ids.includes(acc.id) ? 'text-white' : 'text-primary'}`}>{acc.name}</span>
-                                                <span className={`text-[9px] font-mono uppercase tracking-widest ${formData.account_ids.includes(acc.id) ? 'text-white/60' : 'text-stone/40'}`}>{acc.site_code || 'No-Code'}</span>
-                                            </div>
-                                        </label>
-                                    ))}
-                                    {accounts.length === 0 && <div className="col-span-full py-4 text-center border border-dashed border-gold/30 rounded-sm text-[11px] font-bold text-stone/30 uppercase tracking-[0.2em]">Hệ thống chưa có data cửa hàng</div>}
-                                </div>
-                            </div>
-                        </form>
-                        
-                        <div className="px-8 py-6 bg-stone/5 border-t border-gold/20 flex justify-end gap-3 shrink-0">
-                            <button type="button" onClick={() => setIsFormOpen(false)} className="px-8 py-2.5 text-[11px] font-black uppercase tracking-widest text-stone/40 hover:text-brick hover:bg-brick/5 rounded-sm transition-all">Bỏ qua</button>
-                            <button onClick={handleFormSubmit} className="bg-primary text-white px-10 py-2.5 text-[11px] font-black uppercase tracking-widest hover:bg-umber transition-all rounded-sm shadow-premium active:scale-95">
-                                {formMode === 'edit' ? 'Cập nhật phân quyền' : 'Kích hoạt nhân sự'}
+                        <div className="flex shrink-0 justify-end gap-3 border-t border-gold/20 bg-stone/5 px-8 py-6">
+                            <button type="button" onClick={() => setIsFormOpen(false)} className="rounded-sm px-8 py-2.5 text-[11px] font-black uppercase tracking-widest text-stone/40 transition-all hover:bg-brick/5 hover:text-brick">
+                                Bỏ qua
+                            </button>
+                            <button type="submit" disabled={saving} className="rounded-sm bg-primary px-10 py-2.5 text-[11px] font-black uppercase tracking-widest text-white shadow-premium transition-all hover:bg-umber disabled:opacity-60">
+                                {saving ? 'Đang lưu...' : formMode === 'edit' ? 'Cập nhật' : 'Tạo người dùng'}
                             </button>
                         </div>
-                    </div>
+                    </form>
                 </div>
             )}
         </div>

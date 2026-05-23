@@ -25,6 +25,10 @@ import {
 } from '../../utils/money';
 import { formatCategorySummary, getProductCategoryNames } from '../../utils/productCategories';
 import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
+import {
+    hasAdminDataPermission,
+    hasAdminPermission,
+} from '../../utils/adminPermissions';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
 const PRODUCT_DETAIL_PATH = '/san-pham';
@@ -1197,6 +1201,16 @@ function buildQuickEditSearchIndex(product, draft = null, original = null) {
 
 const ProductList = () => {
     const { user } = useAuth();
+    const canViewProductCost = hasAdminDataPermission(user, 'cost.view');
+    const canCreateProducts = hasAdminPermission(user, 'products.create');
+    const canUpdateProducts = hasAdminPermission(user, 'products.update');
+    const canDeleteProducts = hasAdminPermission(user, 'products.delete_soft');
+    const canDeleteProductsPermanently = hasAdminPermission(user, 'products.delete_permanent');
+    const canExportProducts = hasAdminPermission(user, 'products.export');
+    const permittedProductColumns = useMemo(
+        () => (canViewProductCost ? DEFAULT_COLUMNS : DEFAULT_COLUMNS.filter((column) => column.id !== 'cost_price')),
+        [canViewProductCost]
+    );
     const { available: aiAvailable, disabledReason } = useAiAvailability();
     const navigate = useNavigate();
     const location = useLocation();
@@ -1273,8 +1287,8 @@ const ProductList = () => {
     const toggleExpandRow = (productId, e) => {
         if (e) e.stopPropagation();
         setExpandedRows(prev => 
-            prev.includes(productId) 
-                ? prev.filter(id => id !== productId) 
+            prev.includes(productId)
+                ? prev.filter(id => id !== productId)
                 : [...prev, productId]
         );
     };
@@ -2451,7 +2465,7 @@ const ProductList = () => {
         saveAsDefault,
         setAvailableColumns,
         setVisibleColumns
-    } = useTableColumns('product_list', DEFAULT_COLUMNS);
+    } = useTableColumns('product_list', permittedProductColumns);
 
     const exportFieldOptions = [
         ...availableColumns
@@ -2693,14 +2707,14 @@ const ProductList = () => {
             }));
 
             const supplierCodeColumn = { id: 'supplier_product_code', label: 'Mã NCC', minWidth: '130px' };
-            const actionColumn = DEFAULT_COLUMNS.find((column) => column.id === 'actions');
-            const productLinkColumn = DEFAULT_COLUMNS.find((column) => column.id === 'product_link');
-            const leadingColumns = DEFAULT_COLUMNS.filter((column) => !['actions', 'product_link'].includes(column.id));
+            const actionColumn = permittedProductColumns.find((column) => column.id === 'actions');
+            const productLinkColumn = permittedProductColumns.find((column) => column.id === 'product_link');
+            const leadingColumns = permittedProductColumns.filter((column) => !['actions', 'product_link'].includes(column.id));
             const baseColumns = [
                 ...leadingColumns.slice(0, 2),
                 ...(productLinkColumn ? [productLinkColumn] : []),
                 ...leadingColumns.slice(2),
-                ...(DEFAULT_COLUMNS.some((column) => column.id === 'supplier_product_code') ? [] : [supplierCodeColumn]),
+                ...(permittedProductColumns.some((column) => column.id === 'supplier_product_code') ? [] : [supplierCodeColumn]),
                 ...(actionColumn ? [actionColumn] : []),
             ];
             const combinedColumns = [...baseColumns.slice(0, -1), ...attrColumns, baseColumns[baseColumns.length - 1]];
@@ -4618,7 +4632,7 @@ const ProductList = () => {
                         <span className="font-bold">{notification.message}</span>
                     </div>
                     {notification.action === 'undo' && (
-                        <button 
+                        <button
                             onClick={handleUndoBulkUpdate}
                             className="bg-white text-primary border border-primary/20 hover:bg-primary hover:text-white px-3 py-1 rounded-sm text-[11px] font-black uppercase tracking-tighter transition-all shadow-sm"
                         >
@@ -4963,15 +4977,15 @@ const ProductList = () => {
                                 Nhận diện sản phẩm theo SKU, đồng thời đối soát thêm ID, slug và link sản phẩm nếu file đang có sẵn các cột đó.
                             </p>
                             <div className="flex justify-end gap-3">
-                                <button
+                                {canExportProducts && <button
                                     type="button"
                                     onClick={closeImportConfigModal}
                                     className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
                                     disabled={isImportingExcel}
                                 >
                                     Hủy
-                                </button>
-                                <button
+                                </button>}
+                                {(canCreateProducts || canUpdateProducts) && <button
                                     type="button"
                                     onClick={handleSubmitImportExcel}
                                     className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2 disabled:opacity-60"
@@ -4979,7 +4993,7 @@ const ProductList = () => {
                                 >
                                     {isImportingExcel ? <span className="material-symbols-outlined animate-spin text-[16px]">sync</span> : <span className="material-symbols-outlined text-[16px]">upload_file</span>}
                                     Bắt đầu import
-                                </button>
+                                </button>}
                             </div>
                         </div>
                     </div>
@@ -5251,8 +5265,8 @@ const ProductList = () => {
 
                 <div className="bg-white border border-primary/10 p-2 shadow-sm rounded-sm flex flex-wrap items-center gap-2">
                     <div className="flex gap-1 items-center">
-                        {!isTrashView && (
-                            <button 
+                        {!isTrashView && canCreateProducts && (
+                            <button
                                 onClick={() => navigateToProductForm('/admin/products/new')}
                                 className="bg-brick text-white px-3 h-9 flex items-center gap-2 hover:bg-umber transition-all rounded-sm shadow-sm font-bold text-[11px] uppercase tracking-wider shrink-0"
                                 title="Thêm sản phẩm mới"
@@ -5263,16 +5277,16 @@ const ProductList = () => {
                         )}
                         <button onClick={handleRefresh} disabled={loading} className="p-1.5 border border-primary/10 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all" title="Tải lại dữ liệu"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
                         <button data-column-settings-btn onClick={() => setShowColumnSettings(!showColumnSettings)} className={`p-1.5 border rounded-sm w-9 h-9 ${showColumnSettings ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Cấu hình hiển thị cột"><span className="material-symbols-outlined text-[18px]">settings_suggest</span></button>
-                        <button onClick={handleOpenProductSortModal} className={`p-1.5 border rounded-sm w-9 h-9 ${showProductSortModal ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Sắp xếp thứ tự sản phẩm">
+                        {canUpdateProducts && <button onClick={handleOpenProductSortModal} className={`p-1.5 border rounded-sm w-9 h-9 ${showProductSortModal ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-primary border-primary/30 hover:bg-primary/5'}`} title="Sắp xếp thứ tự sản phẩm">
                             <span className="material-symbols-outlined text-[18px]">swap_vert</span>
-                        </button>
-                        <button 
+                        </button>}
+                        <button
                             data-filter-btn 
                             onClick={() => {
                                 if (!showAdvanced) setTempFilters(sanitizeProductFilters(filters, allAttributes));
                                 setShowAdvanced(!showAdvanced);
-                            }} 
-                            className={`p-1.5 border transition-all rounded-sm w-9 h-9 ${showAdvanced ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`} 
+                            }}
+                            className={`p-1.5 border transition-all rounded-sm w-9 h-9 ${showAdvanced ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary border-primary/20 hover:bg-primary/5'}`}
                             title="Bộ lọc nâng cao"
                         >
                             <span className="material-symbols-outlined text-[18px]">filter_alt</span>
@@ -5306,10 +5320,10 @@ const ProductList = () => {
                         <div className="flex gap-1 items-center border-primary/10 pr-1">
                             <button
                                 type="button"
-                                disabled={selectedIds.length === 0 || isTrashView || syncingGoogleMerchant}
+                                disabled={selectedIds.length === 0 || isTrashView || syncingGoogleMerchant || !canUpdateProducts}
                                 onClick={handleSyncSelectedGoogleMerchant}
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
-                                    selectedIds.length > 0 && !isTrashView && !syncingGoogleMerchant
+                                    selectedIds.length > 0 && !isTrashView && !syncingGoogleMerchant && canUpdateProducts
                                         ? 'bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
@@ -5320,11 +5334,11 @@ const ProductList = () => {
                             </button>
                             <button
                                 type="button"
-                                disabled={selectedIds.length === 0 || isTrashView}
+                                disabled={selectedIds.length === 0 || isTrashView || !canUpdateProducts}
                                 onClick={() => openQuickEditModal(selectedIds)}
                                 data-quick-edit-trigger="bulk"
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
-                                    selectedIds.length > 0 && !isTrashView
+                                    selectedIds.length > 0 && !isTrashView && canUpdateProducts
                                         ? 'bg-sky-50 text-sky-700 hover:bg-sky-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
@@ -5335,14 +5349,14 @@ const ProductList = () => {
                             </button>
                             <button
                                 type="button"
-                                disabled={selectedIds.length === 0 || isTrashView || !aiAvailable}
+                                disabled={selectedIds.length === 0 || isTrashView || !aiAvailable || !canUpdateProducts}
                                 onClick={() => {
                                     const token = `seo-${Date.now()}`;
                                     setBulkSeoAutoStartToken(token);
                                     setShowBulkSeoModal(true);
                                 }}
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
-                                    selectedIds.length > 0 && !isTrashView && aiAvailable
+                                    selectedIds.length > 0 && !isTrashView && aiAvailable && canUpdateProducts
                                         ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white shadow-sm'
                                         : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
                                 }`}
@@ -5351,33 +5365,33 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
                             </button>
-                            <button 
-                                disabled={selectedIds.length === 0} 
+                            <button
+                                disabled={selectedIds.length === 0 || !canCreateProducts}
                                 onClick={requestBulkDuplicate}
-                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && canCreateProducts ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                 title="Nhân bản các mục đã chọn"
                             >
                                 <span className="material-symbols-outlined text-[18px]">content_copy</span>
                             </button>
-                            <button 
-                                disabled={selectedIds.length === 0 || isTrashView} 
-                                onClick={() => setShowBulkUpdateModal(true)} 
-                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                            <button
+                                disabled={selectedIds.length === 0 || isTrashView || !canUpdateProducts}
+                                onClick={() => setShowBulkUpdateModal(true)}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView && canUpdateProducts ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                 title="Cập nhật thuộc tính hàng loạt"
                             >
                                 <span className="material-symbols-outlined text-[18px]">tune</span>
                             </button>
                             {SHOW_BULK_COPY_ACTION && (
                                 <button
-                                    disabled={selectedIds.length === 0 || isTrashView}
+                                    disabled={selectedIds.length === 0 || isTrashView || !canUpdateProducts}
                                     onClick={() => setShowBulkCopyModal(true)}
-                                    className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                                    className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && !isTrashView && canUpdateProducts ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                     title="Sao chép 2 mục từ 1 sản phẩm nguồn sang các sản phẩm đã chọn"
                                 >
                                     <span className="material-symbols-outlined text-[18px]">conversion_path</span>
                                 </button>
                             )}
-                            {!isTrashView && (
+                            {!isTrashView && canUpdateProducts && (
                                 <button
                                     type="button"
                                     onClick={handleOpenCategoryImageManager}
@@ -5392,7 +5406,7 @@ const ProductList = () => {
                                     <span className="material-symbols-outlined text-[18px]">photo_library</span>
                                 </button>
                             )}
-                            {!isTrashView && SHOW_BULK_IMAGE_APPEND_ACTION && (
+                            {!isTrashView && canUpdateProducts && SHOW_BULK_IMAGE_APPEND_ACTION && (
                                 <button
                                     type="button"
                                     onClick={() => setShowBulkImageAppendModal(true)}
@@ -5402,7 +5416,7 @@ const ProductList = () => {
                                     <span className="material-symbols-outlined text-[18px]">add_photo_alternate</span>
                                 </button>
                             )}
-                            {!isTrashView && (
+                            {!isTrashView && canUpdateProducts && (
                                 <button
                                     type="button"
                                     onClick={() => setShowBulkImageRefreshModal(true)}
@@ -5412,18 +5426,18 @@ const ProductList = () => {
                                     <span className="material-symbols-outlined text-[18px]">imagesmode</span>
                                 </button>
                             )}
-                            <button 
-                                disabled={selectedIds.length === 0} 
-                                onClick={isTrashView ? handleBulkRestore : handleBulkDelete} 
-                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 ? (isTrashView ? 'bg-green-600/10 text-green-600 hover:bg-green-600 hover:text-white shadow-sm' : 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm') : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
+                            <button
+                                disabled={selectedIds.length === 0 || (isTrashView ? !canUpdateProducts : !canDeleteProducts)}
+                                onClick={isTrashView ? handleBulkRestore : handleBulkDelete}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && (isTrashView ? canUpdateProducts : canDeleteProducts) ? (isTrashView ? 'bg-green-600/10 text-green-600 hover:bg-green-600 hover:text-white shadow-sm' : 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm') : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                 title={isTrashView ? "Khôi phục đã chọn" : "Xóa các mục đã chọn"}
                             >
                                 <span className="material-symbols-outlined text-[18px]">{isTrashView ? 'restore_from_trash' : 'delete_sweep'}</span>
                             </button>
-                            {isTrashView && (
-                                <button 
-                                    disabled={selectedIds.length === 0} 
-                                    onClick={handleBulkDelete} 
+                            {isTrashView && canDeleteProductsPermanently && (
+                                <button
+                                    disabled={selectedIds.length === 0}
+                                    onClick={handleBulkDelete}
                                     className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 ? 'bg-brick/10 text-brick hover:bg-brick hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
                                     title="Xóa vĩnh viễn đã chọn"
                                 >
@@ -5456,8 +5470,8 @@ const ProductList = () => {
 
                         <div className="h-6 w-px bg-primary/20 mx-1"></div>
 
-                        <button 
-                            onClick={() => setIsTrashView(!isTrashView)} 
+                        <button
+                            onClick={() => setIsTrashView(!isTrashView)}
                             className={`p-1.5 border rounded-sm w-9 h-9 transition-all relative ${isTrashView ? 'bg-primary text-white border-primary shadow-inner' : 'bg-white text-primary/60 border border-primary/20 hover:text-primary hover:border-primary'}`}
                             title={isTrashView ? "Quay lại sản phẩm hiện có" : "Xem sản phẩm đã xóa"}
                         >
@@ -5545,7 +5559,7 @@ const ProductList = () => {
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Danh mục</label>
                             <div className="relative" data-attr-dropdown>
-                                <button 
+                                <button
                                     onClick={() => setOpenAttrId(openAttrId === 'category' ? null : 'category')}
                                     className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === 'category' ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
                                 >
@@ -5563,7 +5577,7 @@ const ProductList = () => {
                                     <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
                                         <div className="max-h-64 overflow-y-auto custom-scrollbar">
                                             <div className="flex border-b border-primary/5 mb-1 px-1 gap-1">
-                                                <button 
+                                                <button
                                                     className="flex-1 py-1.5 text-[10px] font-black text-primary hover:bg-primary/5 uppercase tracking-widest"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -5573,7 +5587,7 @@ const ProductList = () => {
                                                         }));
                                                     }}
                                                 >Chọn tất cả</button>
-                                                <button 
+                                                <button
                                                     className="flex-1 py-1.5 text-[10px] font-black text-brick hover:bg-brick/5 uppercase tracking-widest"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -5625,7 +5639,7 @@ const ProductList = () => {
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Loại sản phẩm</label>
                             <div className="relative" data-attr-dropdown>
-                                <button 
+                                <button
                                     onClick={() => setOpenAttrId(openAttrId === 'type' ? null : 'type')}
                                     className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === 'type' ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
                                 >
@@ -5643,7 +5657,7 @@ const ProductList = () => {
                                     <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
                                         <div className="max-h-64 overflow-y-auto custom-scrollbar">
                                             <div className="flex border-b border-primary/5 mb-1 px-1 gap-1">
-                                                <button 
+                                                <button
                                                     className="flex-1 py-1.5 text-[10px] font-black text-primary hover:bg-primary/5 uppercase tracking-widest"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -5653,7 +5667,7 @@ const ProductList = () => {
                                                         }));
                                                     }}
                                                 >Chọn tất cả</button>
-                                                <button 
+                                                <button
                                                     className="flex-1 py-1.5 text-[10px] font-black text-brick hover:bg-brick/5 uppercase tracking-widest"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
@@ -5850,7 +5864,7 @@ const ProductList = () => {
                                     <div key={attr.id} className="p-4 space-y-2.5 border-r border-b border-primary/10 relative">
                                         <label className="text-[11px] font-bold text-stone-500 uppercase tracking-[0.15em]">{attr.name}</label>
                                         <div className="relative" data-attr-dropdown>
-                                            <button 
+                                            <button
                                                 onClick={() => setOpenAttrId(openAttrId === attr.id ? null : attr.id)}
                                                 className={`w-full h-10 bg-white border rounded-sm px-3 pr-8 flex items-center transition-all ${openAttrId === attr.id ? 'border-primary shadow-inner ring-1 ring-primary/5' : 'border-primary/20 hover:border-primary/40 shadow-sm'}`}
                                             >
@@ -5868,7 +5882,7 @@ const ProductList = () => {
                                                 <div className="absolute top-[calc(100%+4px)] left-0 right-0 bg-white border border-primary/30 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] z-[1001] rounded-sm py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
                                                     <div className="max-h-64 overflow-y-auto custom-scrollbar">
                                                         {(tempFilters.attributes[attr.id] || []).length > 0 && (
-                                                            <button 
+                                                            <button
                                                                 className="w-full px-3 py-2 text-left text-[11px] font-black text-brick hover:bg-brick/5 border-b border-primary/5 mb-1 uppercase tracking-widest flex items-center gap-2"
                                                                 onClick={(e) => {
                                                                     e.stopPropagation();
@@ -6178,7 +6192,11 @@ const ProductList = () => {
                                             animate={{ opacity: 1, y: 0 }}
                                             exit={{ opacity: 0, y: -10 }}
                                             onClick={(event) => handleRowSelectionClick(p.id, event)}
-                                            onDoubleClick={() => navigateToProductForm(`/admin/products/edit/${editTargetId}`)}
+                                            onDoubleClick={() => {
+                                                if (canUpdateProducts) {
+                                                    navigateToProductForm(`/admin/products/edit/${editTargetId}`);
+                                                }
+                                            }}
                                             className={`transition-all group cursor-pointer ${
                                                 selectedIds.includes(p.id) ? 'bg-gold/10' : 
                                                 pIsParent ? 'row-parent' : 
@@ -6188,8 +6206,8 @@ const ProductList = () => {
                                             <td className="p-3 border border-primary/20 sticky-col-0" onDoubleClick={(e) => e.stopPropagation()}>
                                                 <div className="flex items-center gap-2">
                                                     {!isSubRow && pIsParent ? (
-                                                        <button 
-                                                            onClick={(e) => toggleExpandRow(p.id, e)} 
+                                                        <button
+                                                            onClick={(e) => toggleExpandRow(p.id, e)}
                                                             className={`size-6 flex items-center justify-center rounded-full border border-gold/30 text-gold transition-all expand-btn ${isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'}`}
                                                             title={isExpanded ? 'Thu gọn' : (p.type === 'grouped' ? 'Xem thành phần' : (p.type === 'bundle' ? 'Xem tùy chọn bundle' : 'Xem biến thể'))}
                                                         >
@@ -6334,16 +6352,16 @@ const ProductList = () => {
                                                                             onDoubleClick={e => { e.stopPropagation(); e.target.select(); }}
                                                                         />
                                                                         <div className="flex flex-col gap-0.5">
-                                                                            <button 
-                                                                                onClick={handleSaveQuickEdit} 
+                                                                            <button
+                                                                                onClick={handleSaveQuickEdit}
                                                                                 disabled={savingId === p.id}
                                                                                 className="quick-edit-btn quick-save-btn" 
                                                                                 title="Lưu"
                                                                             >
                                                                                 <span className="material-symbols-outlined text-[18px] font-bold">{savingId === p.id ? 'sync' : 'check'}</span>
                                                                             </button>
-                                                                            <button 
-                                                                                onClick={handleCancelQuickEdit} 
+                                                                            <button
+                                                                                onClick={handleCancelQuickEdit}
                                                                                 className="quick-edit-btn quick-cancel-btn" 
                                                                                 title="Hủy"
                                                                             >
@@ -6519,16 +6537,16 @@ const ProductList = () => {
                                                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                             {isTrashView ? (
                                                                 <React.Fragment>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleRestore(p.id); }} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>
+                                                                    {canUpdateProducts && <button onClick={(e) => { e.stopPropagation(); handleRestore(p.id); }} className="p-1 hover:text-green-600" title="Khôi phục"><span className="material-symbols-outlined text-[18px]">restore</span></button>}
+                                                                    {canDeleteProductsPermanently && <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa vĩnh viễn"><span className="material-symbols-outlined text-[18px]">delete_forever</span></button>}
                                                                 </React.Fragment>
                                                             ) : (
                                                                 <React.Fragment>
-                                                                    <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Đồng bộ Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                                                    <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                                                                    <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+                                                                    {canUpdateProducts && <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Đồng bộ Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>}
+                                                                    {canCreateProducts && <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>}
+                                                                    {canUpdateProducts && <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>}
+                                                                    {canUpdateProducts && <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>}
+                                                                    {canDeleteProducts && <button onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }} className="p-1 hover:text-brick" title="Xóa"><span className="material-symbols-outlined text-[18px]">delete</span></button>}
                                                                 </React.Fragment>
                                                             )}
                                                         </div>
@@ -7171,7 +7189,7 @@ const ProductList = () => {
                                     <div className="md:col-span-3">
                                         <select 
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
-                                            value={bulkUpdateData.category_id || ''} 
+                                            value={bulkUpdateData.category_id || ''}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, category_id: e.target.value})}
                                         >
                                             <option value="">-- Bỏ qua --</option>
@@ -7210,7 +7228,7 @@ const ProductList = () => {
                                             inputMode="decimal"
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                             placeholder="Số lượng"
-                                            value={bulkUpdateData.stock_quantity ?? ''} 
+                                            value={bulkUpdateData.stock_quantity ?? ''}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, stock_quantity: normalizeQuantityDraft(e.target.value)})}
                                         />
                                     </div>
@@ -7218,7 +7236,7 @@ const ProductList = () => {
                                         <label className="text-[13px] font-bold text-primary/80">Loại sản phẩm</label>
                                         <select 
                                             className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
-                                            value={bulkUpdateData.type || ''} 
+                                            value={bulkUpdateData.type || ''}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, type: e.target.value})}
                                         >
                                             <option value="">-- Bỏ qua --</option>
@@ -7280,7 +7298,7 @@ const ProductList = () => {
                                         <label className="text-[13px] font-bold text-primary/80 whitespace-nowrap">Nổi bật:</label>
                                         <select 
                                             className="flex-1 bg-white border border-primary/20 px-2 py-1 rounded-sm text-[12px] focus:border-primary"
-                                            value={bulkUpdateData.is_featured === undefined ? '' : bulkUpdateData.is_featured} 
+                                            value={bulkUpdateData.is_featured === undefined ? '' : bulkUpdateData.is_featured}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, is_featured: e.target.value === '' ? undefined : e.target.value === '1'})}
                                         >
                                             <option value="">-- Giữ nguyên --</option>
@@ -7292,7 +7310,7 @@ const ProductList = () => {
                                         <label className="text-[13px] font-bold text-primary/80 whitespace-nowrap">Mới:</label>
                                         <select 
                                             className="flex-1 bg-white border border-primary/20 px-2 py-1 rounded-sm text-[12px] focus:border-primary"
-                                            value={bulkUpdateData.is_new === undefined ? '' : bulkUpdateData.is_new} 
+                                            value={bulkUpdateData.is_new === undefined ? '' : bulkUpdateData.is_new}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, is_new: e.target.value === '' ? undefined : e.target.value === '1'})}
                                         >
                                             <option value="">-- Giữ nguyên --</option>
@@ -7304,7 +7322,7 @@ const ProductList = () => {
                                         <label className="text-[13px] font-bold text-primary/80 whitespace-nowrap">Trạng thái:</label>
                                         <select 
                                             className="flex-1 bg-white border border-primary/20 px-2 py-1 rounded-sm text-[12px] focus:border-primary"
-                                            value={bulkUpdateData.status === undefined ? '' : bulkUpdateData.status} 
+                                            value={bulkUpdateData.status === undefined ? '' : bulkUpdateData.status}
                                             onChange={e => setBulkUpdateData({...bulkUpdateData, status: e.target.value === '' ? undefined : e.target.value === '1'})}
                                         >
                                             <option value="">-- Giữ nguyên --</option>
@@ -7327,7 +7345,7 @@ const ProductList = () => {
                                             {attr.frontend_type === 'select' ? (
                                                 <select 
                                                     className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
-                                                    value={val} 
+                                                    value={val}
                                                     onChange={e => setBulkUpdateData({...bulkUpdateData, [attr.id]: e.target.value})}
                                                 >
                                                     <option value="">-- Bỏ qua --</option>
@@ -7358,7 +7376,7 @@ const ProductList = () => {
                                                     type="text" 
                                                     className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
                                                     placeholder="Nhập giá trị hoặc để trống bỏ qua..."
-                                                    value={val} 
+                                                    value={val}
                                                     onChange={e => setBulkUpdateData({...bulkUpdateData, [attr.id]: e.target.value})}
                                                 />
                                             )}
@@ -7370,12 +7388,12 @@ const ProductList = () => {
                         </div>
 
                         <div className="mt-6 pt-4 border-t border-primary/10 flex justify-end gap-3 shrink-0">
-                            <button 
-                                onClick={() => setShowBulkUpdateModal(false)} 
+                            <button
+                                onClick={() => setShowBulkUpdateModal(false)}
                                 className="px-4 py-2 border border-primary/20 text-primary rounded-sm font-bold text-[13px] hover:bg-primary/5"
                             >Hủy bỏ</button>
-                            <button 
-                                onClick={handleBulkUpdateAttributesSubmit} 
+                            <button
+                                onClick={handleBulkUpdateAttributesSubmit}
                                 className="px-6 py-2 bg-primary text-white rounded-sm font-bold text-[13px] hover:bg-primary/90 flex items-center gap-2"
                                 disabled={loading}
                             >

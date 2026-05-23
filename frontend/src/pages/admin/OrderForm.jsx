@@ -57,6 +57,7 @@ import {
     normalizeRoundedImportCostNumber,
 } from '../../utils/money';
 import { buildOrderAiPickerEntries, buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
+import { hasAdminPermission } from '../../utils/adminPermissions';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
     <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
@@ -3464,8 +3465,16 @@ const OrderForm = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
     const { showModal } = useUI();
+    const canCreateOrders = hasAdminPermission(user, 'orders.create');
+    const canUpdateOrders = hasAdminPermission(user, 'orders.update');
     const productQuickFilterStorageKey = getProductQuickFilterStorageKey(user);
     const initialProductQuickFilterState = getStoredProductQuickFilterState(user);
+
+    useEffect(() => {
+        if ((isEdit && !canUpdateOrders) || (!isEdit && !canCreateOrders)) {
+            navigate('/admin/orders', { replace: true });
+        }
+    }, [canCreateOrders, canUpdateOrders, isEdit, navigate]);
 
     const [loading, setLoading] = useState(isEdit || !!duplicateFromId);
     const [saving, setSaving] = useState(false);
@@ -6955,8 +6964,10 @@ const OrderForm = () => {
         const pastedText = e.clipboardData.getData('text');
         if (!pastedText) return;
 
-        e.preventDefault();
-        detectAdministrativeAddress(pastedText);
+        const target = e.currentTarget;
+        window.requestAnimationFrame(() => {
+            detectAdministrativeAddress(target.value);
+        });
     };
 
     const handleShippingAddressBlur = (e) => {

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Account;
+use App\Services\AccessControlService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -47,7 +48,7 @@ class AccountController extends Controller
         ]);
 
         // Attach current user as owner
-        $request->user()->accounts()->attach($account->id, ['role' => 'owner']);
+        $request->user()->accounts()->attach($account->id, $this->pivotPayloadForRole('owner'));
         app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
         return response()->json($account->load('users'), 201);
@@ -91,7 +92,7 @@ class AccountController extends Controller
                 'is_admin' => false,
             ]);
 
-            $user->accounts()->attach($account->id, ['role' => 'owner']);
+            $user->accounts()->attach($account->id, $this->pivotPayloadForRole('owner'));
             app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
             \Illuminate\Support\Facades\DB::commit();
@@ -171,5 +172,15 @@ class AccountController extends Controller
             'subdomain' => $account->subdomain,
             'domain' => $account->domain,
         ]);
+    }
+
+    private function pivotPayloadForRole(string $role): array
+    {
+        return [
+            'role' => $role,
+            'status' => 1,
+            'permissions' => json_encode(AccessControlService::permissionsForRole($role)),
+            'data_permissions' => json_encode(AccessControlService::dataPermissionsForRole($role)),
+        ];
     }
 }

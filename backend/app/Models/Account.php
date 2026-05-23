@@ -10,6 +10,9 @@ class Account extends Model
 
     public function users()
     {
-        return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();
+        return $this->belongsToMany(User::class)
+            ->using(AccountUser::class)
+            ->withPivot('role', 'status', 'permissions', 'data_permissions')
+            ->withTimestamps();
     }
 }

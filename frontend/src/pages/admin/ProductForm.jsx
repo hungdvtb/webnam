@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { productApi, categoryApi, attributeApi, productImageApi, aiApi, blogApi, mediaApi, cmsApi, inventoryApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
+import { useAuth } from '../../context/AuthContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import ReactQuill from 'react-quill-new';
 import mammoth from 'mammoth';
@@ -33,6 +34,7 @@ import { resolveImageObjectUrl } from '../../utils/mediaUrl';
 import { formatCategorySummary, getCategoryNamesByIds, getProductCategoryIds, normalizeCategoryIds } from '../../utils/productCategories';
 import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
 import { resolveAiRequestError } from '../../utils/aiError';
+import { hasAdminPermission } from '../../utils/adminPermissions';
 import ProductDescriptionAiReviewModal from '../../components/admin/ProductDescriptionAiReviewModal';
 import ProductDescriptionHtmlPasteModal from '../../components/admin/ProductDescriptionHtmlPasteModal';
 import ProductDescriptionImageLibraryModal from '../../components/admin/ProductDescriptionImageLibraryModal';
@@ -2253,7 +2255,17 @@ const ProductForm = () => {
     const returnContext = location.state?.returnContext || null;
 
     const { showModal, hideModal, showToast } = useUI();
+    const { user } = useAuth();
     const { available: aiAvailable, disabledReason } = useAiAvailability();
+    const canCreateProducts = hasAdminPermission(user, 'products.create');
+    const canUpdateProducts = hasAdminPermission(user, 'products.update');
+
+    useEffect(() => {
+        if ((isCreateFlow && !canCreateProducts) || (!isCreateFlow && !canUpdateProducts)) {
+            navigate('/admin/products', { replace: true });
+        }
+    }, [canCreateProducts, canUpdateProducts, isCreateFlow, navigate]);
+
     const [isSaving, setIsSaving] = useState(false);
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiGeneratingSeo, setAiGeneratingSeo] = useState(false);

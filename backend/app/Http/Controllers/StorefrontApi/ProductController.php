@@ -427,19 +427,20 @@ class ProductController extends Controller
         });
     }
 
-    private function getOrderedCategoryIds(Category $category, $accountId): array
+    private function getOrderedCategoryIds(Category $category, $accountId, bool $includeLinkOnlyDescendants = false): array
     {
         $ids = [(int) $category->id];
 
         $children = Category::query()
             ->where('parent_id', $category->id)
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->orderBy('order')
             ->orderBy('id')
             ->get(['id']);
 
         foreach ($children as $child) {
-            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId));
+            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants));
         }
 
         return $ids;
@@ -1000,7 +1001,7 @@ class ProductController extends Controller
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->first();
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
             }
         }
 
@@ -1010,7 +1011,7 @@ class ProductController extends Controller
                 ->find($request->category_id);
 
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
             }
         }
         $stepStartedAt = $this->markTiming($timings, 'category', $stepStartedAt);

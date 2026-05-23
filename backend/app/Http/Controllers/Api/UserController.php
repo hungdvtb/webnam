@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\AccessControlService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
@@ -24,22 +26,40 @@ class UserController extends Controller
             'password' => 'required|string|min:6',
             'status' => 'boolean',
             'permissions' => 'nullable|array',
-            'account_ids' => 'nullable|array'
+            'permissions.*' => 'string',
+            'account_ids' => 'nullable|array',
+            'account_ids.*' => 'integer|exists:accounts,id',
+            'account_accesses' => 'nullable|array',
+            'account_accesses.*.account_id' => 'required_with:account_accesses|integer|exists:accounts,id',
+            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'viewer', 'custom'])],
+            'account_accesses.*.status' => 'nullable|boolean',
+            'account_accesses.*.permissions' => 'nullable|array',
+            'account_accesses.*.permissions.*' => 'string',
+            'account_accesses.*.data_permissions' => 'nullable|array',
+            'account_accesses.*.data_permissions.*' => 'string',
         ]);
 
         try {
             DB::beginTransaction();
+
+            $accountSyncPayload = $this->buildAccountSyncPayload($validated, $request->input('permissions'));
+            $legacyPermissions = $validated['permissions']
+                ?? AccessControlService::moduleIdsFromPermissions(
+                    collect($accountSyncPayload)
+                        ->flatMap(fn ($payload) => $payload['permissions'] ?? [])
+                        ->all()
+                );
             
             $user = User::create([
                 'name' => $validated['name'],
                 'email' => $validated['email'],
                 'password' => Hash::make($validated['password']),
                 'status' => $request->has('status') ? $validated['status'] : 1,
-                'permissions' => $validated['permissions'] ?? null,
+                'permissions' => $legacyPermissions,
             ]);
 
-            if (!empty($validated['account_ids'])) {
-                $user->accounts()->sync($validated['account_ids']);
+            if ($accountSyncPayload !== []) {
+                $user->accounts()->sync($accountSyncPayload);
             }
 
             DB::commit();
@@ -60,11 +80,23 @@ class UserController extends Controller
             'password' => 'nullable|string|min:6',
             'status' => 'boolean',
             'permissions' => 'nullable|array',
-            'account_ids' => 'nullable|array'
+            'permissions.*' => 'string',
+            'account_ids' => 'nullable|array',
+            'account_ids.*' => 'integer|exists:accounts,id',
+            'account_accesses' => 'nullable|array',
+            'account_accesses.*.account_id' => 'required_with:account_accesses|integer|exists:accounts,id',
+            'account_accesses.*.role' => ['nullable', 'string', 'max:50', Rule::in(['owner', 'manager', 'staff', 'sale', 'warehouse', 'viewer', 'custom'])],
+            'account_accesses.*.status' => 'nullable|boolean',
+            'account_accesses.*.permissions' => 'nullable|array',
+            'account_accesses.*.permissions.*' => 'string',
+            'account_accesses.*.data_permissions' => 'nullable|array',
+            'account_accesses.*.data_permissions.*' => 'string',
         ]);
 
         try {
             DB::beginTransaction();
+
+            $accountSyncPayload = $this->buildAccountSyncPayload($validated, $request->input('permissions'));
 
             $user->name = $validated['name'];
             $user->email = $validated['email'];
@@ -76,12 +108,18 @@ class UserController extends Controller
             }
             if (isset($validated['permissions'])) {
                 $user->permissions = $validated['permissions'];
+            } elseif ($accountSyncPayload !== []) {
+                $user->permissions = AccessControlService::moduleIdsFromPermissions(
+                    collect($accountSyncPayload)
+                        ->flatMap(fn ($payload) => $payload['permissions'] ?? [])
+                        ->all()
+                );
             }
             
             $user->save();
 
-            if (isset($validated['account_ids'])) {
-                $user->accounts()->sync($validated['account_ids']);
+            if (array_key_exists('account_accesses', $validated) || array_key_exists('account_ids', $validated)) {
+                $user->accounts()->sync($accountSyncPayload);
             }
 
             DB::commit();
@@ -102,5 +140,50 @@ class UserController extends Controller
         }
         $user->delete();
         return response()->json(['message' => 'Xoá thành công']);
+    }
+
+    private function buildAccountSyncPayload(array $validated, mixed $legacyPermissions): array
+    {
+        if (!empty($validated['account_accesses'])) {
+            $payload = [];
+
+            foreach ($validated['account_accesses'] as $access) {
+                $accountId = (int) $access['account_id'];
+                $role = $access['role'] ?? 'custom';
+                $permissions = $access['permissions'] ?? AccessControlService::permissionsForRole($role);
+                $dataPermissions = $access['data_permissions'] ?? AccessControlService::dataPermissionsForRole($role);
+
+                $payload[$accountId] = [
+                    'role' => $role,
+                    'status' => array_key_exists('status', $access) ? (int) (bool) $access['status'] : 1,
+                    'permissions' => json_encode(AccessControlService::sanitizePermissionsForStorage($permissions)),
+                    'data_permissions' => json_encode(AccessControlService::normalizeDataPermissions($dataPermissions)),
+                ];
+            }
+
+            return $payload;
+        }
+
+        if (empty($validated['account_ids'])) {
+            return [];
+        }
+
+        $permissions = AccessControlService::sanitizePermissionsForStorage(
+            AccessControlService::expandLegacyPermissions(
+                is_array($legacyPermissions) ? $legacyPermissions : []
+            )
+        );
+
+        $payload = [];
+        foreach ($validated['account_ids'] as $accountId) {
+            $payload[(int) $accountId] = [
+                'role' => 'custom',
+                'status' => 1,
+                'permissions' => json_encode($permissions),
+                'data_permissions' => json_encode([]),
+            ];
+        }
+
+        return $payload;
     }
 }

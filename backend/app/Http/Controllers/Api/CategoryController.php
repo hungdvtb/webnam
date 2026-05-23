@@ -935,6 +935,7 @@ class CategoryController extends Controller
     public function index(Request $request)
     {
         $isTrashView = $this->shouldUseCategoryTrashView($request);
+        $includeLinkOnly = $request->boolean('include_link_only') && $request->bearerToken();
 
         if ($isTrashView) {
             $this->ensureCategoryTrashSchema();
@@ -945,6 +946,7 @@ class CategoryController extends Controller
             : Category::query();
 
         $categories = $query
+            ->when(!$isTrashView && !$includeLinkOnly, fn ($categoryQuery) => $categoryQuery->publiclyListed())
             ->with([
                 'bannerMediaAsset',
                 'logoMediaAsset',
@@ -983,6 +985,7 @@ class CategoryController extends Controller
             'meta_keywords' => 'nullable|string|max:255',
             'banner' => 'nullable|image|max:5120',
             'logo' => 'nullable|image|max:5120',
+            'visibility' => 'nullable|string|in:' . Category::VISIBILITY_PUBLIC . ',' . Category::VISIBILITY_LINK_ONLY,
             'filterable_attribute_ids' => 'nullable|array',
             'category_items' => 'nullable|array',
             'category_items.*' => 'array',
@@ -1027,6 +1030,7 @@ class CategoryController extends Controller
                 'logo_path' => $logoAsset ? $this->mediaService->buildAssetUrl($logoAsset, 'large') : null,
                 'logo_media_asset_id' => $logoAsset?->id,
                 'status' => $request->status ?? 1,
+                'visibility' => $request->input('visibility', Category::VISIBILITY_PUBLIC),
                 'order' => $this->nextSiblingOrder($parentId),
                 'display_layout' => 'layout_1',
                 'filterable_attribute_ids' => $this->normalizeFilterableAttributeIds(
@@ -1083,6 +1087,7 @@ class CategoryController extends Controller
             'meta_keywords' => 'nullable|string|max:255',
             'banner' => 'nullable|image|max:5120',
             'logo' => 'nullable|image|max:5120',
+            'visibility' => 'nullable|string|in:' . Category::VISIBILITY_PUBLIC . ',' . Category::VISIBILITY_LINK_ONLY,
             'filterable_attribute_ids' => 'nullable|array',
             'category_items' => 'nullable|array',
             'category_items.*' => 'array',
@@ -1152,6 +1157,9 @@ class CategoryController extends Controller
             $category->meta_keywords = $this->normalizeNullableString($request->input('meta_keywords'));
         }
         $category->status = $request->input('status', $category->status);
+        if ($request->has('visibility')) {
+            $category->visibility = $request->input('visibility') ?: Category::VISIBILITY_PUBLIC;
+        }
         $category->display_layout = 'layout_1';
 
         if ($request->has('filterable_attribute_ids')) {
@@ -1836,6 +1844,7 @@ class CategoryController extends Controller
             'meta_keywords' => $category->meta_keywords,
             'display_layout' => $category->display_layout ?: 'layout_1',
             'status' => (int) $category->status,
+            'visibility' => $category->visibility ?: Category::VISIBILITY_PUBLIC,
             'filterable_attribute_ids' => $category->filterable_attribute_ids ?: [],
             'banner_path' => $category->banner_path,
             'logo_path' => $category->logo_path,

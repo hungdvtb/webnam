@@ -29,6 +29,12 @@ export async function generateMetadata({ params }) {
       title: `${seoTitle || category?.name || 'Danh muc'} | GOM DAI THANH`,
       description: seoDescription || `Kham pha bo suu tap ${slug.replace(/-/g, ' ')} tinh xao tu lang gom Bat Trang.`,
       keywords: seoKeywords || undefined,
+      robots: category?.visibility === 'link_only'
+        ? {
+            index: false,
+            follow: true,
+          }
+        : undefined,
     };
   } catch (error) {
     console.error(`Failed to load category metadata for slug "${slug}"`, error);

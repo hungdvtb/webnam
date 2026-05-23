@@ -137,19 +137,20 @@ class StorefrontController extends Controller
         return false;
     }
 
-    protected function getOrderedCategoryIds(Category $category, $accountId = null): array
+    protected function getOrderedCategoryIds(Category $category, $accountId = null, bool $includeLinkOnlyDescendants = false): array
     {
         $ids = [(int) $category->id];
 
         $children = Category::query()
             ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
             ->where('parent_id', $category->id)
+            ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->orderBy('order')
             ->orderBy('id')
             ->get(['id']);
 
         foreach ($children as $child) {
-            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId));
+            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants));
         }
 
         return $ids;
@@ -238,7 +239,7 @@ class StorefrontController extends Controller
             ]);
     }
 
-    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null): void
+    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null, bool $includeLinkOnlyDescendants = false): void
     {
         $normalizedCategories = collect($categories)->filter();
         $categoryIds = $normalizedCategories
@@ -252,7 +253,7 @@ class StorefrontController extends Controller
             return;
         }
 
-        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId);
+        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId, $includeLinkOnlyDescendants);
         $queryCategoryIds = collect($categoryDescendantIdMap)
             ->flatten()
             ->map(fn ($categoryId) => (int) $categoryId)
@@ -322,7 +323,7 @@ class StorefrontController extends Controller
         });
     }
 
-    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null): array
+    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null, bool $includeLinkOnlyDescendants = false): array
     {
         $rootIds = collect($categoryIds)
             ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
@@ -337,6 +338,7 @@ class StorefrontController extends Controller
         $allCategories = Category::query()
             ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
             ->where('status', true)
+            ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->get(['id', 'parent_id']);
 
         $childrenByParent = $allCategories->groupBy(fn ($category) => (int) ($category->parent_id ?? 0));
@@ -623,6 +625,7 @@ class StorefrontController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->publiclyListed()
             ->orderBy('order')
             ->get(['id', 'name', 'slug', 'parent_id', 'description', 'order', 'logo_path']);
 
@@ -658,7 +661,7 @@ class StorefrontController extends Controller
                 ->where('slug', $request->category)
                 ->first();
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
             }
         }
 
@@ -669,7 +672,7 @@ class StorefrontController extends Controller
                 ->find($request->category_id);
 
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
             }
         }
 
@@ -1122,6 +1125,7 @@ class StorefrontController extends Controller
         $categories = Category::query()
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true)
+            ->publiclyListed()
             ->whereNull('parent_id')
             ->orderBy('order')
             ->get(['id', 'name', 'slug', 'description', 'logo_path']);

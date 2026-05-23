@@ -216,7 +216,7 @@ class ProductParentRetailPriceSyncService
             ->whereNull('deleted_at')
             ->value('price');
 
-        if ($currentPrice === null || round((float) $currentPrice, 2) === round($price, 2)) {
+        if ($currentPrice !== null && round((float) $currentPrice, 2) === round($price, 2)) {
             return;
         }
 

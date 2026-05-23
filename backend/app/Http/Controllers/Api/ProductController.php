@@ -9590,6 +9590,12 @@ class ProductController extends Controller
     {
         $product = Product::with($this->productResourceRelations())->findOrFail($id);
 
+        if (in_array($product->type, ['configurable', 'bundle'], true)
+            && $this->productParentRetailPriceSyncService->syncParentProduct($product)
+        ) {
+            $product = Product::with($this->productResourceRelations())->findOrFail($id);
+        }
+
         if ($product->type === 'configurable') {
             // Use all linked variants for the admin edit screen, including out-of-stock rows.
             $variations = $product->linkedProducts()

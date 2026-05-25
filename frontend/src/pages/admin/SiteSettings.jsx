@@ -112,7 +112,7 @@ const escapeModalHtml = (value) => String(value ?? '')
 const formatGoogleMerchantManualSyncResult = (data = {}) => {
     const errors = Array.isArray(data.errors) ? data.errors : [];
     const lines = [
-        `Tổng sản phẩm đã quét: ${Number(data.total_scanned || data.total || 0)}`,
+        `Tổng sản phẩm đã quét: ${Number(data.total_scanned || data.total || data.scanned || 0)}`,
         `Số sản phẩm cập nhật thành công: ${Number(data.updated || 0)}`,
         `Số sản phẩm bỏ qua: ${Number(data.skipped || 0)}`,
         `Số sản phẩm đã xóa khỏi Merchant: ${Number(data.deleted || 0)}`,
@@ -130,6 +130,19 @@ const formatGoogleMerchantManualSyncResult = (data = {}) => {
 
     return lines.map(escapeModalHtml).join('<br />');
 };
+
+const mergeGoogleMerchantManualSyncResult = (current, batch) => ({
+    total_candidates: Number(batch.total_candidates || current.total_candidates || 0),
+    total_scanned: Number(current.total_scanned || 0) + Number(batch.total_scanned || 0),
+    updated: Number(current.updated || 0) + Number(batch.updated || 0),
+    skipped: Number(current.skipped || 0) + Number(batch.skipped || 0),
+    deleted: Number(current.deleted || 0) + Number(batch.deleted || 0),
+    failed: Number(current.failed || 0) + Number(batch.failed || 0),
+    errors: [
+        ...(Array.isArray(current.errors) ? current.errors : []),
+        ...(Array.isArray(batch.errors) ? batch.errors : []),
+    ].slice(0, 20),
+});
 
 const trackingPlatforms = [
     {
@@ -763,6 +776,7 @@ const SiteSettings = () => {
     const [testingGoogleMerchant, setTestingGoogleMerchant] = useState(false);
     const [registeringGoogleMerchantGcp, setRegisteringGoogleMerchantGcp] = useState(false);
     const [syncingGoogleMerchantNow, setSyncingGoogleMerchantNow] = useState(false);
+    const [googleMerchantManualSyncProgress, setGoogleMerchantManualSyncProgress] = useState(null);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
     const [quoteTemplates, setQuoteTemplates] = useState([]);
@@ -1054,31 +1068,70 @@ const SiteSettings = () => {
         }
 
         setSyncingGoogleMerchantNow(true);
-        try {
-            const response = await googleMerchantApi.syncProducts({
-                all: true,
-                queue: false,
-                account_id: activeAccountId,
-            }, {
-                timeout: 300000,
-            });
+        setGoogleMerchantManualSyncProgress({ scanned: 0, total: 0 });
+        let aggregate = {
+            total_candidates: 0,
+            total_scanned: 0,
+            updated: 0,
+            skipped: 0,
+            deleted: 0,
+            failed: 0,
+            errors: [],
+        };
 
-            if (response.data?.stats) {
-                setGoogleMerchantStats(response.data.stats);
+        try {
+            let cursor = 0;
+            let finished = false;
+            let latestStats = null;
+
+            while (!finished) {
+                const response = await googleMerchantApi.syncProducts({
+                    all: true,
+                    queue: false,
+                    account_id: activeAccountId,
+                    cursor,
+                    batch_size: 1,
+                }, {
+                    timeout: 120000,
+                });
+
+                const batch = response.data || {};
+                aggregate = mergeGoogleMerchantManualSyncResult(aggregate, batch);
+                latestStats = batch.stats || latestStats;
+                finished = Boolean(batch.finished);
+                cursor = Number(batch.next_cursor || 0);
+
+                setGoogleMerchantManualSyncProgress({
+                    scanned: aggregate.total_scanned,
+                    total: aggregate.total_candidates,
+                });
+
+                if (!finished && cursor <= 0) {
+                    throw new Error('Không nhận được cursor tiếp theo từ máy chủ.');
+                }
+            }
+
+            if (latestStats) {
+                setGoogleMerchantStats(latestStats);
             } else {
                 fetchGoogleMerchantSettings();
             }
 
             showModal({
-                title: response.data?.failed > 0 ? 'Đồng bộ hoàn tất, có lỗi' : 'Đồng bộ Google Merchant hoàn tất',
-                content: formatGoogleMerchantManualSyncResult(response.data || {}),
-                type: response.data?.failed > 0 ? 'error' : 'success',
+                title: aggregate.failed > 0 ? 'Đồng bộ hoàn tất, có lỗi' : 'Đồng bộ Google Merchant hoàn tất',
+                content: formatGoogleMerchantManualSyncResult(aggregate),
+                type: aggregate.failed > 0 ? 'error' : 'success',
             });
         } catch (error) {
             const message = error.response?.data?.message || 'Không thể đồng bộ toàn bộ Google Merchant.';
-            showModal({ title: 'Lỗi', content: escapeModalHtml(message), type: 'error' });
+            showModal({
+                title: 'Lỗi',
+                content: `${formatGoogleMerchantManualSyncResult(aggregate)}<br />${escapeModalHtml(message)}`,
+                type: 'error',
+            });
         } finally {
             setSyncingGoogleMerchantNow(false);
+            setGoogleMerchantManualSyncProgress(null);
         }
     };
 
@@ -2785,7 +2838,9 @@ const SiteSettings = () => {
                                             className="inline-flex h-9 items-center gap-2 rounded-sm border border-blue-200 bg-blue-50 px-4 text-[12px] font-black uppercase tracking-wider text-blue-700 hover:bg-blue-100 disabled:opacity-50"
                                         >
                                             <span className={`material-symbols-outlined text-[18px] ${syncingGoogleMerchantNow ? 'animate-refresh-spin' : ''}`}>cloud_sync</span>
-                                            {syncingGoogleMerchantNow ? 'Đang đồng bộ...' : 'Đồng bộ Google Merchant ngay'}
+                                            {syncingGoogleMerchantNow
+                                                ? `Đang đồng bộ ${googleMerchantManualSyncProgress?.scanned || 0}/${googleMerchantManualSyncProgress?.total || '...'}`
+                                                : 'Đồng bộ Google Merchant ngay'}
                                         </button>
                                         <button
                                             type="button"

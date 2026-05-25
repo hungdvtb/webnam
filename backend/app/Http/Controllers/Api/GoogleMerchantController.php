@@ -184,6 +184,8 @@ class GoogleMerchantController extends Controller
             'all' => 'nullable|boolean',
             'queue' => 'nullable|boolean',
             'action' => 'nullable|string|in:upsert,out_of_stock,delete',
+            'cursor' => 'nullable|integer|min:0',
+            'batch_size' => 'nullable|integer|min:1|max:25',
         ]);
 
         if (!empty($validated['all'])) {
@@ -192,11 +194,26 @@ class GoogleMerchantController extends Controller
             $runImmediately = array_key_exists('queue', $validated) && $validated['queue'] === false;
 
             if ($runImmediately) {
-                $summary = $this->syncGoogleMerchantProductsNow($query, $validated['action'] ?? null);
+                $cursor = (int) ($validated['cursor'] ?? 0);
+                $batchSize = min(max((int) ($validated['batch_size'] ?? 3), 1), 25);
+                $totalCandidates = (clone $query)->count();
+                $batchQuery = clone $query;
+                if ($cursor > 0) {
+                    $batchQuery->where('products.id', '>', $cursor);
+                }
+
+                $summary = $this->syncGoogleMerchantProductsNow($batchQuery, $validated['action'] ?? null, $batchSize);
+                $lastProductId = (int) ($summary['last_product_id'] ?? $cursor);
+                $hasMore = $lastProductId > 0
+                    && (clone $query)->where('products.id', '>', $lastProductId)->exists();
 
                 return response()->json([
                     'status' => $summary['failed'] > 0 ? 'partial_error' : 'synced',
                     ...$summary,
+                    'cursor' => $cursor,
+                    'next_cursor' => $hasMore ? $lastProductId : null,
+                    'finished' => !$hasMore,
+                    'total_candidates' => $totalCandidates,
                     'stats' => $this->syncStats($accountId),
                 ]);
             }
@@ -292,7 +309,7 @@ class GoogleMerchantController extends Controller
         return $query;
     }
 
-    private function syncGoogleMerchantProductsNow($query, ?string $action): array
+    private function syncGoogleMerchantProductsNow($query, ?string $action, int $limit = 0): array
     {
         $summary = [
             'total_scanned' => 0,
@@ -301,44 +318,48 @@ class GoogleMerchantController extends Controller
             'deleted' => 0,
             'failed' => 0,
             'errors' => [],
+            'last_product_id' => null,
         ];
 
-        $query->chunkById(100, function ($products) use (&$summary, $action) {
-            foreach ($products as $product) {
-                $summary['total_scanned']++;
+        $products = $limit > 0
+            ? $query->limit($limit)->get()
+            : $query->get();
 
-                try {
-                    $result = $this->syncService->syncProduct($product, $action);
-                    $status = (string) ($result['status'] ?? 'synced');
+        foreach ($products as $product) {
+            $summary['total_scanned']++;
+            $summary['last_product_id'] = (int) $product->id;
 
-                    if ($status === 'deleted') {
+            try {
+                $result = $this->syncService->syncProduct($product, $action);
+                $status = (string) ($result['status'] ?? 'synced');
+
+                if ($status === 'deleted') {
+                    $summary['deleted']++;
+                } elseif ($status === 'skipped') {
+                    $summary['skipped']++;
+                } else {
+                    $summary['updated']++;
+                }
+
+                foreach (($result['bundle_options'] ?? []) as $bundleOptionResult) {
+                    $optionStatus = (string) ($bundleOptionResult['status'] ?? '');
+                    $optionAction = (string) ($bundleOptionResult['action'] ?? '');
+                    if ($optionStatus === 'deleted' || str_contains($optionAction, 'delete')) {
                         $summary['deleted']++;
-                    } elseif ($status === 'skipped') {
-                        $summary['skipped']++;
-                    } else {
-                        $summary['updated']++;
-                    }
-
-                    foreach (($result['bundle_options'] ?? []) as $bundleOptionResult) {
-                        $optionStatus = (string) ($bundleOptionResult['status'] ?? '');
-                        $optionAction = (string) ($bundleOptionResult['action'] ?? '');
-                        if ($optionStatus === 'deleted' || str_contains($optionAction, 'delete')) {
-                            $summary['deleted']++;
-                        }
-                    }
-
-                    $summary['deleted'] += count($result['variant_child_deletes'] ?? []);
-                } catch (\Throwable $exception) {
-                    $summary['failed']++;
-                    if (count($summary['errors']) < 20) {
-                        $summary['errors'][] = [
-                            'product_id' => (int) $product->id,
-                            'message' => $exception->getMessage(),
-                        ];
                     }
                 }
+
+                $summary['deleted'] += count($result['variant_child_deletes'] ?? []);
+            } catch (\Throwable $exception) {
+                $summary['failed']++;
+                if (count($summary['errors']) < 20) {
+                    $summary['errors'][] = [
+                        'product_id' => (int) $product->id,
+                        'message' => $exception->getMessage(),
+                    ];
+                }
             }
-        });
+        }
 
         return $summary;
     }

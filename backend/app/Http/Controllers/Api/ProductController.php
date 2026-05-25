@@ -5126,9 +5126,67 @@ class ProductController extends Controller
             ->all();
     }
 
-    protected function applyProductAttributeFilters(Builder $query, $inputAttributes, array $options = []): void
+    protected function normalizeAttributeFilterInputValues($values): array
+    {
+        return collect(is_array($values) ? $values : explode(',', (string) $values))
+            ->map(function ($value) {
+                if (!is_scalar($value)) {
+                    return null;
+                }
+
+                return trim((string) $value);
+            })
+            ->filter(fn ($value) => $value !== null && $value !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    protected function normalizeAttributeFilterGroups($inputAttributes): array
     {
         if (!is_array($inputAttributes) || empty($inputAttributes)) {
+            return [];
+        }
+
+        $filterGroups = [];
+
+        foreach ($inputAttributes as $attrId => $values) {
+            if (!is_numeric($attrId)) {
+                continue;
+            }
+
+            $valueArray = $this->normalizeAttributeFilterInputValues($values);
+
+            if (empty($valueArray)) {
+                continue;
+            }
+
+            $filterGroups[] = [
+                'attribute_id' => (int) $attrId,
+                'values' => $valueArray,
+            ];
+        }
+
+        return $filterGroups;
+    }
+
+    protected function applyOwnAttributeFilterGroups($query, array $filterGroups): void
+    {
+        foreach ($filterGroups as $filterGroup) {
+            $attributeId = (int) $filterGroup['attribute_id'];
+            $valueArray = $filterGroup['values'];
+
+            $query->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+            });
+        }
+    }
+
+    protected function applyProductAttributeFilters(Builder $query, $inputAttributes, array $options = []): void
+    {
+        $filterGroups = $this->normalizeAttributeFilterGroups($inputAttributes);
+
+        if (empty($filterGroups)) {
             return;
         }
 
@@ -5139,67 +5197,72 @@ class ProductController extends Controller
             ? (bool) $options['include_bundle_items']
             : false;
 
-        foreach ($inputAttributes as $attrId => $values) {
-            if (!is_numeric($attrId)) {
-                continue;
-            }
+        $query->where(function (Builder $attributeQuery) use (
+            $filterGroups,
+            $includeVariationMatches,
+            $includeBundleItemMatches
+        ) {
+            $attributeQuery->where(function (Builder $ownAttributeQuery) use ($filterGroups) {
+                $this->applyOwnAttributeFilterGroups($ownAttributeQuery, $filterGroups);
+            });
 
-            $valueArray = collect(is_array($values) ? $values : explode(',', (string) $values))
-                ->map(function ($value) {
-                    if (!is_scalar($value)) {
-                        return null;
-                    }
-
-                    return trim((string) $value);
-                })
-                ->filter(fn ($value) => $value !== null && $value !== '')
-                ->unique()
-                ->values()
-                ->all();
-
-            if (empty($valueArray)) {
-                continue;
-            }
-
-            $attributeId = (int) $attrId;
-
-            $query->where(function (Builder $attributeQuery) use (
-                $attributeId,
-                $valueArray,
-                $includeVariationMatches,
-                $includeBundleItemMatches
-            ) {
-                $attributeQuery->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
-                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+            if ($includeVariationMatches) {
+                $attributeQuery->orWhereHas('variations', function (Builder $variationQuery) use ($filterGroups) {
+                    $variationQuery->where('products.status', true);
+                    $this->applyVariationAttributeFilterGroups($variationQuery, $filterGroups);
                 });
+            }
 
-                if ($includeVariationMatches) {
-                    $attributeQuery->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
-                        $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
-                            $productQuery->where('status', true);
-                        });
+            if ($includeBundleItemMatches) {
+                $attributeQuery->orWhereHas('bundleItems', function (Builder $bundleItemQuery) use ($filterGroups) {
+                    $bundleItemQuery->where(function (Builder $resolvedBundleItemQuery) use ($filterGroups) {
+                        $resolvedBundleItemQuery
+                            ->where(function (Builder $bundleItemAttributeQuery) use ($filterGroups) {
+                                $this->applyOwnAttributeFilterGroups($bundleItemAttributeQuery, $filterGroups);
+                            })
+                            ->orWhereHas('variations', function (Builder $variationQuery) use ($filterGroups) {
+                                $variationQuery->where('products.status', true);
+                                $this->applyVariationAttributeFilterGroups($variationQuery, $filterGroups);
+                            });
+                    });
+                });
+            }
+        });
+    }
+
+    protected function applyVariationAttributeFilterGroups($query, array $filterGroups): void
+    {
+        foreach ($filterGroups as $filterGroup) {
+            $attributeId = (int) $filterGroup['attribute_id'];
+            $valueArray = $filterGroup['values'];
+
+            $query->where(function (Builder $attributeQuery) use ($attributeId, $valueArray) {
+                $attributeQuery
+                    ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
                         $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                    })
+                    ->orWhere(function (Builder $inheritedAttributeQuery) use ($attributeId, $valueArray) {
+                        $inheritedAttributeQuery
+                            ->whereDoesntHave('attributeValues', function (Builder $attributeValueQuery) use ($attributeId) {
+                                $attributeValueQuery->where('attribute_id', $attributeId);
+                            })
+                            ->whereHas('parentConfigurable.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
+                                $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
+                            });
                     });
-                }
-
-                if ($includeBundleItemMatches) {
-                    $attributeQuery->orWhereHas('bundleItems', function (Builder $bundleItemQuery) use ($attributeId, $valueArray) {
-                        $bundleItemQuery->where(function (Builder $resolvedBundleItemQuery) use ($attributeId, $valueArray) {
-                            $resolvedBundleItemQuery
-                                ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
-                                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
-                                })
-                                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $valueArray) {
-                                    $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
-                                        $productQuery->where('status', true);
-                                    });
-                                    $this->applyAttributeValueConstraint($attributeValueQuery, $attributeId, $valueArray);
-                                });
-                        });
-                    });
-                }
             });
         }
+    }
+
+    protected function applyVariationAttributeFilters($query, $inputAttributes): void
+    {
+        $filterGroups = $this->normalizeAttributeFilterGroups($inputAttributes);
+
+        if (empty($filterGroups)) {
+            return;
+        }
+
+        $this->applyVariationAttributeFilterGroups($query, $filterGroups);
     }
 
     protected function applyProductBundleQuickFilters(Builder $query, $inputFilters): void
@@ -5966,6 +6029,8 @@ class ProductController extends Controller
             $query->whereDoesntHave('parentConfigurable');
         }
 
+        $pickerAttributeFilters = $request->input('attributes');
+
         $query->with([
             'unit:id,name',
             'images:id,product_id,image_url,is_primary,sort_order',
@@ -5973,7 +6038,10 @@ class ProductController extends Controller
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                 ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id')
                 ->with(['unit:id,name']),
-            'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
+            'variations' => function ($variationQuery) use ($pickerAttributeFilters) {
+                $variationQuery->where('products.status', true);
+                $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
+            },
             'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.images:id,product_id,image_url,is_primary,sort_order',
@@ -5981,7 +6049,10 @@ class ProductController extends Controller
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.images:id,product_id,image_url,is_primary,sort_order',
-            'bundleItems.variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
+            'bundleItems.variations' => function ($variationQuery) use ($pickerAttributeFilters) {
+                $variationQuery->where('products.status', true);
+                $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
+            },
             'bundleItems.variations.unit:id,name',
             'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.variations.images:id,product_id,image_url,is_primary,sort_order',

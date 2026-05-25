@@ -575,16 +575,17 @@ class GoogleMerchantProductSyncService
 
     private function buildBundleOptionInputPayload(Product $product, array $option, array $settings, string $parentOfferId): array
     {
-        $title = $this->cleanText((string) $option['title'], 150);
-        $description = $this->resolveDescription($product);
-        $link = $this->resolveBundleOptionProductUrl($product, $option, $settings);
-        $imageLink = $this->resolveImageUrl($product);
-        $additionalImages = $this->resolveAdditionalImageUrls($product, $imageLink);
+        $displayProduct = $this->productUrlOwner($product);
+        $title = $this->cleanText((string) $displayProduct->name, 150);
+        $description = $this->resolveDescription($displayProduct);
+        $link = $this->resolveBundleOptionProductUrl($displayProduct, $option, $settings);
+        $imageLink = $this->resolveImageUrl($displayProduct);
+        $additionalImages = $this->resolveAdditionalImageUrls($displayProduct, $imageLink);
         $price = (float) $option['price'];
-        $googleProductCategory = $this->resolveGoogleProductCategory($product, $settings);
-        $productTypes = $this->resolveProductTypes($product);
+        $googleProductCategory = $this->resolveGoogleProductCategory($displayProduct, $settings);
+        $productTypes = $this->resolveProductTypes($displayProduct);
 
-        $eligibilityFailures = $this->bundleOptionEligibilityFailures($product, $option, $settings, [
+        $eligibilityFailures = $this->bundleOptionEligibilityFailures($displayProduct, $option, $settings, [
             'title' => $title,
             'link' => $link,
             'image_link' => $imageLink,

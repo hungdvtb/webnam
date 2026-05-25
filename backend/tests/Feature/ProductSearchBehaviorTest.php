@@ -422,6 +422,87 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BAT-HUONG-LAM-018');
     }
 
+    public function test_picker_attribute_filter_keeps_only_variations_matching_combined_parent_and_variant_values(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men rạn',
+            'Men lam',
+        ]);
+        $patternAttribute = $this->createProductAttribute($account, 'Mẫu', [
+            'Sen',
+            'Rồng',
+        ]);
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Bat tra sam men ran',
+            'sku' => 'MR70-BATTRASAM-RAN',
+            'type' => 'configurable',
+        ]);
+        $this->attachProductAttributeValue($parent, $glazeAttribute, 'Men rạn');
+
+        $senVariant = $this->createProduct($account, [
+            'name' => 'Bat tra sam men ran - Sen',
+            'sku' => 'MR70-BATTRASAM-RAN-SEN',
+        ]);
+        $this->attachProductAttributeValue($senVariant, $patternAttribute, 'Sen');
+
+        $rongVariant = $this->createProduct($account, [
+            'name' => 'Bat tra sam men ran - Rong',
+            'sku' => 'MR70-BATTRASAM-RAN-RONG',
+        ]);
+        $this->attachProductAttributeValue($rongVariant, $patternAttribute, 'Rồng');
+
+        $this->attachVariation($parent, $senVariant, ['position' => 0]);
+        $this->attachVariation($parent, $rongVariant, ['position' => 1]);
+
+        $rongResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men rạn',
+                    $patternAttribute->id => 'Rồng',
+                ],
+            ]));
+
+        $rongResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+
+        $rongVariationIds = collect($rongResponse->json('data.0.variations'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertSame([$rongVariant->id], $rongVariationIds);
+
+        $senResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'per_page' => 20,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men rạn',
+                    $patternAttribute->id => 'Sen',
+                ],
+            ]));
+
+        $senResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+
+        $senVariationIds = collect($senResponse->json('data.0.variations'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertSame([$senVariant->id], $senVariationIds);
+    }
+
     public function test_attribute_filter_matches_only_exact_attribute_values(): void
     {
         $account = $this->authenticate();

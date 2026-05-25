@@ -853,7 +853,9 @@ const normalizeStoredProductQuickFilterState = (value = {}) => {
         values: normalizeStoredQuickFilterValues(source.values),
         attributeId2: String(source.attributeId2 ?? source.attribute_id_2 ?? '').trim(),
         values2: normalizeStoredQuickFilterValues(source.values2),
-        quickModeEnabled: Boolean(source.quickModeEnabled ?? source.quick_mode_enabled),
+        quickModeEnabled: source.quickModeEnabled === undefined && source.quick_mode_enabled === undefined
+            ? true
+            : Boolean(source.quickModeEnabled ?? source.quick_mode_enabled),
     };
 };
 const getStoredProductQuickFilterState = (user = null) => {
@@ -1195,15 +1197,23 @@ const getProductAttributeDisplayValues = (product, attributeId) => {
         ))
         : [];
 
+    const matchesAttributeId = (attributeValue) => (
+        String(attributeValue?.attribute_id ?? attributeValue?.attribute?.id ?? '') === String(attributeId)
+    );
+    const ownAttributeValues = productAttributeValues.filter(matchesAttributeId);
+    const inheritedValuesForAttribute = ownAttributeValues.length > 0
+        ? []
+        : inheritedAttributeValues.filter(matchesAttributeId);
+
     return Array.from(new Set(
         [
-            ...inheritedAttributeValues,
-            ...productAttributeValues,
+            ...inheritedValuesForAttribute,
+            ...ownAttributeValues,
             ...variationAttributeValues,
             ...bundleItemAttributeValues,
             ...bundleOptionAttributeValues,
         ]
-            .filter((attributeValue) => String(attributeValue?.attribute_id ?? attributeValue?.attribute?.id ?? '') === String(attributeId))
+            .filter(matchesAttributeId)
             .flatMap((attributeValue) => parseProductAttributeValueList(attributeValue?.value))
             .filter(Boolean)
     ));
@@ -1256,6 +1266,15 @@ const buildProductQuickFilterCriterion = (attribute, value) => {
         compareValue: normalizeProductSearchText(normalizedValue),
     };
 };
+const buildProductAttributeQuickFilterCriterion = (attribute, value) => {
+    const normalizedValue = normalizeQuickFilterOptionValue(value);
+    if (!attribute || !normalizedValue || isBundleProductQuickFilterAttribute(attribute)) return null;
+
+    return {
+        attribute,
+        value: normalizedValue,
+    };
+};
 const productMatchesBundleQuickFilterCriteria = (entry, criteria = []) => {
     if (!Array.isArray(criteria) || criteria.length === 0) return true;
     if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) return false;
@@ -1301,6 +1320,13 @@ const productMatchesQuickFilterValue = (product, attribute, value) => {
 
     return getProductQuickFilterDisplayValues(product, attribute)
         .some((displayValue) => selectedValues.has(normalizeProductSearchText(displayValue)));
+};
+const productMatchesAttributeQuickFilterCriteria = (entry, criteria = []) => {
+    if (!Array.isArray(criteria) || criteria.length === 0) return true;
+
+    return criteria.every((criterion) => (
+        productMatchesQuickFilterValue(entry, criterion.attribute, criterion.value)
+    ));
 };
 const buildDependentProductQuickFilterOptions = (products, primaryAttribute, primaryValue, secondaryAttribute) => {
     if (!primaryAttribute || !primaryValue || !secondaryAttribute) {
@@ -3569,6 +3595,7 @@ const OrderForm = () => {
     const ignoreNextMobileProductSearchPopRef = useRef(false);
     const previousShowSearchDropdownRef = useRef(false);
     const productSearchAbortRef = useRef(null);
+    const productSearchRequestKeyRef = useRef('');
     const productSearchCacheRef = useRef(new Map());
     const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
     const skipNextProductQuickFilterPersistRef = useRef(false);
@@ -3680,6 +3707,16 @@ const OrderForm = () => {
         normalizedProductQuickFilterValues2,
     ]);
     const hasActiveProductBundleQuickFilter = activeProductBundleQuickFilterCriteria.length > 0;
+    const activeProductAttributeQuickFilterCriteria = useMemo(() => ([
+        buildProductAttributeQuickFilterCriterion(activeProductQuickFilterAttribute, normalizedProductQuickFilterValues[0]),
+        buildProductAttributeQuickFilterCriterion(activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2[0]),
+    ].filter(Boolean)), [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
+    const hasActiveProductAttributeQuickFilter = activeProductAttributeQuickFilterCriteria.length > 0;
     const activeProductQuickSetupKey = useMemo(() => {
         if (!hasActiveProductQuickFilter) return '';
 
@@ -5723,28 +5760,26 @@ const OrderForm = () => {
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
         const cacheKey = JSON.stringify({ account_id: activeAccountId, ...params });
-        const cachedProducts = productSearchCacheRef.current.get(cacheKey);
-        if (Array.isArray(cachedProducts) && cachedProducts.length > 0) {
+        productSearchRequestKeyRef.current = cacheKey;
+        productSearchAbortRef.current?.abort();
+
+        if (productSearchCacheRef.current.has(cacheKey)) {
+            const cachedProducts = productSearchCacheRef.current.get(cacheKey);
             setProducts(cachedProducts);
             return;
         }
 
-        productSearchAbortRef.current?.abort();
         const controller = new AbortController();
         productSearchAbortRef.current = controller;
 
         try {
             const prodRes = await productApi.getAll(params, controller.signal);
-            if (controller.signal.aborted) return;
+            if (controller.signal.aborted || productSearchRequestKeyRef.current !== cacheKey) return;
 
             const nextProducts = Array.isArray(prodRes.data.data)
                 ? prodRes.data.data.map((product) => normalizeProductPickerEntry(product))
                 : [];
-            if (nextProducts.length > 0) {
-                productSearchCacheRef.current.set(cacheKey, nextProducts);
-            } else {
-                productSearchCacheRef.current.delete(cacheKey);
-            }
+            productSearchCacheRef.current.set(cacheKey, nextProducts);
             setProducts(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
@@ -6015,6 +6050,8 @@ const OrderForm = () => {
             scope_key: activeProductQuickFilterScopeKey,
             ...params,
         });
+        productQuickFilterScopeAbortRef.current?.abort();
+
         const cachedProducts = productQuickFilterScopeCacheRef.current.get(cacheKey);
         if (cachedProducts) {
             setProductQuickFilterScopeProducts(cachedProducts);
@@ -6022,7 +6059,6 @@ const OrderForm = () => {
             return;
         }
 
-        productQuickFilterScopeAbortRef.current?.abort();
         const controller = new AbortController();
         productQuickFilterScopeAbortRef.current = controller;
 
@@ -6074,13 +6110,14 @@ const OrderForm = () => {
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
         const cacheKey = JSON.stringify({ quick_setup: true, account_id: activeAccountId, ...params });
+        productQuickSetupAbortRef.current?.abort();
+
         const cachedProducts = productQuickSetupCacheRef.current.get(cacheKey);
         if (cachedProducts) {
             setProductQuickSetupProducts(cachedProducts);
             return;
         }
 
-        productQuickSetupAbortRef.current?.abort();
         const controller = new AbortController();
         productQuickSetupAbortRef.current = controller;
 
@@ -6116,9 +6153,14 @@ const OrderForm = () => {
         const searchableEntries = isProductQuickModeActive
             ? quickModeSearchEntries
             : buildProductSearchEntries(products, {
-                includeNested: Boolean(searchTerm.trim()) || hasActiveProductBundleQuickFilter,
+                includeNested: Boolean(searchTerm.trim()) || hasActiveProductBundleQuickFilter || hasActiveProductAttributeQuickFilter,
             });
         const preparedProducts = searchableEntries
+            .filter((product) => (
+                hasActiveProductAttributeQuickFilter
+                    ? productMatchesAttributeQuickFilterCriteria(product, activeProductAttributeQuickFilterCriteria)
+                    : true
+            ))
             .filter((product) => (
                 hasActiveProductBundleQuickFilter
                     ? productMatchesBundleQuickFilterCriteria(product, activeProductBundleQuickFilterCriteria)
@@ -6150,8 +6192,10 @@ const OrderForm = () => {
             ))
             .slice(0, 50);
     }, [
+        activeProductAttributeQuickFilterCriteria,
         activeProductBundleQuickFilterCriteria,
         formData.items,
+        hasActiveProductAttributeQuickFilter,
         hasActiveProductBundleQuickFilter,
         isProductQuickModeActive,
         products,
@@ -6253,7 +6297,6 @@ const OrderForm = () => {
     useEffect(() => {
         if (!hasActiveProductQuickFilter) {
             lastVisitedProductQuickSetupKeyRef.current = '';
-            setProductQuickModeEnabled(false);
             setShowProductQuickSetupPanel(false);
             setProductQuickSetupSearchTerm('');
             setProductQuickSetupProducts([]);
@@ -6262,19 +6305,12 @@ const OrderForm = () => {
 
         if (lastVisitedProductQuickSetupKeyRef.current !== activeProductQuickSetupKey) {
             lastVisitedProductQuickSetupKeyRef.current = activeProductQuickSetupKey;
-            setProductQuickModeEnabled((prev) => prev && activeProductQuickSetupItems.length > 0);
             setShowProductQuickSetupPanel(false);
             return;
         }
-
-        if (productQuickModeEnabled && activeProductQuickSetupItems.length === 0) {
-            setProductQuickModeEnabled(false);
-        }
     }, [
-        activeProductQuickSetupItems.length,
         activeProductQuickSetupKey,
         hasActiveProductQuickFilter,
-        productQuickModeEnabled,
     ]);
 
     useEffect(() => {

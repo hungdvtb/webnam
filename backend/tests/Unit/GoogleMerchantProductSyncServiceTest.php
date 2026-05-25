@@ -135,7 +135,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(2, $payloads);
         $this->assertSame('BUNDLE-001', $payloads[0]['offerId']);
-        $this->assertSame('Ban tho 2m tro len, 3 bat huong', $payloads[1]['productAttributes']['title']);
+        $this->assertSame('Bo do tho bundle', $payloads[1]['productAttributes']['title']);
         $this->assertSame('Mo ta bundle cha.', $payloads[1]['productAttributes']['description']);
         $this->assertSame('https://cdn.gomdaithanh.com/products/bundle.jpg', $payloads[1]['productAttributes']['imageLink']);
         $this->assertStringContainsString('bundle_option_uid=bundle-option-1', $payloads[1]['productAttributes']['link']);
@@ -194,7 +194,10 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(1, $payloads);
         $this->assertSame('KYNGAI-VAK', $payloads[0]['offerId']);
+        $this->assertSame('Ky ngai men vang anh kim', $payloads[0]['productAttributes']['title']);
+        $this->assertSame('Mo ta san pham cha.', $payloads[0]['productAttributes']['description']);
         $this->assertSame('https://gomdaithanh.com/san-pham/ky-ngai-men-vang-anh-kim', $payloads[0]['productAttributes']['link']);
+        $this->assertSame('https://cdn.gomdaithanh.com/products/ky-ngai.jpg', $payloads[0]['productAttributes']['imageLink']);
         $this->assertSame('420000000000', $payloads[0]['productAttributes']['price']['amountMicros']);
         $this->assertArrayNotHasKey('itemGroupId', $payloads[0]['productAttributes']);
     }
@@ -214,6 +217,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
             'type' => 'configurable',
             'name' => 'Ky ngai men vang anh kim',
             'slug' => 'ky-ngai-men-vang-anh-kim',
+            'description' => 'Mo ta san pham cha.',
             'price' => 999000,
             'category_id' => 8,
             'sku' => 'KYNGAI-VAK',
@@ -246,6 +250,10 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(1, $payloads);
         $this->assertSame('KYNGAI-VAK', $payloads[0]['offerId']);
+        $this->assertSame('Ky ngai men vang anh kim', $payloads[0]['productAttributes']['title']);
+        $this->assertSame('Mo ta san pham cha.', $payloads[0]['productAttributes']['description']);
+        $this->assertSame('https://gomdaithanh.com/san-pham/ky-ngai-men-vang-anh-kim', $payloads[0]['productAttributes']['link']);
+        $this->assertSame('https://cdn.gomdaithanh.com/products/ky-ngai.jpg', $payloads[0]['productAttributes']['imageLink']);
         $this->assertSame('420000000000', $payloads[0]['productAttributes']['price']['amountMicros']);
     }
 
@@ -299,7 +307,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(2, $payloads);
         $this->assertSame('BUNDLE-001', $payloads[0]['offerId']);
-        $this->assertSame('Lua chon hien thi', $payloads[1]['productAttributes']['title']);
+        $this->assertSame('Bo do tho bundle', $payloads[1]['productAttributes']['title']);
     }
 
     private function bundleItemWithPivot(

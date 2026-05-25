@@ -853,9 +853,7 @@ const normalizeStoredProductQuickFilterState = (value = {}) => {
         values: normalizeStoredQuickFilterValues(source.values),
         attributeId2: String(source.attributeId2 ?? source.attribute_id_2 ?? '').trim(),
         values2: normalizeStoredQuickFilterValues(source.values2),
-        quickModeEnabled: source.quickModeEnabled === undefined && source.quick_mode_enabled === undefined
-            ? true
-            : Boolean(source.quickModeEnabled ?? source.quick_mode_enabled),
+        quickModeEnabled: true,
     };
 };
 const getStoredProductQuickFilterState = (user = null) => {
@@ -877,7 +875,6 @@ const persistProductQuickFilterState = (storageKey, state) => {
         normalizedState.searchTerm
         || normalizedState.values.length > 0
         || normalizedState.values2.length > 0
-        || normalizedState.quickModeEnabled
     );
 
     try {
@@ -1087,13 +1084,25 @@ const parseProductAttributeValueList = (value) => {
 
     return [trimmedValue];
 };
+const dedupeProductQuickFilterOptions = (options = []) => {
+    const seenValues = new Set();
+
+    return (Array.isArray(options) ? options : [])
+        .filter((option) => {
+            const normalizedValue = normalizeProductSearchText(option?.value || option?.label);
+            if (!normalizedValue || seenValues.has(normalizedValue)) return false;
+
+            seenValues.add(normalizedValue);
+            return true;
+        });
+};
 const buildProductQuickFilterAttributes = (attributes = []) => {
     const normalizedAttributes = attributes
         .filter((attribute) => supportedProductQuickFilterTypes.has(attribute?.frontend_type))
         .map((attribute) => ({
             ...attribute,
             quick_filter_kind: attribute?.quick_filter_kind || PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE,
-            options: (attribute.options || [])
+            options: dedupeProductQuickFilterOptions((attribute.options || [])
                 .map((option) => {
                     const value = normalizeQuickFilterOptionValue(option?.value);
                     return {
@@ -1102,7 +1111,7 @@ const buildProductQuickFilterAttributes = (attributes = []) => {
                         label: normalizeQuickFilterOptionValue(option?.label) || value,
                     };
                 })
-                .filter((option) => option.value !== '')
+                .filter((option) => option.value !== ''))
         }))
         .filter((attribute) => attribute.options.length > 0);
 
@@ -2106,8 +2115,19 @@ const buildVariationDisplayName = (parentName, variationName, optionLabel) => {
     const normalizedParentName = normalizeCanvasText(parentName);
     const normalizedVariationName = normalizeCanvasText(variationName);
     const normalizedOptionLabel = normalizeCanvasText(optionLabel);
+    const normalizedParentSearch = normalizeProductSearchText(normalizedParentName);
+    const normalizedVariationSearch = normalizeProductSearchText(normalizedVariationName);
 
     if (normalizedVariationName) {
+        if (
+            normalizedParentName
+            && normalizedVariationSearch
+            && normalizedVariationSearch !== normalizedParentSearch
+            && !normalizedVariationSearch.startsWith(normalizedParentSearch)
+        ) {
+            return `${normalizedParentName} - ${normalizedVariationName || normalizedOptionLabel}`;
+        }
+
         return normalizedVariationName;
     }
 
@@ -2583,19 +2603,45 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
         }
 
         const product = normalizeProductPickerEntry(rawProduct);
+        const productId = Number(product?.id ?? product?.product_id) || 0;
+        const rawEntryKind = String(product?.entry_kind || '').trim();
+        const isDirectVariationEntry = rawEntryKind === SEARCH_ENTRY_VARIATION || Number(product?.parent_product_id ?? 0) > 0;
+        const directParentProductId = Number(
+            product?.parent_product_id
+            ?? product?.parent?.id
+            ?? product?.parent_configurable?.[0]?.id
+            ?? product?.parentConfigurable?.[0]?.id
+            ?? 0
+        ) || null;
+        const directParentProductName = normalizeCanvasText(
+            product?.parent_product_name
+            || product?.parent?.name
+            || product?.parent_configurable?.[0]?.name
+            || product?.parentConfigurable?.[0]?.name
+        );
+        const directOptionLabel = normalizeCanvasText(product?.option_label || product?.attribute_summary || buildAttributeValueSummary(product));
         const baseName = normalizeCanvasText(product?.name) || 'Sản phẩm';
-        const baseDisplayName = normalizeCanvasText(product?.display_name) || baseName;
+        const baseDisplayName = isDirectVariationEntry
+            ? (
+                normalizeCanvasText(product?.display_name)
+                || buildVariationDisplayName(directParentProductName, baseName, directOptionLabel)
+                || baseName
+            )
+            : (normalizeCanvasText(product?.display_name) || baseName);
         const baseSku = normalizeCanvasText(product?.sku);
         const baseDisplaySku = normalizeCanvasText(product?.display_sku) || baseSku;
         const baseEntry = {
-            entry_id: `product-${Number(product?.id ?? product?.product_id) || 0}`,
-            entry_kind: SEARCH_ENTRY_PRODUCT,
-            id: Number(product?.id ?? product?.product_id) || 0,
-            target_product_id: Number(product?.id ?? product?.product_id) || 0,
+            entry_id: `${isDirectVariationEntry ? 'variation' : 'product'}-${productId}`,
+            entry_kind: isDirectVariationEntry ? SEARCH_ENTRY_VARIATION : SEARCH_ENTRY_PRODUCT,
+            id: productId,
+            target_product_id: productId,
+            parent_product_id: isDirectVariationEntry ? directParentProductId : undefined,
+            parent_product_name: isDirectVariationEntry ? directParentProductName : undefined,
             name: baseName,
             display_name: baseDisplayName,
             sku: baseSku,
             display_sku: baseDisplaySku,
+            option_label: isDirectVariationEntry ? directOptionLabel : '',
             price: Number(product?.price ?? 0) || 0,
             expected_cost: parseMoneyNumber(product?.expected_cost),
             cost_price: resolveProductCostPrice(product),
@@ -2610,6 +2656,8 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 baseDisplayName,
                 baseSku,
                 baseDisplaySku,
+                directParentProductName,
+                directOptionLabel,
                 normalizeCanvasText(product?.bundle_title),
                 buildAttributeValueSummary(product),
             ].filter(Boolean),
@@ -2641,7 +2689,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 parent_product_id: baseEntry.id,
                 parent_product_name: baseEntry.name,
                 name: normalizeCanvasText(variation?.name) || baseEntry.name,
-                display_name: buildVariationDisplayName(baseEntry.name, variation?.name, optionLabel),
+                display_name: normalizeCanvasText(variation?.display_name) || buildVariationDisplayName(baseEntry.name, variation?.name, optionLabel),
                 sku: normalizeCanvasText(variation?.sku),
                 display_sku: normalizeCanvasText(variation?.sku || product?.sku),
                 option_label: optionLabel,
@@ -2656,6 +2704,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 parent_attribute_values: baseEntry.attribute_values,
                 search_keywords: [
                     baseEntry.name,
+                    normalizeCanvasText(variation?.display_name),
                     normalizeCanvasText(variation?.name),
                     normalizeCanvasText(variation?.sku),
                     optionLabel,
@@ -4154,28 +4203,8 @@ const OrderForm = () => {
         [activeProductQuickSetupItems]
     );
     const visibleProductQuickSetupProducts = useMemo(() => {
-        let filtered = productQuickSetupProducts;
-
-        if (activeProductQuickFilterAttribute2 && normalizedProductQuickFilterValues2[0]) {
-            const attrValue2 = String(normalizedProductQuickFilterValues2[0]);
-            const selectedValue = normalizeProductSearchText(attrValue2);
-            const selectedLabel = normalizeProductSearchText(
-                getQuickFilterOptionLabel(activeProductQuickFilterAttribute2, attrValue2)
-            );
-
-            filtered = productQuickSetupProducts.filter((product) => {
-                const values = getProductQuickFilterDisplayValues(product, activeProductQuickFilterAttribute2);
-
-                // Match if value is exact OR if value is missing (shared item).
-                return values.length === 0 || values.some((value) => {
-                    const comparableValue = normalizeProductSearchText(value);
-                    return comparableValue === selectedValue || comparableValue === selectedLabel;
-                });
-            });
-        }
-
-        return mergeProductQuickSetupEntries(filtered, activeProductQuickSetupItems);
-    }, [activeProductQuickSetupItems, productQuickSetupProducts, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
+        return mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems);
+    }, [activeProductQuickSetupItems, productQuickSetupProducts]);
     const syncOrderFormTableViewportWidth = useCallback(() => {
         const viewportNode = orderFormTableViewportRef.current;
         if (!viewportNode) return;
@@ -5762,8 +5791,9 @@ const OrderForm = () => {
         const cacheKey = JSON.stringify({ account_id: activeAccountId, ...params });
         productSearchRequestKeyRef.current = cacheKey;
         productSearchAbortRef.current?.abort();
+        const shouldUseProductSearchCache = normalizeCanvasText(term) === '';
 
-        if (productSearchCacheRef.current.has(cacheKey)) {
+        if (shouldUseProductSearchCache && productSearchCacheRef.current.has(cacheKey)) {
             const cachedProducts = productSearchCacheRef.current.get(cacheKey);
             setProducts(cachedProducts);
             return;
@@ -5779,7 +5809,9 @@ const OrderForm = () => {
             const nextProducts = Array.isArray(prodRes.data.data)
                 ? prodRes.data.data.map((product) => normalizeProductPickerEntry(product))
                 : [];
-            productSearchCacheRef.current.set(cacheKey, nextProducts);
+            if (shouldUseProductSearchCache) {
+                productSearchCacheRef.current.set(cacheKey, nextProducts);
+            }
             setProducts(nextProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
@@ -6097,7 +6129,7 @@ const OrderForm = () => {
         }
 
         const params = {
-            per_page: 24,
+            per_page: 200,
             picker: 1,
         };
         appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);

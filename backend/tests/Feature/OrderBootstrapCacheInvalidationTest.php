@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Attribute;
+use App\Models\AttributeOption;
 use App\Models\QuoteTemplate;
 use App\Models\User;
 use App\Support\OrderBootstrapCache;
@@ -73,6 +75,50 @@ class OrderBootstrapCacheInvalidationTest extends TestCase
             ->assertJsonPath('message', 'Settings updated successfully');
 
         $this->assertFalse(Cache::has($cacheKey));
+    }
+
+    public function test_order_form_bootstrap_deduplicates_product_attribute_options_by_value(): void
+    {
+        [$account] = $this->authenticate();
+        $attribute = Attribute::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Loai men',
+            'code' => 'loai-men-' . Str::lower(Str::random(6)),
+            'entity_type' => 'product',
+            'frontend_type' => 'select',
+            'is_filterable' => true,
+            'is_filterable_frontend' => true,
+            'is_filterable_backend' => true,
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+
+        foreach ([
+            ['value' => 'Men ran', 'order' => 0],
+            ['value' => 'Men ran', 'order' => 1],
+            ['value' => 'Men lam', 'order' => 2],
+            ['value' => 'Men lam', 'order' => 3],
+        ] as $option) {
+            AttributeOption::query()->create([
+                'attribute_id' => $attribute->id,
+                ...$option,
+            ]);
+        }
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders/bootstrap?mode=form');
+
+        $response->assertOk();
+
+        $attributePayload = collect($response->json('product_attributes'))
+            ->firstWhere('id', $attribute->id);
+
+        $this->assertNotNull($attributePayload);
+        $this->assertSame(
+            ['Men ran', 'Men lam'],
+            collect($attributePayload['options'])->pluck('value')->all()
+        );
     }
 
     private function authenticate(): array

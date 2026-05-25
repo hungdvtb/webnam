@@ -3793,7 +3793,22 @@ class OrderController extends Controller
             ->where('status', true)
             ->ordered()
             ->get()
-            ->toArray();
+            ->map(function (Attribute $attribute) {
+                $payload = $attribute->toArray();
+                $payload['options'] = collect($payload['options'] ?? [])
+                    ->filter(fn ($option) => trim((string) ($option['value'] ?? '')) !== '')
+                    ->unique(fn ($option) => Str::of((string) ($option['value'] ?? ''))
+                        ->lower()
+                        ->ascii()
+                        ->squish()
+                        ->toString())
+                    ->values()
+                    ->all();
+
+                return $payload;
+            })
+            ->values()
+            ->all();
     }
 
     private function loadOrderProductQuickFilterAttributes(int $accountId): array

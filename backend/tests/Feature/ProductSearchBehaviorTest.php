@@ -189,6 +189,65 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.id', $parent->id);
     }
 
+    public function test_picker_search_returns_every_active_variant_for_matching_configurable_product(): void
+    {
+        $account = $this->authenticate();
+        $patternAttribute = $this->createProductAttribute($account, 'Hoa van', [
+            'SEN',
+            'Cuon thu',
+        ]);
+
+        $parent = $this->createProduct($account, [
+            'name' => 'Bat tra sam men RAN',
+            'sku' => 'MR70-BATTRASAM-RAN',
+            'type' => 'configurable',
+        ]);
+
+        $senVariant = $this->createProduct($account, [
+            'name' => 'Bat tra sam men RAN - SEN',
+            'sku' => 'MR70-BATTRASAM-RAN-SEN',
+            'price' => 110000,
+        ]);
+        $this->attachProductAttributeValue($senVariant, $patternAttribute, 'SEN');
+
+        $scrollVariant = $this->createProduct($account, [
+            'name' => 'Bat tra sam men RAN - Cuon thu',
+            'sku' => 'MR70-BATTRASAM-RAN-CUONTHU',
+            'price' => 120000,
+        ]);
+        $this->attachProductAttributeValue($scrollVariant, $patternAttribute, 'Cuon thu');
+
+        $this->attachVariation($parent, $senVariant, ['position' => 0]);
+        $this->attachVariation($parent, $scrollVariant, ['position' => 1]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=battra&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $parent->id);
+
+        $variations = collect($response->json('data.0.variations'));
+        $variationIds = $variations
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+        $variationNames = $variations->pluck('display_name')->all();
+        $variationSkus = $variations->pluck('sku')->all();
+
+        $this->assertSame([$senVariant->id, $scrollVariant->id], $variationIds);
+        $this->assertSame([
+            'Bat tra sam men RAN - SEN',
+            'Bat tra sam men RAN - Cuon thu',
+        ], $variationNames);
+        $this->assertSame([
+            'MR70-BATTRASAM-RAN-SEN',
+            'MR70-BATTRASAM-RAN-CUONTHU',
+        ], $variationSkus);
+    }
+
     public function test_name_search_uses_name_matching_instead_of_sku_token_matching(): void
     {
         $account = $this->authenticate();

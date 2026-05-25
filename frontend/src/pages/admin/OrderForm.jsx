@@ -6189,12 +6189,12 @@ const OrderForm = () => {
             });
         const preparedProducts = searchableEntries
             .filter((product) => (
-                hasActiveProductAttributeQuickFilter
+                !isProductQuickModeActive && hasActiveProductAttributeQuickFilter
                     ? productMatchesAttributeQuickFilterCriteria(product, activeProductAttributeQuickFilterCriteria)
                     : true
             ))
             .filter((product) => (
-                hasActiveProductBundleQuickFilter
+                !isProductQuickModeActive && hasActiveProductBundleQuickFilter
                     ? productMatchesBundleQuickFilterCriteria(product, activeProductBundleQuickFilterCriteria)
                     : true
             ))

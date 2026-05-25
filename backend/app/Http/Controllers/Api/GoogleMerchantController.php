@@ -275,7 +275,11 @@ class GoogleMerchantController extends Controller
         $query = GoogleMerchantSyncLog::query()->latest('id');
 
         if ($accountId) {
-            $query->where('account_id', $accountId);
+            $query->where(function ($accountQuery) use ($accountId) {
+                $accountQuery
+                    ->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            });
         }
 
         if ($request->filled('product_id')) {

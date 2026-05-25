@@ -141,15 +141,43 @@ class GoogleMerchantProductSyncService
 
     private function syncVariantChildThroughParent(Product $variant, Product $parent, ?string $action = null): array
     {
+        $settings = $this->settingsService->settingsFor((int) ($variant->account_id ?: $parent->account_id) ?: null);
+        $accountId = $this->accountId($settings);
+        $dataSourceName = $this->dataSourceName($settings, $accountId);
+        $variantOfferId = $this->resolveOfferId($variant, $settings);
+        $reason = 'Bien the con khong duoc day rieng; chi giu offer san pham cha tren Google Merchant.';
+
         $this->recordLocalLog(
             $variant,
-            $this->resolveOfferId($variant, $this->settingsService->settingsFor((int) $variant->account_id ?: null)),
+            $variantOfferId,
             'variant_child_redirect',
             'skipped',
             'Bien the con khong duoc day rieng; dong bo lai san pham cha.'
         );
 
+        $variantDeleteResult = $this->deleteProductInput(
+            $variant,
+            $settings,
+            $accountId,
+            $dataSourceName,
+            $variantOfferId,
+            'variant_child_delete',
+            $reason
+        );
+
+        if ($action === 'delete') {
+            $variantDeleteResult['redirected_from_variant_id'] = (int) $variant->id;
+            $variantDeleteResult['redirected_from_variant_action'] = $action;
+
+            return $variantDeleteResult;
+        }
+
         $result = $this->syncProduct($parent, null);
+        $result['variant_child_deletes'] = collect([$variantDeleteResult])
+            ->merge($result['variant_child_deletes'] ?? [])
+            ->unique(fn (array $deleteResult) => (string) ($deleteResult['offer_id'] ?? ''))
+            ->values()
+            ->all();
         $result['redirected_from_variant_id'] = (int) $variant->id;
         $result['redirected_from_variant_action'] = $action;
 
@@ -544,7 +572,7 @@ class GoogleMerchantProductSyncService
             return [];
         }
 
-        return $this->configurableProductVariants($product)
+        return $this->configurableProductVariants($product, true)
             ->map(function (Product $variant) use ($settings, $accountId, $dataSourceName, $reason) {
                 return $this->deleteProductInput(
                     $variant,
@@ -1311,17 +1339,22 @@ class GoogleMerchantProductSyncService
             ->first();
     }
 
-    private function configurableProductVariants(Product $product)
+    private function configurableProductVariants(Product $product, bool $includeTrashed = false)
     {
         if ((string) $product->type !== 'configurable') {
             return collect();
         }
 
-        if ($product->relationLoaded('variations')) {
+        if (!$includeTrashed && $product->relationLoaded('variations')) {
             return $product->variations;
         }
 
-        return $product->variations()->get();
+        $query = $product->variations();
+        if ($includeTrashed) {
+            $query->withTrashed();
+        }
+
+        return $query->get();
     }
 
     private function isEligibleVariantForParentOffer(Product $variant): bool

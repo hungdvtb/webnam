@@ -10,6 +10,11 @@ if (is_string($verifySsl)) {
     $verifySsl = filter_var($verifySsl, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true;
 }
 
+$scheduledSyncEnabled = env('GOOGLE_MERCHANT_SCHEDULED_SYNC_ENABLED', true);
+if (is_string($scheduledSyncEnabled)) {
+    $scheduledSyncEnabled = filter_var($scheduledSyncEnabled, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true;
+}
+
 return [
     'enabled' => (bool) $enabled,
 
@@ -36,6 +41,7 @@ return [
     'default_google_product_category' => env('GOOGLE_MERCHANT_DEFAULT_GOOGLE_PRODUCT_CATEGORY'),
     'inactive_action' => env('GOOGLE_MERCHANT_INACTIVE_ACTION', 'out_of_stock'),
 
+    'scheduled_sync_enabled' => (bool) $scheduledSyncEnabled,
     'queue_connection' => env('GOOGLE_MERCHANT_QUEUE_CONNECTION', 'sync'),
     'queue_name' => env('GOOGLE_MERCHANT_QUEUE_NAME', 'google-merchant'),
 

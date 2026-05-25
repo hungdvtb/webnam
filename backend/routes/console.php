@@ -11,3 +11,7 @@ Artisan::command('inspire', function () {
 Schedule::command('meta-catalog:sync-products --delete-stale --scheduled')
     ->hourly()
     ->withoutOverlapping(55);
+
+Schedule::command('google-merchant:sync-products --scheduled')
+    ->hourly()
+    ->withoutOverlapping(55);

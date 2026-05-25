@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { cmsApi, mediaApi, orderApi, quoteTemplateApi, googleMerchantApi } from '../../services/api';
 import { useUI } from '../../context/UIContext';
 import { createDefaultHeaderMenus, normalizeHeaderMenus } from '../../utils/headerSettings';
@@ -111,6 +111,7 @@ const escapeModalHtml = (value) => String(value ?? '')
 
 const formatGoogleMerchantManualSyncResult = (data = {}) => {
     const errors = Array.isArray(data.errors) ? data.errors : [];
+    const breakdown = data.candidate_breakdown || {};
     const lines = [
         `Tổng sản phẩm đã quét: ${Number(data.total_scanned || data.total || data.scanned || 0)}`,
         `Số sản phẩm cập nhật thành công: ${Number(data.updated || 0)}`,
@@ -119,7 +120,23 @@ const formatGoogleMerchantManualSyncResult = (data = {}) => {
         `Số sản phẩm lỗi: ${Number(data.failed || 0)}`,
     ];
 
+    if (Object.keys(breakdown).length > 0) {
+        lines.push('');
+        lines.push('Phân loại danh sách quét:');
+        lines.push(`- Dòng candidate theo query cũ: ${Number(breakdown.legacy_candidate_rows_before_filter || 0)}`);
+        lines.push(`- Sản phẩm cha/top-level được tính vào tiến trình: ${Number(breakdown.top_level_candidates || 0)}`);
+        lines.push(`- Sản phẩm đang bán top-level: ${Number(breakdown.active_top_level_products || 0)}`);
+        lines.push(`- Sản phẩm tắt/đã xóa cần cleanup: ${Number(breakdown.inactive_or_deleted_top_level_cleanup || 0)}`);
+        lines.push(`- Biến thể con đã loại khỏi tổng: ${Number(breakdown.variant_child_rows_excluded_from_total || 0)}`);
+        lines.push(`- Sản phẩm bundle/combo: ${Number(breakdown.bundle_parent_products || 0)}`);
+        lines.push(`- Sản phẩm cha có biến thể: ${Number(breakdown.configurable_parent_products || 0)}`);
+        lines.push(`- Sản phẩm thường/top-level khác: ${Number(breakdown.simple_top_level_products || 0)}`);
+        lines.push(`- Dòng tùy chọn bundle hiển thị: ${Number(breakdown.bundle_option_rows_visible || 0)}`);
+        lines.push(`- Dòng tùy chọn bundle nội bộ: ${Number(breakdown.bundle_option_rows_internal || 0)}`);
+    }
+
     if (errors.length > 0) {
+        lines.push('');
         lines.push('Lý do lỗi:');
         errors.slice(0, 10).forEach((error) => {
             lines.push(`#${error.product_id || '-'}: ${error.message || 'Không rõ lỗi'}`);
@@ -133,6 +150,7 @@ const formatGoogleMerchantManualSyncResult = (data = {}) => {
 
 const mergeGoogleMerchantManualSyncResult = (current, batch) => ({
     total_candidates: Number(batch.total_candidates || current.total_candidates || 0),
+    candidate_breakdown: batch.candidate_breakdown || current.candidate_breakdown || null,
     total_scanned: Number(current.total_scanned || 0) + Number(batch.total_scanned || 0),
     updated: Number(current.updated || 0) + Number(batch.updated || 0),
     skipped: Number(current.skipped || 0) + Number(batch.skipped || 0),
@@ -789,6 +807,7 @@ const SiteSettings = () => {
     const [copiedRoute, setCopiedRoute] = useState('');
 
     const activeAccountId = localStorage.getItem('activeAccountId');
+    const googleMerchantManualSyncPausedRef = useRef(false);
 
     const fetchDomains = useCallback(async () => {
         try {
@@ -1067,6 +1086,7 @@ const SiteSettings = () => {
             return;
         }
 
+        googleMerchantManualSyncPausedRef.current = false;
         setSyncingGoogleMerchantNow(true);
         setGoogleMerchantManualSyncProgress({ scanned: 0, total: 0 });
         let aggregate = {
@@ -1085,14 +1105,18 @@ const SiteSettings = () => {
             let latestStats = null;
 
             while (!finished) {
+                if (googleMerchantManualSyncPausedRef.current) {
+                    break;
+                }
+
                 const response = await googleMerchantApi.syncProducts({
                     all: true,
                     queue: false,
                     account_id: activeAccountId,
                     cursor,
-                    batch_size: 1,
+                    batch_size: 5,
                 }, {
-                    timeout: 120000,
+                    timeout: 180000,
                 });
 
                 const batch = response.data || {};
@@ -1106,7 +1130,7 @@ const SiteSettings = () => {
                     total: aggregate.total_candidates,
                 });
 
-                if (!finished && cursor <= 0) {
+                if (!finished && cursor <= 0 && !googleMerchantManualSyncPausedRef.current) {
                     throw new Error('Không nhận được cursor tiếp theo từ máy chủ.');
                 }
             }
@@ -1117,10 +1141,13 @@ const SiteSettings = () => {
                 fetchGoogleMerchantSettings();
             }
 
+            const paused = googleMerchantManualSyncPausedRef.current && !finished;
             showModal({
-                title: aggregate.failed > 0 ? 'Đồng bộ hoàn tất, có lỗi' : 'Đồng bộ Google Merchant hoàn tất',
+                title: paused
+                    ? 'Đã tạm dừng đồng bộ Google Merchant'
+                    : (aggregate.failed > 0 ? 'Đồng bộ hoàn tất, có lỗi' : 'Đồng bộ Google Merchant hoàn tất'),
                 content: formatGoogleMerchantManualSyncResult(aggregate),
-                type: aggregate.failed > 0 ? 'error' : 'success',
+                type: paused ? 'info' : (aggregate.failed > 0 ? 'error' : 'success'),
             });
         } catch (error) {
             const message = error.response?.data?.message || 'Không thể đồng bộ toàn bộ Google Merchant.';
@@ -1132,7 +1159,16 @@ const SiteSettings = () => {
         } finally {
             setSyncingGoogleMerchantNow(false);
             setGoogleMerchantManualSyncProgress(null);
+            googleMerchantManualSyncPausedRef.current = false;
         }
+    };
+
+    const handlePauseGoogleMerchantSync = () => {
+        googleMerchantManualSyncPausedRef.current = true;
+        setGoogleMerchantManualSyncProgress((prev) => ({
+            ...(prev || { scanned: 0, total: 0 }),
+            pausing: true,
+        }));
     };
 
     const handleRegisterGoogleMerchantGcp = async () => {
@@ -2839,9 +2875,20 @@ const SiteSettings = () => {
                                         >
                                             <span className={`material-symbols-outlined text-[18px] ${syncingGoogleMerchantNow ? 'animate-refresh-spin' : ''}`}>cloud_sync</span>
                                             {syncingGoogleMerchantNow
-                                                ? `Đang đồng bộ ${googleMerchantManualSyncProgress?.scanned || 0}/${googleMerchantManualSyncProgress?.total || '...'}`
+                                                ? `${googleMerchantManualSyncProgress?.pausing ? 'Đang tạm dừng' : 'Đang đồng bộ'} ${googleMerchantManualSyncProgress?.scanned || 0}/${googleMerchantManualSyncProgress?.total || '...'}`
                                                 : 'Đồng bộ Google Merchant ngay'}
                                         </button>
+                                        {syncingGoogleMerchantNow && (
+                                            <button
+                                                type="button"
+                                                onClick={handlePauseGoogleMerchantSync}
+                                                disabled={Boolean(googleMerchantManualSyncProgress?.pausing)}
+                                                className="inline-flex h-9 items-center gap-2 rounded-sm border border-brick/20 bg-white px-4 text-[12px] font-black uppercase tracking-wider text-brick hover:bg-brick/[0.04] disabled:opacity-50"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">pause_circle</span>
+                                                Tạm dừng đồng bộ
+                                            </button>
+                                        )}
                                         <button
                                             type="button"
                                             onClick={handleRegisterGoogleMerchantGcp}

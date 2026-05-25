@@ -135,7 +135,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(2, $payloads);
         $this->assertSame('BUNDLE-001', $payloads[0]['offerId']);
-        $this->assertSame('Bo do tho bundle', $payloads[1]['productAttributes']['title']);
+        $this->assertSame('Ban tho 2m tro len, 3 bat huong', $payloads[1]['productAttributes']['title']);
         $this->assertSame('Mo ta bundle cha.', $payloads[1]['productAttributes']['description']);
         $this->assertSame('https://cdn.gomdaithanh.com/products/bundle.jpg', $payloads[1]['productAttributes']['imageLink']);
         $this->assertStringContainsString('bundle_option_uid=bundle-option-1', $payloads[1]['productAttributes']['link']);
@@ -307,7 +307,7 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
 
         $this->assertCount(2, $payloads);
         $this->assertSame('BUNDLE-001', $payloads[0]['offerId']);
-        $this->assertSame('Bo do tho bundle', $payloads[1]['productAttributes']['title']);
+        $this->assertSame('Lua chon hien thi', $payloads[1]['productAttributes']['title']);
     }
 
     private function bundleItemWithPivot(

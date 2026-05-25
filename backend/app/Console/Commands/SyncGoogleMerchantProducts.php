@@ -67,6 +67,8 @@ class SyncGoogleMerchantProducts extends Command
 
         if ($ids->isNotEmpty()) {
             $query->whereIn('id', $ids->all());
+        } else {
+            $query->whereDoesntHave('parentConfigurable');
         }
 
         if (!$this->option('include-inactive')) {
@@ -75,8 +77,7 @@ class SyncGoogleMerchantProducts extends Command
                     ->where(function ($sellableProductQuery) {
                         $sellableProductQuery
                             ->whereNull('products.deleted_at')
-                            ->where('status', true)
-                            ->whereDoesntHave('parentConfigurable');
+                            ->where('status', true);
                     })
                     ->orWhereNotNull('google_merchant_offer_id')
                     ->orWhereNotNull('google_merchant_product_input_name')

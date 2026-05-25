@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Services\GoogleMerchant\GoogleMerchantProductSyncService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class GoogleMerchantController extends Controller
@@ -191,12 +192,14 @@ class GoogleMerchantController extends Controller
         if (!empty($validated['all'])) {
             $accountId = $this->resolveAccountId($request);
             $query = $this->googleMerchantAllProductsQuery($accountId);
+            $breakdown = $this->googleMerchantCandidateBreakdown($accountId);
             $runImmediately = array_key_exists('queue', $validated) && $validated['queue'] === false;
 
             if ($runImmediately) {
+                $startedAt = microtime(true);
                 $cursor = (int) ($validated['cursor'] ?? 0);
-                $batchSize = min(max((int) ($validated['batch_size'] ?? 3), 1), 25);
-                $totalCandidates = (clone $query)->count();
+                $batchSize = min(max((int) ($validated['batch_size'] ?? 5), 1), 25);
+                $totalCandidates = (int) ($breakdown['top_level_candidates'] ?? (clone $query)->count());
                 $batchQuery = clone $query;
                 if ($cursor > 0) {
                     $batchQuery->where('products.id', '>', $cursor);
@@ -206,6 +209,16 @@ class GoogleMerchantController extends Controller
                 $lastProductId = (int) ($summary['last_product_id'] ?? $cursor);
                 $hasMore = $lastProductId > 0
                     && (clone $query)->where('products.id', '>', $lastProductId)->exists();
+                $summary['candidate_breakdown'] = $breakdown;
+
+                $this->recordManualSyncBatchLog(
+                    $accountId,
+                    $summary,
+                    $cursor,
+                    $batchSize,
+                    !$hasMore,
+                    $startedAt
+                );
 
                 return response()->json([
                     'status' => $summary['failed'] > 0 ? 'partial_error' : 'synced',
@@ -229,6 +242,7 @@ class GoogleMerchantController extends Controller
             return response()->json([
                 'status' => 'queued',
                 'queued' => $count,
+                'candidate_breakdown' => $breakdown,
             ]);
         }
 
@@ -284,13 +298,13 @@ class GoogleMerchantController extends Controller
     private function googleMerchantAllProductsQuery(?int $accountId)
     {
         $query = Product::withTrashed()
+            ->whereDoesntHave('parentConfigurable')
             ->where(function ($productQuery) {
                 $productQuery
                     ->where(function ($sellableProductQuery) {
                         $sellableProductQuery
                             ->whereNull('products.deleted_at')
-                            ->where('status', true)
-                            ->whereDoesntHave('parentConfigurable');
+                            ->where('status', true);
                     })
                     ->orWhereNotNull('google_merchant_offer_id')
                     ->orWhereNotNull('google_merchant_product_input_name')
@@ -307,6 +321,116 @@ class GoogleMerchantController extends Controller
         }
 
         return $query;
+    }
+
+    private function googleMerchantLegacyProductRowsQuery(?int $accountId)
+    {
+        $query = Product::withTrashed()
+            ->where(function ($productQuery) {
+                $productQuery
+                    ->where(function ($sellableProductQuery) {
+                        $sellableProductQuery
+                            ->whereNull('products.deleted_at')
+                            ->where('status', true)
+                            ->whereDoesntHave('parentConfigurable');
+                    })
+                    ->orWhereNotNull('google_merchant_offer_id')
+                    ->orWhereNotNull('google_merchant_product_input_name')
+                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+            });
+
+        $this->applyGoogleMerchantAccountScope($query, $accountId);
+
+        return $query;
+    }
+
+    private function googleMerchantVariantCleanupQuery(?int $accountId)
+    {
+        $query = Product::withTrashed()
+            ->whereHas('parentConfigurable')
+            ->where(function ($stateQuery) {
+                $stateQuery
+                    ->whereNotNull('google_merchant_offer_id')
+                    ->orWhereNotNull('google_merchant_product_input_name')
+                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+            });
+
+        $this->applyGoogleMerchantAccountScope($query, $accountId);
+
+        return $query;
+    }
+
+    private function googleMerchantCandidateBreakdown(?int $accountId): array
+    {
+        $topLevelQuery = $this->googleMerchantAllProductsQuery($accountId);
+        $legacyRows = $this->googleMerchantLegacyProductRowsQuery($accountId);
+        $variantCleanup = $this->googleMerchantVariantCleanupQuery($accountId);
+        $activeTopLevel = Product::withTrashed()
+            ->whereDoesntHave('parentConfigurable')
+            ->whereNull('products.deleted_at')
+            ->where('status', true);
+        $this->applyGoogleMerchantAccountScope($activeTopLevel, $accountId);
+
+        $inactiveOrDeletedTopLevel = Product::withTrashed()
+            ->whereDoesntHave('parentConfigurable')
+            ->where(function ($stateQuery) {
+                $stateQuery
+                    ->whereNotNull('google_merchant_offer_id')
+                    ->orWhereNotNull('google_merchant_product_input_name')
+                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+            })
+            ->where(function ($inactiveQuery) {
+                $inactiveQuery
+                    ->whereNotNull('products.deleted_at')
+                    ->orWhere('status', false);
+            });
+        $this->applyGoogleMerchantAccountScope($inactiveOrDeletedTopLevel, $accountId);
+
+        $bundleOptionRows = DB::table('product_links')
+            ->join('products', 'products.id', '=', 'product_links.product_id')
+            ->where('product_links.link_type', 'bundle');
+        if ($accountId) {
+            $bundleOptionRows->where(function ($accountQuery) use ($accountId) {
+                $accountQuery
+                    ->where('products.account_id', $accountId)
+                    ->orWhereNull('products.account_id');
+            });
+        }
+
+        return [
+            'legacy_candidate_rows_before_filter' => (clone $legacyRows)->count(),
+            'top_level_candidates' => (clone $topLevelQuery)->count(),
+            'active_top_level_products' => (clone $activeTopLevel)->count(),
+            'inactive_or_deleted_top_level_cleanup' => (clone $inactiveOrDeletedTopLevel)->count(),
+            'variant_child_rows_excluded_from_total' => (clone $variantCleanup)->count(),
+            'bundle_parent_products' => (clone $topLevelQuery)->where('type', 'bundle')->count(),
+            'configurable_parent_products' => (clone $topLevelQuery)->where('type', 'configurable')->count(),
+            'simple_top_level_products' => (clone $topLevelQuery)->whereNotIn('type', ['bundle', 'configurable'])->count(),
+            'bundle_option_rows_visible' => (clone $bundleOptionRows)
+                ->where(function ($statusQuery) {
+                    $statusQuery
+                        ->whereNull('product_links.bundle_option_status')
+                        ->orWhere('product_links.bundle_option_status', '')
+                        ->orWhere('product_links.bundle_option_status', 'visible');
+                })
+                ->count(),
+            'bundle_option_rows_internal' => (clone $bundleOptionRows)
+                ->where('product_links.bundle_option_status', 'internal')
+                ->count(),
+        ];
+    }
+
+    private function applyGoogleMerchantAccountScope($query, ?int $accountId): void
+    {
+        if (!$accountId) {
+            return;
+        }
+
+        $query->where(function ($accountQuery) use ($accountId) {
+            $accountQuery
+                ->where('account_id', $accountId)
+                ->orWhereNull('account_id');
+        });
     }
 
     private function syncGoogleMerchantProductsNow($query, ?string $action, int $limit = 0): array
@@ -362,6 +486,41 @@ class GoogleMerchantController extends Controller
         }
 
         return $summary;
+    }
+
+    private function recordManualSyncBatchLog(
+        ?int $accountId,
+        array $summary,
+        int $cursor,
+        int $batchSize,
+        bool $finished,
+        float $startedAt
+    ): void {
+        try {
+            GoogleMerchantSyncLog::query()->create([
+                'account_id' => $accountId,
+                'product_id' => null,
+                'offer_id' => null,
+                'action' => 'manual_batch_sync',
+                'status' => (int) ($summary['failed'] ?? 0) > 0 ? 'error' : 'success',
+                'request_method' => 'BATCH',
+                'request_url' => 'api/google-merchant/products/sync',
+                'request_payload' => [
+                    'cursor' => $cursor,
+                    'batch_size' => $batchSize,
+                ],
+                'response_body' => [
+                    ...$summary,
+                    'finished' => $finished,
+                ],
+                'error_message' => (int) ($summary['failed'] ?? 0) > 0
+                    ? 'Manual Google Merchant batch sync completed with failures.'
+                    : null,
+                'duration_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            ]);
+        } catch (\Throwable) {
+            // Product-level API logs still capture the concrete sync result.
+        }
     }
 
     public function logs(Request $request)

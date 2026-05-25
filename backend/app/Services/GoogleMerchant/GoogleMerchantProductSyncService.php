@@ -604,7 +604,7 @@ class GoogleMerchantProductSyncService
     private function buildBundleOptionInputPayload(Product $product, array $option, array $settings, string $parentOfferId): array
     {
         $displayProduct = $this->productUrlOwner($product);
-        $title = $this->cleanText((string) $displayProduct->name, 150);
+        $title = $this->cleanText((string) ($option['title'] ?? ''), 150);
         $description = $this->resolveDescription($displayProduct);
         $link = $this->resolveBundleOptionProductUrl($displayProduct, $option, $settings);
         $imageLink = $this->resolveImageUrl($displayProduct);

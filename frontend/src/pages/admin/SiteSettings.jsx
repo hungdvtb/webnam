@@ -162,6 +162,12 @@ const mergeGoogleMerchantManualSyncResult = (current, batch) => ({
     ].slice(0, 20),
 });
 
+const isRequestCanceled = (error) => (
+    error?.code === 'ERR_CANCELED'
+    || error?.name === 'CanceledError'
+    || String(error?.message || '').toLowerCase().includes('canceled')
+);
+
 const trackingPlatforms = [
     {
         key: 'facebook',
@@ -808,6 +814,7 @@ const SiteSettings = () => {
 
     const activeAccountId = localStorage.getItem('activeAccountId');
     const googleMerchantManualSyncPausedRef = useRef(false);
+    const googleMerchantManualSyncAbortRef = useRef(null);
 
     const fetchDomains = useCallback(async () => {
         try {
@@ -1103,21 +1110,51 @@ const SiteSettings = () => {
             let cursor = 0;
             let finished = false;
             let latestStats = null;
+            let batchSize = 5;
 
             while (!finished) {
                 if (googleMerchantManualSyncPausedRef.current) {
                     break;
                 }
 
-                const response = await googleMerchantApi.syncProducts({
-                    all: true,
-                    queue: false,
-                    account_id: activeAccountId,
-                    cursor,
-                    batch_size: 5,
-                }, {
-                    timeout: 180000,
-                });
+                let response = null;
+                let attempt = 0;
+                while (!response) {
+                    const controller = new AbortController();
+                    googleMerchantManualSyncAbortRef.current = controller;
+
+                    try {
+                        response = await googleMerchantApi.syncProducts({
+                            all: true,
+                            queue: false,
+                            account_id: activeAccountId,
+                            cursor,
+                            batch_size: batchSize,
+                        }, {
+                            timeout: 180000,
+                            signal: controller.signal,
+                        });
+                    } catch (error) {
+                        if (googleMerchantManualSyncPausedRef.current || isRequestCanceled(error)) {
+                            break;
+                        }
+
+                        attempt += 1;
+                        if (batchSize > 1) {
+                            batchSize = 1;
+                        }
+
+                        if (attempt >= 3) {
+                            throw error;
+                        }
+                    } finally {
+                        googleMerchantManualSyncAbortRef.current = null;
+                    }
+                }
+
+                if (!response) {
+                    break;
+                }
 
                 const batch = response.data || {};
                 aggregate = mergeGoogleMerchantManualSyncResult(aggregate, batch);
@@ -1150,21 +1187,36 @@ const SiteSettings = () => {
                 type: paused ? 'info' : (aggregate.failed > 0 ? 'error' : 'success'),
             });
         } catch (error) {
-            const message = error.response?.data?.message || 'Không thể đồng bộ toàn bộ Google Merchant.';
+            const message = error.response?.data?.message
+                || error.message
+                || 'Không thể đồng bộ toàn bộ Google Merchant.';
+            aggregate = {
+                ...aggregate,
+                failed: Number(aggregate.failed || 0) + 1,
+                errors: [
+                    ...(Array.isArray(aggregate.errors) ? aggregate.errors : []),
+                    {
+                        product_id: 'request',
+                        message,
+                    },
+                ].slice(0, 20),
+            };
             showModal({
                 title: 'Lỗi',
-                content: `${formatGoogleMerchantManualSyncResult(aggregate)}<br />${escapeModalHtml(message)}`,
+                content: formatGoogleMerchantManualSyncResult(aggregate),
                 type: 'error',
             });
         } finally {
             setSyncingGoogleMerchantNow(false);
             setGoogleMerchantManualSyncProgress(null);
+            googleMerchantManualSyncAbortRef.current = null;
             googleMerchantManualSyncPausedRef.current = false;
         }
     };
 
     const handlePauseGoogleMerchantSync = () => {
         googleMerchantManualSyncPausedRef.current = true;
+        googleMerchantManualSyncAbortRef.current?.abort();
         setGoogleMerchantManualSyncProgress((prev) => ({
             ...(prev || { scanned: 0, total: 0 }),
             pausing: true,

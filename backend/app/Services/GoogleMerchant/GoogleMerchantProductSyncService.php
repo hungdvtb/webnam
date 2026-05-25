@@ -23,6 +23,12 @@ class GoogleMerchantProductSyncService
     private const REGISTER_GCP_ENDPOINT = 'https://merchantapi.googleapis.com/accounts/v1/accounts/%s/developerRegistration:registerGcp';
     private const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
     private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
+    private const PRODUCT_TERMINAL_DELETE_ACTIONS = [
+        'delete',
+        'delete_inactive',
+        'delete_ineligible',
+        'variant_child_delete',
+    ];
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
     private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
 
@@ -59,6 +65,15 @@ class GoogleMerchantProductSyncService
         $resolvedAction = $this->resolveSyncAction($product, $settings, $action);
 
         if (Str::startsWith($resolvedAction, 'delete')) {
+            if ($resolvedAction !== 'delete' && !$this->productNeedsMerchantDelete($product)) {
+                return $this->markProductDeleteSkipped(
+                    $product,
+                    $offerId,
+                    $resolvedAction,
+                    $this->productInactiveReason($product) ?: 'San pham da duoc go khoi Google Merchant truoc do.'
+                );
+            }
+
             return $this->deleteProductAndBundleOptionInputs(
                 $product,
                 $settings,
@@ -115,6 +130,13 @@ class GoogleMerchantProductSyncService
                 'Bien the con khong con duoc day rieng len Google Merchant.'
             );
             $this->markProductSuccess($product, $resolvedAction, $offerId, $payloadHash, $body);
+
+            Log::info('Google Merchant product input synced.', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'offer_id' => $offerId,
+                'action' => $resolvedAction,
+            ]);
 
             $result = [
                 'status' => 'synced',
@@ -257,6 +279,15 @@ class GoogleMerchantProductSyncService
             }
 
             $this->markProductDeleted($product, $offerId, $action);
+            $this->recordLocalLog($product, $offerId, $action, 'deleted', $reason);
+
+            Log::info('Google Merchant product input deleted.', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'offer_id' => $offerId,
+                'action' => $action,
+                'reason' => $reason,
+            ]);
 
             $result = [
                 'status' => 'deleted',
@@ -468,6 +499,14 @@ class GoogleMerchantProductSyncService
                 throw new GoogleMerchantProductSyncException($this->responseErrorMessage($response, 'Google Merchant API rejected the bundle option.'));
             }
 
+            Log::info('Google Merchant bundle option input synced.', [
+                'product_id' => $product->id,
+                'sku' => $product->sku,
+                'offer_id' => $offerId,
+                'action' => 'bundle_option_upsert',
+                'title' => $entry['title'],
+            ]);
+
             $results[] = [
                 'status' => 'synced',
                 'action' => 'bundle_option_upsert',
@@ -558,6 +597,17 @@ class GoogleMerchantProductSyncService
             $result['reason'] = $reason;
         }
 
+        $this->recordLocalLog($product, $offerId, $action, 'deleted', $reason);
+
+        Log::info('Google Merchant bundle option input deleted.', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'offer_id' => $offerId,
+            'action' => $action,
+            'title' => $option['title'] ?? null,
+            'reason' => $reason,
+        ]);
+
         return $result;
     }
 
@@ -573,6 +623,7 @@ class GoogleMerchantProductSyncService
         }
 
         return $this->configurableProductVariants($product, true)
+            ->filter(fn (Product $variant) => $this->variantChildNeedsMerchantDelete($variant))
             ->map(function (Product $variant) use ($settings, $accountId, $dataSourceName, $reason) {
                 return $this->deleteProductInput(
                     $variant,
@@ -707,7 +758,13 @@ class GoogleMerchantProductSyncService
 
     private function isInternalBundleOptionStatus(mixed $value): bool
     {
-        return Str::lower(Str::squish((string) $value)) === self::BUNDLE_OPTION_STATUS_INTERNAL;
+        $status = Str::of((string) $value)
+            ->ascii()
+            ->lower()
+            ->squish()
+            ->toString();
+
+        return in_array($status, [self::BUNDLE_OPTION_STATUS_INTERNAL, 'noi bo'], true);
     }
 
     private function bundleOptionGroupKey(Product $item): string
@@ -1339,6 +1396,11 @@ class GoogleMerchantProductSyncService
             ->first();
     }
 
+    private function variantChildNeedsMerchantDelete(Product $variant): bool
+    {
+        return $this->productNeedsMerchantDelete($variant);
+    }
+
     private function configurableProductVariants(Product $product, bool $includeTrashed = false)
     {
         if ((string) $product->type !== 'configurable') {
@@ -1554,9 +1616,23 @@ class GoogleMerchantProductSyncService
 
     private function hasMerchantSyncState(Product $product): bool
     {
-        return trim((string) $product->google_merchant_offer_id) !== ''
-            || trim((string) $product->google_merchant_product_input_name) !== ''
-            || (string) $product->google_merchant_sync_status === 'synced';
+        $status = (string) $product->google_merchant_sync_status;
+
+        return trim((string) $product->google_merchant_product_input_name) !== ''
+            || $status === 'synced'
+            || $status === 'error';
+    }
+
+    private function productNeedsMerchantDelete(Product $product): bool
+    {
+        return !$this->productAlreadyRemovedFromMerchant($product);
+    }
+
+    private function productAlreadyRemovedFromMerchant(Product $product): bool
+    {
+        return (string) $product->google_merchant_sync_status === 'not_synced'
+            && trim((string) $product->google_merchant_product_input_name) === ''
+            && in_array((string) $product->google_merchant_last_action, self::PRODUCT_TERMINAL_DELETE_ACTIONS, true);
     }
 
     private function resolveGoogleProductCategory(Product $product, array $settings): string
@@ -1717,6 +1793,37 @@ class GoogleMerchantProductSyncService
         return [
             'status' => 'skipped',
             'action' => 'skip_ineligible',
+            'product_id' => (int) $product->id,
+            'offer_id' => $offerId,
+            'reason' => $reason,
+        ];
+    }
+
+    private function markProductDeleteSkipped(Product $product, ?string $offerId, string $action, string $reason): array
+    {
+        $product->forceFill([
+            'google_merchant_sync_status' => 'not_synced',
+            'google_merchant_last_attempted_at' => now(),
+            'google_merchant_last_error' => Str::limit($reason, 5000, ''),
+            'google_merchant_offer_id' => $offerId,
+            'google_merchant_product_input_name' => null,
+            'google_merchant_last_payload_hash' => null,
+            'google_merchant_last_action' => $action,
+        ])->saveQuietly();
+
+        $this->recordLocalLog($product, $offerId, $action, 'skipped', $reason);
+
+        Log::info('Google Merchant product delete skipped because it is already removed.', [
+            'product_id' => $product->id,
+            'sku' => $product->sku,
+            'offer_id' => $offerId,
+            'action' => $action,
+            'reason' => $reason,
+        ]);
+
+        return [
+            'status' => 'skipped',
+            'action' => $action,
             'product_id' => (int) $product->id,
             'offer_id' => $offerId,
             'reason' => $reason,

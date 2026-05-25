@@ -310,6 +310,43 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
         $this->assertSame('Lua chon hien thi', $payloads[1]['productAttributes']['title']);
     }
 
+    public function test_skipped_offer_id_is_not_treated_as_existing_merchant_state(): void
+    {
+        $product = new Product([
+            'sku' => 'SKIPPED-001',
+            'google_merchant_offer_id' => 'SKIPPED-001',
+            'google_merchant_sync_status' => 'not_synced',
+            'google_merchant_last_action' => 'skip_ineligible',
+        ]);
+
+        $service = app(GoogleMerchantProductSyncService::class);
+        $method = new \ReflectionMethod($service, 'hasMerchantSyncState');
+        $method->setAccessible(true);
+
+        $this->assertFalse($method->invoke($service, $product));
+    }
+
+    public function test_product_already_deleted_from_merchant_does_not_need_delete_again(): void
+    {
+        $product = new Product([
+            'sku' => 'DELETED-001',
+            'google_merchant_offer_id' => 'DELETED-001',
+            'google_merchant_sync_status' => 'not_synced',
+            'google_merchant_product_input_name' => null,
+            'google_merchant_last_action' => 'delete_inactive',
+        ]);
+
+        $service = app(GoogleMerchantProductSyncService::class);
+        $method = new \ReflectionMethod($service, 'productNeedsMerchantDelete');
+        $method->setAccessible(true);
+
+        $this->assertFalse($method->invoke($service, $product));
+
+        $product->google_merchant_product_input_name = 'accounts/123/productInputs/example';
+
+        $this->assertTrue($method->invoke($service, $product));
+    }
+
     private function bundleItemWithPivot(
         int $id,
         float $price,

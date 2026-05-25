@@ -79,9 +79,9 @@ class SyncGoogleMerchantProducts extends Command
                             ->whereNull('products.deleted_at')
                             ->where('status', true);
                     })
-                    ->orWhereNotNull('google_merchant_offer_id')
-                    ->orWhereNotNull('google_merchant_product_input_name')
-                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                    ->orWhere(function ($stateQuery) {
+                        $this->applyGoogleMerchantKnownStateConstraint($stateQuery);
+                    });
             });
         }
 
@@ -97,6 +97,7 @@ class SyncGoogleMerchantProducts extends Command
         $variantChildDeleted = 0;
         $failureSamples = [];
         $skippedSamples = [];
+        $deletedSamples = [];
 
         $this->line(sprintf(
             '[%s] Google Merchant sync started at %s. Candidates: %d. Limit: %s.',
@@ -117,7 +118,8 @@ class SyncGoogleMerchantProducts extends Command
             &$bundleOptionDeleted,
             &$variantChildDeleted,
             &$failureSamples,
-            &$skippedSamples
+            &$skippedSamples,
+            &$deletedSamples
         ) {
             foreach ($products as $product) {
                 if ($limit > 0 && $processed >= $limit) {
@@ -139,6 +141,14 @@ class SyncGoogleMerchantProducts extends Command
 
                         if ($status === 'deleted') {
                             $deleted++;
+                            if (count($deletedSamples) < 20) {
+                                $deletedSamples[] = [
+                                    'product_id' => (int) $product->id,
+                                    'offer_id' => $result['offer_id'] ?? null,
+                                    'action' => $result['action'] ?? null,
+                                    'reason' => $reason,
+                                ];
+                            }
                             $this->line(sprintf('[deleted] #%d %s%s', $product->id, $result['offer_id'] ?? '', $suffix));
                         } elseif ($status === 'skipped') {
                             $skipped++;
@@ -163,6 +173,15 @@ class SyncGoogleMerchantProducts extends Command
                             if ($optionStatus === 'deleted' || str_contains($optionAction, 'delete')) {
                                 $deleted++;
                                 $bundleOptionDeleted++;
+                                if (count($deletedSamples) < 20) {
+                                    $deletedSamples[] = [
+                                        'product_id' => (int) $product->id,
+                                        'offer_id' => $bundleOptionResult['offer_id'] ?? null,
+                                        'action' => $optionAction,
+                                        'reason' => $optionReason,
+                                        'title' => $bundleOptionResult['title'] ?? null,
+                                    ];
+                                }
                             }
                             $this->line(sprintf(
                                 '  [%s] %s %s%s',
@@ -177,6 +196,14 @@ class SyncGoogleMerchantProducts extends Command
                             $deleted++;
                             $variantChildDeleted++;
                             $variantReason = trim((string) ($variantDeleteResult['reason'] ?? ''));
+                            if (count($deletedSamples) < 20) {
+                                $deletedSamples[] = [
+                                    'product_id' => $variantDeleteResult['product_id'] ?? null,
+                                    'offer_id' => $variantDeleteResult['offer_id'] ?? null,
+                                    'action' => $variantDeleteResult['action'] ?? null,
+                                    'reason' => $variantReason,
+                                ];
+                            }
                             $variantSuffix = $variantReason !== '' ? " - {$variantReason}" : '';
                             $this->line(sprintf(
                                 '  [deleted] variant_child_delete #%s %s%s',
@@ -220,6 +247,7 @@ class SyncGoogleMerchantProducts extends Command
             'variant_child_deleted' => $variantChildDeleted,
             'failed' => $failed,
             'skipped_samples' => $skippedSamples,
+            'deleted_samples' => $deletedSamples,
             'failure_samples' => $failureSamples,
         ];
         $this->recordSummaryLog($accountId, $operation, $failed > 0 ? 'error' : 'success', $summary, $startedAtMs);
@@ -227,6 +255,23 @@ class SyncGoogleMerchantProducts extends Command
         $this->info("Done. Scanned: {$processed}/{$totalCandidates}. Updated: {$synced}. Deleted: {$deleted}. Skipped: {$skipped}. Failed: {$failed}.");
 
         return $failed > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    private function applyGoogleMerchantKnownStateConstraint($query): void
+    {
+        $query
+            ->whereNotNull('google_merchant_product_input_name')
+            ->orWhereIn('google_merchant_sync_status', ['synced', 'error'])
+            ->orWhere(function ($offerQuery) {
+                $offerQuery
+                    ->whereNotNull('google_merchant_offer_id')
+                    ->where(function ($stateQuery) {
+                        $stateQuery
+                            ->whereNull('google_merchant_sync_status')
+                            ->orWhere('google_merchant_sync_status', '<>', 'not_synced')
+                            ->orWhereIn('google_merchant_last_action', ['upsert', 'out_of_stock']);
+                    });
+            });
     }
 
     private function recordSummaryLog(?int $accountId, string $operation, string $status, array $summary, float $startedAtMs): void

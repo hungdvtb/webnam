@@ -306,9 +306,9 @@ class GoogleMerchantController extends Controller
                             ->whereNull('products.deleted_at')
                             ->where('status', true);
                     })
-                    ->orWhereNotNull('google_merchant_offer_id')
-                    ->orWhereNotNull('google_merchant_product_input_name')
-                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                    ->orWhere(function ($stateQuery) {
+                        $this->applyGoogleMerchantKnownStateConstraint($stateQuery);
+                    });
             })
             ->orderBy('id');
 
@@ -334,9 +334,9 @@ class GoogleMerchantController extends Controller
                             ->where('status', true)
                             ->whereDoesntHave('parentConfigurable');
                     })
-                    ->orWhereNotNull('google_merchant_offer_id')
-                    ->orWhereNotNull('google_merchant_product_input_name')
-                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                    ->orWhere(function ($stateQuery) {
+                        $this->applyGoogleMerchantKnownStateConstraint($stateQuery);
+                    });
             });
 
         $this->applyGoogleMerchantAccountScope($query, $accountId);
@@ -349,10 +349,7 @@ class GoogleMerchantController extends Controller
         $query = Product::withTrashed()
             ->whereHas('parentConfigurable')
             ->where(function ($stateQuery) {
-                $stateQuery
-                    ->whereNotNull('google_merchant_offer_id')
-                    ->orWhereNotNull('google_merchant_product_input_name')
-                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                $this->applyGoogleMerchantKnownStateConstraint($stateQuery);
             });
 
         $this->applyGoogleMerchantAccountScope($query, $accountId);
@@ -374,10 +371,7 @@ class GoogleMerchantController extends Controller
         $inactiveOrDeletedTopLevel = Product::withTrashed()
             ->whereDoesntHave('parentConfigurable')
             ->where(function ($stateQuery) {
-                $stateQuery
-                    ->whereNotNull('google_merchant_offer_id')
-                    ->orWhereNotNull('google_merchant_product_input_name')
-                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+                $this->applyGoogleMerchantKnownStateConstraint($stateQuery);
             })
             ->where(function ($inactiveQuery) {
                 $inactiveQuery
@@ -420,6 +414,23 @@ class GoogleMerchantController extends Controller
         ];
     }
 
+    private function applyGoogleMerchantKnownStateConstraint($query): void
+    {
+        $query
+            ->whereNotNull('google_merchant_product_input_name')
+            ->orWhereIn('google_merchant_sync_status', ['synced', 'error'])
+            ->orWhere(function ($offerQuery) {
+                $offerQuery
+                    ->whereNotNull('google_merchant_offer_id')
+                    ->where(function ($stateQuery) {
+                        $stateQuery
+                            ->whereNull('google_merchant_sync_status')
+                            ->orWhere('google_merchant_sync_status', '<>', 'not_synced')
+                            ->orWhereIn('google_merchant_last_action', ['upsert', 'out_of_stock']);
+                    });
+            });
+    }
+
     private function applyGoogleMerchantAccountScope($query, ?int $accountId): void
     {
         if (!$accountId) {
@@ -442,6 +453,8 @@ class GoogleMerchantController extends Controller
             'deleted' => 0,
             'failed' => 0,
             'errors' => [],
+            'skipped_samples' => [],
+            'deleted_samples' => [],
             'last_product_id' => null,
         ];
 
@@ -459,8 +472,24 @@ class GoogleMerchantController extends Controller
 
                 if ($status === 'deleted') {
                     $summary['deleted']++;
+                    if (count($summary['deleted_samples']) < 20) {
+                        $summary['deleted_samples'][] = [
+                            'product_id' => (int) $product->id,
+                            'offer_id' => $result['offer_id'] ?? null,
+                            'action' => $result['action'] ?? null,
+                            'reason' => $result['reason'] ?? null,
+                        ];
+                    }
                 } elseif ($status === 'skipped') {
                     $summary['skipped']++;
+                    if (count($summary['skipped_samples']) < 20) {
+                        $summary['skipped_samples'][] = [
+                            'product_id' => (int) $product->id,
+                            'offer_id' => $result['offer_id'] ?? null,
+                            'action' => $result['action'] ?? null,
+                            'reason' => $result['reason'] ?? null,
+                        ];
+                    }
                 } else {
                     $summary['updated']++;
                 }
@@ -470,10 +499,29 @@ class GoogleMerchantController extends Controller
                     $optionAction = (string) ($bundleOptionResult['action'] ?? '');
                     if ($optionStatus === 'deleted' || str_contains($optionAction, 'delete')) {
                         $summary['deleted']++;
+                        if (count($summary['deleted_samples']) < 20) {
+                            $summary['deleted_samples'][] = [
+                                'product_id' => (int) $product->id,
+                                'offer_id' => $bundleOptionResult['offer_id'] ?? null,
+                                'action' => $optionAction,
+                                'reason' => $bundleOptionResult['reason'] ?? null,
+                                'title' => $bundleOptionResult['title'] ?? null,
+                            ];
+                        }
                     }
                 }
 
-                $summary['deleted'] += count($result['variant_child_deletes'] ?? []);
+                foreach (($result['variant_child_deletes'] ?? []) as $variantDeleteResult) {
+                    $summary['deleted']++;
+                    if (count($summary['deleted_samples']) < 20) {
+                        $summary['deleted_samples'][] = [
+                            'product_id' => $variantDeleteResult['product_id'] ?? null,
+                            'offer_id' => $variantDeleteResult['offer_id'] ?? null,
+                            'action' => $variantDeleteResult['action'] ?? null,
+                            'reason' => $variantDeleteResult['reason'] ?? null,
+                        ];
+                    }
+                }
             } catch (\Throwable $exception) {
                 $summary['failed']++;
                 if (count($summary['errors']) < 20) {

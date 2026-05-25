@@ -102,6 +102,35 @@ const createGeminiKey = () => ({
     is_active: true,
 });
 
+const escapeModalHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const formatGoogleMerchantManualSyncResult = (data = {}) => {
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const lines = [
+        `Tổng sản phẩm đã quét: ${Number(data.total_scanned || data.total || 0)}`,
+        `Số sản phẩm cập nhật thành công: ${Number(data.updated || 0)}`,
+        `Số sản phẩm bỏ qua: ${Number(data.skipped || 0)}`,
+        `Số sản phẩm đã xóa khỏi Merchant: ${Number(data.deleted || 0)}`,
+        `Số sản phẩm lỗi: ${Number(data.failed || 0)}`,
+    ];
+
+    if (errors.length > 0) {
+        lines.push('Lý do lỗi:');
+        errors.slice(0, 10).forEach((error) => {
+            lines.push(`#${error.product_id || '-'}: ${error.message || 'Không rõ lỗi'}`);
+        });
+    } else {
+        lines.push('Lý do lỗi: không có');
+    }
+
+    return lines.map(escapeModalHtml).join('<br />');
+};
+
 const trackingPlatforms = [
     {
         key: 'facebook',
@@ -733,6 +762,7 @@ const SiteSettings = () => {
     const [savingGoogleMerchant, setSavingGoogleMerchant] = useState(false);
     const [testingGoogleMerchant, setTestingGoogleMerchant] = useState(false);
     const [registeringGoogleMerchantGcp, setRegisteringGoogleMerchantGcp] = useState(false);
+    const [syncingGoogleMerchantNow, setSyncingGoogleMerchantNow] = useState(false);
     const [domains, setDomains] = useState([]);
     const [newDomain, setNewDomain] = useState('');
     const [quoteTemplates, setQuoteTemplates] = useState([]);
@@ -1010,6 +1040,45 @@ const SiteSettings = () => {
             showModal({ title: 'Lỗi', content: message, type: 'error' });
         } finally {
             setTestingGoogleMerchant(false);
+        }
+    };
+
+    const handleSyncGoogleMerchantNow = async () => {
+        if (!activeAccountId) {
+            showModal({ title: 'Lỗi', content: 'Vui lòng chọn account trước khi đồng bộ Google Merchant.', type: 'error' });
+            return;
+        }
+
+        if (!window.confirm('Đồng bộ lại toàn bộ sản phẩm hợp lệ sang Google Merchant ngay bây giờ?')) {
+            return;
+        }
+
+        setSyncingGoogleMerchantNow(true);
+        try {
+            const response = await googleMerchantApi.syncProducts({
+                all: true,
+                queue: false,
+                account_id: activeAccountId,
+            }, {
+                timeout: 300000,
+            });
+
+            if (response.data?.stats) {
+                setGoogleMerchantStats(response.data.stats);
+            } else {
+                fetchGoogleMerchantSettings();
+            }
+
+            showModal({
+                title: response.data?.failed > 0 ? 'Đồng bộ hoàn tất, có lỗi' : 'Đồng bộ Google Merchant hoàn tất',
+                content: formatGoogleMerchantManualSyncResult(response.data || {}),
+                type: response.data?.failed > 0 ? 'error' : 'success',
+            });
+        } catch (error) {
+            const message = error.response?.data?.message || 'Không thể đồng bộ toàn bộ Google Merchant.';
+            showModal({ title: 'Lỗi', content: escapeModalHtml(message), type: 'error' });
+        } finally {
+            setSyncingGoogleMerchantNow(false);
         }
     };
 
@@ -2708,11 +2777,20 @@ const SiteSettings = () => {
                                 icon="shopping_bag"
                                 title="Google Merchant Center"
                                 rightSlot={(
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={handleSyncGoogleMerchantNow}
+                                            disabled={syncingGoogleMerchantNow || savingGoogleMerchant || testingGoogleMerchant || registeringGoogleMerchantGcp}
+                                            className="inline-flex h-9 items-center gap-2 rounded-sm border border-blue-200 bg-blue-50 px-4 text-[12px] font-black uppercase tracking-wider text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                                        >
+                                            <span className={`material-symbols-outlined text-[18px] ${syncingGoogleMerchantNow ? 'animate-refresh-spin' : ''}`}>cloud_sync</span>
+                                            {syncingGoogleMerchantNow ? 'Đang đồng bộ...' : 'Đồng bộ Google Merchant ngay'}
+                                        </button>
                                         <button
                                             type="button"
                                             onClick={handleRegisterGoogleMerchantGcp}
-                                            disabled={registeringGoogleMerchantGcp || savingGoogleMerchant || testingGoogleMerchant}
+                                            disabled={registeringGoogleMerchantGcp || savingGoogleMerchant || testingGoogleMerchant || syncingGoogleMerchantNow}
                                             className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
                                         >
                                             {registeringGoogleMerchantGcp ? 'Đang đăng ký...' : 'Đăng ký GCP'}
@@ -2720,7 +2798,7 @@ const SiteSettings = () => {
                                         <button
                                             type="button"
                                             onClick={handleTestGoogleMerchant}
-                                            disabled={testingGoogleMerchant || registeringGoogleMerchantGcp}
+                                            disabled={testingGoogleMerchant || registeringGoogleMerchantGcp || syncingGoogleMerchantNow}
                                             className="h-9 px-4 rounded-sm border border-primary/20 bg-white text-primary text-[12px] font-black uppercase tracking-wider hover:bg-primary/[0.04] disabled:opacity-50"
                                         >
                                             {testingGoogleMerchant ? 'Đang kiểm tra...' : 'Kiểm tra kết nối'}
@@ -2728,7 +2806,7 @@ const SiteSettings = () => {
                                         <button
                                             type="button"
                                             onClick={handleSaveGoogleMerchant}
-                                            disabled={savingGoogleMerchant}
+                                            disabled={savingGoogleMerchant || syncingGoogleMerchantNow}
                                             className="h-9 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 disabled:opacity-50"
                                         >
                                             {savingGoogleMerchant ? 'Đang lưu...' : 'Lưu Google Merchant'}

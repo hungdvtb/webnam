@@ -187,23 +187,18 @@ class GoogleMerchantController extends Controller
         ]);
 
         if (!empty($validated['all'])) {
-            $query = Product::query()
-                ->where(function ($productQuery) {
-                    $productQuery
-                        ->where(function ($sellableProductQuery) {
-                            $sellableProductQuery
-                                ->where('status', true)
-                                ->whereDoesntHave('parentConfigurable');
-                        })
-                        ->orWhereNotNull('google_merchant_offer_id')
-                        ->orWhereNotNull('google_merchant_product_input_name')
-                        ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
-                })
-                ->orderBy('id');
-
             $accountId = $this->resolveAccountId($request);
-            if ($accountId) {
-                $query->where('account_id', $accountId);
+            $query = $this->googleMerchantAllProductsQuery($accountId);
+            $runImmediately = array_key_exists('queue', $validated) && $validated['queue'] === false;
+
+            if ($runImmediately) {
+                $summary = $this->syncGoogleMerchantProductsNow($query, $validated['action'] ?? null);
+
+                return response()->json([
+                    'status' => $summary['failed'] > 0 ? 'partial_error' : 'synced',
+                    ...$summary,
+                    'stats' => $this->syncStats($accountId),
+                ]);
             }
 
             $count = 0;
@@ -267,6 +262,85 @@ class GoogleMerchantController extends Controller
             'failed' => $failed,
             'results' => $results,
         ]);
+    }
+
+    private function googleMerchantAllProductsQuery(?int $accountId)
+    {
+        $query = Product::withTrashed()
+            ->where(function ($productQuery) {
+                $productQuery
+                    ->where(function ($sellableProductQuery) {
+                        $sellableProductQuery
+                            ->whereNull('products.deleted_at')
+                            ->where('status', true)
+                            ->whereDoesntHave('parentConfigurable');
+                    })
+                    ->orWhereNotNull('google_merchant_offer_id')
+                    ->orWhereNotNull('google_merchant_product_input_name')
+                    ->orWhereIn('google_merchant_sync_status', ['synced', 'error']);
+            })
+            ->orderBy('id');
+
+        if ($accountId) {
+            $query->where(function ($accountQuery) use ($accountId) {
+                $accountQuery
+                    ->where('account_id', $accountId)
+                    ->orWhereNull('account_id');
+            });
+        }
+
+        return $query;
+    }
+
+    private function syncGoogleMerchantProductsNow($query, ?string $action): array
+    {
+        $summary = [
+            'total_scanned' => 0,
+            'updated' => 0,
+            'skipped' => 0,
+            'deleted' => 0,
+            'failed' => 0,
+            'errors' => [],
+        ];
+
+        $query->chunkById(100, function ($products) use (&$summary, $action) {
+            foreach ($products as $product) {
+                $summary['total_scanned']++;
+
+                try {
+                    $result = $this->syncService->syncProduct($product, $action);
+                    $status = (string) ($result['status'] ?? 'synced');
+
+                    if ($status === 'deleted') {
+                        $summary['deleted']++;
+                    } elseif ($status === 'skipped') {
+                        $summary['skipped']++;
+                    } else {
+                        $summary['updated']++;
+                    }
+
+                    foreach (($result['bundle_options'] ?? []) as $bundleOptionResult) {
+                        $optionStatus = (string) ($bundleOptionResult['status'] ?? '');
+                        $optionAction = (string) ($bundleOptionResult['action'] ?? '');
+                        if ($optionStatus === 'deleted' || str_contains($optionAction, 'delete')) {
+                            $summary['deleted']++;
+                        }
+                    }
+
+                    $summary['deleted'] += count($result['variant_child_deletes'] ?? []);
+                } catch (\Throwable $exception) {
+                    $summary['failed']++;
+                    if (count($summary['errors']) < 20) {
+                        $summary['errors'][] = [
+                            'product_id' => (int) $product->id,
+                            'message' => $exception->getMessage(),
+                        ];
+                    }
+                }
+            }
+        });
+
+        return $summary;
     }
 
     public function logs(Request $request)

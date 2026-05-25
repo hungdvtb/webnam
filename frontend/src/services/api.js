@@ -419,8 +419,9 @@ export const googleMerchantApi = {
     syncProduct: (id, data = {}) => api.post(`/google-merchant/products/${id}/sync`, data, {
         retryPolicy: 'never',
     }),
-    syncProducts: (data = {}) => api.post('/google-merchant/products/sync', data, {
+    syncProducts: (data = {}, config = {}) => api.post('/google-merchant/products/sync', data, {
         retryPolicy: 'never',
+        ...config,
     }),
     getLogs: (params) => api.get('/google-merchant/logs', { params }),
 };

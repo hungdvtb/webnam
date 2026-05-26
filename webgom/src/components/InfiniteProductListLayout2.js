@@ -9,7 +9,6 @@ import { useCart } from '@/context/CartContext';
 import {
   resolveEntityImageUrl,
   resolveEntityPrimaryVideoUrl,
-  resolveVideoThumbnailUrl,
 } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
@@ -95,7 +94,6 @@ export default function InfiniteProductListLayout2({ initialData }) {
           const productCardKey = buildProductCardKey(product);
           const displayPrice = getDisplayPrice(product);
           const videoUrl = resolveEntityPrimaryVideoUrl(product);
-          const videoThumbnailSrc = videoUrl ? resolveVideoThumbnailUrl(videoUrl) : '';
           const hasVideoMedia = Boolean(videoUrl);
           const imageSrc = resolveEntityImageUrl(product, 'medium', FALLBACK_PRODUCT_IMAGE);
           const cartOptions = product.item_type === 'bundle_option'
@@ -126,7 +124,7 @@ export default function InfiniteProductListLayout2({ initialData }) {
                   onClick={() => handleProductClick(product, productHref)}
                 >
                   <Image
-                    src={videoThumbnailSrc || imageSrc}
+                    src={imageSrc}
                     alt={hasVideoMedia ? `${product.name || FALLBACK_PRODUCT_ALT} video` : (product.name || FALLBACK_PRODUCT_ALT)}
                     fill
                     unoptimized

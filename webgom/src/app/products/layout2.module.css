@@ -419,6 +419,7 @@
 }
 
 .imageLink {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
@@ -433,6 +434,39 @@
 
 .productCard:hover .image {
   transform: scale(1.08);
+}
+
+.videoImageLink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.02) 0%, rgba(15, 23, 42, 0.26) 100%);
+  pointer-events: none;
+}
+
+.videoPlayBadge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  display: inline-grid;
+  width: clamp(38px, 18%, 54px);
+  aspect-ratio: 1 / 1;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.74);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22);
+  color: #fff;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.videoPlayIcon {
+  margin-left: 2px;
+  font-size: 32px !important;
+  line-height: 1;
 }
 
 .cardBody {
@@ -782,6 +816,14 @@
 
   .imageArea {
     aspect-ratio: 1 / 1;
+  }
+
+  .videoPlayBadge {
+    width: 36px;
+  }
+
+  .videoPlayIcon {
+    font-size: 24px !important;
   }
 
   .cardBody {

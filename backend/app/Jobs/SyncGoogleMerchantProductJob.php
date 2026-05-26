@@ -15,7 +15,7 @@ class SyncGoogleMerchantProductJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
-    public int $timeout = 120;
+    public int $timeout = 300;
 
     public function __construct(public int $productId, public ?string $action = null)
     {

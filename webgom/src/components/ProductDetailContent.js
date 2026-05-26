@@ -145,7 +145,7 @@ const filterUniqueRenderableImages = (sourceImages = []) => {
 };
 
 const normalizeProductVideoUrls = (items = [], fallbackUrl = '') => {
-  const sourceItems = Array.isArray(items) ? items : [];
+  const sourceItems = Array.isArray(items) ? items : (items ? [items] : []);
   const urls = sourceItems
     .map((item) => String(typeof item === 'object' ? (item?.url || item?.video_url || '') : item || '').trim())
     .filter(Boolean);
@@ -176,9 +176,10 @@ const resolveBundleOptionVideoUrls = (product, activeConfig) => {
 
   const uniqueOptionVideoUrls = optionVideoUrls.filter((url, index, collection) => collection.indexOf(url) === index);
 
-  return uniqueOptionVideoUrls.length > 0
-    ? normalizeProductVideoUrls(uniqueOptionVideoUrls)
-    : parentVideoUrls;
+  return normalizeProductVideoUrls([
+    ...uniqueOptionVideoUrls,
+    ...parentVideoUrls,
+  ]);
 };
 
 const getPinnedEntityGalleryImages = (entity) => {

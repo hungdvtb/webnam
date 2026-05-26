@@ -7,6 +7,8 @@ use App\Models\ProductImage;
 use App\Models\SiteDomain;
 use App\Services\GoogleMerchant\GoogleMerchantProductSyncService;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class GoogleMerchantProductSyncServiceTest extends TestCase
@@ -345,6 +347,54 @@ class GoogleMerchantProductSyncServiceTest extends TestCase
         $product->google_merchant_product_input_name = 'accounts/123/productInputs/example';
 
         $this->assertTrue($method->invoke($service, $product));
+    }
+
+    public function test_merchant_request_retries_retryable_http_response(): void
+    {
+        config([
+            'google_merchant.request_attempts' => 2,
+            'google_merchant.retry_delay_ms' => 0,
+        ]);
+
+        Http::fake([
+            'https://merchantapi.googleapis.com/*' => Http::sequence()
+                ->push(['error' => ['message' => 'temporarily unavailable']], 503)
+                ->push(['name' => 'accounts/123/productInputs/example'], 200),
+        ]);
+
+        $service = app(GoogleMerchantProductSyncService::class);
+        $method = new \ReflectionMethod($service, 'sendMerchantRequest');
+        $method->setAccessible(true);
+
+        $response = $method->invoke(
+            $service,
+            'post',
+            'https://merchantapi.googleapis.com/products/v1/accounts/123/productInputs:insert',
+            ['offerId' => 'RETRY-001'],
+            null,
+            'RETRY-001',
+            'upsert',
+            [
+                'credential_type' => 'access_token',
+                'access_token' => 'test-token',
+            ],
+        );
+
+        $this->assertTrue($response->successful());
+        $this->assertSame('accounts/123/productInputs/example', $response->json('name'));
+        Http::assertSentCount(2);
+    }
+
+    public function test_merchant_timeout_exception_is_retryable(): void
+    {
+        $service = app(GoogleMerchantProductSyncService::class);
+        $method = new \ReflectionMethod($service, 'isRetryableMerchantException');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke(
+            $service,
+            new ConnectionException('cURL error 28: Operation timed out after 30001 milliseconds')
+        ));
     }
 
     private function bundleItemWithPivot(

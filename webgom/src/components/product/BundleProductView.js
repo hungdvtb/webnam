@@ -80,6 +80,28 @@ const normalizeGalleryVideoUrls = (items = [], fallbackUrl = '') => {
   ));
 };
 
+const imageUrlCandidate = (url) => {
+  const normalized = String(url || '').trim();
+  return normalized ? { url: normalized, path: normalized, image_url: normalized } : null;
+};
+
+const uniqueRenderableImages = (items = []) => {
+  const seenSources = new Set();
+
+  return (Array.isArray(items) ? items : [])
+    .filter(Boolean)
+    .filter((item) => {
+      const resolvedSource = resolveImageObjectUrl(item, 'large', '');
+
+      if (!resolvedSource || seenSources.has(resolvedSource)) {
+        return false;
+      }
+
+      seenSources.add(resolvedSource);
+      return true;
+    });
+};
+
 const sentenceCaseButtonStyle = { textTransform: 'none' };
 const BUNDLE_WORKSPACE_STATE_KEY = '__webgomBundleWorkspace';
 const BUNDLE_DETAIL_SCROLL_REQUEST_EVENT = 'webgom:bundle-detail-scroll-request';
@@ -528,31 +550,36 @@ export default function BundleProductView({
       return null;
     }
 
-    const firstItemWithOptionImage = matchedItems.find((item) => (
-      item?.option_image || item?.pivot?.option_image || item?.option_image_url || item?.pivot?.option_image_url
-    ));
-    const firstItemWithOptionVideo = matchedItems.find((item) => (
-      item?.option_video_url || item?.pivot?.option_video_url
-    ));
-    const optionVideoUrls = normalizeGalleryVideoUrls(
-      matchedOption?.video_urls
-      || matchedOption?.videos
-      || matchedOption?.option_video_urls
-      || matchedOption?.option_videos
-      || [],
-      matchedOption?.video_url
-      || matchedOption?.option_video_url
-      || firstItemWithOptionVideo?.option_video_url
-      || firstItemWithOptionVideo?.pivot?.option_video_url
-      || ''
-    );
-    const optionImage = matchedOption?.primary_image
-      || matchedOption?.option_image
-      || firstItemWithOptionImage?.option_image
-      || firstItemWithOptionImage?.pivot?.option_image
-      || (firstItemWithOptionImage?.option_image_url ? { url: firstItemWithOptionImage.option_image_url } : null)
-      || (firstItemWithOptionImage?.pivot?.option_image_url ? { url: firstItemWithOptionImage.pivot.option_image_url } : null)
-      || null;
+    const optionGalleryImages = uniqueRenderableImages([
+      matchedOption?.primary_image,
+      matchedOption?.option_image,
+      matchedOption?.featured_image_media,
+      matchedOption?.featuredImageMedia,
+      imageUrlCandidate(matchedOption?.main_image),
+      imageUrlCandidate(matchedOption?.option_image_url),
+      imageUrlCandidate(matchedOption?.featured_image),
+      ...matchedItems.flatMap((item) => ([
+        item?.option_image,
+        item?.pivot?.option_image,
+        item?.option_post_featured_image,
+        item?.pivot?.option_post_featured_image,
+        imageUrlCandidate(item?.option_image_url),
+        imageUrlCandidate(item?.pivot?.option_image_url),
+      ])),
+    ]);
+    const optionVideoUrls = normalizeGalleryVideoUrls([
+      ...(Array.isArray(matchedOption?.video_urls) ? matchedOption.video_urls : [matchedOption?.video_urls]),
+      ...(Array.isArray(matchedOption?.videos) ? matchedOption.videos : [matchedOption?.videos]),
+      ...(Array.isArray(matchedOption?.option_video_urls) ? matchedOption.option_video_urls : [matchedOption?.option_video_urls]),
+      ...(Array.isArray(matchedOption?.option_videos) ? matchedOption.option_videos : [matchedOption?.option_videos]),
+      matchedOption?.video_url,
+      matchedOption?.option_video_url,
+      ...matchedItems.flatMap((item) => ([
+        item?.option_video_url,
+        item?.pivot?.option_video_url,
+      ])),
+    ]);
+    const optionImage = optionGalleryImages[0] || null;
 
     return {
       name: String(
@@ -561,25 +588,25 @@ export default function BundleProductView({
         || selectedConfig
       ).trim() || selectedConfig,
       primaryImage: optionImage,
+      galleryImages: optionGalleryImages,
       videoUrls: optionVideoUrls,
     };
-  }, [activeBundleConfig, bundleItems, manualActiveTab, product?.bundle_options]);
+  }, [activeBundleConfig, bundleItems, manualActiveTab, product.bundle_options]);
 
   const bundleHeroProductName = activeBundleOptionDisplay?.name || product.name;
   const currentGalleryVideoUrls = useMemo(() => {
-    const optionVideoUrls = normalizeGalleryVideoUrls(activeBundleOptionDisplay?.videoUrls || []);
-
-    return optionVideoUrls.length > 0
-      ? optionVideoUrls
-      : normalizeGalleryVideoUrls(videoUrls, videoUrl);
-  }, [activeBundleOptionDisplay?.videoUrls, videoUrl, videoUrls]);
+    return normalizeGalleryVideoUrls([
+      ...(Array.isArray(activeBundleOptionDisplay?.videoUrls) ? activeBundleOptionDisplay.videoUrls : []),
+      ...(Array.isArray(videoUrls) ? videoUrls : [videoUrls]),
+      videoUrl,
+    ]);
+  }, [activeBundleOptionDisplay, videoUrl, videoUrls]);
   const hasCurrentGalleryVideo = currentGalleryVideoUrls.length > 0;
 
   const bundleMobileGalleryImages = useMemo(() => {
     const sourceImages = Array.isArray(images) ? images : [];
-    const optionImage = activeBundleOptionDisplay?.primaryImage || null;
-    const optionImageUrl = resolveImageObjectUrl(optionImage, 'large', '');
     const seenSources = new Set();
+    const mergedImages = [];
 
     const isRenderableGallerySource = (value) => {
       const normalized = String(value || '').trim();
@@ -595,27 +622,26 @@ export default function BundleProductView({
       return true;
     };
 
-    if (optionImageUrl) {
-      seenSources.add(optionImageUrl);
-    }
-
-    const cleanedImages = sourceImages.filter((image) => {
-      const resolvedSource = getImageUrl(image);
+    const addGalleryImage = (image) => {
+      const resolvedSource = resolveImageObjectUrl(image, 'large', '') || getImageUrl(image);
 
       if (!isRenderableGallerySource(resolvedSource) || seenSources.has(resolvedSource)) {
-        return false;
+        return;
       }
 
       seenSources.add(resolvedSource);
-      return true;
-    });
+      mergedImages.push(image);
+    };
 
-    if (optionImageUrl) {
-      return [optionImage, ...(cleanedImages.length > 0 ? cleanedImages : sourceImages)];
-    }
+    const optionImages = Array.isArray(activeBundleOptionDisplay?.galleryImages)
+      ? activeBundleOptionDisplay.galleryImages
+      : [activeBundleOptionDisplay?.primaryImage].filter(Boolean);
 
-    return cleanedImages.length > 0 ? cleanedImages : sourceImages;
-  }, [activeBundleOptionDisplay?.primaryImage, getImageUrl, images]);
+    optionImages.forEach(addGalleryImage);
+    sourceImages.forEach(addGalleryImage);
+
+    return mergedImages.length > 0 ? mergedImages : sourceImages;
+  }, [activeBundleOptionDisplay, getImageUrl, images]);
 
   const getCompactConfigLabel = (configName) => {
     const normalized = String(configName || '').replace(/\s+/g, ' ').trim();
@@ -1692,6 +1718,7 @@ export default function BundleProductView({
                 getImageUrl={getImageUrl}
                 productName={bundleHeroProductName}
                 priorityFirstImage
+                deferVideoThumbnails={false}
               />
             </div>
 
@@ -1706,6 +1733,7 @@ export default function BundleProductView({
                 productName={bundleHeroProductName}
                 showSingleThumbnail
                 priorityFirstImage={false}
+                deferVideoThumbnails={false}
               />
             </div>
           </div>

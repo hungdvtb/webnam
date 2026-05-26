@@ -165,7 +165,7 @@ function buildThumbMarkup(item, index, isActive) {
     `    <img src="${escapeAttribute(thumbImage)}" alt="${escapeAttribute(label)}" loading="lazy" decoding="async" />`,
     item.type === 'video' ? '    <span class="bdt-media-gallery-thumb-play material-symbols-outlined">play_arrow</span>' : '',
     '  </span>',
-    `  <span class="bdt-media-gallery-thumb-label">${escapeHtml(item.type === 'video' ? 'Video' : 'Ảnh')}</span>`,
+    item.type === 'video' ? '  <span class="bdt-media-gallery-thumb-label">Video</span>' : '',
     '</button>',
   ].filter(Boolean).join('');
 }

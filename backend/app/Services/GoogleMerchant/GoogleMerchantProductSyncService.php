@@ -6,6 +6,7 @@ use App\Models\GoogleMerchantSyncLog;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\SiteDomain;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
@@ -29,6 +30,7 @@ class GoogleMerchantProductSyncService
         'delete_ineligible',
         'variant_child_delete',
     ];
+    private const RETRYABLE_RESPONSE_STATUSES = [408, 425, 429, 500, 502, 503, 504];
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
     private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
 
@@ -825,33 +827,111 @@ class GoogleMerchantProductSyncService
         string $action,
         array $settings
     ): Response {
-        $startedAt = microtime(true);
-        $response = null;
-        $error = null;
+        $attempts = max((int) config('google_merchant.request_attempts', 2), 1);
+        $methodLabel = Str::upper($method);
 
-        try {
-            $request = $this->baseRequest($settings)->withToken($this->accessToken($settings));
-            $response = $method === 'delete'
-                ? $request->delete($url)
-                : $request->post($url, $payload ?? []);
+        for ($attempt = 1; $attempt <= $attempts; $attempt++) {
+            $startedAt = microtime(true);
+            $response = null;
+            $error = null;
 
-            return $response;
-        } catch (Throwable $exception) {
-            $error = $exception;
-            throw $exception;
-        } finally {
-            $this->recordApiLog(
-                product: $product,
-                offerId: $offerId,
-                action: $action,
-                method: Str::upper($method),
-                url: $url,
-                payload: $payload,
-                response: $response,
-                error: $error,
-                durationMs: (int) round((microtime(true) - $startedAt) * 1000)
+            try {
+                $request = $this->baseRequest($settings)->withToken($this->accessToken($settings));
+                $response = $method === 'delete'
+                    ? $request->delete($url)
+                    : $request->post($url, $payload ?? []);
+            } catch (Throwable $exception) {
+                $error = $exception;
+            } finally {
+                $this->recordApiLog(
+                    product: $product,
+                    offerId: $offerId,
+                    action: $action,
+                    method: $methodLabel,
+                    url: $url,
+                    payload: $payload,
+                    response: $response,
+                    error: $error,
+                    durationMs: (int) round((microtime(true) - $startedAt) * 1000)
+                );
+            }
+
+            if ($error !== null) {
+                if ($attempt < $attempts && $this->isRetryableMerchantException($error)) {
+                    $this->logMerchantRetry($product, $offerId, $action, $attempt, $attempts, $error->getMessage());
+                    $this->sleepBeforeMerchantRetry($attempt);
+                    continue;
+                }
+
+                throw $error;
+            }
+
+            if (!$this->isRetryableMerchantResponse($response) || $attempt >= $attempts) {
+                return $response;
+            }
+
+            $this->logMerchantRetry(
+                $product,
+                $offerId,
+                $action,
+                $attempt,
+                $attempts,
+                'HTTP ' . $response->status()
             );
+            $this->sleepBeforeMerchantRetry($attempt);
         }
+
+        throw new GoogleMerchantProductSyncException('Google Merchant request retry loop exited without a response.');
+    }
+
+    private function isRetryableMerchantResponse(?Response $response): bool
+    {
+        return $response !== null && in_array($response->status(), self::RETRYABLE_RESPONSE_STATUSES, true);
+    }
+
+    private function isRetryableMerchantException(Throwable $exception): bool
+    {
+        if ($exception instanceof ConnectionException) {
+            return true;
+        }
+
+        $message = Str::lower($exception->getMessage());
+
+        return str_contains($message, 'timed out')
+            || str_contains($message, 'timeout')
+            || str_contains($message, 'curl error 28')
+            || str_contains($message, 'connection refused')
+            || str_contains($message, 'could not resolve host')
+            || str_contains($message, 'connection reset');
+    }
+
+    private function sleepBeforeMerchantRetry(int $attempt): void
+    {
+        $delayMs = max((int) config('google_merchant.retry_delay_ms', 1500), 0);
+        if ($delayMs <= 0) {
+            return;
+        }
+
+        usleep($delayMs * 1000 * max($attempt, 1));
+    }
+
+    private function logMerchantRetry(
+        ?Product $product,
+        ?string $offerId,
+        string $action,
+        int $attempt,
+        int $attempts,
+        string $reason
+    ): void {
+        Log::warning('Retrying Google Merchant request after transient failure.', [
+            'product_id' => $product?->id,
+            'sku' => $product?->sku,
+            'offer_id' => $offerId,
+            'action' => $action,
+            'attempt' => $attempt,
+            'max_attempts' => $attempts,
+            'reason' => $reason,
+        ]);
     }
 
     private function loadProductMerchantRelations(Product $product): void
@@ -883,8 +963,8 @@ class GoogleMerchantProductSyncService
     {
         return Http::acceptJson()
             ->asJson()
-            ->timeout(max((int) config('google_merchant.timeout', 30), 1))
-            ->connectTimeout(max((int) config('google_merchant.connect_timeout', 10), 1))
+            ->timeout(max((int) config('google_merchant.timeout', 75), 1))
+            ->connectTimeout(max((int) config('google_merchant.connect_timeout', 15), 1))
             ->withOptions([
                 'verify' => (bool) config('google_merchant.verify_ssl', true),
             ]);
@@ -920,8 +1000,8 @@ class GoogleMerchantProductSyncService
 
         return Cache::remember($cacheKey, now()->addMinutes(50), function () use ($clientId, $clientSecret, $refreshToken) {
             $response = Http::asForm()
-                ->timeout(max((int) config('google_merchant.timeout', 30), 1))
-                ->connectTimeout(max((int) config('google_merchant.connect_timeout', 10), 1))
+                ->timeout(max((int) config('google_merchant.timeout', 75), 1))
+                ->connectTimeout(max((int) config('google_merchant.connect_timeout', 15), 1))
                 ->withOptions([
                     'verify' => (bool) config('google_merchant.verify_ssl', true),
                 ])
@@ -988,8 +1068,8 @@ class GoogleMerchantProductSyncService
 
         $assertion = $unsignedJwt . '.' . $this->base64UrlEncode($signature);
         $response = Http::asForm()
-            ->timeout(max((int) config('google_merchant.timeout', 30), 1))
-            ->connectTimeout(max((int) config('google_merchant.connect_timeout', 10), 1))
+            ->timeout(max((int) config('google_merchant.timeout', 75), 1))
+            ->connectTimeout(max((int) config('google_merchant.connect_timeout', 15), 1))
             ->withOptions([
                 'verify' => (bool) config('google_merchant.verify_ssl', true),
             ])

@@ -319,6 +319,88 @@ export const resolveCartItemImageUrl = (item, preferredOrFallback = 'medium', fa
   return resolvedFallback;
 };
 
+const getVideoValueFromCandidate = (item) => {
+  if (!item) {
+    return '';
+  }
+
+  if (typeof item === 'string' || typeof item === 'number') {
+    return String(item).trim();
+  }
+
+  if (typeof item !== 'object' || Array.isArray(item)) {
+    return '';
+  }
+
+  return String(
+    item.url
+    || item.video_url
+    || item.videoUrl
+    || item.src
+    || item.youtubeId
+    || item.youtube_id
+    || ''
+  ).trim();
+};
+
+const normalizeVideoCollection = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(getVideoValueFromCandidate).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+
+    if (!normalized) {
+      return [];
+    }
+
+    if (/^\s*[\[{]/.test(normalized)) {
+      try {
+        const parsed = JSON.parse(normalized);
+        return normalizeVideoCollection(parsed);
+      } catch {
+        return [normalized];
+      }
+    }
+
+    return [normalized];
+  }
+
+  const directValue = getVideoValueFromCandidate(value);
+  return directValue ? [directValue] : [];
+};
+
+export const getEntityVideoCandidates = (entity = {}) => {
+  if (!entity || typeof entity !== 'object' || Array.isArray(entity)) {
+    return [];
+  }
+
+  const candidates = [
+    ...normalizeVideoCollection(entity.video_urls),
+    ...normalizeVideoCollection(entity.videoUrls),
+    ...normalizeVideoCollection(entity.videos),
+    getVideoValueFromCandidate(entity.video_url),
+    getVideoValueFromCandidate(entity.videoUrl),
+  ].filter(Boolean);
+  const seen = new Set();
+
+  return candidates.filter((candidate) => {
+    const normalizedKey = normalizeVideoCandidate(candidate).toLowerCase();
+
+    if (!normalizedKey || seen.has(normalizedKey) || !resolveVideoEmbedUrl(candidate)) {
+      return false;
+    }
+
+    seen.add(normalizedKey);
+    return true;
+  });
+};
+
+export const resolveEntityPrimaryVideoUrl = (entity = {}) => (
+  getEntityVideoCandidates(entity)[0] || ''
+);
+
 export const resolveYouTubeVideoId = (value) => {
   const normalized = normalizeVideoCandidate(value);
 

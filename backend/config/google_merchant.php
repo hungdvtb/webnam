@@ -45,7 +45,9 @@ return [
     'queue_connection' => env('GOOGLE_MERCHANT_QUEUE_CONNECTION', 'sync'),
     'queue_name' => env('GOOGLE_MERCHANT_QUEUE_NAME', 'google-merchant'),
 
-    'timeout' => (int) env('GOOGLE_MERCHANT_TIMEOUT', 30),
-    'connect_timeout' => (int) env('GOOGLE_MERCHANT_CONNECT_TIMEOUT', 10),
+    'timeout' => (int) env('GOOGLE_MERCHANT_TIMEOUT', 75),
+    'connect_timeout' => (int) env('GOOGLE_MERCHANT_CONNECT_TIMEOUT', 15),
+    'request_attempts' => (int) env('GOOGLE_MERCHANT_REQUEST_ATTEMPTS', 2),
+    'retry_delay_ms' => (int) env('GOOGLE_MERCHANT_RETRY_DELAY_MS', 1500),
     'verify_ssl' => $verifySsl,
 ];

@@ -5,7 +5,11 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import styles from '../app/products/layout2.module.css';
 import { useCart } from '@/context/CartContext';
-import { resolveEntityImageUrl } from '@/lib/media';
+import {
+  resolveEntityImageUrl,
+  resolveEntityPrimaryVideoUrl,
+  resolveVideoThumbnailUrl,
+} from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
 import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from '@/lib/productPrefetch';
@@ -64,6 +68,9 @@ export default function InfiniteProductListLayout2({ initialData }) {
           const productHref = buildProductDetailHref(product);
           const productCardKey = buildProductCardKey(product);
           const displayPrice = getDisplayPrice(product);
+          const videoUrl = resolveEntityPrimaryVideoUrl(product);
+          const videoThumbnailSrc = videoUrl ? resolveVideoThumbnailUrl(videoUrl) : '';
+          const hasVideoMedia = Boolean(videoUrl);
           const imageSrc = resolveEntityImageUrl(product, 'medium', FALLBACK_PRODUCT_IMAGE);
           const cartOptions = product.item_type === 'bundle_option'
             ? {
@@ -81,20 +88,27 @@ export default function InfiniteProductListLayout2({ initialData }) {
               <div className={styles.imageArea}>
                 <Link
                   href={productHref}
-                  className={styles.imageLink}
+                  className={`${styles.imageLink} ${hasVideoMedia ? styles.videoImageLink : ''}`}
                   onPointerEnter={() => handleProductIntent(product, productHref)}
                   onFocus={() => handleProductIntent(product, productHref)}
                   onTouchStart={() => handleProductIntent(product, productHref)}
                   onClick={() => handleProductClick(product, productHref)}
                 >
                   <Image
-                    src={imageSrc}
-                    alt={product.name || FALLBACK_PRODUCT_ALT}
+                    src={videoThumbnailSrc || imageSrc}
+                    alt={hasVideoMedia ? `${product.name || FALLBACK_PRODUCT_ALT} video` : (product.name || FALLBACK_PRODUCT_ALT)}
                     fill
                     unoptimized
                     className={styles.image}
                     sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
                   />
+                  {hasVideoMedia ? (
+                    <span className={styles.videoPlayBadge} aria-label="San pham co video">
+                      <span className={`material-symbols-outlined ${styles.videoPlayIcon}`} aria-hidden="true">
+                        play_arrow
+                      </span>
+                    </span>
+                  ) : null}
                 </Link>
               </div>
 

@@ -55,8 +55,14 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
     return null;
   }
 
+  const snapshotImages = Array.isArray(snapshot.images) ? snapshot.images.filter(Boolean) : [];
   const primaryImage = snapshot.primary_image
+    || snapshotImages.find((image) => Boolean(image?.is_primary))
+    || snapshotImages[0]
     || (snapshot.main_image ? { url: snapshot.main_image, path: snapshot.main_image } : null);
+  const videoUrls = Array.isArray(snapshot.video_urls)
+    ? snapshot.video_urls.filter(Boolean)
+    : (snapshot.video_url ? [snapshot.video_url] : []);
   const hasRequestedOption = Boolean(
     requestedBundleOptionUid
     || requestedBundleOptionKey
@@ -80,7 +86,7 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
     special_price: snapshot.special_price ?? null,
     primary_image: primaryImage,
     main_image: snapshot.main_image || primaryImage?.url || primaryImage?.path || '',
-    images: primaryImage ? [primaryImage] : [],
+    images: snapshotImages.length > 0 ? snapshotImages : (primaryImage ? [primaryImage] : []),
     category: snapshot.category || null,
     bundle_items: [],
     grouped_items: [],
@@ -97,7 +103,8 @@ const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', r
     }],
     specifications: '',
     additional_info: [],
-    video_urls: [],
+    video_url: snapshot.video_url || videoUrls[0] || '',
+    video_urls: videoUrls,
     is_bundle_option_lite: true,
     is_bundle_shell: !hasRequestedOption,
   };
@@ -228,6 +235,7 @@ export default function ProductDetailClientShell({
       || requestedBundleOptionKey
       || requestedBundleOptionTitle
     );
+    const hasInitialBundleOptionDetail = hasRequestedBundleOption && Boolean(initialProduct);
     const fetchFullProduct = () => {
       if (cancelled) {
         return;
@@ -276,6 +284,11 @@ export default function ProductDetailClientShell({
     const cancelScheduledStart = scheduleAfterFirstPaint(() => {
       setDeferredSectionsReady(true);
 
+      if (hasInitialBundleOptionDetail) {
+        fullFetchTimer = window.setTimeout(fetchFullProduct, 900);
+        return;
+      }
+
       if (!hasRequestedBundleOption) {
         fetchFullProduct();
         return;
@@ -323,6 +336,7 @@ export default function ProductDetailClientShell({
     };
   }, [
     deferFullProduct,
+    initialProduct,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
     requestedBundleOptionUid,

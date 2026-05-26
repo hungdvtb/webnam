@@ -4,7 +4,7 @@ import config from './config';
 
 const SNAPSHOT_PREFIX = 'webgom:bundle-option-snapshot:';
 const DETAIL_PREFIX = 'webgom:bundle-option-detail:';
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 const pendingPrefetches = new Map();
 
 const normalizeText = (value) => String(value || '').trim();
@@ -45,6 +45,11 @@ const pickBundleOptionSnapshot = (product = {}, href = '') => ({
   special_price: product?.special_price ?? null,
   primary_image: product?.primary_image ?? null,
   main_image: product?.main_image ?? null,
+  images: Array.isArray(product?.images) ? product.images : [],
+  video_url: product?.video_url || product?.videoUrl || '',
+  video_urls: Array.isArray(product?.video_urls)
+    ? product.video_urls
+    : (Array.isArray(product?.videoUrls) ? product.videoUrls : []),
   category: product?.category ?? null,
   bundle_option_uid: getOptionUid(product),
   bundle_option_key: getOptionKey(product),

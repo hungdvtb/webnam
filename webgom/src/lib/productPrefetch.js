@@ -37,7 +37,6 @@ const getCacheKey = (slug = '', optionUid = '', optionKey = '', optionTitle = ''
 
 const pickBundleOptionSnapshot = (product = {}, href = '') => ({
   cache_version: CACHE_VERSION,
-  __webgom_is_snapshot: true,
   cached_at: Date.now(),
   href,
   id: product?.id ?? null,

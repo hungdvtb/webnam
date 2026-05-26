@@ -423,7 +423,6 @@ export default function ProductGallery({
   showSingleThumbnail = false,
   priorityFirstImage = true,
   deferVideoThumbnails = true,
-  deferVideoEmbeds = true,
 }) {
   const normalizedImages = Array.isArray(images) ? images.filter(Boolean) : [];
   const normalizedVideoUrls = (Array.isArray(videoUrls) && videoUrls.length > 0 ? videoUrls : [videoUrl])
@@ -447,9 +446,6 @@ export default function ProductGallery({
     Boolean(primaryDisplayImage) && requestedDisplayIndex === 0,
   );
   const [canRenderVideoThumbnails, setCanRenderVideoThumbnails] = useState(!deferVideoThumbnails);
-  const [loadedVideoIndexes, setLoadedVideoIndexes] = useState(() => (
-    deferVideoEmbeds ? new Set() : new Set([0])
-  ));
   const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
 
   const stageRef = useRef(null);
@@ -485,8 +481,6 @@ export default function ProductGallery({
   const previousImage = currentImageIndex > 0 ? galleryImages[currentImageIndex - 1] : null;
   const nextImage = currentImageIndex < galleryImages.length - 1 ? galleryImages[currentImageIndex + 1] : null;
   const activeThumbIndex = isShowingVideo || isPrimaryDisplayOverrideVisible ? -1 : currentImageIndex;
-  const isActiveVideoLoaded = loadedVideoIndexes.has(activeVideoIndex);
-  const activeVideoThumbnailUrl = activeVideoUrl ? resolveVideoThumbnailUrl(activeVideoUrl) : '';
 
   const resolveGalleryImageSrc = (image) => (
     image?.__fallback ? getImageUrl(null) : getImageUrl(image)
@@ -759,21 +753,6 @@ export default function ProductGallery({
   }, [deferVideoThumbnails]);
 
   useEffect(() => {
-    if (!deferVideoEmbeds) {
-      setLoadedVideoIndexes(new Set(Array.from({ length: normalizedVideoUrls.length }, (_, index) => index)));
-      return;
-    }
-
-    setLoadedVideoIndexes((previous) => {
-      const next = new Set(
-        Array.from(previous).filter((index) => index >= 0 && index < normalizedVideoUrls.length),
-      );
-
-      return next.size === previous.size ? previous : next;
-    });
-  }, [deferVideoEmbeds, normalizedVideoUrls.length]);
-
-  useEffect(() => {
     if (!isMobileViewport || !showThumbnailStrip || typeof window === 'undefined') {
       return undefined;
     }
@@ -806,18 +785,6 @@ export default function ProductGallery({
 
     thumbRefs.current.delete(key);
   };
-
-  const loadActiveVideo = useCallback(() => {
-    setLoadedVideoIndexes((previous) => {
-      if (previous.has(activeVideoIndex)) {
-        return previous;
-      }
-
-      const next = new Set(previous);
-      next.add(activeVideoIndex);
-      return next;
-    });
-  }, [activeVideoIndex]);
 
   const handlePointerDown = (event) => {
     const interactionType = getPointerInteractionType(event);
@@ -1115,48 +1082,16 @@ export default function ProductGallery({
       >
         {isShowingVideo ? (
           <div className={styles.productMediaVideoShell}>
-            {isActiveVideoLoaded ? (
-              <iframe
-                src={embedUrl}
-                title={`${productName} video`}
-                className={styles.productMediaVideoFrame}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
-                allowFullScreen
-                loading="lazy"
-                referrerPolicy="strict-origin-when-cross-origin"
-                onLoad={() => logProductTiming('load-video', { productName, videoIndex: activeVideoIndex })}
-              />
-            ) : (
-              <button
-                type="button"
-                className={styles.productMediaVideoPosterButton}
-                onClick={loadActiveVideo}
-                aria-label={`Phat video ${productName}`}
-              >
-                {activeVideoThumbnailUrl ? (
-                  <span className={styles.productMediaVideoPosterImageWrap}>
-                    <Image
-                      src={activeVideoThumbnailUrl}
-                      alt={`${productName} video thumbnail`}
-                      fill
-                      unoptimized
-                      loading="lazy"
-                      sizes="(max-width: 767px) 100vw, (max-width: 1279px) 52vw, 620px"
-                      className={styles.productMediaVideoPosterImage}
-                      draggable={false}
-                    />
-                  </span>
-                ) : (
-                  <span className={styles.productMediaVideoPosterFallback}>
-                    <span className="material-symbols-outlined" aria-hidden="true">smart_display</span>
-                  </span>
-                )}
-
-                <span className={styles.productMediaVideoPosterOverlay}>
-                  <span className="material-symbols-outlined" aria-hidden="true">play_arrow</span>
-                </span>
-              </button>
-            )}
+            <iframe
+              src={embedUrl}
+              title={`${productName} video`}
+              className={styles.productMediaVideoFrame}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen; web-share"
+              allowFullScreen
+              loading="lazy"
+              referrerPolicy="strict-origin-when-cross-origin"
+              onLoad={() => logProductTiming('load-video', { productName, videoIndex: activeVideoIndex })}
+            />
           </div>
         ) : currentDisplayImage ? (
           <div className={styles.productMediaViewport}>
@@ -1225,7 +1160,7 @@ export default function ProductGallery({
           ) : null}
 
           <div className={styles.productMediaLightboxStage}>
-            {isShowingVideo && isActiveVideoLoaded ? (
+            {isShowingVideo ? (
               <iframe
                 src={embedUrl}
                 title={`${productName} video fullscreen`}
@@ -1235,35 +1170,6 @@ export default function ProductGallery({
                 loading="lazy"
                 referrerPolicy="strict-origin-when-cross-origin"
               />
-            ) : isShowingVideo ? (
-              <button
-                type="button"
-                className={styles.productMediaVideoPosterButton}
-                onClick={loadActiveVideo}
-                aria-label={`Phat video ${productName}`}
-              >
-                {activeVideoThumbnailUrl ? (
-                  <span className={styles.productMediaVideoPosterImageWrap}>
-                    <Image
-                      src={activeVideoThumbnailUrl}
-                      alt={`${productName} video thumbnail`}
-                      fill
-                      unoptimized
-                      className={styles.productMediaVideoPosterImage}
-                      loading="lazy"
-                      sizes="(max-width: 767px) 100vw, 980px"
-                      draggable={false}
-                    />
-                  </span>
-                ) : (
-                  <span className={styles.productMediaVideoPosterFallback}>
-                    <span className="material-symbols-outlined" aria-hidden="true">smart_display</span>
-                  </span>
-                )}
-                <span className={styles.productMediaVideoPosterOverlay}>
-                  <span className="material-symbols-outlined" aria-hidden="true">play_arrow</span>
-                </span>
-              </button>
             ) : currentImageSrc ? (
               <div
                 ref={setFullscreenZoomContainerNode}

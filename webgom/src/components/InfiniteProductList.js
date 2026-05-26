@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
+import { useMemo } from 'react';
 import styles from '../app/products/products.module.css';
 import { useCart } from '@/context/CartContext';
 import {
@@ -12,7 +13,11 @@ import {
 } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
 import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
-import { cacheBundleOptionSnapshot, prefetchBundleOptionDetail } from '@/lib/productPrefetch';
+import {
+  cacheBundleOptionSnapshot,
+  prefetchBundleOptionDetail,
+  useVisibleBundleProductPrefetch,
+} from '@/lib/productPrefetch';
 import { markProductNavigationClick } from '@/lib/productPerformance';
 import CategoryVariantQuickAdd from './CategoryVariantQuickAdd';
 
@@ -41,19 +46,40 @@ const getDisplayPrice = (product = {}) => {
 };
 
 export default function InfiniteProductList({ initialData }) {
-  const products = initialData?.data || [];
+  const products = useMemo(() => initialData?.data || [], [initialData?.data]);
   const { addToCart } = useCart();
   const router = useRouter();
+  const bundlePrefetchEntries = useMemo(() => (
+    products.map((product) => {
+      const href = buildProductDetailHref(product);
 
-  const handleProductIntent = (product, href) => {
-    cacheBundleOptionSnapshot(product, href);
-    prefetchBundleOptionDetail(product, href);
+      return {
+        key: buildProductCardKey(product),
+        product,
+        href,
+      };
+    })
+  ), [products]);
 
+  useVisibleBundleProductPrefetch(bundlePrefetchEntries);
+
+  const prefetchProductRoute = (href) => {
     try {
       router.prefetch(href);
     } catch {
       // Prefetch is opportunistic.
     }
+  };
+
+  const handleProductIntent = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    prefetchBundleOptionDetail(product, href);
+    prefetchProductRoute(href);
+  };
+
+  const handleProductTouchStart = (product, href) => {
+    cacheBundleOptionSnapshot(product, href);
+    prefetchProductRoute(href);
   };
 
   const handleProductClick = (product, href) => {
@@ -84,13 +110,18 @@ export default function InfiniteProductList({ initialData }) {
             : {};
 
           return (
-            <div key={productCardKey} className={styles.productCard} data-product-card="true">
+            <div
+              key={productCardKey}
+              className={styles.productCard}
+              data-product-card="true"
+              data-bundle-prefetch-key={productCardKey}
+            >
               <Link
                 href={productHref}
                 className={`${styles.imageWrapper} ${hasVideoMedia ? styles.videoImageWrapper : ''}`}
                 onPointerEnter={() => handleProductIntent(product, productHref)}
                 onFocus={() => handleProductIntent(product, productHref)}
-                onTouchStart={() => handleProductIntent(product, productHref)}
+                onTouchStart={() => handleProductTouchStart(product, productHref)}
                 onClick={() => handleProductClick(product, productHref)}
               >
                 <Image
@@ -116,7 +147,7 @@ export default function InfiniteProductList({ initialData }) {
                   style={{ textDecoration: 'none', color: 'inherit' }}
                   onPointerEnter={() => handleProductIntent(product, productHref)}
                   onFocus={() => handleProductIntent(product, productHref)}
-                  onTouchStart={() => handleProductIntent(product, productHref)}
+                  onTouchStart={() => handleProductTouchStart(product, productHref)}
                   onClick={() => handleProductClick(product, productHref)}
                 >
                   <h3 className={styles.productName}>{product.name}</h3>

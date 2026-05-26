@@ -9,7 +9,9 @@ import DesktopCategorySidebar from '@/components/DesktopCategorySidebar';
 import SortSelect from '@/components/SortSelect';
 import AttributeFiltersDropdown from '@/components/AttributeFiltersDropdown';
 import CategoryPerformanceLogger from '@/components/CategoryPerformanceLogger';
+import BundleProductPrefetchBootstrap from '@/components/BundleProductPrefetchBootstrap';
 import { resolveImageObjectUrl, resolveMediaUrl } from '@/lib/media';
+import config from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -22,6 +24,61 @@ export const metadata = {
 const PRODUCTS_PER_PAGE = 40;
 const PAGE_GAP = 'gap';
 const FALLBACK_CATEGORY_BANNER = '/banner-store.png';
+const BUNDLE_DETAIL_CACHE_VERSION = 8;
+const BUNDLE_DETAIL_PREFIX = 'webgom:bundle-option-detail:';
+
+const normalizeText = (value = '') => String(value ?? '').trim();
+
+const isBundleOptionProduct = (product = {}) => (
+  normalizeText(product?.item_type || product?.itemType) === 'bundle_option'
+  || normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid) !== ''
+  || normalizeText(product?.bundle_option_key || product?.bundleOptionKey) !== ''
+  || normalizeText(product?.bundle_option_title || product?.bundleOptionTitle) !== ''
+);
+
+const isBundleNavigationProduct = (product = {}) => (
+  isBundleOptionProduct(product)
+  || normalizeText(product?.type || product?.productType).toLowerCase() === 'bundle'
+);
+
+const getBundleOptionKey = (product = {}) => normalizeText(product?.bundle_option_key || product?.bundleOptionKey);
+const getBundleOptionUid = (product = {}) => normalizeText(product?.bundle_option_uid || product?.bundleOptionUid || product?.option_uid);
+const getBundleOptionTitle = (product = {}) => normalizeText(product?.bundle_option_title || product?.bundleOptionTitle);
+
+const getBundleDetailCacheKey = (slug = '', optionUid = '', optionKey = '', optionTitle = '') => {
+  const identity = normalizeText(optionUid) || normalizeText(optionKey) || normalizeText(optionTitle) || 'default';
+  return `${normalizeText(slug)}::${identity}`;
+};
+
+function buildBundlePrefetchDescriptor(product = {}) {
+  const slug = normalizeText(product?.slug);
+
+  if (!slug || !isBundleNavigationProduct(product)) {
+    return null;
+  }
+
+  const optionUid = getBundleOptionUid(product);
+  const optionKey = getBundleOptionKey(product);
+  const optionTitle = getBundleOptionTitle(product);
+  const cacheKey = getBundleDetailCacheKey(slug, optionUid, optionKey, optionTitle);
+  let endpoint = `/web-api/products/${encodeURIComponent(slug)}`;
+
+  if (isBundleOptionProduct(product)) {
+    const params = new URLSearchParams();
+    if (optionUid) params.set('bundle_option_uid', optionUid);
+    if (optionKey) params.set('bundle_option_key', optionKey);
+    if (optionTitle) params.set('bundle_option', optionTitle);
+    endpoint = `/web-api/products/${encodeURIComponent(slug)}/bundle-option-detail${params.toString() ? `?${params.toString()}` : ''}`;
+  }
+
+  return {
+    key: cacheKey,
+    storageKey: `${BUNDLE_DETAIL_PREFIX}${cacheKey}`,
+    url: `${config.apiUrl}${endpoint}`,
+    siteCode: config.siteCode,
+    cacheVersion: BUNDLE_DETAIL_CACHE_VERSION,
+  };
+}
 
 function resolveCategoryBannerUrl(categoryInfo) {
   return resolveImageObjectUrl(categoryInfo?.banner_image, 'large', '')
@@ -266,11 +323,15 @@ export default async function ProductsPage({ searchParams }) {
       categoryTiming={categoryInfo?.__webgomTiming}
     />
   );
+  const bundlePrefetchDescriptors = (productsData.data || [])
+    .map((product) => buildBundlePrefetchDescriptor(product))
+    .filter(Boolean);
 
   if (activeLayout === 'layout_2') {
     return (
       <div className={styles2.container}>
         {performanceLogger}
+        <BundleProductPrefetchBootstrap descriptors={bundlePrefetchDescriptors} />
         <nav className={styles2.breadcrumbs}>
           <Link href="/" className={styles2.breadcrumbLink}>Trang chủ</Link>
           <span className="material-symbols-outlined" style={{ fontSize: '14px', opacity: 0.4 }}>chevron_right</span>
@@ -327,6 +388,7 @@ export default async function ProductsPage({ searchParams }) {
   return (
     <div className={styles.productsPage}>
       {performanceLogger}
+      <BundleProductPrefetchBootstrap descriptors={bundlePrefetchDescriptors} />
       <main className="container py-8">
         <nav className={styles.breadcrumbNav}>
           <Link href="/">Trang chủ</Link>

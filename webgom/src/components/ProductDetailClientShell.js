@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailTabs from '@/components/ProductDetailTabs';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
@@ -12,8 +12,9 @@ import {
   logProductTiming,
 } from '@/lib/productPerformance';
 import {
-  readBundleOptionSnapshot,
+  cacheBundleProductDetail,
   readCachedBundleOptionDetail,
+  readPendingBundleProductDetail,
 } from '@/lib/productPrefetch';
 import styles from '@/app/product/[slug]/product.module.css';
 
@@ -50,64 +51,20 @@ const scheduleAfterFirstPaint = (callback) => {
   };
 };
 
-const buildOptimisticBundleProduct = (snapshot, requestedBundleOptionKey = '', requestedBundleOptionTitle = '', requestedBundleOptionUid = '') => {
-  if (!snapshot) {
-    return null;
+const buildRelatedViewAllHref = (product, relatedMeta) => {
+  if (relatedMeta?.has_explicit_related) {
+    return '/products';
   }
 
-  const snapshotImages = Array.isArray(snapshot.images) ? snapshot.images.filter(Boolean) : [];
-  const primaryImage = snapshot.primary_image
-    || snapshotImages.find((image) => Boolean(image?.is_primary))
-    || snapshotImages[0]
-    || (snapshot.main_image ? { url: snapshot.main_image, path: snapshot.main_image } : null);
-  const videoUrls = Array.isArray(snapshot.video_urls)
-    ? snapshot.video_urls.filter(Boolean)
-    : (snapshot.video_url ? [snapshot.video_url] : []);
-  const hasRequestedOption = Boolean(
-    requestedBundleOptionUid
-    || requestedBundleOptionKey
-    || requestedBundleOptionTitle
-    || snapshot.bundle_option_uid
-    || snapshot.bundle_option_key
-    || snapshot.bundle_option_title
-  );
+  const fallbackCategorySlug = String(
+    relatedMeta?.fallback_category?.slug
+    || product?.category?.slug
+    || ''
+  ).trim();
 
-  return {
-    id: snapshot.id,
-    slug: snapshot.slug,
-    type: 'bundle',
-    item_type: hasRequestedOption ? 'bundle_option' : (snapshot.item_type || 'product'),
-    name: hasRequestedOption
-      ? (snapshot.bundle_option_title || snapshot.name || snapshot.bundle_parent_name || '')
-      : (snapshot.name || snapshot.bundle_parent_name || ''),
-    sku: snapshot.sku || '',
-    price: snapshot.bundle_option_total_price ?? snapshot.price ?? 0,
-    current_price: snapshot.bundle_option_discounted_price ?? snapshot.current_price ?? snapshot.price ?? 0,
-    special_price: snapshot.special_price ?? null,
-    primary_image: primaryImage,
-    main_image: snapshot.main_image || primaryImage?.url || primaryImage?.path || '',
-    images: snapshotImages.length > 0 ? snapshotImages : (primaryImage ? [primaryImage] : []),
-    category: snapshot.category || null,
-    bundle_items: [],
-    grouped_items: [],
-    bundle_options: [{
-      uid: requestedBundleOptionUid || snapshot.bundle_option_uid || '',
-      bundle_option_uid: requestedBundleOptionUid || snapshot.bundle_option_uid || '',
-      key: requestedBundleOptionKey || snapshot.bundle_option_key || '',
-      name: requestedBundleOptionTitle || snapshot.bundle_option_title || snapshot.name || '',
-      bundle_option_title: requestedBundleOptionTitle || snapshot.bundle_option_title || '',
-      primary_image: primaryImage,
-      main_image: snapshot.main_image || primaryImage?.url || '',
-      bundle_option_total_price: snapshot.bundle_option_total_price ?? snapshot.price ?? 0,
-      bundle_option_discounted_price: snapshot.bundle_option_discounted_price ?? snapshot.current_price ?? snapshot.price ?? 0,
-    }],
-    specifications: '',
-    additional_info: [],
-    video_url: snapshot.video_url || videoUrls[0] || '',
-    video_urls: videoUrls,
-    is_bundle_option_lite: true,
-    is_bundle_shell: !hasRequestedOption,
-  };
+  return fallbackCategorySlug
+    ? `/category/${encodeURIComponent(fallbackCategorySlug)}`
+    : '/products';
 };
 
 function DeferredDescription({ product, descriptionReady }) {
@@ -131,6 +88,49 @@ function DeferredDescription({ product, descriptionReady }) {
   );
 }
 
+function ProductDetailLoadingSkeleton({ hasError = false }) {
+  return (
+    <div className={styles.productLoadingShell} aria-live="polite" aria-busy={!hasError}>
+      <div className={styles.productLoadingBreadcrumb}>
+        <span className={styles.productLoadingLine} />
+        <span className={styles.productLoadingLineShort} />
+      </div>
+
+      <div className={styles.mainGrid}>
+        <div className={styles.galleryColumn}>
+          <div className={styles.productLoadingGallery}>
+            <div className={styles.productLoadingMedia}>
+              <span className="material-symbols-outlined" aria-hidden="true">image</span>
+            </div>
+            <div className={styles.productLoadingThumbs}>
+              {Array.from({ length: 5 }).map((_, index) => (
+                <span key={index} className={styles.productLoadingThumb} />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.infoColumn}>
+          <div className={styles.productLoadingInfo}>
+            <span className={styles.productLoadingTitle} />
+            <span className={styles.productLoadingLineWide} />
+            <span className={styles.productLoadingLineMedium} />
+            <div className={styles.productLoadingActions}>
+              <span />
+              <span />
+            </div>
+            {hasError ? (
+              <p className={styles.productLoadingError}>
+                Khong the tai du lieu san pham. Vui long thu lai.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProductDetailClientShell({
   initialProduct,
   slug,
@@ -149,6 +149,17 @@ export default function ProductDetailClientShell({
   const [relatedViewAllHref, setRelatedViewAllHref] = useState(initialRelatedViewAllHref);
   const [fullProductReady, setFullProductReady] = useState(!deferFullProduct);
   const [deferredSectionsReady, setDeferredSectionsReady] = useState(!deferFullProduct);
+  const [criticalFetchFailed, setCriticalFetchFailed] = useState(false);
+  const secondaryLoadStartedRef = useRef(false);
+  const hasRequestedBundleOption = Boolean(
+    requestedBundleOptionUid
+    || requestedBundleOptionKey
+    || requestedBundleOptionTitle
+  );
+
+  useEffect(() => {
+    secondaryLoadStartedRef.current = false;
+  }, [requestedBundleOptionKey, requestedBundleOptionTitle, requestedBundleOptionUid, slug]);
 
   useEffect(() => {
     markProductRouteReady({
@@ -175,17 +186,70 @@ export default function ProductDetailClientShell({
 
   useEffect(() => {
     if (product || typeof window === 'undefined') {
-      return;
+      return undefined;
     }
 
     let cancelled = false;
-    const applyCachedProduct = (nextProduct) => {
-      window.setTimeout(() => {
-        if (!cancelled) {
-          setProduct(nextProduct);
-        }
-      }, 0);
+    const cachedDetail = readCachedBundleOptionDetail(
+      slug,
+      requestedBundleOptionKey,
+      requestedBundleOptionTitle,
+      requestedBundleOptionUid,
+    );
+
+    if (!cachedDetail) {
+      const pendingDetail = readPendingBundleProductDetail(
+        slug,
+        requestedBundleOptionKey,
+        requestedBundleOptionTitle,
+        requestedBundleOptionUid,
+      );
+
+      if (pendingDetail) {
+        pendingDetail.then((pendingProduct) => {
+          if (cancelled || !pendingProduct) {
+            return;
+          }
+
+          setProduct(pendingProduct);
+          if (!hasRequestedBundleOption && !pendingProduct?.is_bundle_option_lite) {
+            setFullProductReady(true);
+          }
+        });
+      }
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    window.setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setProduct(cachedDetail);
+      if (!hasRequestedBundleOption && !cachedDetail?.is_bundle_option_lite) {
+        setFullProductReady(true);
+      }
+    }, 0);
+
+    return () => {
+      cancelled = true;
     };
+  }, [
+    hasRequestedBundleOption,
+    product,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+    requestedBundleOptionUid,
+    slug,
+  ]);
+
+  useEffect(() => {
+    if (!deferFullProduct || !slug || product) {
+      return undefined;
+    }
 
     const cachedDetail = readCachedBundleOptionDetail(
       slug,
@@ -195,47 +259,112 @@ export default function ProductDetailClientShell({
     );
 
     if (cachedDetail) {
-      applyCachedProduct(cachedDetail);
-      return () => {
-        cancelled = true;
-      };
+      return undefined;
     }
 
-    const snapshot = readBundleOptionSnapshot(
+    const pendingDetail = readPendingBundleProductDetail(
       slug,
       requestedBundleOptionKey,
       requestedBundleOptionTitle,
       requestedBundleOptionUid,
     );
-    const optimisticProduct = buildOptimisticBundleProduct(
-      snapshot,
-      requestedBundleOptionKey,
-      requestedBundleOptionTitle,
-      requestedBundleOptionUid,
-    );
 
-    if (optimisticProduct) {
-      applyCachedProduct(optimisticProduct);
+    if (pendingDetail) {
+      return undefined;
     }
+
+    let cancelled = false;
+    const params = {
+      bundle_option_uid: requestedBundleOptionUid,
+      bundle_option_key: requestedBundleOptionKey,
+      bundle_option: requestedBundleOptionTitle,
+    };
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value) query.set(key, value);
+    });
+    const endpoint = hasRequestedBundleOption
+      ? `/web-api/products/${slug}/bundle-option-detail${query.toString() ? `?${query.toString()}` : ''}`
+      : `/web-api/products/${slug}`;
+    const criticalRequest = hasRequestedBundleOption
+      ? getWebProductBundleOptionDetail(slug, params)
+      : getWebProductDetail(slug);
+
+    logProductTiming('api-start', {
+      endpoint,
+      mode: 'critical-bundle-gallery',
+    });
+
+    criticalRequest
+      .then((criticalProduct) => {
+        if (cancelled || !criticalProduct) {
+          return;
+        }
+
+        setProduct(criticalProduct);
+        setCriticalFetchFailed(false);
+        cacheBundleProductDetail(
+          criticalProduct,
+          slug,
+          requestedBundleOptionKey,
+          requestedBundleOptionTitle,
+          requestedBundleOptionUid,
+        );
+
+        if (!hasRequestedBundleOption || !criticalProduct?.is_bundle_option_lite) {
+          setFullProductReady(true);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCriticalFetchFailed(true);
+          console.error('Failed to fetch critical bundle product detail:', error);
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [product, requestedBundleOptionKey, requestedBundleOptionTitle, requestedBundleOptionUid, slug]);
+  }, [
+    deferFullProduct,
+    hasRequestedBundleOption,
+    product,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+    requestedBundleOptionUid,
+    slug,
+  ]);
 
   useEffect(() => {
-    if (!deferFullProduct || !slug) {
+    if (!deferFullProduct || !slug || !product || secondaryLoadStartedRef.current) {
       return undefined;
     }
 
     let cancelled = false;
     let fullFetchTimer = null;
-    const hasRequestedBundleOption = Boolean(
-      requestedBundleOptionUid
-      || requestedBundleOptionKey
-      || requestedBundleOptionTitle
-    );
-    const hasInitialBundleOptionDetail = hasRequestedBundleOption && Boolean(initialProduct);
+
+    const applyRelatedProducts = (relatedResult, baseProduct) => {
+      setRelatedProducts(relatedResult?.items || []);
+      setRelatedViewAllHref(buildRelatedViewAllHref(baseProduct, relatedResult?.meta || null));
+    };
+
+    const fetchRelatedProducts = () => {
+      logProductTiming('api-start', {
+        endpoint: `/web-api/products/${slug}/related`,
+        mode: 'deferred-related',
+      });
+
+      getWebRelatedProducts(slug)
+        .then((relatedResult) => {
+          if (!cancelled) {
+            applyRelatedProducts(relatedResult, product);
+          }
+        })
+        .catch((error) => {
+          console.error('Failed to fetch deferred related products:', error);
+        });
+    };
+
     const fetchFullProduct = () => {
       if (cancelled) {
         return;
@@ -254,27 +383,18 @@ export default function ProductDetailClientShell({
           return;
         }
 
+        const fullProduct = productResult.status === 'fulfilled' ? productResult.value : product;
+
         if (productResult.status === 'fulfilled') {
           setProduct(productResult.value);
           setFullProductReady(true);
+          cacheBundleProductDetail(productResult.value, slug);
         } else {
           console.error('Failed to fetch deferred product detail:', productResult.reason);
         }
 
         if (relatedResult.status === 'fulfilled') {
-          setRelatedProducts(relatedResult.value?.items || []);
-
-          const hasExplicitRelated = Boolean(relatedResult.value?.meta?.has_explicit_related);
-          const fallbackCategorySlug = String(
-            relatedResult.value?.meta?.fallback_category?.slug
-            || productResult.value?.category?.slug
-            || ''
-          ).trim();
-          setRelatedViewAllHref(
-            hasExplicitRelated
-              ? '/products'
-              : (fallbackCategorySlug ? `/category/${encodeURIComponent(fallbackCategorySlug)}` : '/products')
-          );
+          applyRelatedProducts(relatedResult.value, fullProduct);
         } else {
           console.error('Failed to fetch deferred related products:', relatedResult.reason);
         }
@@ -282,49 +402,15 @@ export default function ProductDetailClientShell({
     };
 
     const cancelScheduledStart = scheduleAfterFirstPaint(() => {
+      secondaryLoadStartedRef.current = true;
       setDeferredSectionsReady(true);
 
-      if (hasInitialBundleOptionDetail) {
+      if (hasRequestedBundleOption) {
         fullFetchTimer = window.setTimeout(fetchFullProduct, 900);
         return;
       }
 
-      if (!hasRequestedBundleOption) {
-        fetchFullProduct();
-        return;
-      }
-
-      const params = {
-        bundle_option_uid: requestedBundleOptionUid,
-        bundle_option_key: requestedBundleOptionKey,
-        bundle_option: requestedBundleOptionTitle,
-      };
-      const query = new URLSearchParams();
-      Object.entries(params).forEach(([key, value]) => {
-        if (value) query.set(key, value);
-      });
-
-      logProductTiming('api-start', {
-        endpoint: `/web-api/products/${slug}/bundle-option-detail?${query.toString()}`,
-        mode: 'deferred-lite-bundle-option',
-      });
-
-      getWebProductBundleOptionDetail(slug, params)
-        .then((liteProduct) => {
-          if (!cancelled && liteProduct) {
-            setProduct(liteProduct);
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to fetch deferred bundle option detail:', error);
-        })
-        .finally(() => {
-          if (cancelled || typeof window === 'undefined') {
-            return;
-          }
-
-          fullFetchTimer = window.setTimeout(fetchFullProduct, 900);
-        });
+      fetchRelatedProducts();
     });
 
     return () => {
@@ -336,19 +422,13 @@ export default function ProductDetailClientShell({
     };
   }, [
     deferFullProduct,
-    initialProduct,
-    requestedBundleOptionKey,
-    requestedBundleOptionTitle,
-    requestedBundleOptionUid,
+    hasRequestedBundleOption,
+    product,
     slug,
   ]);
 
   if (!product) {
-    return (
-      <div className={styles.tabsSection}>
-        <div className={styles.tabContent}>Đang mở trang sản phẩm...</div>
-      </div>
-    );
+    return <ProductDetailLoadingSkeleton hasError={criticalFetchFailed} />;
   }
 
   const productContentKey = [

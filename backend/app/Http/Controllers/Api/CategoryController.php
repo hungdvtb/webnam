@@ -1198,6 +1198,51 @@ class CategoryController extends Controller
         return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']));
     }
 
+    public function duplicate(Request $request, $id)
+    {
+        $request->validate([
+            'include_children' => 'nullable|boolean',
+        ]);
+
+        $sourceCategory = Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+            ->findOrFail($id);
+        $includeChildren = $request->boolean('include_children');
+
+        try {
+            $result = DB::transaction(function () use ($sourceCategory, $includeChildren) {
+                return $this->duplicateCategoryBranch(
+                    $sourceCategory,
+                    $sourceCategory->parent_id ? (int) $sourceCategory->parent_id : null,
+                    $includeChildren,
+                    true
+                );
+            });
+        } catch (Throwable $exception) {
+            \Log::error('Error duplicating category: ' . $exception->getMessage(), [
+                'category_id' => $id,
+                'include_children' => $includeChildren,
+            ]);
+
+            return response()->json([
+                'message' => 'Không thể sao chép danh mục.',
+                'error' => $exception->getMessage(),
+            ], 500);
+        }
+
+        $category = $result['category']->fresh(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']);
+
+        return response()->json([
+            'message' => $includeChildren
+                ? 'Đã sao chép danh mục và cây danh mục con.'
+                : 'Đã sao chép danh mục.',
+            'category' => $category,
+            'id' => (int) $category->id,
+            'duplicated_ids' => $result['ids'],
+            'duplicated_count' => count($result['ids']),
+            'include_children' => $includeChildren,
+        ], 201);
+    }
+
     public function destroy($id)
     {
         $this->ensureCategoryTrashSchema();
@@ -2314,6 +2359,164 @@ class CategoryController extends Controller
         }
 
         return $ordered;
+    }
+
+    private function duplicateCategoryBranch(Category $sourceCategory, ?int $parentId, bool $includeChildren, bool $isRoot = false): array
+    {
+        $sourceCategory->loadMissing(['bannerMediaAsset', 'logoMediaAsset']);
+
+        $name = $isRoot
+            ? 'Copy - ' . $sourceCategory->name
+            : $sourceCategory->name;
+        $slugSource = $isRoot
+            ? $name
+            : ($sourceCategory->slug ?: $name);
+        $codeSource = $sourceCategory->code ?: $name;
+        $bannerAsset = $this->cloneCategoryMediaForDuplicate($sourceCategory, 'banner');
+        $logoAsset = $this->cloneCategoryMediaForDuplicate($sourceCategory, 'logo');
+
+        $category = Category::create([
+            'name' => $name,
+            'code' => Category::buildUniqueCode($codeSource),
+            'site_domain_id' => $sourceCategory->site_domain_id ? (int) $sourceCategory->site_domain_id : null,
+            'slug' => Category::buildUniqueSlug($slugSource),
+            'parent_id' => $parentId,
+            'description' => $sourceCategory->getRawOriginal('description'),
+            'meta_title' => $sourceCategory->getRawOriginal('meta_title'),
+            'meta_description' => $sourceCategory->getRawOriginal('meta_description'),
+            'meta_keywords' => $sourceCategory->getRawOriginal('meta_keywords'),
+            'banner_path' => $bannerAsset['path'],
+            'banner_media_asset_id' => $bannerAsset['asset_id'],
+            'logo_path' => $logoAsset['path'],
+            'logo_media_asset_id' => $logoAsset['asset_id'],
+            'status' => (int) ($sourceCategory->status ?? 1),
+            'visibility' => $sourceCategory->visibility ?: Category::VISIBILITY_PUBLIC,
+            'order' => $isRoot
+                ? $this->nextSiblingOrder($parentId)
+                : (int) ($sourceCategory->order ?? $this->nextSiblingOrder($parentId)),
+            'account_id' => $sourceCategory->account_id,
+            'display_layout' => $sourceCategory->display_layout ?: 'layout_1',
+            'filterable_attribute_ids' => $sourceCategory->filterable_attribute_ids ?: [],
+        ]);
+
+        $this->copyCategoryProductAssignments((int) $sourceCategory->id, (int) $category->id);
+        $this->categoryDemoLogoService->syncDemoLogoPath($category);
+
+        $ids = [(int) $category->id];
+
+        if ($includeChildren) {
+            $children = Category::with(['bannerMediaAsset', 'logoMediaAsset'])
+                ->where('parent_id', $sourceCategory->id)
+                ->orderBy('order')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($children as $childCategory) {
+                $childResult = $this->duplicateCategoryBranch($childCategory, (int) $category->id, true, false);
+                $ids = array_merge($ids, $childResult['ids']);
+            }
+        }
+
+        return [
+            'category' => $category,
+            'ids' => $ids,
+        ];
+    }
+
+    private function cloneCategoryMediaForDuplicate(Category $category, string $type): array
+    {
+        $isLogo = $type === 'logo';
+        $relation = $isLogo ? 'logoMediaAsset' : 'bannerMediaAsset';
+        $rawPath = $category->getRawOriginal($isLogo ? 'logo_path' : 'banner_path');
+        $asset = $category->{$relation};
+
+        if (!$asset) {
+            return [
+                'path' => $rawPath,
+                'asset_id' => null,
+            ];
+        }
+
+        try {
+            $clonedAsset = $this->mediaService->cloneAssetFromExisting($asset, [
+                'collection' => $isLogo ? 'category-logos' : 'category-banners',
+                'source' => 'category-duplicate',
+                'source_category_id' => (int) $category->id,
+            ]);
+
+            return [
+                'path' => $this->mediaService->buildAssetUrl($clonedAsset, 'large'),
+                'asset_id' => (int) $clonedAsset->id,
+            ];
+        } catch (Throwable $exception) {
+            \Log::warning('Could not clone category media asset while duplicating category.', [
+                'category_id' => (int) $category->id,
+                'media_type' => $type,
+                'asset_id' => (int) $asset->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return [
+                'path' => $rawPath,
+                'asset_id' => null,
+            ];
+        }
+    }
+
+    private function copyCategoryProductAssignments(int $sourceCategoryId, int $targetCategoryId): void
+    {
+        $columns = ['product_id', 'category_id'];
+        $hasSortOrder = Schema::hasColumn('category_product', 'sort_order');
+
+        foreach ([
+            'sort_order',
+            'item_type',
+            'bundle_option_uid',
+            'bundle_option_key',
+            'bundle_option_post_id',
+            'bundle_option_title',
+        ] as $column) {
+            if (Schema::hasColumn('category_product', $column)) {
+                $columns[] = $column;
+            }
+        }
+
+        $assignmentRows = DB::table('category_product')
+            ->where('category_id', $sourceCategoryId)
+            ->when($hasSortOrder, fn ($query) => $query
+                ->orderByRaw('CASE WHEN sort_order IS NULL THEN 1 ELSE 0 END')
+                ->orderBy('sort_order'))
+            ->orderBy('id')
+            ->get($columns);
+
+        if ($assignmentRows->isEmpty()) {
+            return;
+        }
+
+        $timestamp = now();
+        $insertRows = $assignmentRows
+            ->map(function ($row) use ($targetCategoryId, $timestamp, $columns) {
+                $payload = [];
+
+                foreach ($columns as $column) {
+                    if ($column === 'category_id') {
+                        $payload[$column] = $targetCategoryId;
+                        continue;
+                    }
+
+                    $payload[$column] = $row->{$column} ?? null;
+                }
+
+                $payload['created_at'] = $timestamp;
+                $payload['updated_at'] = $timestamp;
+
+                return $payload;
+            })
+            ->all();
+
+        foreach (array_chunk($insertRows, 500) as $chunk) {
+            DB::table('category_product')->insert($chunk);
+        }
     }
 
     private function nextSiblingOrder(?int $parentId, ?int $ignoreCategoryId = null): int

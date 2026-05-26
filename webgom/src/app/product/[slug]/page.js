@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
+import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailClientShell from '@/components/ProductDetailClientShell';
@@ -45,59 +45,20 @@ export default async function ProductDetailPage({ params, searchParams }) {
   let policyPosts = [];
 
   if (isBundleOptionRequest || isBundlePreviewRequest) {
-    let initialBundleProduct = null;
-    let initialRelatedProducts = [];
-    let initialRelatedViewAllHref = '/products';
-    let shouldDeferFullProduct = true;
-
-    if (isBundleOptionRequest) {
-      try {
-        initialBundleProduct = await getWebProductBundleOptionDetail(slug, {
-          bundle_option_uid: requestedBundleOptionUid,
-          bundle_option_key: requestedBundleOptionKey,
-          bundle_option: requestedBundleOptionTitle,
-        });
-      } catch (error) {
-        console.error('Failed to fetch initial bundle option detail:', error);
-      }
-    } else if (isBundlePreviewRequest) {
-      const [previewProductResult, previewRelatedResult] = await Promise.allSettled([
-        getWebProductDetail(slug),
-        getWebRelatedProducts(slug),
-      ]);
-
-      if (previewProductResult.status === 'fulfilled') {
-        initialBundleProduct = previewProductResult.value;
-        shouldDeferFullProduct = false;
-      } else {
-        console.error('Failed to fetch initial bundle preview detail:', previewProductResult.reason);
-      }
-
-      if (previewRelatedResult.status === 'fulfilled') {
-        initialRelatedProducts = previewRelatedResult.value?.items || [];
-        initialRelatedViewAllHref = buildRelatedViewAllHref(
-          previewProductResult.status === 'fulfilled' ? previewProductResult.value : null,
-          previewRelatedResult.value?.meta || null,
-        );
-      } else {
-        console.error('Failed to fetch initial bundle preview related products:', previewRelatedResult.reason);
-      }
-    }
-
     return (
       <div className={styles.productDetail}>
         <main className={`container py-10 ${styles.productPageMain} ${styles.productPageMainCompact}`}>
           <div className={styles.productPageSections}>
             <ProductDetailClientShell
-              initialProduct={initialBundleProduct}
+              initialProduct={null}
               slug={slug}
               requestedBundleOptionUid={requestedBundleOptionUid}
               requestedBundleOptionKey={requestedBundleOptionKey}
               requestedBundleOptionTitle={requestedBundleOptionTitle}
               requestedVariantId={requestedVariantId}
-              initialRelatedProducts={initialRelatedProducts}
-              initialRelatedViewAllHref={initialRelatedViewAllHref}
-              deferFullProduct={shouldDeferFullProduct}
+              initialRelatedProducts={[]}
+              initialRelatedViewAllHref="/products"
+              deferFullProduct
               stripBundlePreviewParam={isBundlePreviewRequest}
               enableDeferredProductAnalytics
             />

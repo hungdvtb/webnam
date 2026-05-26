@@ -498,6 +498,7 @@ export const categoryApi = {
     bulkDelete: (ids) => api.delete('/categories/bulk-delete', { data: { ids } }),
     restore: (id) => api.post(`/categories/${id}/restore`),
     bulkRestore: (ids) => api.post('/categories/bulk-restore', { ids }),
+    duplicate: (id, data = {}) => api.post(`/categories/${id}/duplicate`, data),
     reorder: (items) => api.post('/categories/reorder', { items }),
     reorderProducts: (id, items) => {
         const normalizedItems = Array.isArray(items) ? items : [];

@@ -833,6 +833,12 @@ const CategoryList = () => {
     const [isBulkDeleting, setIsBulkDeleting] = useState(false);
     const [isBulkRestoring, setIsBulkRestoring] = useState(false);
     const [restoringNodeId, setRestoringNodeId] = useState(null);
+    const [isDuplicatingCategory, setIsDuplicatingCategory] = useState(false);
+    const [duplicateDialog, setDuplicateDialog] = useState({
+        show: false,
+        node: null,
+        descendantCount: 0,
+    });
     const [allAttributes, setAllAttributes] = useState([]);
     const [selectedCategoryMeta, setSelectedCategoryMeta] = useState(null);
     const [categoryProducts, setCategoryProducts] = useState([]);
@@ -1278,6 +1284,7 @@ const CategoryList = () => {
         setCategoryProducts([]);
         setCategoryProductsDirty(false);
         setSelectedCategoryMeta(null);
+        setDuplicateDialog({ show: false, node: null, descendantCount: 0 });
         setIsCategoryFormLoading(false);
         editCategoryRequestRef.current += 1;
         categoryProductsRequestRef.current += 1;
@@ -1996,6 +2003,66 @@ const CategoryList = () => {
         loadCategoryForEdit(categoryId);
     };
 
+    const closeDuplicateDialog = () => {
+        setDuplicateDialog({ show: false, node: null, descendantCount: 0 });
+    };
+
+    const openDuplicateCategoryDialog = (node = selectedCategoryNode) => {
+        if (isTrashView || !node || isDuplicatingCategory) {
+            return;
+        }
+
+        setDuplicateDialog({
+            show: true,
+            node,
+            descendantCount: getDescendants(treeData, node.id).length,
+        });
+    };
+
+    const duplicateCategory = async (includeChildren = false) => {
+        const node = duplicateDialog.node || selectedCategoryNode;
+        const categoryId = Number(node?.id || 0) || null;
+
+        if (isTrashView || !categoryId || isDuplicatingCategory) {
+            return;
+        }
+
+        setIsDuplicatingCategory(true);
+        closeDuplicateDialog();
+
+        try {
+            const response = await categoryApi.duplicate(categoryId, {
+                include_children: includeChildren,
+            });
+            const duplicatedCategoryId = Number(response?.data?.category?.id || response?.data?.id || 0) || null;
+            const duplicatedCount = Number(response?.data?.duplicated_count || 1) || 1;
+
+            setSelectedIds(new Set());
+            await fetchCategories({ reloadProducts: false });
+
+            if (duplicatedCategoryId) {
+                setSelectedId(duplicatedCategoryId);
+                loadCategoryForEdit(duplicatedCategoryId);
+            }
+
+            showToast({
+                message: includeChildren
+                    ? `Đã sao chép ${duplicatedCount} danh mục.`
+                    : 'Đã sao chép danh mục.',
+                type: 'success',
+            });
+        } catch (error) {
+            console.error('Category duplicate error:', error);
+            showModal({
+                title: 'Lỗi sao chép',
+                content: error?.response?.data?.message || 'Không thể sao chép danh mục đã chọn.',
+                type: 'error',
+            });
+        } finally {
+            setIsDuplicatingCategory(false);
+        }
+    };
+
     useEffect(() => {
         if (isTrashView || !isFormOpen || !formData.id || !selectedId) {
             return;
@@ -2584,6 +2651,86 @@ const CategoryList = () => {
                         </div>
                     )}
 
+                    {duplicateDialog.show && (
+                        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-primary/35 px-4 backdrop-blur-sm">
+                            <div className="w-full max-w-lg rounded-sm border border-gold/20 bg-white shadow-premium-lg">
+                                <div className="border-b border-gold/10 px-5 py-4">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <h3 className="font-display text-lg font-bold italic uppercase text-primary">
+                                                Sao chép danh mục
+                                            </h3>
+                                            <p className="mt-1 text-[11px] font-bold text-stone/50">
+                                                Tạo danh mục mới với tên mặc định "Copy - {duplicateDialog.node?.text || ''}".
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={closeDuplicateDialog}
+                                            className="flex size-8 items-center justify-center rounded-full text-stone/35 transition-all hover:bg-brick/5 hover:text-brick"
+                                            disabled={isDuplicatingCategory}
+                                        >
+                                            <span className="material-symbols-outlined text-[20px]">close</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4 px-5 py-5">
+                                    <div className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4 text-[13px] leading-6 text-stone/70">
+                                        <div className="font-bold text-primary">{duplicateDialog.node?.text}</div>
+                                        <div className="mt-1">
+                                            Hệ thống sẽ sao chép thông tin danh mục, SEO/meta, hình ảnh, trạng thái hiển thị, liên kết theo tên miền và toàn bộ mục sản phẩm đúng thứ tự.
+                                        </div>
+                                        <div className="mt-2 font-bold text-stone/60">
+                                            Sản phẩm không bị nhân bản, chỉ sao chép quan hệ danh mục - sản phẩm.
+                                        </div>
+                                    </div>
+
+                                    {duplicateDialog.descendantCount > 0 ? (
+                                        <div className="rounded-sm border border-amber-200 bg-amber-50 p-4 text-[12px] font-bold text-amber-800">
+                                            Danh mục này có {duplicateDialog.descendantCount} danh mục con. Chọn cách sao chép bên dưới.
+                                        </div>
+                                    ) : null}
+                                </div>
+
+                                <div className="flex flex-wrap justify-end gap-2 border-t border-gold/10 bg-gold/5 px-5 py-4">
+                                    <button
+                                        type="button"
+                                        onClick={closeDuplicateDialog}
+                                        disabled={isDuplicatingCategory}
+                                        className="rounded-sm border border-gold/20 bg-white px-4 py-2 text-[12px] font-bold uppercase tracking-widest text-stone/60 transition-all hover:border-gold/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Hủy
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => duplicateCategory(false)}
+                                        disabled={isDuplicatingCategory}
+                                        className="inline-flex items-center gap-2 rounded-sm border border-primary/20 bg-white px-4 py-2 text-[12px] font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <span className={`material-symbols-outlined text-[16px] ${isDuplicatingCategory ? 'animate-spin' : ''}`}>
+                                            {isDuplicatingCategory ? 'sync' : 'content_copy'}
+                                        </span>
+                                        Chỉ mục này
+                                    </button>
+                                    {duplicateDialog.descendantCount > 0 ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => duplicateCategory(true)}
+                                            disabled={isDuplicatingCategory}
+                                            className="inline-flex items-center gap-2 rounded-sm bg-brick px-4 py-2 text-[12px] font-bold uppercase tracking-widest text-white shadow-sm transition-all hover:bg-umber disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${isDuplicatingCategory ? 'animate-spin' : ''}`}>
+                                                {isDuplicatingCategory ? 'sync' : 'account_tree'}
+                                            </span>
+                                            Sao chép cả cây con
+                                        </button>
+                                    ) : null}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {/* Toolbar */}
                     <div className="bg-white border border-gold/10 p-2 shadow-sm rounded-sm flex items-center justify-between">
                         <div className="flex gap-1.5 items-center w-full max-w-3xl">
@@ -2602,6 +2749,20 @@ const CategoryList = () => {
                                 disabled={loading}
                             >
                                 <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-spin' : ''}`}>refresh</span>
+                            </button>
+                            <button
+                                onClick={() => openDuplicateCategoryDialog()}
+                                className={`relative border p-1.5 transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm ${
+                                    selectedCategoryNode && !isTrashView
+                                        ? 'bg-white border-gold/20 text-stone hover:border-primary hover:text-primary'
+                                        : 'bg-white border-gold/10 text-stone/30 cursor-not-allowed'
+                                } ${isDuplicatingCategory ? 'opacity-70' : ''}`}
+                                title={selectedCategoryNode && !isTrashView ? 'Sao chép danh mục đang chọn' : 'Chọn một danh mục để sao chép'}
+                                disabled={!selectedCategoryNode || isTrashView || isDuplicatingCategory}
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${isDuplicatingCategory ? 'animate-spin' : ''}`}>
+                                    {isDuplicatingCategory ? 'sync' : 'content_copy'}
+                                </span>
                             </button>
                             <button
                                 onClick={isTrashView ? handleBulkRestore : handleBulkDelete}
@@ -2934,6 +3095,17 @@ const CategoryList = () => {
                                                 Sắp xếp danh mục con
                                             </button>
                                         )}
+                                        <button
+                                            type="button"
+                                            onClick={() => openDuplicateCategoryDialog(selectedCategoryNode)}
+                                            disabled={isDuplicatingCategory}
+                                            className="inline-flex h-8 items-center gap-1.5 rounded-sm border border-gold/20 bg-white px-3 text-[10px] font-black uppercase tracking-[0.16em] text-stone/70 transition-all hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 shadow-sm"
+                                        >
+                                            <span className={`material-symbols-outlined text-[16px] ${isDuplicatingCategory ? 'animate-spin' : ''}`}>
+                                            {isDuplicatingCategory ? 'sync' : 'content_copy'}
+                                        </span>
+                                            Sao chép
+                                        </button>
                                         <button
                                             type="button"
                                             onClick={() => handleEdit(selectedCategoryNode)}

@@ -137,6 +137,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/categories/bulk-restore', [CategoryController::class , 'bulkRestore']);
     Route::get('/categories/{id}/products', [CategoryController::class , 'products'])->whereNumber('id');
     Route::post('/categories/{id}/products/reorder', [CategoryController::class , 'reorderProducts'])->whereNumber('id');
+    Route::post('/categories/{id}/duplicate', [CategoryController::class , 'duplicate'])->whereNumber('id');
     Route::post('/categories/{id}/restore', [CategoryController::class , 'restore'])->whereNumber('id');
     Route::post('/categories/{id}', [CategoryController::class , 'update'])->whereNumber('id');
     Route::delete('/categories/{id}', [CategoryController::class , 'destroy'])->whereNumber('id');

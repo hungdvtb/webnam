@@ -71,6 +71,27 @@ export function buildProductDetailHref(product = {}) {
   return Object.keys(query).length > 0 ? { pathname, query } : pathname;
 }
 
+export function stringifyProductHref(href = '') {
+  if (typeof href === 'string') {
+    return href || '/products';
+  }
+
+  const pathname = normalizeText(href?.pathname) || '/products';
+  const query = href?.query && typeof href.query === 'object' ? href.query : {};
+  const params = new URLSearchParams();
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') {
+      return;
+    }
+
+    params.set(key, String(value));
+  });
+
+  const queryString = params.toString();
+  return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
 export function buildBundleComponentDetailHref(item = {}) {
   const parentSlugOrId = normalizeText(
     item?.base_product_slug

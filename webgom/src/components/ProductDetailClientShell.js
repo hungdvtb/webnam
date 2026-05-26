@@ -13,6 +13,7 @@ import {
 } from '@/lib/productPerformance';
 import {
   cacheBundleProductDetail,
+  readBundleOptionSnapshot,
   readCachedBundleOptionDetail,
   readPendingBundleProductDetail,
 } from '@/lib/productPrefetch';
@@ -148,9 +149,11 @@ export default function ProductDetailClientShell({
   const [relatedProducts, setRelatedProducts] = useState(initialRelatedProducts);
   const [relatedViewAllHref, setRelatedViewAllHref] = useState(initialRelatedViewAllHref);
   const [fullProductReady, setFullProductReady] = useState(!deferFullProduct);
+  const [criticalProductReady, setCriticalProductReady] = useState(Boolean(initialProduct));
   const [deferredSectionsReady, setDeferredSectionsReady] = useState(!deferFullProduct);
   const [criticalFetchFailed, setCriticalFetchFailed] = useState(false);
   const secondaryLoadStartedRef = useRef(false);
+  const pendingCriticalProductRef = useRef('');
   const hasRequestedBundleOption = Boolean(
     requestedBundleOptionUid
     || requestedBundleOptionKey
@@ -159,7 +162,20 @@ export default function ProductDetailClientShell({
 
   useEffect(() => {
     secondaryLoadStartedRef.current = false;
-  }, [requestedBundleOptionKey, requestedBundleOptionTitle, requestedBundleOptionUid, slug]);
+    pendingCriticalProductRef.current = '';
+
+    const timeoutId = window.setTimeout(() => {
+      setProduct(initialProduct || null);
+      setFullProductReady(!deferFullProduct);
+      setCriticalProductReady(Boolean(initialProduct));
+      setDeferredSectionsReady(!deferFullProduct);
+      setCriticalFetchFailed(false);
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [deferFullProduct, initialProduct, requestedBundleOptionKey, requestedBundleOptionTitle, requestedBundleOptionUid, slug]);
 
   useEffect(() => {
     markProductRouteReady({
@@ -185,11 +201,29 @@ export default function ProductDetailClientShell({
   }, [stripBundlePreviewParam]);
 
   useEffect(() => {
-    if (product || typeof window === 'undefined') {
+    if (criticalProductReady || typeof window === 'undefined') {
       return undefined;
     }
 
     let cancelled = false;
+    const criticalKey = [
+      slug,
+      requestedBundleOptionUid,
+      requestedBundleOptionKey,
+      requestedBundleOptionTitle,
+    ].join('::');
+    const applyCriticalProduct = (nextProduct) => {
+      if (cancelled || !nextProduct) {
+        return;
+      }
+
+      setProduct(nextProduct);
+      setCriticalProductReady(true);
+      setCriticalFetchFailed(false);
+      if (!hasRequestedBundleOption && !nextProduct?.is_bundle_option_lite) {
+        setFullProductReady(true);
+      }
+    };
     const cachedDetail = readCachedBundleOptionDetail(
       slug,
       requestedBundleOptionKey,
@@ -198,6 +232,23 @@ export default function ProductDetailClientShell({
     );
 
     if (!cachedDetail) {
+      if (!product) {
+        const snapshot = readBundleOptionSnapshot(
+          slug,
+          requestedBundleOptionKey,
+          requestedBundleOptionTitle,
+          requestedBundleOptionUid,
+        );
+
+        if (snapshot) {
+          window.setTimeout(() => {
+            if (!cancelled) {
+              setProduct(snapshot);
+            }
+          }, 0);
+        }
+      }
+
       const pendingDetail = readPendingBundleProductDetail(
         slug,
         requestedBundleOptionKey,
@@ -206,16 +257,10 @@ export default function ProductDetailClientShell({
       );
 
       if (pendingDetail) {
-        pendingDetail.then((pendingProduct) => {
-          if (cancelled || !pendingProduct) {
-            return;
-          }
-
-          setProduct(pendingProduct);
-          if (!hasRequestedBundleOption && !pendingProduct?.is_bundle_option_lite) {
-            setFullProductReady(true);
-          }
-        });
+        if (pendingCriticalProductRef.current !== criticalKey) {
+          pendingCriticalProductRef.current = criticalKey;
+          pendingDetail.then(applyCriticalProduct);
+        }
       }
 
       return () => {
@@ -228,16 +273,14 @@ export default function ProductDetailClientShell({
         return;
       }
 
-      setProduct(cachedDetail);
-      if (!hasRequestedBundleOption && !cachedDetail?.is_bundle_option_lite) {
-        setFullProductReady(true);
-      }
+      applyCriticalProduct(cachedDetail);
     }, 0);
 
     return () => {
       cancelled = true;
     };
   }, [
+    criticalProductReady,
     hasRequestedBundleOption,
     product,
     requestedBundleOptionKey,
@@ -247,7 +290,7 @@ export default function ProductDetailClientShell({
   ]);
 
   useEffect(() => {
-    if (!deferFullProduct || !slug || product) {
+    if (!deferFullProduct || !slug || criticalProductReady) {
       return undefined;
     }
 
@@ -302,6 +345,7 @@ export default function ProductDetailClientShell({
         }
 
         setProduct(criticalProduct);
+        setCriticalProductReady(true);
         setCriticalFetchFailed(false);
         cacheBundleProductDetail(
           criticalProduct,
@@ -326,9 +370,9 @@ export default function ProductDetailClientShell({
       cancelled = true;
     };
   }, [
+    criticalProductReady,
     deferFullProduct,
     hasRequestedBundleOption,
-    product,
     requestedBundleOptionKey,
     requestedBundleOptionTitle,
     requestedBundleOptionUid,
@@ -336,7 +380,7 @@ export default function ProductDetailClientShell({
   ]);
 
   useEffect(() => {
-    if (!deferFullProduct || !slug || !product || secondaryLoadStartedRef.current) {
+    if (!deferFullProduct || !slug || !product || !criticalProductReady || secondaryLoadStartedRef.current) {
       return undefined;
     }
 
@@ -424,6 +468,7 @@ export default function ProductDetailClientShell({
     deferFullProduct,
     hasRequestedBundleOption,
     product,
+    criticalProductReady,
     slug,
   ]);
 

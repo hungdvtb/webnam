@@ -9,12 +9,12 @@ import { useCart } from '@/context/CartContext';
 import {
   resolveEntityImageUrl,
   resolveEntityPrimaryVideoUrl,
-  resolveVideoThumbnailUrl,
 } from '@/lib/media';
 import { calculateFullBundleDiscount } from '@/lib/bundlePricing';
-import { buildProductCardKey, buildProductDetailHref } from '@/lib/productLinks';
+import { buildProductCardKey, buildProductDetailHref, stringifyProductHref } from '@/lib/productLinks';
 import {
   cacheBundleOptionSnapshot,
+  isBundleNavigationProduct,
   prefetchBundleOptionDetail,
   useVisibleBundleProductPrefetch,
 } from '@/lib/productPrefetch';
@@ -63,9 +63,13 @@ export default function InfiniteProductListLayout2({ initialData }) {
 
   useVisibleBundleProductPrefetch(bundlePrefetchEntries);
 
-  const prefetchProductRoute = (href) => {
+  const prefetchProductRoute = (href, product) => {
+    if (isBundleNavigationProduct(product)) {
+      return;
+    }
+
     try {
-      router.prefetch(href);
+      router.prefetch(stringifyProductHref(href));
     } catch {
       // Prefetch is opportunistic.
     }
@@ -74,17 +78,32 @@ export default function InfiniteProductListLayout2({ initialData }) {
   const handleProductIntent = (product, href) => {
     cacheBundleOptionSnapshot(product, href);
     prefetchBundleOptionDetail(product, href);
-    prefetchProductRoute(href);
+    prefetchProductRoute(href, product);
   };
 
   const handleProductTouchStart = (product, href) => {
     cacheBundleOptionSnapshot(product, href);
-    prefetchProductRoute(href);
+    prefetchProductRoute(href, product);
   };
 
-  const handleProductClick = (product, href) => {
+  const handleProductClick = (event, product, href) => {
     cacheBundleOptionSnapshot(product, href);
     markProductNavigationClick(product, href);
+
+    if (
+      !isBundleNavigationProduct(product)
+      || event.defaultPrevented
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+      || event.button !== 0
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    router.push(stringifyProductHref(href));
   };
 
   return (
@@ -95,8 +114,8 @@ export default function InfiniteProductListLayout2({ initialData }) {
           const productCardKey = buildProductCardKey(product);
           const displayPrice = getDisplayPrice(product);
           const videoUrl = resolveEntityPrimaryVideoUrl(product);
-          const videoThumbnailSrc = videoUrl ? resolveVideoThumbnailUrl(videoUrl) : '';
           const hasVideoMedia = Boolean(videoUrl);
+          const isBundleNavigation = isBundleNavigationProduct(product);
           const imageSrc = resolveEntityImageUrl(product, 'medium', FALLBACK_PRODUCT_IMAGE);
           const cartOptions = product.item_type === 'bundle_option'
             ? {
@@ -120,16 +139,18 @@ export default function InfiniteProductListLayout2({ initialData }) {
                 <Link
                   href={productHref}
                   className={`${styles.imageLink} ${hasVideoMedia ? styles.videoImageLink : ''}`}
+                  prefetch={isBundleNavigation ? false : undefined}
                   onPointerEnter={() => handleProductIntent(product, productHref)}
                   onFocus={() => handleProductIntent(product, productHref)}
                   onTouchStart={() => handleProductTouchStart(product, productHref)}
-                  onClick={() => handleProductClick(product, productHref)}
+                  onClick={(event) => handleProductClick(event, product, productHref)}
                 >
                   <Image
-                    src={videoThumbnailSrc || imageSrc}
+                    src={imageSrc}
                     alt={hasVideoMedia ? `${product.name || FALLBACK_PRODUCT_ALT} video` : (product.name || FALLBACK_PRODUCT_ALT)}
                     fill
                     unoptimized
+                    loading="lazy"
                     className={styles.image}
                     sizes="(max-width: 767px) 50vw, (max-width: 1200px) 50vw, 25vw"
                   />
@@ -147,10 +168,11 @@ export default function InfiniteProductListLayout2({ initialData }) {
                 <Link
                   href={productHref}
                   className={styles.productLink}
+                  prefetch={isBundleNavigation ? false : undefined}
                   onPointerEnter={() => handleProductIntent(product, productHref)}
                   onFocus={() => handleProductIntent(product, productHref)}
                   onTouchStart={() => handleProductTouchStart(product, productHref)}
-                  onClick={() => handleProductClick(product, productHref)}
+                  onClick={(event) => handleProductClick(event, product, productHref)}
                 >
                   <h3 className={styles.productName}>{product.name}</h3>
                 </Link>

@@ -52,12 +52,49 @@ class Product extends Model
 
     public function approvedReviews()
     {
-        return $this->hasMany(ProductReview::class)->where('is_approved', true);
+        return $this->hasMany(ProductReview::class)
+            ->visible()
+            ->topLevel()
+            ->whereBetween('rating', [1, 5]);
     }
 
     public function getAverageRatingAttribute()
     {
         return $this->approvedReviews()->avg('rating') ?: 0;
+    }
+
+    public function getReviewCountAttribute()
+    {
+        return $this->approvedReviews()->count();
+    }
+
+    public function reviewDistribution(): array
+    {
+        $counts = $this->approvedReviews()
+            ->selectRaw('LEAST(5, GREATEST(1, ROUND(rating))) as rating_bucket, COUNT(*) as total')
+            ->groupBy('rating_bucket')
+            ->pluck('total', 'rating_bucket')
+            ->all();
+
+        return collect(range(1, 5))
+            ->mapWithKeys(fn (int $rating) => [$rating => (int) ($counts[$rating] ?? 0)])
+            ->all();
+    }
+
+    public function reviewSummary(): array
+    {
+        $distribution = $this->reviewDistribution();
+        $total = array_sum($distribution);
+        $sum = collect($distribution)->reduce(
+            fn (int $carry, int $count, int $rating) => $carry + ($rating * $count),
+            0
+        );
+
+        return [
+            'average_rating' => $total > 0 ? round($sum / $total, 1) : 0.0,
+            'total_reviews' => $total,
+            'distribution' => $distribution,
+        ];
     }
 
     public function getCurrentPriceAttribute()

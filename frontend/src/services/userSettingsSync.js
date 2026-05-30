@@ -9,9 +9,11 @@ const SYNCED_EXACT_KEYS = new Set([
     'shipping_notification_settings_v1',
     'order_column_widths',
     'added_cost_price_migrated_form',
+    'order_form_product_quick_setup_map_v1',
 ]);
 
 const SYNCED_PREFIXES = [
+    'order_form_product_quick_filter_state_v1::',
     'product_',
     'order_',
     'shipment_',
@@ -83,7 +85,7 @@ const resolveStorageName = (storage) => {
     try {
         if (storage === window.localStorage) return 'localStorage';
         if (storage === window.sessionStorage) return 'sessionStorage';
-    } catch (error) {
+    } catch {
         return null;
     }
 
@@ -152,7 +154,7 @@ const readCacheOwner = () => {
 
     try {
         return storage.getItem(CACHE_OWNER_KEY) || '';
-    } catch (error) {
+    } catch {
         return '';
     }
 };

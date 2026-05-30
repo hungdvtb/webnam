@@ -31,6 +31,9 @@ Route::post('/login', [AuthController::class , 'login']);
 
 Route::get('/products', [ProductController::class , 'index']);
 Route::get('/products/{id}', [ProductController::class , 'show'])->where('id', '[0-9]+');
+Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'index'])->whereNumber('productId');
+Route::post('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'store'])->whereNumber('productId');
+Route::post('/product-reviews/{id}/like', [\App\Http\Controllers\Api\ReviewController::class , 'like'])->whereNumber('id');
 
 Route::get('/categories', [CategoryController::class , 'index']);
 Route::get('/categories/{id}', [CategoryController::class , 'show'])->whereNumber('id');
@@ -461,9 +464,6 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
         Route::post('/coupons', [\App\Http\Controllers\Api\CouponController::class , 'store']);
         Route::post('/coupons/validate', [\App\Http\Controllers\Api\CouponController::class , 'validate']);
 
-        // Reviews (Public can read, Auth can post)
-        Route::post('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'store']);
-
         // Wishlist
         Route::get('/wishlist', [\App\Http\Controllers\Api\WishlistController::class , 'index']);
         Route::post('/wishlist/toggle/{productId}', [\App\Http\Controllers\Api\WishlistController::class , 'toggle']);
@@ -536,7 +536,17 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
 
         // Admin Review Management
         Route::get('/admin/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'adminIndex']);
-        Route::post('/admin/reviews/{id}/approve', [\App\Http\Controllers\Api\ReviewController::class , 'approve']);
+        Route::post('/admin/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'adminStore']);
+        Route::post('/admin/reviews/bulk-import', [\App\Http\Controllers\Api\ReviewController::class , 'adminBulkImport']);
+        Route::get('/admin/reviews/export', [\App\Http\Controllers\Api\ReviewController::class , 'adminExport']);
+        Route::post('/admin/reviews/seed-sample', [\App\Http\Controllers\Api\ReviewController::class , 'adminSeedSample']);
+        Route::get('/admin/reviews/unread-summary', [\App\Http\Controllers\Api\ReviewController::class , 'adminUnreadSummary']);
+        Route::post('/admin/reviews/mark-seen', [\App\Http\Controllers\Api\ReviewController::class , 'adminMarkSeen']);
+        Route::get('/admin/reviews/{id}', [\App\Http\Controllers\Api\ReviewController::class , 'adminShow'])->whereNumber('id');
+        Route::put('/admin/reviews/{id}', [\App\Http\Controllers\Api\ReviewController::class , 'adminUpdate'])->whereNumber('id');
+        Route::delete('/admin/reviews/{id}', [\App\Http\Controllers\Api\ReviewController::class , 'adminDestroy'])->whereNumber('id');
+        Route::post('/admin/reviews/{id}/approve', [\App\Http\Controllers\Api\ReviewController::class , 'approve'])->whereNumber('id');
+        Route::post('/admin/reviews/{id}/hide', [\App\Http\Controllers\Api\ReviewController::class , 'hide'])->whereNumber('id');
 
         // Admin AI Tools
         Route::post('/ai/generate-content', [AIController::class , 'generateContent']);
@@ -575,9 +585,6 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
             Route::delete('transactions/{id}', [\App\Http\Controllers\DebtController::class, 'deleteTransaction']);
         });
     });
-
-// Public Routes for Reviews (Reading)
-Route::get('/products/{productId}/reviews', [\App\Http\Controllers\Api\ReviewController::class , 'index']);
 
 // Public AI Chat Routes
 Route::get('/ai/status', [AIController::class , 'status']);

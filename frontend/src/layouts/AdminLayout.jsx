@@ -5,6 +5,7 @@ import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventor
 import useUserSettingsBootstrap from '../hooks/useUserSettingsBootstrap';
 import { normalizeAdminPermissions } from '../utils/adminPermissions';
 import LeadRealtimeNotifier from '../components/admin/LeadRealtimeNotifier';
+import { reviewApi } from '../services/api';
 
 
 const SidebarText = ({ isExpanded, className = '', children }) => (
@@ -40,6 +41,7 @@ const AdminLayout = () => {
         location.pathname.startsWith('/admin/leads');
     const isDesignRoute =
         location.pathname.startsWith('/admin/categories') ||
+        location.pathname.startsWith('/admin/reviews') ||
         location.pathname.startsWith('/admin/blog');
     const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
 
@@ -64,6 +66,7 @@ const AdminLayout = () => {
     const [isSidebarHovered, setIsSidebarHovered] = React.useState(false);
     const [isSidebarFocused, setIsSidebarFocused] = React.useState(false);
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = React.useState(false);
+    const [reviewUnreadCount, setReviewUnreadCount] = React.useState(0);
 
     const isOrderForm = location.pathname.startsWith('/admin/orders/new') || location.pathname.startsWith('/admin/orders/edit');
     const shouldShowSidebar = !isOrderForm;
@@ -159,6 +162,50 @@ const AdminLayout = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isMobileSidebarOpen, isSidebarDrawerMode]);
 
+    React.useEffect(() => {
+        if (!user || loading || !settingsReady) {
+            return undefined;
+        }
+
+        const normalized = normalizeAdminPermissions(user);
+        const canSeeReviews = user.is_admin || normalized.includes('products');
+        if (!canSeeReviews) {
+            setReviewUnreadCount(0);
+            return undefined;
+        }
+
+        let isMounted = true;
+        const syncUnread = () => {
+            reviewApi.unreadSummary()
+                .then((response) => {
+                    if (!isMounted) return;
+                    setReviewUnreadCount(Number(response?.data?.total || 0));
+                })
+                .catch(() => {
+                    if (isMounted) setReviewUnreadCount(0);
+                });
+        };
+
+        const handleUnreadUpdate = (event) => {
+            if (typeof event.detail?.total === 'number') {
+                setReviewUnreadCount(Math.max(0, event.detail.total));
+                return;
+            }
+
+            syncUnread();
+        };
+
+        syncUnread();
+        const intervalId = window.setInterval(syncUnread, 60000);
+        window.addEventListener('admin:review-unread-updated', handleUnreadUpdate);
+
+        return () => {
+            isMounted = false;
+            window.clearInterval(intervalId);
+            window.removeEventListener('admin:review-unread-updated', handleUnreadUpdate);
+        };
+    }, [user, loading, settingsReady]);
+
     const closeMobileSidebar = () => {
         setIsMobileSidebarOpen(false);
     };
@@ -227,6 +274,7 @@ const AdminLayout = () => {
         if (path === '/admin') return 'dashboard';
         if (path.startsWith('/admin/accounts')) return 'accounts';
         if (path.startsWith('/admin/products')) return 'products';
+        if (path.startsWith('/admin/reviews')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
@@ -543,7 +591,7 @@ const AdminLayout = () => {
                         </div>
                     )}
 
-                    {(canAccess('categories') || canAccess('blog')) && (
+                    {(canAccess('categories') || canAccess('products') || canAccess('blog')) && (
                         <div className="space-y-1">
                             <button
                                 onClick={() => setIsDesignOpen(!isDesignOpen)}
@@ -573,6 +621,23 @@ const AdminLayout = () => {
                                             <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
                                                 Danh mục sản phẩm
                                             </SidebarText>
+                                        </Link>
+                                    )}
+                                    {canAccess('products') && (
+                                        <Link
+                                            to="/admin/reviews"
+                                            title="Đánh giá & bình luận"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/reviews' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/reviews' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>reviews</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Đánh giá & bình luận
+                                            </SidebarText>
+                                            {reviewUnreadCount > 0 ? (
+                                                <span className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-brick px-1.5 py-0.5 text-[10px] font-black leading-none text-white">
+                                                    {reviewUnreadCount > 99 ? '99+' : reviewUnreadCount}
+                                                </span>
+                                            ) : null}
                                         </Link>
                                     )}
                                     {canAccess('blog') && (
@@ -777,7 +842,7 @@ const AdminLayout = () => {
                         </button>
                     </div>
                 )}
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

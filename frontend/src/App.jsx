@@ -26,6 +26,7 @@ import AdminLayout from './layouts/AdminLayout';
 import AdminDashboard from './pages/admin/Dashboard';
 import ProductList from './pages/admin/ProductList';
 import ProductForm from './pages/admin/ProductForm';
+import ProductReviewManager from './pages/admin/ProductReviewManager';
 import CategoryList from './pages/admin/CategoryList';
 import AttributeList from './pages/admin/AttributeList';
 import MenuList from './pages/admin/MenuList';
@@ -162,6 +163,7 @@ function App() {
                 <Route path="products" element={<ProductList />} />
                 <Route path="products/new" element={<ProductForm />} />
                 <Route path="products/edit/:id" element={<ProductForm />} />
+                <Route path="reviews" element={<ProductReviewManager />} />
                 <Route path="categories" element={<CategoryList />} />
                 <Route path="attributes" element={<AttributeList />} />
                 <Route path="menus" element={<MenuList />} />

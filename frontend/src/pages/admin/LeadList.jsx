@@ -17,6 +17,9 @@ const textareaClassName = 'w-full min-h-[132px] rounded-sm border border-primary
 const buttonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black uppercase tracking-[0.08em] text-primary/80 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const iconButtonClassName = 'relative inline-flex size-10 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/70 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
 const tableToolbarButtonClassName = 'inline-flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[12px] font-black uppercase tracking-[0.08em] text-primary/80 shadow-sm transition-all hover:border-primary/30 hover:text-primary';
+const leadTableHeaderCellClassName = 'group relative border-b border-r border-primary/10 bg-[#F0F4F8] px-3 py-2 text-[11px] font-black uppercase tracking-[0.08em] text-primary shadow-sm last:border-r-0';
+const leadTableBodyCellClassName = 'group/cell overflow-hidden border-b border-r border-primary/10 px-3 py-2 align-middle text-[13px] last:border-r-0';
+const leadStatusSelectClassName = 'h-8 w-full min-w-0 max-w-full rounded-sm border border-primary/10 bg-white px-2 pr-8 text-[12px] font-semibold text-[#0F172A] shadow-sm transition-all focus:border-primary/30 focus:outline-none disabled:cursor-not-allowed disabled:bg-primary/5';
 const LEAD_SELECT_COLUMN_WIDTH = 56;
 const MAX_NOTIFICATION_ITEMS = 12;
 const LEAD_LIST_COPY_RESET_MS = 1800;
@@ -343,6 +346,24 @@ const patchStatusCountsForTransition = (statuses = [], previousLead = null, next
     });
 };
 
+const mergeLeadStatusesWithCounts = (configStatuses = [], countedStatuses = []) => {
+    const countById = new Map(
+        (Array.isArray(countedStatuses) ? countedStatuses : [])
+            .filter((status) => status?.id)
+            .map((status) => [String(status.id), Number(status.count || 0)])
+    );
+
+    return (Array.isArray(configStatuses) ? configStatuses : []).map((status) => {
+        const statusId = String(status?.id ?? '');
+        if (!statusId || !countById.has(statusId)) return status;
+
+        return {
+            ...status,
+            count: countById.get(statusId),
+        };
+    });
+};
+
 const copyTextToClipboard = async (value) => {
     const text = String(value ?? '');
     if (!text.trim()) return false;
@@ -413,13 +434,13 @@ const LeadPhoneValue = ({ lead }) => {
     return (
         <div className="min-w-0">
             <div
-                className={`truncate text-[13px] font-semibold ${isRepeatPhone ? 'text-brick' : 'text-[#0F172A]'}`}
+                className={`truncate text-[13px] font-semibold leading-5 ${isRepeatPhone ? 'text-brick' : 'text-[#0F172A]'}`}
                 title={phoneTitle}
             >
                 {lead?.phone || '-'}
             </div>
             {isRepeatPhone ? (
-                <span className="mt-1 inline-flex rounded-full border border-brick/15 bg-brick/5 px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.08em] text-brick">
+                <span className="mt-0.5 inline-flex rounded-full border border-brick/15 bg-brick/5 px-1.5 py-0.5 text-[10px] font-black uppercase tracking-[0.06em] text-brick">
                     Đặt lại
                 </span>
             ) : null}
@@ -674,12 +695,14 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <div className="text-[13px] text-[#0F172A]">
+                    <div className="text-[13px] leading-5 text-[#0F172A]">
                         <div>{lead.placed_date || '-'}</div>
-                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
-                        {lead.order_number ? (
-                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
-                        ) : null}
+                        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold leading-4 text-primary/60">
+                            <span className="shrink-0">{lead.placed_time || '-'}</span>
+                            {lead.order_number ? (
+                                <span className="truncate font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</span>
+                            ) : null}
+                        </div>
                     </div>
                 </LeadCopyableCell>
             );
@@ -760,11 +783,11 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <div className="text-[13px] text-[#0F172A]">
+                    <div className="text-[13px] leading-5 text-[#0F172A]">
                         <div>{lead.placed_date || '-'}</div>
-                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
+                        <div className="mt-0.5 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
                         {lead.order_number ? (
-                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
+                            <div className="mt-0.5 truncate text-[11px] font-bold leading-4 text-primary/45" title={lead.order_number}>{lead.order_number}</div>
                         ) : null}
                     </div>
                 </LeadCopyableCell>
@@ -846,10 +869,10 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
     );
 
     const renderStickyLeadTable = () => (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-[62dvh] min-h-[360px] flex-col md:h-auto md:min-h-0 md:flex-1">
             <div
                 ref={leadTableHeaderScrollRef}
-                className="relative z-20 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
+                className="relative z-20 shrink-0 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
                 style={{ paddingRight: leadTableScrollbarWidth ? `${leadTableScrollbarWidth}px` : undefined }}
             >
                 <table className="table-fixed border-collapse bg-[#F0F4F8]" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
@@ -863,7 +886,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                                     onDragStart={(event) => handleHeaderDragStart(event, index)}
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={(event) => handleHeaderDrop(event, index)}
-                                    className="group relative border-b border-r border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm last:border-r-0"
+                                    className={leadTableHeaderCellClassName}
                                     title="KÃ©o Ä‘á»ƒ Ä‘á»•i vá»‹ trÃ­ cá»™t"
                                 >
                                     <div className="truncate pr-4">{column.label}</div>
@@ -897,13 +920,13 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                     <tbody>
                         {loading && leads.length === 0 ? (
                             <tr>
-                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'clamp(220px, calc(100dvh - 430px), 520px)' }}>
                                     Đang tải danh sách lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
-                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'clamp(220px, calc(100dvh - 430px), 520px)' }}>
                                     Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                                 </td>
                             </tr>
@@ -1143,24 +1166,24 @@ const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
 
     return (
         <div className="relative max-w-full" title={productTooltip}>
-            <div className="flex items-start gap-2">
+            <div className="flex items-center gap-2">
                 <div className="min-w-0 flex-1">
                     <div
-                        className="overflow-hidden text-[13px] font-bold leading-5 text-[#0F172A]"
-                        style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}
+                        className="overflow-hidden text-[13px] font-bold leading-[1.3] text-[#0F172A]"
+                        style={{ display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}
                     >
                         {summaryTitle}
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold text-primary/55">
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] font-semibold leading-4 text-primary/55">
                         {primaryItem?.bundle_option_title ? (
-                            <span className="rounded-sm bg-primary/[0.05] px-1.5 py-0.5 text-primary">{primaryItem.bundle_option_title}</span>
+                            <span className="shrink-0 rounded-sm bg-primary/[0.05] px-1.5 py-0.5 text-primary">{primaryItem.bundle_option_title}</span>
                         ) : null}
                         {primaryItem?.product_sku ? <span className="truncate">{primaryItem.product_sku}</span> : null}
                         <span>{totalItemCount > 1 ? `${totalItemCount} sản phẩm` : `x${primaryItem?.quantity || 1}`}</span>
-                        {lead.items.some((item) => item?.is_bundle) ? <span className="rounded-sm bg-slate-100 px-1.5 py-0.5 text-primary">Bundle</span> : null}
+                        {lead.items.some((item) => item?.is_bundle) ? <span className="shrink-0 rounded-sm bg-slate-100 px-1.5 py-0.5 text-primary">Bundle</span> : null}
                     </div>
                     {totalItemCount > 1 ? (
-                        <div className="mt-1 truncate text-[11px] text-primary/45">
+                        <div className="mt-0.5 truncate text-[11px] leading-4 text-primary/45">
                             +{totalItemCount - 1} sản phẩm khác, tổng SL {totalQuantity}
                         </div>
                     ) : null}
@@ -1173,7 +1196,7 @@ const CompactProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                             event.stopPropagation();
                             onToggleBundle(detailKey);
                         }}
-                        className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 transition-all hover:border-primary/30 hover:text-primary"
+                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 transition-all hover:border-primary/30 hover:text-primary"
                         aria-expanded={isOpen}
                         aria-controls={`lead-product-details-${lead.id}`}
                         title={isOpen ? 'Ẩn chi tiết sản phẩm' : 'Xem chi tiết sản phẩm'}
@@ -2160,7 +2183,7 @@ const LeadList = () => {
             setTagRules(tagRuleResponse.data || []);
             setStatuses((prev) => {
                 const nextStatuses = statusResponse.data || [];
-                return nextStatuses.length ? nextStatuses : prev;
+                return nextStatuses.length ? mergeLeadStatusesWithCounts(nextStatuses, prev) : prev;
             });
         } catch (error) {
             console.error('Failed to reload lead settings', error);
@@ -2945,12 +2968,14 @@ const LeadList = () => {
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <div className="text-[13px] text-[#0F172A]">
+                    <div className="text-[13px] leading-5 text-[#0F172A]">
                         <div>{lead.placed_date || '-'}</div>
-                        <div className="mt-1 font-semibold text-primary/60">{lead.placed_time || '-'}</div>
-                        {lead.order_number ? (
-                            <div className="mt-2 truncate text-[11px] font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</div>
-                        ) : null}
+                        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] font-semibold leading-4 text-primary/60">
+                            <span className="shrink-0">{lead.placed_time || '-'}</span>
+                            {lead.order_number ? (
+                                <span className="truncate font-bold text-primary/45" title={lead.order_number}>{lead.order_number}</span>
+                            ) : null}
+                        </div>
                     </div>
                 </LeadCopyableCell>
             );
@@ -2999,7 +3024,7 @@ const LeadList = () => {
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
                 >
-                    <div className="text-[13px] leading-5 text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>
+                    <div className="lead-table-clamp-2 text-[13px] leading-[1.35] text-[#0F172A]" title={lead.address || '-'}>{lead.address || '-'}</div>
                 </LeadCopyableCell>
             );
         case 'tag':
@@ -3022,14 +3047,14 @@ const LeadList = () => {
                     copyLabel="trạng thái đơn"
                     copiedCellId={copiedCellId}
                     onCopy={handleCopyCellValue}
-                    iconTopClassName="top-2.5"
+                    iconTopClassName="top-1.5"
                 >
                     <select
                         value={lead.status_config?.id || ''}
                         title={statusLabel}
                         disabled={isTrashView}
                         onChange={(event) => handleLeadStatusChange(lead, event.target.value)}
-                        className={`${inputClassName} w-full min-w-0 max-w-full pr-9 disabled:cursor-not-allowed disabled:bg-primary/5`}
+                        className={leadStatusSelectClassName}
                     >
                         {statuses.map((status) => (
                             <option key={status.id} value={status.id}>{formatStatusLabel(status.name, status.code)}</option>
@@ -3094,16 +3119,16 @@ const LeadList = () => {
     );
 
     const renderStickyLeadTable = () => (
-        <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-[62dvh] min-h-[360px] flex-col md:h-auto md:min-h-0 md:flex-1">
             <div
                 ref={leadTableHeaderScrollRef}
-                className="relative z-20 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
+                className="relative z-20 shrink-0 overflow-hidden border-x border-t border-primary/10 bg-[#F0F4F8]"
             >
                 <table className="table-fixed border-collapse bg-[#F0F4F8]" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                     {renderLeadTableColGroupActive()}
                     <thead>
                         <tr className="lead-table-head text-left shadow-sm">
-                            <th className="border-b border-r border-primary/10 bg-[#F0F4F8] px-3 py-3 text-center text-[11px] font-black uppercase tracking-[0.08em] text-primary">
+                            <th className="border-b border-r border-primary/10 bg-[#F0F4F8] px-2 py-2 text-center text-[11px] font-black uppercase tracking-[0.08em] text-primary">
                                 <input
                                     type="checkbox"
                                     checked={leads.length > 0 && selectedLeadIds.length === leads.length}
@@ -3119,7 +3144,7 @@ const LeadList = () => {
                                     onDragStart={(event) => handleHeaderDragStart(event, index)}
                                     onDragOver={(event) => event.preventDefault()}
                                     onDrop={(event) => handleHeaderDrop(event, index)}
-                                    className="group relative border-b border-r border-primary/10 bg-[#F0F4F8] px-4 py-3 text-[12px] font-bold text-primary shadow-sm last:border-r-0"
+                                    className={leadTableHeaderCellClassName}
                                     title="KÃ©o Ä‘á»ƒ Ä‘á»•i vá»‹ trÃ­ cá»™t"
                                 >
                                     <div className="truncate pr-4">{column.label}</div>
@@ -3153,13 +3178,13 @@ const LeadList = () => {
                     <tbody>
                         {loading && leads.length === 0 ? (
                             <tr>
-                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'clamp(220px, calc(100dvh - 430px), 520px)' }}>
                                     Đang tải danh sách lead...
                                 </td>
                             </tr>
                         ) : leads.length === 0 ? (
                             <tr>
-                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'calc(100vh - 430px)' }}>
+                                <td colSpan={(renderedColumns.length || 1) + 1} className="border-b border-primary/10 px-4 py-14 text-center text-[13px] font-semibold text-primary/55" style={{ height: 'clamp(220px, calc(100dvh - 430px), 520px)' }}>
                                     Không tìm thấy lead phù hợp với bộ lọc hiện tại.
                                 </td>
                             </tr>
@@ -3176,10 +3201,10 @@ const LeadList = () => {
                                 <React.Fragment key={lead.id}>
                                     <tr
                                         id={`lead-row-${lead.id}`}
-                                        className={`align-top transition-all ${highlightClass}`}
+                                        className={`lead-compact-row align-middle transition-all ${highlightClass}`}
                                         onDoubleClick={() => { if (!isTrashView) handleOpenOrderForm(lead); }}
                                     >
-                                        <td className="border-b border-r border-primary/10 px-3 py-3 align-top text-center">
+                                        <td className="border-b border-r border-primary/10 px-2 py-2 align-middle text-center">
                                             <input
                                                 type="checkbox"
                                                 checked={selectedLeadIds.includes(lead.id)}
@@ -3192,7 +3217,7 @@ const LeadList = () => {
                                         {renderedColumns.map((column) => (
                                             <td
                                                 key={`${lead.id}-${column.id}`}
-                                                className="group/cell overflow-hidden border-b border-r border-primary/10 px-4 py-3 align-top text-[13px] last:border-r-0"
+                                                className={leadTableBodyCellClassName}
                                             >
                                                 {renderLeadTableCellContent(lead, column.id)}
                                             </td>
@@ -3316,14 +3341,22 @@ const LeadList = () => {
     ]), [statuses, totalAcrossStatuses]);
 
     return (
-        <div className="h-full min-h-0 bg-[#fcfcfa] p-6">
+        <div className="lead-list-page min-h-[calc(100dvh-104px)] bg-[#fcfcfa] p-3 md:h-full md:min-h-0 md:p-6">
             <style>{`
+                .lead-list-page { overflow: visible; }
+                .lead-table-scrollbar { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; scrollbar-gutter: stable; touch-action: pan-x pan-y; }
                 .lead-table-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
                 .lead-table-scrollbar::-webkit-scrollbar-track { background: #F0F4F8; }
                 .lead-table-scrollbar::-webkit-scrollbar-thumb { background: #1B365D; border: 2px solid #F0F4F8; border-radius: 5px; }
                 .lead-table-head { font-size: 11px; font-weight: 900; color: #1B365D; letter-spacing: 0.02em; background-color: #F0F4F8; }
+                .lead-compact-row { height: 56px; }
+                .lead-table-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+                @media (max-width: 767px) {
+                    .lead-list-page { min-height: calc(100dvh - 76px); }
+                    .lead-compact-row { height: 54px; }
+                }
             `}</style>
-            <div className="mx-auto flex h-full min-h-0 max-w-[1700px] flex-col gap-5">
+            <div className="mx-auto flex min-h-[calc(100dvh-128px)] max-w-[1700px] flex-col gap-4 md:h-full md:min-h-0 md:gap-5">
                 <div className="flex flex-wrap gap-3">
                     {normalizedTabItems.map((item) => {
                         const active = String(filters.status || '') === String(item.id || '');
@@ -3344,7 +3377,7 @@ const LeadList = () => {
                     })}
                 </div>
 
-                <div className="flex min-h-0 flex-1 flex-col overflow-visible rounded-md border border-primary/10 bg-white shadow-xl">
+                <div className="flex min-h-[70vh] flex-1 flex-col overflow-visible rounded-md border border-primary/10 bg-white shadow-xl md:min-h-0">
                     <div className="flex flex-col gap-3 border-b border-primary/10 bg-[#F8FAFC] px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
                         <div className="flex flex-wrap items-center gap-2 xl:shrink-0">
                             <div className="relative" ref={notificationPanelRef}>

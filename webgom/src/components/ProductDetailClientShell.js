@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailTabs from '@/components/ProductDetailTabs';
+import ProductReviews from '@/components/product/ProductReviews';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
 import { getWebProductBundleOptionDetail, getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
@@ -454,6 +455,10 @@ export default function ProductDetailClientShell({
         product={product}
         descriptionReady={deferredSectionsReady && fullProductReady}
       />
+
+      {deferredSectionsReady && fullProductReady ? (
+        <ProductReviews product={product} />
+      ) : null}
 
       {deferredSectionsReady ? (
         <RelatedProductsSection

@@ -936,8 +936,19 @@ export const couponApi = {
 export const reviewApi = {
     getByProduct: (productId) => api.get(`/products/${productId}/reviews`),
     store: (productId, data) => api.post(`/products/${productId}/reviews`, data),
+    like: (id) => api.post(`/product-reviews/${id}/like`),
     adminList: (params) => api.get('/admin/reviews', { params }),
+    adminGet: (id) => api.get(`/admin/reviews/${id}`),
+    adminCreate: (data) => api.post('/admin/reviews', data),
+    adminBulkImport: (data) => api.post('/admin/reviews/bulk-import', data),
+    adminExport: (params) => api.get('/admin/reviews/export', { params, responseType: 'blob' }),
+    seedSample: (data) => api.post('/admin/reviews/seed-sample', data),
+    unreadSummary: () => api.get('/admin/reviews/unread-summary'),
+    markSeen: () => api.post('/admin/reviews/mark-seen'),
+    adminUpdate: (id, data) => api.put(`/admin/reviews/${id}`, data),
+    adminDelete: (id) => api.delete(`/admin/reviews/${id}`),
     approve: (id) => api.post(`/admin/reviews/${id}/approve`),
+    hide: (id) => api.post(`/admin/reviews/${id}/hide`),
 };
 
 export const wishlistApi = {

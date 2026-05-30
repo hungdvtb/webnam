@@ -17,6 +17,15 @@ const DIRECT_IMAGE_FIELDS = [
   'path',
   'src',
 ];
+const STAR_PATH = 'M12 2.5l2.93 5.94 6.56.95-4.75 4.63 1.12 6.54L12 17.48l-5.86 3.08 1.12-6.54-4.75-4.63 6.56-.95L12 2.5z';
+
+function StarSvg({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d={STAR_PATH} fill="currentColor" />
+    </svg>
+  );
+}
 
 const DESKTOP_RELATED_BREAKPOINT = 1024;
 
@@ -81,14 +90,24 @@ function getRelatedRatingMeta(relatedProduct) {
 function renderRelatedStars(ratingValue) {
   return Array.from({ length: 5 }, (_, index) => {
     const starIndex = index + 1;
-    let icon = 'star_outline';
-
-    if (ratingValue >= starIndex) icon = 'star';
-    else if (ratingValue >= starIndex - 0.5) icon = 'star_half';
+    const fillPercent = Math.max(0, Math.min(100, (ratingValue - (starIndex - 1)) * 100));
+    const isFull = fillPercent >= 99.5;
+    const isEmpty = fillPercent <= 0.5;
 
     return (
-      <span key={`related-star-${index}`} className="material-symbols-outlined" aria-hidden="true">
-        {icon}
+      <span key={`related-star-${index}`} className={styles.relStarFrame} aria-hidden="true">
+        {isFull ? (
+          <StarSvg className={`${styles.relStarIcon} ${styles.relStarFull}`} />
+        ) : isEmpty ? (
+          <StarSvg className={`${styles.relStarIcon} ${styles.relStarBase}`} />
+        ) : (
+          <>
+            <StarSvg className={`${styles.relStarIcon} ${styles.relStarBase}`} />
+            <span className={styles.relStarFill} style={{ width: `${fillPercent}%` }}>
+              <StarSvg className={styles.relStarIcon} />
+            </span>
+          </>
+        )}
       </span>
     );
   });

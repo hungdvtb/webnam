@@ -8,6 +8,7 @@ import ActionLinks from './common/ActionLinks';
 import QuantitySelector from './common/QuantitySelector';
 import BuyButtons from './common/BuyButtons';
 import TrustBadges from './common/TrustBadges';
+import ProductRatingSummary from './ProductRatingSummary';
 
 import Breadcrumb from './common/Breadcrumb';
 
@@ -273,6 +274,7 @@ export default function ConfigurableProductView({
           <div className={styles.infoWrapper}>
             <div className={styles.titleSection}>
               <h1 className={styles.title}>{product.name}</h1>
+              <ProductRatingSummary product={product} />
               {currentProduct?.sku ? (
                 <p className={styles.configurableMobileSku}>
                   Mã sản phẩm: <span>{currentProduct.sku}</span>

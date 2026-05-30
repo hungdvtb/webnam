@@ -691,6 +691,17 @@ class ProductController extends Controller
         ];
     }
 
+    private function mapProductReviewSummary(Product $product): array
+    {
+        $summary = $product->reviewSummary();
+
+        return [
+            'average_rating' => (float) $summary['average_rating'],
+            'total_reviews' => (int) $summary['total_reviews'],
+            'distribution' => $summary['distribution'],
+        ];
+    }
+
     private function filterDisplayProductImages($images): Collection
     {
         return collect($images)
@@ -1687,6 +1698,11 @@ class ProductController extends Controller
             
             $this->sanitizeProductImageRelations($product);
             $responseData = $product->toArray();
+            $reviewSummary = $this->mapProductReviewSummary($product);
+            $responseData['average_rating'] = $reviewSummary['average_rating'];
+            $responseData['review_count'] = $reviewSummary['total_reviews'];
+            $responseData['rating_distribution'] = $reviewSummary['distribution'];
+            $responseData['review_summary'] = $reviewSummary;
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
@@ -1767,6 +1783,11 @@ class ProductController extends Controller
             if ($product->type !== 'bundle') {
                 $this->sanitizeProductImageRelations($product);
                 $responseData = $product->toArray();
+                $reviewSummary = $this->mapProductReviewSummary($product);
+                $responseData['average_rating'] = $reviewSummary['average_rating'];
+                $responseData['review_count'] = $reviewSummary['total_reviews'];
+                $responseData['rating_distribution'] = $reviewSummary['distribution'];
+                $responseData['review_summary'] = $reviewSummary;
                 $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
                 $responseData['bundle_items'] = [];
                 $responseData['bundle_options'] = [];
@@ -1880,6 +1901,11 @@ class ProductController extends Controller
 
             $this->sanitizeProductImageRelations($product);
             $responseData = $product->toArray();
+            $reviewSummary = $this->mapProductReviewSummary($product);
+            $responseData['average_rating'] = $reviewSummary['average_rating'];
+            $responseData['review_count'] = $reviewSummary['total_reviews'];
+            $responseData['rating_distribution'] = $reviewSummary['distribution'];
+            $responseData['review_summary'] = $reviewSummary;
             $responseData['description'] = '';
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
@@ -2036,6 +2062,7 @@ class ProductController extends Controller
                 'current_price' => $product->current_price,
                 'main_image' => $product->main_image ?: ($primaryImage['url'] ?? null),
                 'average_rating' => round($product->average_rating, 1),
+                'review_count' => (int) $product->review_count,
                 'primary_image' => $primaryImage,
                 'images' => $images,
                 'category' => $this->resolvePrimaryCategory($product),

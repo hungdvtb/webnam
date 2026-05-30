@@ -161,6 +161,34 @@ export async function getWebRelatedProducts(slug) {
     };
 }
 
+export async function getWebProductReviews(productId, params = {}) {
+    const urlParams = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+            urlParams.append(key, value);
+        }
+    });
+
+    const query = urlParams.toString();
+    return fetchFromApi(`/products/${productId}/reviews${query ? `?${query}` : ''}`, {
+        cache: 'no-store',
+    });
+}
+
+export async function submitWebProductReview(productId, data) {
+    return fetchFromApi(`/products/${productId}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function likeWebProductReview(reviewId) {
+    return fetchFromApi(`/product-reviews/${reviewId}/like`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+    });
+}
+
 export async function placeWebOrder(orderData) {
     return fetchFromApi('/storefront/order', {
         method: 'POST',

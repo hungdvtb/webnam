@@ -118,6 +118,12 @@ const PRODUCT_INFO_MENU_ITEMS = [
     sectionId: "image-video-section",
   },
   {
+    id: "reviews",
+    icon: "rate_review",
+    label: "\u0110\u00e1nh gi\u00e1 v\u00e0 b\u00ecnh lu\u1eadn",
+    sectionId: "product-review-section",
+  },
+  {
     id: "specs",
     icon: "info",
     label: "Th\u00f4ng s\u1ed1 chi ti\u1ebft",

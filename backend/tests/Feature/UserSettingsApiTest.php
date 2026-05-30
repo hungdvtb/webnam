@@ -121,6 +121,48 @@ class UserSettingsApiTest extends TestCase
             ->assertJsonPath('localStorage.activeAccountId', '321');
     }
 
+    public function test_it_persists_order_form_product_quick_filter_settings(): void
+    {
+        $user = $this->authenticate();
+        $filterKey = 'order_form_product_quick_filter_state_v1::' . $user->id . '::12::gom::order-form';
+        $filterPayload = json_encode([
+            'attributeId' => '8',
+            'values' => ['Men lam'],
+            'attributeId2' => '12',
+            'values2' => ['Size M'],
+            'quickModeEnabled' => true,
+        ], JSON_UNESCAPED_UNICODE);
+        $setupPayload = json_encode([
+            $user->id . '::12::gom::order-form' => [
+                '8::men lam|12::size m' => [
+                    ['product_id' => 123, 'sku' => 'SP-123', 'name' => 'San pham test'],
+                ],
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+
+        $this->patchJson('/api/user-settings', [
+            'localStorage' => [
+                $filterKey => $filterPayload,
+                'order_form_product_quick_setup_map_v1' => $setupPayload,
+            ],
+        ])->assertOk();
+
+        $this->getJson('/api/user-settings')
+            ->assertOk()
+            ->assertJsonPath('localStorage.' . $filterKey, $filterPayload)
+            ->assertJsonPath('localStorage.order_form_product_quick_setup_map_v1', $setupPayload);
+
+        $this->patchJson('/api/user-settings', [
+            'localStorage' => [
+                $filterKey => null,
+            ],
+        ])->assertOk();
+
+        $this->getJson('/api/user-settings')
+            ->assertOk()
+            ->assertJsonMissingPath('localStorage.' . $filterKey);
+    }
+
     protected function authenticate(): User
     {
         $user = User::query()->create([

@@ -8,6 +8,7 @@ import QuantitySelector from './common/QuantitySelector';
 import BuyButtons from './common/BuyButtons';
 import TrustBadges from './common/TrustBadges';
 import Breadcrumb from './common/Breadcrumb';
+import ProductRatingSummary from './ProductRatingSummary';
 
 export default function SimpleProductView({
   product,
@@ -52,6 +53,7 @@ export default function SimpleProductView({
                 <div className={styles.simpleTitleRow}>
                   <h1 className={styles.title}>{product.name}</h1>
                 </div>
+                <ProductRatingSummary product={product} />
                 {product?.sku ? (
                   <p className={styles.simpleMobileSku}>
                     Mã sản phẩm: <span>{product.sku}</span>

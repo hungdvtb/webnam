@@ -11,6 +11,7 @@ import BuyButtons from './common/BuyButtons';
 import SpecificationList from './common/SpecificationList';
 import ActionLinks from './common/ActionLinks';
 import ComponentSelectionModal from './common/ComponentSelectionModal';
+import ProductRatingSummary from './ProductRatingSummary';
 import { Fragment, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import Breadcrumb from './common/Breadcrumb';
@@ -1743,6 +1744,7 @@ export default function BundleProductView({
             <div className={styles.infoWrapper}>
               <div className={styles.titleSection}>
                 <h1 className={styles.title}>{bundleHeroProductName}</h1>
+                <ProductRatingSummary product={product} />
                 <div className={styles.meta}>
                   <span className={styles.sku}>Mã bộ: <span className={styles.skuValue}>{product.sku || `COMBO-${product.id}`}</span></span>
                   <span className={styles.statusDot} style={{ backgroundColor: '#10b981' }}></span>

@@ -4,6 +4,7 @@ import styles from './product.module.css';
 import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailClientShell from '@/components/ProductDetailClientShell';
 import ProductDetailTabs from '@/components/ProductDetailTabs';
+import ProductReviews from '@/components/product/ProductReviews';
 import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
 import { getPolicyPosts } from '@/lib/policyContent';
@@ -128,6 +129,8 @@ export default async function ProductDetailPage({ params, searchParams }) {
             mainImage={mainImage}
             policyPosts={policyPosts}
           />
+
+          <ProductReviews product={product} />
 
           <RelatedProductsSection
             relatedProducts={relatedProducts}

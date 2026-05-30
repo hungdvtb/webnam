@@ -58,6 +58,7 @@ import {
 } from '../../utils/money';
 import { buildOrderAiPickerEntries, buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
 import { hasAdminPermission } from '../../utils/adminPermissions';
+import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
     <section className={`bg-white border border-primary/10 shadow-sm rounded-sm overflow-hidden ${className}`}>
@@ -844,6 +845,16 @@ const normalizeStoredQuickFilterValues = (values = []) => (
         ? values.map(normalizeQuickFilterOptionValue).filter(Boolean).slice(0, 1)
         : []
 );
+const normalizeStoredQuickFilterBoolean = (value, fallbackValue = true) => {
+    if (typeof value === 'boolean') return value;
+    if (value === null || value === undefined || value === '') return fallbackValue;
+
+    const normalizedValue = String(value).trim().toLowerCase();
+    if (['0', 'false', 'no', 'off'].includes(normalizedValue)) return false;
+    if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) return true;
+
+    return fallbackValue;
+};
 const normalizeStoredProductQuickFilterState = (value = {}) => {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
@@ -853,7 +864,7 @@ const normalizeStoredProductQuickFilterState = (value = {}) => {
         values: normalizeStoredQuickFilterValues(source.values),
         attributeId2: String(source.attributeId2 ?? source.attribute_id_2 ?? '').trim(),
         values2: normalizeStoredQuickFilterValues(source.values2),
-        quickModeEnabled: true,
+        quickModeEnabled: normalizeStoredQuickFilterBoolean(source.quickModeEnabled ?? source.quick_mode_enabled, true),
     };
 };
 const getStoredProductQuickFilterState = (user = null) => {
@@ -868,7 +879,7 @@ const getStoredProductQuickFilterState = (user = null) => {
     }
 };
 const persistProductQuickFilterState = (storageKey, state) => {
-    if (typeof window === 'undefined' || !storageKey) return;
+    if (typeof window === 'undefined' || !storageKey) return false;
 
     const normalizedState = normalizeStoredProductQuickFilterState(state);
     const hasPersistedState = Boolean(
@@ -879,20 +890,43 @@ const persistProductQuickFilterState = (storageKey, state) => {
 
     try {
         if (!hasPersistedState) {
+            if (window.localStorage.getItem(storageKey) === null) {
+                return false;
+            }
+
             window.localStorage.removeItem(storageKey);
-            return;
+            return true;
         }
 
-        window.localStorage.setItem(storageKey, JSON.stringify(normalizedState));
+        const serializedState = JSON.stringify(normalizedState);
+        if (window.localStorage.getItem(storageKey) === serializedState) {
+            return false;
+        }
+
+        window.localStorage.setItem(storageKey, serializedState);
+        return true;
     } catch (error) {
         console.error('Unable to persist product quick filter state', error);
+        return false;
     }
 };
-const resolveProductQuickSetupNamespace = () => {
+const buildProductQuickFilterDurableSignature = (storageKey, state = {}) => {
+    const normalizedState = normalizeStoredProductQuickFilterState(state);
+
+    return JSON.stringify({
+        storageKey: String(storageKey || ''),
+        attributeId: normalizedState.attributeId,
+        values: normalizedState.values,
+        attributeId2: normalizedState.attributeId2,
+        values2: normalizedState.values2,
+        quickModeEnabled: normalizedState.quickModeEnabled,
+    });
+};
+const resolveProductQuickSetupNamespace = (user = null) => {
     if (typeof window === 'undefined') return 'server';
 
     try {
-        const userId = getStoredUserStorageId();
+        const userId = getStoredUserStorageId(user);
         const activeAccountId = window.localStorage.getItem('activeAccountId') || 'default';
         const activeSiteCode = window.localStorage.getItem('activeSiteCode') || 'default';
 
@@ -920,6 +954,39 @@ const getStoredProductQuickSetupStore = () => {
     } catch (error) {
         console.error('Unable to read product quick setup store', error);
         return {};
+    }
+};
+const hasProductQuickSetupStoreEntries = (store = {}) => (
+    Object.values(store || {}).some((namespaceStore) => (
+        namespaceStore
+        && typeof namespaceStore === 'object'
+        && !Array.isArray(namespaceStore)
+        && Object.keys(namespaceStore).length > 0
+    ))
+);
+const persistProductQuickSetupStore = (store = {}) => {
+    if (typeof window === 'undefined') return false;
+
+    try {
+        if (!hasProductQuickSetupStoreEntries(store)) {
+            if (window.localStorage.getItem(productQuickSetupStorageKey) === null) {
+                return false;
+            }
+
+            window.localStorage.removeItem(productQuickSetupStorageKey);
+            return true;
+        }
+
+        const serializedStore = JSON.stringify(store);
+        if (window.localStorage.getItem(productQuickSetupStorageKey) === serializedStore) {
+            return false;
+        }
+
+        window.localStorage.setItem(productQuickSetupStorageKey, serializedStore);
+        return true;
+    } catch (error) {
+        console.error('Unable to persist product quick setup store', error);
+        return false;
     }
 };
 const getProductQuickSetupEntryKey = (entry) => {
@@ -3648,6 +3715,9 @@ const OrderForm = () => {
     const productSearchCacheRef = useRef(new Map());
     const productQuickFilterStorageKeyRef = useRef(productQuickFilterStorageKey);
     const skipNextProductQuickFilterPersistRef = useRef(false);
+    const lastProductQuickFilterDurableSignatureRef = useRef(
+        buildProductQuickFilterDurableSignature(productQuickFilterStorageKey, initialProductQuickFilterState)
+    );
     const productQuickFilterScopeAbortRef = useRef(null);
     const productQuickFilterScopeCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
@@ -3669,6 +3739,14 @@ const OrderForm = () => {
         () => orderAiQuickRuleOptions.find((option) => option.value === orderAiSelectedRuleKey) || null,
         [orderAiQuickRuleOptions, orderAiSelectedRuleKey]
     );
+
+    const productQuickSetupNamespace = resolveProductQuickSetupNamespace(user);
+
+    const flushProductQuickSettingsNow = useCallback(() => {
+        flushUserSettingsSync().catch((error) => {
+            console.error('Unable to flush product quick filter settings', error);
+        });
+    }, []);
 
     useEffect(() => {
         if (typeof window === 'undefined') return undefined;
@@ -3778,11 +3856,10 @@ const OrderForm = () => {
     const activeProductQuickSetupItems = useMemo(() => {
         if (!activeProductQuickSetupKey) return [];
 
-        const namespace = resolveProductQuickSetupNamespace();
         return normalizeStoredProductQuickSetupItems(
-            productQuickSetupStore?.[namespace]?.[activeProductQuickSetupKey] || []
+            productQuickSetupStore?.[productQuickSetupNamespace]?.[activeProductQuickSetupKey] || []
         );
-    }, [activeProductQuickSetupKey, productQuickSetupStore]);
+    }, [activeProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
     const isProductQuickModeToggleDisabled = activeProductQuickSetupItems.length === 0 || hasActiveProductBundleQuickFilter;
     const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0 && !hasActiveProductBundleQuickFilter;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;
@@ -4389,9 +4466,14 @@ const OrderForm = () => {
 
         const storedState = getStoredProductQuickFilterState(user);
         productQuickFilterStorageKeyRef.current = productQuickFilterStorageKey;
+        lastProductQuickFilterDurableSignatureRef.current = buildProductQuickFilterDurableSignature(
+            productQuickFilterStorageKey,
+            storedState
+        );
         skipNextProductQuickFilterPersistRef.current = true;
 
         setSearchTerm(storedState.searchTerm);
+        setDebouncedSearchTerm(storedState.searchTerm);
         setProductQuickFilterAttributeId(storedState.attributeId);
         setProductQuickFilterValues(storedState.values);
         setProductQuickFilterAttributeId2(storedState.attributeId2);
@@ -4409,15 +4491,24 @@ const OrderForm = () => {
             return;
         }
 
-        persistProductQuickFilterState(productQuickFilterStorageKey, {
+        const nextState = {
             searchTerm,
             attributeId: productQuickFilterAttributeId,
             values: normalizedProductQuickFilterValues,
             attributeId2: productQuickFilterAttributeId2,
             values2: normalizedProductQuickFilterValues2,
             quickModeEnabled: productQuickModeEnabled,
-        });
+        };
+        const didPersist = persistProductQuickFilterState(productQuickFilterStorageKey, nextState);
+        const nextDurableSignature = buildProductQuickFilterDurableSignature(productQuickFilterStorageKey, nextState);
+
+        if (didPersist && lastProductQuickFilterDurableSignatureRef.current !== nextDurableSignature) {
+            flushProductQuickSettingsNow();
+        }
+
+        lastProductQuickFilterDurableSignatureRef.current = nextDurableSignature;
     }, [
+        flushProductQuickSettingsNow,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
         productQuickFilterAttributeId,
@@ -5930,29 +6021,28 @@ const OrderForm = () => {
     const saveActiveProductQuickSetupItems = useCallback((items) => {
         if (!activeProductQuickSetupKey) return;
 
-        const namespace = resolveProductQuickSetupNamespace();
         const normalizedItems = normalizeStoredProductQuickSetupItems(items);
 
         setProductQuickSetupStore((prev) => {
             const next = { ...prev };
-            const nextNamespaceStore = { ...(next[namespace] || {}) };
+            const nextNamespaceStore = { ...(next[productQuickSetupNamespace] || {}) };
 
             if (normalizedItems.length > 0) {
                 nextNamespaceStore[activeProductQuickSetupKey] = normalizedItems;
-                next[namespace] = nextNamespaceStore;
+                next[productQuickSetupNamespace] = nextNamespaceStore;
                 return next;
             }
 
             delete nextNamespaceStore[activeProductQuickSetupKey];
             if (Object.keys(nextNamespaceStore).length > 0) {
-                next[namespace] = nextNamespaceStore;
+                next[productQuickSetupNamespace] = nextNamespaceStore;
             } else {
-                delete next[namespace];
+                delete next[productQuickSetupNamespace];
             }
 
             return next;
         });
-    }, [activeProductQuickSetupKey]);
+    }, [activeProductQuickSetupKey, productQuickSetupNamespace]);
 
     const handleAddProductToQuickSetup = useCallback((product) => {
         if (!product) return;
@@ -6053,10 +6143,19 @@ const OrderForm = () => {
 
     const toggleProductQuickSetupPanel = useCallback((event) => {
         event?.stopPropagation?.();
+        if (showProductQuickSetupPanel) {
+            flushProductQuickSettingsNow();
+        }
         setShowProductQuickSetupPanel((prev) => !prev);
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
-    }, []);
+    }, [flushProductQuickSettingsNow, showProductQuickSetupPanel]);
+
+    const saveAndCloseProductQuickSetupPanel = useCallback((event) => {
+        event?.stopPropagation?.();
+        setShowProductQuickSetupPanel(false);
+        flushProductQuickSettingsNow();
+    }, [flushProductQuickSettingsNow]);
 
     const fetchProductQuickFilterScopeProducts = useCallback(async () => {
         const activeFilterAttribute = activeProductQuickFilterAttribute;
@@ -6317,14 +6416,10 @@ const OrderForm = () => {
     }, [debouncedSearchTerm, pushSearchHistory, showSearchDropdown]);
 
     useEffect(() => {
-        if (typeof window === 'undefined') return;
-
-        try {
-            window.localStorage.setItem(productQuickSetupStorageKey, JSON.stringify(productQuickSetupStore));
-        } catch (error) {
-            console.error('Unable to persist product quick setup store', error);
+        if (persistProductQuickSetupStore(productQuickSetupStore)) {
+            flushProductQuickSettingsNow();
         }
-    }, [productQuickSetupStore]);
+    }, [flushProductQuickSettingsNow, productQuickSetupStore]);
 
     useEffect(() => {
         if (!hasActiveProductQuickFilter) {
@@ -8408,10 +8503,11 @@ const OrderForm = () => {
                                             </div>
                                             <button
                                                 type="button"
-                                                onClick={() => setShowProductQuickSetupPanel(false)}
-                                                className="h-9 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                                onClick={saveAndCloseProductQuickSetupPanel}
+                                                className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
                                             >
-                                                Xong
+                                                <span className="material-symbols-outlined text-[14px]">save</span>
+                                                Lưu
                                             </button>
                                         </div>
 
@@ -8974,10 +9070,11 @@ const OrderForm = () => {
                                                                     </div>
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => setShowProductQuickSetupPanel(false)}
-                                                                        className="h-9 px-3 rounded-sm border border-primary/10 bg-white text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                                                        onClick={saveAndCloseProductQuickSetupPanel}
+                                                                        className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
                                                                     >
-                                                                        {'Xong'}
+                                                                        <span className="material-symbols-outlined text-[14px]">save</span>
+                                                                        {'Lưu'}
                                                                     </button>
                                                                 </div>
 

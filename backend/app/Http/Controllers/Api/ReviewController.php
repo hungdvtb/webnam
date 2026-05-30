@@ -30,7 +30,9 @@ class ReviewController extends Controller
     ];
     private const BULK_IMPORT_TEXT_MAX_CHARS = 10000000;
     private const BULK_IMPORT_FILE_MAX_KB = 51200;
-    private const BULK_IMPORT_ROW_LIMIT = 10000;
+    private const BULK_IMPORT_ROW_LIMIT = 50000;
+
+    private array $bulkImportProductCache = [];
 
     public function index(Request $request, $productId)
     {
@@ -360,6 +362,8 @@ class ReviewController extends Controller
 
     public function adminBulkImport(Request $request)
     {
+        @set_time_limit(300);
+
         $validated = $request->validate([
             'payload' => ['nullable', 'string', 'max:' . self::BULK_IMPORT_TEXT_MAX_CHARS, 'required_without:import_file'],
             'import_file' => ['nullable', 'file', 'max:' . self::BULK_IMPORT_FILE_MAX_KB, 'required_without:payload'],
@@ -762,7 +766,7 @@ class ReviewController extends Controller
     {
         $productId = $this->stringValue($row, ['product_id']);
         if ($productId !== '' && ctype_digit($productId)) {
-            $product = Product::query()->find((int) $productId);
+            $product = $this->cachedBulkImportProduct('id', $productId, fn () => Product::query()->find((int) $productId));
             if ($product) {
                 return $product;
             }
@@ -770,7 +774,7 @@ class ReviewController extends Controller
 
         $sku = $this->stringValue($row, ['sku', 'product_sku']);
         if ($sku !== '') {
-            $product = Product::query()->where('sku', $sku)->first();
+            $product = $this->cachedBulkImportProduct('sku', $sku, fn () => Product::query()->where('sku', $sku)->first());
             if ($product) {
                 return $product;
             }
@@ -778,7 +782,7 @@ class ReviewController extends Controller
 
         $slug = $this->stringValue($row, ['slug', 'product_slug']);
         if ($slug !== '') {
-            $product = Product::query()->where('slug', $slug)->first();
+            $product = $this->cachedBulkImportProduct('slug', $slug, fn () => Product::query()->where('slug', $slug)->first());
             if ($product) {
                 return $product;
             }
@@ -786,16 +790,35 @@ class ReviewController extends Controller
 
         $name = $this->stringValue($row, ['product_name', 'name']);
         if ($name !== '') {
-            return Product::query()
+            return $this->cachedBulkImportProduct('name', $name, fn () => Product::query()
                 ->where(function ($query) use ($name) {
                     $query
                         ->where('name', $name)
                         ->orWhere('name', 'like', "%{$name}%");
                 })
-                ->first();
+                ->first());
         }
 
         return null;
+    }
+
+    private function cachedBulkImportProduct(string $bucket, string $key, callable $lookup): ?Product
+    {
+        $cacheKey = mb_strtolower(trim($key));
+        if ($cacheKey === '') {
+            return null;
+        }
+
+        if (array_key_exists($cacheKey, $this->bulkImportProductCache[$bucket] ?? [])) {
+            $cached = $this->bulkImportProductCache[$bucket][$cacheKey];
+
+            return $cached instanceof Product ? $cached : null;
+        }
+
+        $product = $lookup();
+        $this->bulkImportProductCache[$bucket][$cacheKey] = $product instanceof Product ? $product : false;
+
+        return $product instanceof Product ? $product : null;
     }
 
     private function normalizeBulkReplies(array $row): array

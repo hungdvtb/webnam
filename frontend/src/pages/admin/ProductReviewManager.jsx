@@ -83,6 +83,8 @@ const BULK_IMPORT_SAMPLE = JSON.stringify([
     },
 ], null, 2);
 
+const BULK_FILE_PREVIEW_MAX_BYTES = 1000000;
+
 const normalizeProducts = (response) => {
     const payload = response?.data;
     if (Array.isArray(payload)) return payload;
@@ -175,6 +177,8 @@ export default function ProductReviewManager() {
     const [saving, setSaving] = useState(false);
     const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
     const [bulkPayload, setBulkPayload] = useState(BULK_IMPORT_SAMPLE);
+    const [bulkFile, setBulkFile] = useState(null);
+    const [bulkFileNotice, setBulkFileNotice] = useState('');
     const [bulkStatus, setBulkStatus] = useState('visible');
     const [bulkMode, setBulkMode] = useState('append');
     const [bulkSaving, setBulkSaving] = useState(false);
@@ -340,6 +344,7 @@ export default function ProductReviewManager() {
     const openBulkImport = () => {
         setIsBulkImportOpen(true);
         setBulkResult(null);
+        setBulkFileNotice('');
         setMessage('');
         setError('');
     };
@@ -366,15 +371,39 @@ export default function ProductReviewManager() {
         const file = event.target.files?.[0];
         if (!file) return;
 
+        setBulkFile(file);
+        setBulkResult(null);
+        setError('');
+
+        const fileSizeMb = (file.size / 1024 / 1024).toFixed(2);
+        if (file.size > BULK_FILE_PREVIEW_MAX_BYTES) {
+            setBulkPayload('');
+            setBulkFileNotice(`Đã chọn ${file.name} (${fileSizeMb} MB). File lớn sẽ được gửi trực tiếp, không cần dán vào ô JSON.`);
+            event.target.value = '';
+            return;
+        }
+
         const reader = new FileReader();
-        reader.onload = () => setBulkPayload(String(reader.result || ''));
-        reader.onerror = () => setError('Không thể đọc file JSON.');
+        reader.onload = () => {
+            setBulkPayload(String(reader.result || ''));
+            setBulkFileNotice(`Đã chọn ${file.name} (${fileSizeMb} MB). Có thể bấm nhập ngay hoặc chỉnh nội dung trong ô JSON bên dưới.`);
+        };
+        reader.onerror = () => {
+            setBulkFile(null);
+            setBulkFileNotice('');
+            setError('Không thể đọc file JSON.');
+        };
         reader.readAsText(file);
         event.target.value = '';
     };
 
     const importBulkReviews = (event) => {
         event.preventDefault();
+        if (!bulkFile && !String(bulkPayload || '').trim()) {
+            setError('Chọn file JSON hoặc dán nội dung JSON trước khi nhập.');
+            return;
+        }
+
         if (bulkMode === 'replace' && !window.confirm('Chế độ cập nhật sẽ xóa đánh giá mẫu/import cũ của các sản phẩm có trong JSON, nhưng giữ đánh giá thật của khách. Tiếp tục?')) {
             return;
         }
@@ -384,11 +413,19 @@ export default function ProductReviewManager() {
         setError('');
         setMessage('');
 
-        reviewApi.adminBulkImport({
+        const requestData = bulkFile ? new FormData() : {
             payload: bulkPayload,
             default_status: bulkStatus,
             mode: bulkMode,
-        })
+        };
+
+        if (bulkFile) {
+            requestData.append('import_file', bulkFile);
+            requestData.append('default_status', bulkStatus);
+            requestData.append('mode', bulkMode);
+        }
+
+        reviewApi.adminBulkImport(requestData)
             .then((response) => {
                 const result = response?.data?.result || {};
                 setBulkResult(result);
@@ -537,7 +574,7 @@ export default function ProductReviewManager() {
                         className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-5 py-2.5 text-sm font-black text-primary shadow-sm transition hover:bg-primary hover:text-white"
                     >
                         <span className="material-symbols-outlined text-[20px]">content_paste_go</span>
-                        Dán JSON hàng loạt
+                        Import JSON
                     </button>
                     <button
                         type="button"
@@ -932,7 +969,7 @@ export default function ProductReviewManager() {
                     >
                         <div className="flex items-start justify-between gap-3 border-b border-primary/10 pb-4">
                             <div>
-                                <h2 className="text-xl font-black text-primary">Dán JSON đánh giá hàng loạt</h2>
+                                <h2 className="text-xl font-black text-primary">Import JSON đánh giá hàng loạt</h2>
                                 <p className="mt-1 text-sm text-stone-500">Hỗ trợ product_id, sku, slug hoặc product_name; mỗi đánh giá có thể kèm replies của admin.</p>
                             </div>
                             <button
@@ -980,7 +1017,11 @@ export default function ProductReviewManager() {
                                 </label>
                                 <button
                                     type="button"
-                                    onClick={() => setBulkPayload(BULK_IMPORT_SAMPLE)}
+                                    onClick={() => {
+                                        setBulkFile(null);
+                                        setBulkFileNotice('');
+                                        setBulkPayload(BULK_IMPORT_SAMPLE);
+                                    }}
                                     className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-primary/10 px-4 text-sm font-black text-primary"
                                 >
                                     <span className="material-symbols-outlined text-[18px]">data_object</span>
@@ -998,12 +1039,22 @@ export default function ProductReviewManager() {
                                 />
                             </label>
 
+                            {bulkFileNotice ? (
+                                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">
+                                    {bulkFileNotice}
+                                </div>
+                            ) : null}
+
                             <label className="grid gap-1 text-sm font-bold text-primary">
                                 JSON từ ChatGPT
                                 <textarea
-                                    required
+                                    required={!bulkFile}
                                     value={bulkPayload}
-                                    onChange={(event) => setBulkPayload(event.target.value)}
+                                    onChange={(event) => {
+                                        setBulkFile(null);
+                                        setBulkFileNotice('');
+                                        setBulkPayload(event.target.value);
+                                    }}
                                     rows={18}
                                     spellCheck={false}
                                     className="font-mono rounded-md border border-primary/10 px-3 py-3 text-xs font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"

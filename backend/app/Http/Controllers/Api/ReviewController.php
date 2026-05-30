@@ -28,6 +28,9 @@ class ReviewController extends Controller
         ProductReview::SOURCE_ADMIN_IMPORT,
         ProductReview::SOURCE_ADMIN_SAMPLE,
     ];
+    private const BULK_IMPORT_TEXT_MAX_CHARS = 10000000;
+    private const BULK_IMPORT_FILE_MAX_KB = 51200;
+    private const BULK_IMPORT_ROW_LIMIT = 10000;
 
     public function index(Request $request, $productId)
     {
@@ -358,7 +361,8 @@ class ReviewController extends Controller
     public function adminBulkImport(Request $request)
     {
         $validated = $request->validate([
-            'payload' => 'required|string|max:2000000',
+            'payload' => ['nullable', 'string', 'max:' . self::BULK_IMPORT_TEXT_MAX_CHARS, 'required_without:import_file'],
+            'import_file' => ['nullable', 'file', 'max:' . self::BULK_IMPORT_FILE_MAX_KB, 'required_without:payload'],
             'mode' => ['nullable', Rule::in(['append', 'replace'])],
             'default_status' => ['nullable', Rule::in([
                 ProductReview::STATUS_PENDING,
@@ -367,16 +371,23 @@ class ReviewController extends Controller
             ])],
         ]);
 
-        [$rows, $parseError] = $this->decodeBulkImportPayload((string) $validated['payload']);
+        [$payload, $payloadError] = $this->bulkImportPayloadFromRequest($request, $validated);
+        if ($payloadError) {
+            return response()->json([
+                'message' => $payloadError,
+            ], 422);
+        }
+
+        [$rows, $parseError] = $this->decodeBulkImportPayload($payload);
         if ($parseError) {
             return response()->json([
                 'message' => $parseError,
             ], 422);
         }
 
-        if (count($rows) > 1000) {
+        if (count($rows) > self::BULK_IMPORT_ROW_LIMIT) {
             return response()->json([
-                'message' => 'Má»—i láº§n chá»‰ nÃªn nháº­p tá»‘i Ä‘a 1000 Ä‘Ã¡nh giÃ¡.',
+                'message' => 'Mỗi lần chỉ nên nhập tối đa ' . self::BULK_IMPORT_ROW_LIMIT . ' đánh giá.',
             ], 422);
         }
 
@@ -690,9 +701,29 @@ class ReviewController extends Controller
         return $request->validate($rules);
     }
 
+    private function bulkImportPayloadFromRequest(Request $request, array $validated): array
+    {
+        $file = $request->file('import_file');
+        if ($file) {
+            if (!$file->isValid()) {
+                return ['', 'File JSON upload không hợp lệ.'];
+            }
+
+            $contents = @file_get_contents($file->getRealPath());
+            if ($contents === false || trim((string) $contents) === '') {
+                return ['', 'File JSON đang trống hoặc không đọc được.'];
+            }
+
+            return [(string) $contents, null];
+        }
+
+        return [(string) ($validated['payload'] ?? ''), null];
+    }
+
     private function decodeBulkImportPayload(string $payload): array
     {
         $payload = trim($payload);
+        $payload = preg_replace('/^\xEF\xBB\xBF/', '', $payload) ?? $payload;
         $payload = preg_replace('/^```(?:json)?\s*/i', '', $payload) ?? $payload;
         $payload = preg_replace('/\s*```$/', '', $payload) ?? $payload;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getWebProductReviews,
   likeWebProductReview,
@@ -91,6 +91,32 @@ function formatReviewDate(value) {
   }
 }
 
+function getReviewScrollOffset() {
+  if (typeof document === 'undefined') {
+    return 100;
+  }
+
+  const stickyHeader = document.querySelector('.mobile-sticky-header-shell');
+  const stickyHeaderHeight = Math.round(
+    stickyHeader?.getBoundingClientRect?.().height || stickyHeader?.offsetHeight || 0,
+  );
+
+  return stickyHeaderHeight > 0 ? stickyHeaderHeight + 12 : 100;
+}
+
+function scrollToReviewNode(targetNode, behavior = 'smooth') {
+  if (typeof window === 'undefined' || !targetNode) {
+    return;
+  }
+
+  const top = Math.max(
+    0,
+    Math.round(window.scrollY + targetNode.getBoundingClientRect().top - getReviewScrollOffset()),
+  );
+
+  window.scrollTo({ top, behavior });
+}
+
 const initialForm = {
   rating: 5,
   customer_name: '',
@@ -99,10 +125,15 @@ const initialForm = {
 
 export default function ProductReviews({ product }) {
   const productId = product?.id;
+  const reviewsSectionRef = useRef(null);
+  const reviewListAnchorRef = useRef(null);
+  const reviewListRef = useRef(null);
+  const pendingReviewListScrollRef = useRef(false);
   const [summary, setSummary] = useState(() => normalizeSummary(product));
   const [reviews, setReviews] = useState([]);
   const [reviewMeta, setReviewMeta] = useState({ current_page: 1, last_page: 1, total: 0 });
   const [loading, setLoading] = useState(true);
+  const [reviewListMinHeight, setReviewListMinHeight] = useState(0);
   const [activeRating, setActiveRating] = useState(0);
   const [reviewPage, setReviewPage] = useState(1);
   const [form, setForm] = useState(initialForm);
@@ -123,6 +154,21 @@ export default function ProductReviews({ product }) {
       },
     }));
   };
+
+  const scrollToReviewList = useCallback((behavior = 'smooth') => {
+    scrollToReviewNode(reviewListAnchorRef.current || reviewsSectionRef.current, behavior);
+  }, []);
+
+  const lockReviewListHeight = useCallback(() => {
+    const listHeight = Math.ceil(reviewListRef.current?.getBoundingClientRect?.().height || 0);
+    setReviewListMinHeight(listHeight > 0 ? listHeight : 0);
+  }, []);
+
+  const prepareReviewPageChange = useCallback(() => {
+    pendingReviewListScrollRef.current = true;
+    lockReviewListHeight();
+    scrollToReviewList('auto');
+  }, [lockReviewListHeight, scrollToReviewList]);
 
   const loadReviews = (page = reviewPage, rating = activeRating) => {
     if (!productId) {
@@ -156,6 +202,45 @@ export default function ProductReviews({ product }) {
     loadReviews(reviewPage, activeRating);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId, reviewPage, activeRating]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || loading || !pendingReviewListScrollRef.current) {
+      return undefined;
+    }
+
+    let timeoutId = null;
+    const frameId = window.requestAnimationFrame(() => {
+      timeoutId = window.setTimeout(() => {
+        scrollToReviewList('auto');
+        pendingReviewListScrollRef.current = false;
+        setReviewListMinHeight(0);
+      }, 0);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [loading, reviewMeta.current_page, reviews.length, scrollToReviewList]);
+
+  const goToReviewPage = useCallback((nextPage) => {
+    if (loading) {
+      return;
+    }
+
+    const lastPage = Math.max(1, Number(reviewMeta.last_page) || 1);
+    const targetPage = Math.max(1, Math.min(lastPage, Number(nextPage) || 1));
+
+    if (targetPage === reviewPage) {
+      return;
+    }
+
+    prepareReviewPageChange();
+    setLoading(true);
+    setReviewPage(targetPage);
+  }, [loading, prepareReviewPageChange, reviewMeta.last_page, reviewPage]);
 
   const submitReview = (event) => {
     event.preventDefault();
@@ -257,9 +342,10 @@ export default function ProductReviews({ product }) {
   };
 
   const totalReviews = summary.total_reviews || 0;
+  const reviewListStyle = reviewListMinHeight > 0 ? { minHeight: `${reviewListMinHeight}px` } : undefined;
 
   return (
-    <section id={REVIEW_SECTION_ID} className={styles.reviewsSection}>
+    <section ref={reviewsSectionRef} id={REVIEW_SECTION_ID} className={styles.reviewsSection}>
       <div className={styles.reviewsPanel}>
         <div className={styles.reviewsHeader}>
           <div>
@@ -371,7 +457,8 @@ export default function ProductReviews({ product }) {
           ))}
         </div>
 
-        <div className={styles.reviewList}>
+        <div ref={reviewListAnchorRef} aria-hidden="true" />
+        <div ref={reviewListRef} className={styles.reviewList} style={reviewListStyle}>
           {loading ? (
             <p className={styles.reviewEmpty}>Đang tải đánh giá...</p>
           ) : reviews.length === 0 ? (
@@ -464,7 +551,10 @@ export default function ProductReviews({ product }) {
             <button
               type="button"
               disabled={reviewMeta.current_page <= 1 || loading}
-              onClick={() => setReviewPage((current) => Math.max(1, current - 1))}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                goToReviewPage(reviewMeta.current_page - 1);
+              }}
             >
               Trước
             </button>
@@ -472,7 +562,10 @@ export default function ProductReviews({ product }) {
             <button
               type="button"
               disabled={reviewMeta.current_page >= reviewMeta.last_page || loading}
-              onClick={() => setReviewPage((current) => Math.min(reviewMeta.last_page, current + 1))}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                goToReviewPage(reviewMeta.current_page + 1);
+              }}
             >
               Sau
             </button>

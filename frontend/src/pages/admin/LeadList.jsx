@@ -915,7 +915,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
                 onScroll={handleLeadTableBodyScroll}
                 className="lead-table-scrollbar min-h-0 flex-1 overflow-auto border-x border-b border-primary/10 bg-white"
             >
-                <table className="min-h-full table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                <table className="table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                     {renderLeadTableColGroup()}
                     <tbody>
                         {loading && leads.length === 0 ? (
@@ -1007,7 +1007,7 @@ const ProductCell = ({ lead, expandedBundleIds, onToggleBundle }) => {
 
     const renderLeadTable = () => (
         <div className="lead-table-scrollbar relative min-h-0 flex-1 overflow-auto">
-            <table className="min-h-full table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+            <table className="table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                 <thead>
                     <tr className="lead-table-head text-left shadow-sm">
                         {renderedColumns.map((column, index) => (
@@ -3173,7 +3173,7 @@ const LeadList = () => {
                 onScroll={handleLeadTableBodyScroll}
                 className="lead-table-scrollbar min-h-0 flex-1 overflow-auto border-x border-b border-primary/10 bg-white"
             >
-                <table className="min-h-full table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+                <table className="table-fixed border-collapse bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                     {renderLeadTableColGroupActive()}
                     <tbody>
                         {loading && leads.length === 0 ? (
@@ -3245,7 +3245,7 @@ const LeadList = () => {
 
     const renderLeadTable = () => (
         <div className="lead-table-scrollbar relative min-h-0 flex-1 overflow-x-auto overflow-y-visible">
-            <table className="min-h-full table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
+            <table className="table-fixed border-collapse border border-primary/10 bg-white" style={{ width: `${leadTableWidth}px`, minWidth: '100%' }}>
                 <thead>
                     <tr className="lead-table-head text-left shadow-sm">
                         {renderedColumns.map((column, index) => (

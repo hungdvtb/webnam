@@ -9,6 +9,10 @@ use Illuminate\Support\Facades\Log;
 
 class FacebookAdsSyncService
 {
+    private const INSIGHTS_PAGE_LIMIT = 500;
+
+    private const MAX_INSIGHTS_PAGES = 50;
+
     private function configuredAdAccounts(FinDailyReportConfig $config): array
     {
         $tokenConfigs = [];
@@ -88,6 +92,55 @@ class FacebookAdsSyncService
             ->all();
     }
 
+    public function fetchDailyInsights(string $adAccountId, string $token, string $startDate, string $endDate, string $fields = 'spend'): array
+    {
+        $endpoint = "https://graph.facebook.com/v20.0/{$adAccountId}/insights";
+        $params = [
+            'access_token' => $token,
+            'time_range' => json_encode(['since' => $startDate, 'until' => $endDate]),
+            'time_increment' => 1,
+            'fields' => $fields,
+            'limit' => self::INSIGHTS_PAGE_LIMIT,
+        ];
+
+        $data = [];
+        $nextUrl = null;
+
+        for ($page = 0; $page < self::MAX_INSIGHTS_PAGES; $page++) {
+            $response = $nextUrl
+                ? Http::withoutVerifying()->get($nextUrl)
+                : Http::withoutVerifying()->get($endpoint, $params);
+
+            if (!$response->successful()) {
+                return [
+                    'successful' => false,
+                    'data' => $data,
+                    'error' => $response->body(),
+                ];
+            }
+
+            $pageData = $response->json('data') ?? [];
+            if (is_array($pageData) && $pageData !== []) {
+                $data = array_merge($data, $pageData);
+            }
+
+            $nextUrl = $response->json('paging.next');
+            if (!$nextUrl) {
+                return [
+                    'successful' => true,
+                    'data' => $data,
+                    'error' => null,
+                ];
+            }
+        }
+
+        return [
+            'successful' => false,
+            'data' => $data,
+            'error' => 'Facebook insights pagination exceeded the configured page limit.',
+        ];
+    }
+
     public function syncRange(string $startDate, string $endDate)
     {
         $config = FinDailyReportConfig::first();
@@ -134,17 +187,12 @@ class FacebookAdsSyncService
             $storageAccountId = $accountConfig['storage_account_id'];
 
             try {
-                $response = Http::withoutVerifying()->get("https://graph.facebook.com/v20.0/{$adAccountId}/insights", [
-                    'access_token' => $token,
-                    'time_range' => json_encode(['since' => $minFetchDate, 'until' => $maxFetchDate]),
-                    'time_increment' => 1,
-                    'fields' => 'spend',
-                ]);
+                $response = $this->fetchDailyInsights($adAccountId, $token, $minFetchDate, $maxFetchDate);
 
-                if ($response->successful()) {
+                if ($response['successful']) {
                     $successfulRequestCount++;
                     $dailyAmounts = array_fill_keys($datesToFetch, 0.0);
-                    $data = $response->json('data') ?? [];
+                    $data = $response['data'] ?? [];
                     foreach ($data as $dayData) {
                         $dateStr = $dayData['date_start'] ?? null;
                         if ($dateStr && isset($dailyAmounts[$dateStr])) {
@@ -163,7 +211,7 @@ class FacebookAdsSyncService
                         );
                     }
                 } else {
-                    Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $this->sanitizeForLog($response->body(), [$token]));
+                    Log::error("Facebook Ads Sync Error for {$adAccountId}: " . $this->sanitizeForLog($response['error'] ?? '', [$token]));
                 }
             } catch (\Exception $e) {
                 Log::error("Facebook Ads Sync Exception: " . $this->sanitizeForLog($e->getMessage(), [$token]));

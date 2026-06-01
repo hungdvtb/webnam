@@ -79,4 +79,41 @@ class FacebookAdsSyncServiceTest extends TestCase
         $this->assertSame(1500.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-01')->whereNull('account_id')->value('amount'));
         $this->assertSame(0.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-04-02')->whereNull('account_id')->value('amount'));
     }
+
+    public function test_sync_range_reads_paginated_insights_before_writing_zeroes(): void
+    {
+        FinDailyReportConfig::query()->create([
+            'fb_access_token' => 'token-1',
+            'fb_ad_account_ids' => 'act_123',
+        ]);
+
+        Http::fake([
+            'graph.facebook.com/*' => Http::sequence()
+                ->push([
+                    'data' => [
+                        [
+                            'date_start' => '2026-05-01',
+                            'spend' => '100',
+                        ],
+                    ],
+                    'paging' => [
+                        'next' => 'https://graph.facebook.com/v20.0/act_123/insights?after=page-2',
+                    ],
+                ], 200)
+                ->push([
+                    'data' => [
+                        [
+                            'date_start' => '2026-05-30',
+                            'spend' => '768574',
+                        ],
+                    ],
+                ], 200),
+        ]);
+
+        $result = app(FacebookAdsSyncService::class)->syncRange('2026-05-01', '2026-05-31');
+
+        $this->assertTrue($result);
+        $this->assertSame(768574.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-05-30')->where('account_id', 123)->value('amount'));
+        $this->assertSame(768574.0, (float) DailyAdsSpend::query()->whereDate('date', '2026-05-30')->whereNull('account_id')->value('amount'));
+    }
 }

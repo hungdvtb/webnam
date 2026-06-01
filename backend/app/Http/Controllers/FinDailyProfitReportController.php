@@ -1613,7 +1613,8 @@ class FinDailyProfitReportController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Access Token']);
         }
 
-        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
+        $facebookAdsSyncService = app(FacebookAdsSyncService::class);
+        $facebookAdsSyncService->syncRange($startDate, $endDate);
 
         $taxRate = (float) ($config->fb_tax_rate ?: 0);
 
@@ -1675,18 +1676,16 @@ class FinDailyProfitReportController extends Controller
                         }
                     }
 
-                    $response = \Illuminate\Support\Facades\Http::withoutVerifying()->get(
-                        "https://graph.facebook.com/v20.0/{$adAccountId}/insights",
-                        [
-                            'access_token' => $token,
-                            'time_range' => json_encode(['since' => $startDate, 'until' => $endDate]),
-                            'time_increment' => 1,
-                            'fields' => 'spend,account_name',
-                        ]
+                    $response = $facebookAdsSyncService->fetchDailyInsights(
+                        $adAccountId,
+                        $token,
+                        $startDate,
+                        $endDate,
+                        'spend,account_name'
                     );
 
-                    if ($response->successful()) {
-                        $data = $response->json('data');
+                    if ($response['successful']) {
+                        $data = $response['data'] ?? [];
 
                         if (!empty($data) && isset($data[0]['account_name'])) {
                             $accountsInfo[$adAccountId]['account_name'] = $data[0]['account_name'];

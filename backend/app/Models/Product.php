@@ -10,6 +10,8 @@ class Product extends Model
 {
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
+    protected static array $schemaColumnCache = [];
+
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
@@ -45,6 +47,17 @@ class Product extends Model
 
     protected $appends = ['average_rating', 'current_price', 'main_image', 'primary_image', 'inventory_display_cost', 'inventory_cost_source'];
 
+    protected static function tableHasColumnCached(string $table, string $column): bool
+    {
+        $cacheKey = "{$table}.{$column}";
+
+        if (!array_key_exists($cacheKey, self::$schemaColumnCache)) {
+            self::$schemaColumnCache[$cacheKey] = Schema::hasColumn($table, $column);
+        }
+
+        return self::$schemaColumnCache[$cacheKey];
+    }
+
     public function reviews()
     {
         return $this->hasMany(ProductReview::class);
@@ -60,11 +73,31 @@ class Product extends Model
 
     public function getAverageRatingAttribute()
     {
+        foreach (['average_rating', 'approved_reviews_avg_rating'] as $attribute) {
+            if (array_key_exists($attribute, $this->attributes)) {
+                return (float) ($this->attributes[$attribute] ?? 0);
+            }
+        }
+
+        if ($this->relationLoaded('approvedReviews')) {
+            return (float) ($this->approvedReviews->avg('rating') ?: 0);
+        }
+
         return $this->approvedReviews()->avg('rating') ?: 0;
     }
 
     public function getReviewCountAttribute()
     {
+        foreach (['review_count', 'approved_reviews_count'] as $attribute) {
+            if (array_key_exists($attribute, $this->attributes)) {
+                return (int) ($this->attributes[$attribute] ?? 0);
+            }
+        }
+
+        if ($this->relationLoaded('approvedReviews')) {
+            return $this->approvedReviews->count();
+        }
+
         return $this->approvedReviews()->count();
     }
 
@@ -200,7 +233,7 @@ class Product extends Model
     {
         $pivotColumns = ['sort_order', 'item_type', 'bundle_option_key'];
 
-        if (Schema::hasColumn('category_product', 'bundle_option_uid')) {
+        if (self::tableHasColumnCached('category_product', 'bundle_option_uid')) {
             $pivotColumns[] = 'bundle_option_uid';
         }
 
@@ -215,7 +248,7 @@ class Product extends Model
     protected function productLinksPivotColumns(array $columns): array
     {
         foreach (['bundle_option_uid', 'bundle_option_status'] as $optionalColumn) {
-            if (Schema::hasColumn('product_links', $optionalColumn) && !in_array($optionalColumn, $columns, true)) {
+            if (self::tableHasColumnCached('product_links', $optionalColumn) && !in_array($optionalColumn, $columns, true)) {
                 $columns[] = $optionalColumn;
             }
         }

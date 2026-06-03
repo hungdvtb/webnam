@@ -50,6 +50,14 @@ use Illuminate\Validation\ValidationException;
 class OrderController extends Controller
 {
     private const BOOTSTRAP_CACHE_TTL_SECONDS = 15;
+    private const ORDER_LIST_HIDDEN_PRODUCT_APPENDS = [
+        'average_rating',
+        'current_price',
+        'main_image',
+        'primary_image',
+        'inventory_display_cost',
+        'inventory_cost_source',
+    ];
     private const ORDER_NUMBER_SEQUENCE_START = 10000;
     private const ORDER_NUMBER_LOCK_WAIT_SECONDS = 10;
     private const ORDER_NUMBER_RETRY_ATTEMPTS = 5;
@@ -1421,13 +1429,13 @@ class OrderController extends Controller
 
     private function orderTableHasColumn(string $column): bool
     {
-        static $columnCache = [];
+        static $columnCache = null;
 
-        if (!array_key_exists($column, $columnCache)) {
-            $columnCache[$column] = Schema::hasColumn('orders', $column);
+        if ($columnCache === null) {
+            $columnCache = array_fill_keys(Schema::getColumnListing('orders'), true);
         }
 
-        return $columnCache[$column];
+        return isset($columnCache[$column]);
     }
 
     private function orderSupplementItemsTableExists(): bool
@@ -3686,6 +3694,26 @@ class OrderController extends Controller
         ];
     }
 
+    private function trimOrderListProductPayload(Order $order): void
+    {
+        if (!$order->relationLoaded('items')) {
+            return;
+        }
+
+        $order->items->each(function (OrderItem $item): void {
+            foreach (['product', 'actualProduct'] as $relation) {
+                if (!$item->relationLoaded($relation)) {
+                    continue;
+                }
+
+                $product = $item->getRelation($relation);
+                if ($product instanceof Product) {
+                    $product->makeHidden(self::ORDER_LIST_HIDDEN_PRODUCT_APPENDS);
+                }
+            }
+        });
+    }
+
     private function transformOrderListItems(Collection $orders, int $accountId): Collection
     {
         $repeatMetaMap = $this->repeatCustomerPhoneService->buildOrderMeta($orders, $accountId);
@@ -3695,6 +3723,7 @@ class OrderController extends Controller
 
         return $orders->map(function (Order $order) use ($repeatMetaMap, $inventorySlipSummaryMap, $nameAttributeIds, $phoneAttributeIds) {
             $this->attachResolvedInternalShippingFee($order);
+            $this->trimOrderListProductPayload($order);
             $payload = $order->toArray();
             $payload['source'] = $this->normalizeOrderSourceValue($order->source);
             $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
@@ -4110,7 +4139,7 @@ class OrderController extends Controller
             ->where('account_id', $accountId)
             ->whereIn('id', $productIds)
             ->with([
-                'images:id,product_id,image_url,is_primary,sort_order',
+                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'attributeValues:id,product_id,attribute_id,value',
                 'unit:id,name',
             ])

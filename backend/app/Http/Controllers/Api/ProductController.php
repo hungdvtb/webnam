@@ -42,6 +42,21 @@ class ProductController extends Controller
     private const PRODUCT_DETAIL_PATH = '/san-pham';
     private const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
     private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
+    private const ADMIN_PRODUCT_LIST_HIDDEN_PRODUCT_APPENDS = [
+        'average_rating',
+        'main_image',
+        'primary_image',
+    ];
+    private const ADMIN_PRODUCT_LIST_HIDDEN_IMAGE_APPENDS = [
+        'thumbnail_url',
+        'medium_url',
+        'large_url',
+        'width',
+        'height',
+        'srcset',
+        'mediaAsset',
+        'media_asset',
+    ];
 
     private function normalizeBundleOptionStatus($value): string
     {
@@ -3040,7 +3055,7 @@ class ProductController extends Controller
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
-            'images:id,product_id,image_url,is_primary,sort_order,file_name,file_size',
+            'images:id,product_id,media_asset_id,image_url,is_primary,sort_order,file_name,file_size',
             'superAttributes:' . $attributeResourceColumns,
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
             'attributeValues:id,product_id,attribute_id,value',
@@ -3050,7 +3065,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'is_default'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary,sort_order',
+                        'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
@@ -3060,7 +3075,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary,sort_order',
+                        'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
@@ -3070,7 +3085,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'images:id,product_id,image_url,is_primary,sort_order',
+                        'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
@@ -3112,6 +3127,53 @@ class ProductController extends Controller
         $this->appendAdditionalInfoPostMeta($product);
 
         return $this->appendBundleOptionPostMeta($product);
+    }
+
+    protected function trimAdminProductListPayload(Product $product): Product
+    {
+        $visited = [];
+        $this->hideAdminProductListComputedFields($product, $visited);
+
+        return $product;
+    }
+
+    protected function hideAdminProductListComputedFields(Product $product, array &$visited): void
+    {
+        $objectId = spl_object_id($product);
+        if (isset($visited[$objectId])) {
+            return;
+        }
+
+        $visited[$objectId] = true;
+        $product->makeHidden(self::ADMIN_PRODUCT_LIST_HIDDEN_PRODUCT_APPENDS);
+
+        if ($product->relationLoaded('images')) {
+            $product->images->each(function ($image): void {
+                if ($image instanceof ProductImage) {
+                    $image->makeHidden(self::ADMIN_PRODUCT_LIST_HIDDEN_IMAGE_APPENDS);
+                }
+            });
+        }
+
+        foreach (['parentConfigurable', 'variations', 'groupedItems', 'bundleItems', 'linkedProducts', 'parentProducts'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $related = $product->getRelation($relation);
+            if ($related instanceof Product) {
+                $this->hideAdminProductListComputedFields($related, $visited);
+                continue;
+            }
+
+            if ($related instanceof Collection) {
+                $related->each(function ($item) use (&$visited): void {
+                    if ($item instanceof Product) {
+                        $this->hideAdminProductListComputedFields($item, $visited);
+                    }
+                });
+            }
+        }
     }
 
     protected function appendAdditionalInfoPostMeta(Product $product): Product
@@ -5637,7 +5699,7 @@ class ProductController extends Controller
                 'parentConfigurable:id,name,sku,type',
                 'unit:id,name',
                 'siteDomain:id,domain',
-                'images:id,product_id,image_url,is_primary,sort_order',
+                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'attributeValues:id,product_id,attribute_id,value',
                 'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
@@ -5649,21 +5711,21 @@ class ProductController extends Controller
                 'variations.attributeValues:id,product_id,attribute_id,value',
                 'variations.attributeValues.attribute:id,name,code,frontend_type',
                 'variations.unit:id,name',
-                'variations.images:id,product_id,image_url,is_primary,sort_order',
+                'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
                 'groupedItems.category:id,name,code,slug',
                 'groupedItems.categories:id,name,code,slug',
                 'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
-                'groupedItems.images:id,product_id,image_url,is_primary,sort_order',
+                'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
                 'bundleItems.category:id,name,code,slug',
                 'bundleItems.categories:id,name,code,slug',
                 'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
-                'bundleItems.images:id,product_id,image_url,is_primary,sort_order'
+                'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order'
             ]);
 
         $stockContext = $this->attachActualStockSubqueries($query, $request);
@@ -5748,7 +5810,7 @@ class ProductController extends Controller
             ->with([
                 'category:id,name',
                 'categories:id,name',
-                'images:id,product_id,image_url,is_primary,sort_order',
+                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             ])
             ->orderBy('products.sort_order')
             ->orderByDesc('products.id')
@@ -6033,7 +6095,7 @@ class ProductController extends Controller
 
         $query->with([
             'unit:id,name',
-            'images:id,product_id,image_url,is_primary,sort_order',
+            'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                 ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id')
@@ -6044,18 +6106,18 @@ class ProductController extends Controller
             },
             'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
-            'variations.images:id,product_id,image_url,is_primary,sort_order',
+            'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id',
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
-            'bundleItems.images:id,product_id,image_url,is_primary,sort_order',
+            'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'bundleItems.variations' => function ($variationQuery) use ($pickerAttributeFilters) {
                 $variationQuery->where('products.status', true);
                 $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
             },
             'bundleItems.variations.unit:id,name',
             'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
-            'bundleItems.variations.images:id,product_id,image_url,is_primary,sort_order',
+            'bundleItems.variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
         ]);
 
         if ($searchRankingSql !== null) {
@@ -6685,7 +6747,7 @@ class ProductController extends Controller
             $paginatedMatches->setCollection(
                 $products->map(function (Product $product) use ($stockMap) {
                     return $this->syncProductStocksFromInventory(
-                        $this->appendSupplierMeta($product),
+                        $this->trimAdminProductListPayload($this->appendSupplierMeta($product)),
                         $stockMap
                     );
                 })
@@ -6753,7 +6815,7 @@ class ProductController extends Controller
         $paginated->setCollection(
             $paginated->getCollection()->map(function (Product $product) use ($stockMap) {
                 return $this->syncProductStocksFromInventory(
-                    $this->appendSupplierMeta($product),
+                    $this->trimAdminProductListPayload($this->appendSupplierMeta($product)),
                     $stockMap
                 );
             })

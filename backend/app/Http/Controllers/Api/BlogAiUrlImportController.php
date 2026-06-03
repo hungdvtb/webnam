@@ -5,14 +5,15 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\BlogAiBulkJob;
-use App\Services\BlogAi\BlogAiBulkGenerationService;
+use App\Models\BlogAiUrlImportItem;
+use App\Services\BlogAi\BlogAiUrlImportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
-class BlogAiBulkController extends Controller
+class BlogAiUrlImportController extends Controller
 {
     public function __construct(
-        private readonly BlogAiBulkGenerationService $generationService,
+        private readonly BlogAiUrlImportService $urlImportService,
     ) {
     }
 
@@ -20,25 +21,14 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            return response()->json(['error' => 'Thiếu Account ID.'], 400);
+            return response()->json(['error' => 'Thieu Account ID.'], 400);
         }
 
         $limit = max(min((int) $request->query('limit', 5), 20), 1);
 
-        $sourceType = trim((string) $request->query('source_type', ''));
-        $jobsQuery = BlogAiBulkJob::query()
-            ->where('account_id', $accountId);
-
-        if ($sourceType === 'keyword_excel') {
-            $jobsQuery->where(function ($query) {
-                $query->whereNull('metadata->source_type')
-                    ->orWhere('metadata->source_type', 'keyword_excel');
-            });
-        } elseif ($sourceType !== '') {
-            $jobsQuery->where('metadata->source_type', $sourceType);
-        }
-
-        $jobs = $jobsQuery
+        $jobs = BlogAiBulkJob::query()
+            ->where('account_id', $accountId)
+            ->where('metadata->source_type', BlogAiUrlImportService::SOURCE_TYPE)
             ->latest('id')
             ->limit($limit)
             ->get();
@@ -52,19 +42,21 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            return response()->json(['error' => 'Thiếu Account ID.'], 400);
+            return response()->json(['error' => 'Thieu Account ID.'], 400);
         }
 
         $validated = $request->validate([
-            'file' => 'required|file|max:10240|mimes:xlsx,csv,txt',
-            'requested_post_count' => 'nullable|integer|min:1|max:500',
+            'source_url' => 'required|string|max:500',
+            'max_ai_requests' => 'nullable|integer|min:1|max:200',
+            'max_archive_pages' => 'nullable|integer|min:1|max:300',
         ]);
 
-        $job = $this->generationService->createJobFromUpload(
+        $job = $this->urlImportService->createJobFromUrl(
             $accountId,
-            $validated['file'],
+            $validated['source_url'],
             auth()->id(),
-            isset($validated['requested_post_count']) ? (int) $validated['requested_post_count'] : null
+            isset($validated['max_ai_requests']) ? (int) $validated['max_ai_requests'] : null,
+            isset($validated['max_archive_pages']) ? (int) $validated['max_archive_pages'] : null,
         );
 
         return response()->json([
@@ -84,7 +76,41 @@ class BlogAiBulkController extends Controller
     public function run(Request $request, int $jobId): JsonResponse
     {
         $job = $this->resolveJob($request, $jobId);
-        $job = $this->generationService->run($job);
+        $result = $this->urlImportService->processNextItem($job);
+
+        return response()->json([
+            'data' => $this->mapJob($result['job'], true),
+            'item' => $result['item'] ? $this->mapItem($result['item']) : null,
+            'done' => (bool) ($result['done'] ?? false),
+            'paused' => (bool) ($result['paused'] ?? false),
+            'message' => $result['message'] ?? null,
+        ]);
+    }
+
+    public function scan(Request $request, int $jobId): JsonResponse
+    {
+        $job = $this->resolveJob($request, $jobId);
+        $job = $this->urlImportService->scan($job);
+
+        return response()->json([
+            'data' => $this->mapJob($job, true),
+        ]);
+    }
+
+    public function pause(Request $request, int $jobId): JsonResponse
+    {
+        $job = $this->resolveJob($request, $jobId);
+        $job = $this->urlImportService->pause($job);
+
+        return response()->json([
+            'data' => $this->mapJob($job, true),
+        ]);
+    }
+
+    public function resetFailed(Request $request, int $jobId): JsonResponse
+    {
+        $job = $this->resolveJob($request, $jobId);
+        $job = $this->urlImportService->resetFailedItems($job);
 
         return response()->json([
             'data' => $this->mapJob($job, true),
@@ -95,11 +121,12 @@ class BlogAiBulkController extends Controller
     {
         $accountId = $this->resolveAccountId($request);
         if (!$accountId) {
-            abort(400, 'Thiếu Account ID.');
+            abort(400, 'Thieu Account ID.');
         }
 
         return BlogAiBulkJob::query()
             ->where('account_id', $accountId)
+            ->where('metadata->source_type', BlogAiUrlImportService::SOURCE_TYPE)
             ->whereKey($jobId)
             ->firstOrFail();
     }
@@ -107,11 +134,15 @@ class BlogAiBulkController extends Controller
     private function mapJob(BlogAiBulkJob $job, bool $withLogs = false): array
     {
         $job->refresh();
+        $metadata = $job->metadata ?? [];
+        $summary = $job->summary ?? [];
 
         $payload = [
             'id' => $job->id,
             'status' => $job->status,
             'source_filename' => $job->source_filename,
+            'source_url' => $metadata['source_url'] ?? $job->source_path,
+            'source_type' => $metadata['source_type'] ?? null,
             'total_keywords' => (int) $job->total_keywords,
             'unique_keywords' => (int) $job->unique_keywords,
             'cluster_count' => (int) $job->cluster_count,
@@ -119,13 +150,12 @@ class BlogAiBulkController extends Controller
             'categories_created' => (int) $job->categories_created,
             'posts_created' => (int) $job->posts_created,
             'posts_failed' => (int) $job->posts_failed,
+            'posts_updated' => (int) ($summary['posts_updated'] ?? 0),
             'ai_model' => $job->ai_model,
-            'requested_post_count' => isset($job->metadata['requested_post_count'])
-                ? (int) $job->metadata['requested_post_count']
-                : null,
-            'summary' => $job->summary ?? [],
+            'max_ai_requests' => isset($metadata['max_ai_requests']) ? (int) $metadata['max_ai_requests'] : null,
+            'summary' => $summary,
             'errors' => $job->errors ?? [],
-            'metadata' => $job->metadata ?? [],
+            'metadata' => $metadata,
             'started_at' => $job->started_at?->toIso8601String(),
             'finished_at' => $job->finished_at?->toIso8601String(),
             'created_at' => $job->created_at?->toIso8601String(),
@@ -136,7 +166,14 @@ class BlogAiBulkController extends Controller
             return $payload;
         }
 
-        $logs = $job->logs()
+        $payload['items'] = $job->urlImportItems()
+            ->limit(1000)
+            ->get()
+            ->map(fn (BlogAiUrlImportItem $item) => $this->mapItem($item))
+            ->values()
+            ->all();
+
+        $payload['logs'] = $job->logs()
             ->latest('id')
             ->limit(200)
             ->get()
@@ -152,9 +189,26 @@ class BlogAiBulkController extends Controller
             ])
             ->all();
 
-        $payload['logs'] = $logs;
-
         return $payload;
+    }
+
+    private function mapItem(BlogAiUrlImportItem $item): array
+    {
+        return [
+            'id' => $item->id,
+            'position' => (int) $item->position,
+            'source_url' => $item->source_url,
+            'source_title' => $item->source_title,
+            'status' => $item->status,
+            'post_id' => $item->post_id ? (int) $item->post_id : null,
+            'generated_title' => $item->generated_title,
+            'last_model' => $item->last_model,
+            'last_error' => $item->last_error,
+            'started_at' => $item->started_at?->toIso8601String(),
+            'finished_at' => $item->finished_at?->toIso8601String(),
+            'created_at' => $item->created_at?->toIso8601String(),
+            'updated_at' => $item->updated_at?->toIso8601String(),
+        ];
     }
 
     private function resolveAccountId(Request $request): ?int

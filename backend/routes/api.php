@@ -479,6 +479,14 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
         Route::post('/blog/ai-bulk/jobs', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'store']);
         Route::get('/blog/ai-bulk/jobs/{jobId}', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'show'])->whereNumber('jobId');
         Route::post('/blog/ai-bulk/jobs/{jobId}/run', [\App\Http\Controllers\Api\BlogAiBulkController::class , 'run'])->whereNumber('jobId');
+        Route::get('/blog/ai-url/jobs', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'index']);
+        Route::post('/blog/ai-url/jobs', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'store']);
+        Route::get('/blog/ai-url/jobs/{jobId}', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'show'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/run', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'run'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/scan', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'scan'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/process-next', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'run'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/pause', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'pause'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/reset-failed', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'resetFailed'])->whereNumber('jobId');
         Route::post('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'storeCategory']);
         Route::put('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'updateCategory']);
         Route::delete('/blog/categories/{id}', [\App\Http\Controllers\Api\BlogController::class , 'destroyCategory']);

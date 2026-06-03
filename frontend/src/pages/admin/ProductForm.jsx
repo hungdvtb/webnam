@@ -3280,7 +3280,7 @@ const ProductForm = () => {
         }
 
         try {
-            const response = await productApi.getOne(normalizedProductId);
+            const response = await productApi.getOne(normalizedProductId, { context: 'edit' });
             const variants = (response.data.linked_products || []).filter((product) => (
                 product.pivot?.link_type === 'super_link'
                 && normalizeVariantStatus(product.status, true)
@@ -3351,7 +3351,7 @@ const ProductForm = () => {
             }
 
             try {
-                const response = await productApi.getOne(productId);
+                const response = await productApi.getOne(productId, { context: 'edit' });
                 const product = response.data || {};
                 productTypes[productId] = product.type || '';
 
@@ -4763,7 +4763,7 @@ const ProductForm = () => {
 
     const fetchProduct = async () => {
         try {
-            const response = await productApi.getOne(id);
+            const response = await productApi.getOne(id, { context: 'edit' });
             const data = response.data;
             const duplicateName = isDuplicate ? `${data.name || ''} (Copy)` : (data.name || '');
             const duplicateParentSku = isDuplicate
@@ -7057,7 +7057,7 @@ const ProductForm = () => {
 
             await Promise.all(productIds.map(async (pId) => {
                 try {
-                    const res = await productApi.getOne(pId);
+                    const res = await productApi.getOne(pId, { context: 'edit' });
                     const product = res.data;
                     const primaryImage = resolveBundleItemImage(product);
 
@@ -7509,7 +7509,7 @@ const ProductForm = () => {
                 let persistedImages = Array.isArray(response.data?.images) ? response.data.images : [];
                 if (persistedImages.length === 0 && productId) {
                     try {
-                        const refreshedProduct = await productApi.getOne(productId);
+                        const refreshedProduct = await productApi.getOne(productId, { context: 'edit' });
                         persistedImages = Array.isArray(refreshedProduct.data?.images) ? refreshedProduct.data.images : [];
                     } catch (refreshError) {
                         console.error('Unable to refresh product images after save:', refreshError);

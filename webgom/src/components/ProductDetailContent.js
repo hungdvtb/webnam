@@ -29,6 +29,8 @@ const FALLBACK_PRODUCT_IMAGE = 'https://placehold.co/800';
 const MOBILE_BOTTOM_ORDER_OFFSET = 96;
 const BUNDLE_DETAIL_SCROLL_REQUEST_EVENT = 'webgom:bundle-detail-scroll-request';
 const VARIANT_SELECTION_REQUIRED_MESSAGE = 'Vui lòng chọn mẫu/size trước khi đặt hàng';
+const VARIANT_SELECTION_INVALID_MESSAGE = 'Tổ hợp thuộc tính hiện tại chưa hợp lệ. Vui lòng chọn lại trước khi đặt hàng.';
+const FALLBACK_VARIANT_ATTRIBUTE_LABEL = 'phân loại';
 
 const getMobileScrollOffset = () => {
   if (typeof document === 'undefined') {
@@ -103,6 +105,60 @@ const scrollToBundleSelectionArea = (targetNode) => {
 
   window.scrollTo({ top: targetTop, behavior: 'smooth' });
 
+  return true;
+};
+
+const getVariantSelectionScrollOffset = () => {
+  if (typeof window === 'undefined') {
+    return 80;
+  }
+
+  const isCompactViewport = window.matchMedia?.('(max-width: 768px)')?.matches;
+  return isCompactViewport ? getMobileScrollOffset() : 96;
+};
+
+const getVariantAttributeLabel = (attribute = {}) => {
+  return String(
+    attribute?.name
+    || attribute?.label
+    || attribute?.admin_name
+    || attribute?.code
+    || FALLBACK_VARIANT_ATTRIBUTE_LABEL
+  ).trim();
+};
+
+const buildVariantMissingSelectionMessage = (missingAttributes = []) => {
+  const missingNames = missingAttributes
+    .map(getVariantAttributeLabel)
+    .filter(Boolean);
+
+  if (missingNames.length === 0) {
+    return '';
+  }
+
+  return `Vui lòng chọn ${missingNames.join(', ')}`;
+};
+
+const getVariantAttributeNode = (attributeCode) => {
+  if (typeof document === 'undefined' || !attributeCode) {
+    return null;
+  }
+
+  return Array.from(document.querySelectorAll('[data-variant-attribute-code]'))
+    .find((node) => node.dataset.variantAttributeCode === String(attributeCode)) || null;
+};
+
+const scrollToVariantSelectionTarget = (targetNode) => {
+  if (typeof window === 'undefined' || !targetNode) {
+    return false;
+  }
+
+  const targetTop = Math.max(
+    0,
+    Math.round(window.scrollY + targetNode.getBoundingClientRect().top - getVariantSelectionScrollOffset())
+  );
+
+  window.scrollTo({ top: targetTop, behavior: 'smooth' });
   return true;
 };
 
@@ -395,6 +451,7 @@ export default function ProductDetailContent({
   const [hasExplicitVariantSelection, setHasExplicitVariantSelection] = useState(false);
   const [hasCustomerSelectedVariantMedia, setHasCustomerSelectedVariantMedia] = useState(false);
   const [variantSelectionNotice, setVariantSelectionNotice] = useState('');
+  const [missingVariantAttributeCodes, setMissingVariantAttributeCodes] = useState([]);
   const [selectedGroupItems, setSelectedGroupItems] = useState([]);
   const [bundleItems, setBundleItems] = useState(initialBundleSelectionState.bundleItems);
   const [activeBundleConfig, setActiveBundleConfig] = useState(initialBundleSelectionState.activeBundleConfig);
@@ -456,6 +513,7 @@ export default function ProductDetailContent({
     setHasExplicitVariantSelection(Boolean(requestedVariant?.id));
     setHasCustomerSelectedVariantMedia(false);
     setVariantSelectionNotice('');
+    setMissingVariantAttributeCodes([]);
 
     if (product?.type === 'grouped' && product.grouped_items?.length > 0) {
       setSelectedGroupItems(product.grouped_items.map(item => item.id));
@@ -582,6 +640,37 @@ export default function ProductDetailContent({
 
     return hasMultipleAttributeChoices || (product?.variations?.length || 0) > 1;
   }, [hasStructuredVariantAttributes, hasVariants, product]);
+
+  const getMissingVariantAttributesForOptions = (options = selectedOptions) => {
+    if (!hasVariants || !hasStructuredVariantAttributes) {
+      return [];
+    }
+
+    return (product?.super_attributes || []).filter((attr) => (
+      attr?.code && !options?.[attr.code]
+    ));
+  };
+
+  const setMissingVariantSelectionFeedback = (missingAttributes = []) => {
+    setMissingVariantAttributeCodes(
+      missingAttributes
+        .map((attr) => attr?.code)
+        .filter(Boolean)
+    );
+    setVariantSelectionNotice(buildVariantMissingSelectionMessage(missingAttributes));
+  };
+
+  const clearVariantSelectionFeedback = () => {
+    setMissingVariantAttributeCodes([]);
+    setVariantSelectionNotice('');
+  };
+
+  const scrollToFirstMissingVariantAttribute = (missingAttributes = []) => {
+    const targetNode = getVariantAttributeNode(missingAttributes[0]?.code)
+      || (typeof document !== 'undefined' ? document.querySelector('#variants-selection') : null);
+
+    return scrollToVariantSelectionTarget(targetNode);
+  };
 
   const toggleGroupItem = (id) => {
     const items = product.bundle_items || product.grouped_items || [];
@@ -910,14 +999,14 @@ export default function ProductDetailContent({
     }
 
     if (hasStructuredVariantAttributes) {
-      const missingAttributes = (product.super_attributes || []).filter((attr) => !selectedOptions[attr.code]);
+      const missingAttributes = getMissingVariantAttributesForOptions(selectedOptions);
 
       if (missingAttributes.length > 0) {
-        return VARIANT_SELECTION_REQUIRED_MESSAGE;
+        return buildVariantMissingSelectionMessage(missingAttributes);
       }
 
       if (!matchingVariant || !currentProduct?.id) {
-        return 'Tổ hợp thuộc tính hiện tại chưa hợp lệ. Vui lòng chọn lại trước khi đặt hàng.';
+        return VARIANT_SELECTION_INVALID_MESSAGE;
       }
 
       if (hasConfigurableChoices && !hasExplicitVariantSelection) {
@@ -938,63 +1027,74 @@ export default function ProductDetailContent({
     return '';
   };
 
-  const handleOptionSelect = (attrCode, value) => {
-    setHasExplicitVariantSelection(true);
-    setHasCustomerSelectedVariantMedia(true);
-    setVariantSelectionNotice('');
-    setSelectedOptions(prev => {
-      const next = { ...prev, [attrCode]: value };
-      
-      // Auto-correct other attributes if they become invalid with the new selection
-      product.super_attributes?.forEach(attr => {
-        if (attr.code === attrCode) return;
+  const buildSelectedOptionsAfterChoice = (previousOptions, attrCode, value) => {
+    const next = { ...previousOptions, [attrCode]: value };
 
-        const currentVal = next[attr.code];
-        if (!currentVal) return;
-        const isPossible = product.variations?.some(variant => {
-          const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
-            if (oCode === attr.code) return true;
-            return variant.attribute_values?.some(av => 
-              (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id) 
-              && av.value === oVal
-            );
-          });
-          const thisMatches = variant.attribute_values?.some(av => 
-            (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === currentVal
+    // Auto-correct other attributes if they become invalid with the new selection.
+    product.super_attributes?.forEach(attr => {
+      if (attr.code === attrCode) return;
+
+      const currentVal = next[attr.code];
+      if (!currentVal) return;
+      const isPossible = product.variations?.some(variant => {
+        const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
+          if (oCode === attr.code) return true;
+          return variant.attribute_values?.some(av =>
+            (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id)
+            && av.value === oVal
           );
-          return othersMatch && thisMatches;
         });
-
-        if (!isPossible) {
-          // Find first valid option for this attribute given the current (new) state of NEXT
-          const firstValid = attr.options?.find(opt => {
-            return product.variations?.some(variant => {
-              const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
-                if (oCode === attr.code) return true;
-                return variant.attribute_values?.some(av => 
-                  (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id) 
-                  && av.value === oVal
-                );
-              });
-              const thisMatches = variant.attribute_values?.some(av => 
-                (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
-              );
-              return othersMatch && thisMatches;
-            });
-          });
-          if (firstValid) next[attr.code] = firstValid.value;
-        }
+        const thisMatches = variant.attribute_values?.some(av =>
+          (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === currentVal
+        );
+        return othersMatch && thisMatches;
       });
 
-      return next;
+      if (!isPossible) {
+        const firstValid = attr.options?.find(opt => {
+          return product.variations?.some(variant => {
+            const othersMatch = Object.entries(next).every(([oCode, oVal]) => {
+              if (oCode === attr.code) return true;
+              return variant.attribute_values?.some(av =>
+                (av.attribute?.code === oCode || av.attribute_id === product.super_attributes.find(a => a.code === oCode)?.id)
+                && av.value === oVal
+              );
+            });
+            const thisMatches = variant.attribute_values?.some(av =>
+              (av.attribute?.code === attr.code || av.attribute_id === attr.id) && av.value === opt.value
+            );
+            return othersMatch && thisMatches;
+          });
+        });
+        if (firstValid) next[attr.code] = firstValid.value;
+      }
     });
+
+    return next;
+  };
+
+  const handleOptionSelect = (attrCode, value) => {
+    const nextOptions = buildSelectedOptionsAfterChoice(selectedOptions, attrCode, value);
+    const missingAttributes = getMissingVariantAttributesForOptions(nextOptions);
+
+    setHasExplicitVariantSelection(true);
+    setHasCustomerSelectedVariantMedia(true);
+    setSelectedOptions(nextOptions);
+
+    if (missingAttributes.length > 0) {
+      setMissingVariantSelectionFeedback(missingAttributes);
+      scrollToFirstMissingVariantAttribute(missingAttributes);
+    } else {
+      clearVariantSelectionFeedback();
+    }
+
     setActiveIndex(0);
   };
 
   const handleVariantSelect = (variantId) => {
     setHasExplicitVariantSelection(true);
     setHasCustomerSelectedVariantMedia(true);
-    setVariantSelectionNotice('');
+    clearVariantSelectionFeedback();
     setSelectedVariantId(variantId);
     setActiveIndex(0);
   };
@@ -1002,30 +1102,41 @@ export default function ProductDetailContent({
   const checkAndScrollToOptions = () => {
     let needsSelection = false;
     let needsVariantSelection = false;
+    let variantScrollTarget = null;
     if (hasVariants) {
-      const isStructuredIncomplete = hasStructuredVariantAttributes && (product.super_attributes || []).some((attr) => !selectedOptions[attr.code]);
-      if (isStructuredIncomplete || !matchingVariant || !currentProduct?.id || (hasConfigurableChoices && !hasExplicitVariantSelection)) {
-         needsSelection = true;
-         needsVariantSelection = true;
+      if (hasStructuredVariantAttributes) {
+        const missingAttributes = getMissingVariantAttributesForOptions(selectedOptions);
+        if (missingAttributes.length > 0) {
+          setMissingVariantSelectionFeedback(missingAttributes);
+          scrollToFirstMissingVariantAttribute(missingAttributes);
+          return true;
+        }
+      }
+
+      if (!matchingVariant || !currentProduct?.id || (hasConfigurableChoices && !hasExplicitVariantSelection)) {
+        needsSelection = true;
+        needsVariantSelection = true;
+        variantScrollTarget = typeof document !== 'undefined'
+          ? document.querySelector('#variants-selection')
+          : null;
       }
     } else if (product?.type === 'bundle') {
       const { itemsToCart } = buildBundleCartPayload(resolvedActiveBundleConfig);
       if (itemsToCart.length === 0) {
-         needsSelection = true;
+        needsSelection = true;
       }
     }
 
     if (needsSelection) {
       if (needsVariantSelection) {
-        setVariantSelectionNotice(VARIANT_SELECTION_REQUIRED_MESSAGE);
+        setMissingVariantAttributeCodes([]);
+        setVariantSelectionNotice(
+          hasStructuredVariantAttributes ? VARIANT_SELECTION_INVALID_MESSAGE : VARIANT_SELECTION_REQUIRED_MESSAGE
+        );
       }
-      // Find the selection section
-      const targetNode = document.querySelector('#bundle-list, #variants-selection');
-      if (targetNode) {
-         const yOffset = -80; // offset for sticky header
-         const y = targetNode.getBoundingClientRect().top + window.scrollY + yOffset;
-         window.scrollTo({ top: y, behavior: 'smooth' });
-      }
+      const targetNode = variantScrollTarget
+        || (typeof document !== 'undefined' ? document.querySelector('#bundle-list, #variants-selection') : null);
+      scrollToVariantSelectionTarget(targetNode);
       return true;
     }
     return false;
@@ -1152,6 +1263,7 @@ export default function ProductDetailContent({
     handleAddToCart,
     handleBuyNow,
     variantSelectionNotice,
+    missingVariantAttributeCodes,
     additionalInfo: (() => {
       try {
         if (!product.additional_info) return [];

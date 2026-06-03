@@ -62,7 +62,7 @@ const BlogAiBulkModal = ({ open, onClose, onCompleted }) => {
     const loadRecentJobs = async () => {
         setLoadingRecentJobs(true);
         try {
-            const response = await blogApi.listAiBulkJobs({ limit: 6 });
+            const response = await blogApi.listAiBulkJobs({ limit: 6, source_type: 'keyword_excel' });
             const items = Array.isArray(response.data?.data) ? response.data.data : [];
             setRecentJobs(items);
             if (!currentJob && items[0]) {

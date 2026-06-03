@@ -1076,10 +1076,16 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
             const bundleParentId = Number(item?.bundle_parent_id ?? productId) || productId;
             const bundleOptionTitle = normalizeCanvasText(item?.bundle_option_title || resolveBundleOptionTitle(item));
             const bundleParentName = normalizeCanvasText(item?.bundle_parent_name || item?.parent_product_name || item?.name);
+            const bundleDisplayName = [bundleParentName, bundleOptionTitle]
+                .filter((part, index, source) => (
+                    part
+                    && source.findIndex((candidate) => normalizeProductSearchText(candidate) === normalizeProductSearchText(part)) === index
+                ))
+                .join(' - ');
             const displayName = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
                 ? (
-                    normalizeCanvasText(item?.display_name)
-                    || [bundleParentName, bundleOptionTitle].filter(Boolean).join(' - ')
+                    bundleDisplayName
+                    || normalizeCanvasText(item?.display_name)
                     || normalizeCanvasText(item?.name)
                 )
                 : String(item?.display_name ?? item?.name ?? '').trim();
@@ -2870,12 +2876,36 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
         }
 
         const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+        const isBundleOptionEntry = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
         const parentProductId = Number(item?.parent_product_id ?? 0);
         const parentProductName = normalizeCanvasText(item?.parent_product_name);
-        const baseName = normalizeCanvasText(item?.name) || 'Sản phẩm';
-        const displayName = entryKind === SEARCH_ENTRY_VARIATION
-            ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
-            : (normalizeCanvasText(item?.display_name) || baseName);
+        const bundleParentId = isBundleOptionEntry ? (Number(item?.bundle_parent_id ?? targetProductId) || targetProductId) : 0;
+        const bundleParentName = isBundleOptionEntry
+            ? normalizeCanvasText(item?.bundle_parent_name || item?.parent_product_name || item?.name)
+            : '';
+        const bundleOptionTitle = isBundleOptionEntry
+            ? normalizeCanvasText(item?.bundle_option_title || resolveBundleOptionTitle(item))
+            : '';
+        const rawBundleOptionTitle = isBundleOptionEntry
+            ? normalizeCanvasText(item?.raw_bundle_option_title || item?.option_title)
+            : '';
+        const bundleTitle = isBundleOptionEntry
+            ? normalizeCanvasText(item?.bundle_title || item?.bundle_config_title)
+            : '';
+        const bundleDisplayName = isBundleOptionEntry
+            ? [bundleParentName, bundleOptionTitle]
+                .filter((part, index, source) => (
+                    part
+                    && source.findIndex((candidate) => normalizeProductSearchText(candidate) === normalizeProductSearchText(part)) === index
+                ))
+                .join(' - ')
+            : '';
+        const baseName = normalizeCanvasText(item?.name) || bundleParentName || 'Sản phẩm';
+        const displayName = isBundleOptionEntry
+            ? (bundleDisplayName || normalizeCanvasText(item?.display_name) || baseName)
+            : entryKind === SEARCH_ENTRY_VARIATION
+                ? buildVariationDisplayName(parentProductName, baseName, item?.option_label)
+                : (normalizeCanvasText(item?.display_name) || baseName);
         const sku = normalizeCanvasText(item?.sku);
         const displaySku = normalizeCanvasText(item?.display_sku) || sku;
         const optionLabel = normalizeCanvasText(item?.option_label);
@@ -2907,6 +2937,18 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
             parent_product_name: parentProductName,
             option_label: optionLabel,
+            ...(isBundleOptionEntry ? {
+                bundle_parent_id: bundleParentId,
+                bundle_parent_name: bundleParentName || baseName,
+                bundle_option_key: normalizeCanvasText(item?.bundle_option_key || resolveBundleOptionKey(item)),
+                bundle_option_title: bundleOptionTitle,
+                raw_bundle_option_title: rawBundleOptionTitle,
+                bundle_option_status: normalizeCanvasText(item?.bundle_option_status || 'visible'),
+                bundle_title: bundleTitle,
+                bundle_config_title: bundleTitle,
+                option_post_id: Number(item?.option_post_id) || undefined,
+                option_post_title: normalizeCanvasText(item?.option_post_title),
+            } : {}),
             search_keywords: [
                 baseName,
                 displayName,
@@ -2914,6 +2956,11 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
                 displaySku,
                 parentProductName,
                 optionLabel,
+                bundleParentName,
+                bundleOptionTitle,
+                rawBundleOptionTitle,
+                normalizeCanvasText(item?.option_post_title),
+                bundleTitle,
             ].filter(Boolean),
         });
     });

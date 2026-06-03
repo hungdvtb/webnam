@@ -45,7 +45,7 @@ class ReviewController extends Controller
             ->visible()
             ->whereBetween('rating', [1, 5])
             ->with(['visibleReplies' => function ($query) {
-                $query->with('user')->oldest();
+                $query->with('user')->withCount('likes')->oldest();
             }, 'user'])
             ->withCount('likes')
             ->latest();
@@ -56,8 +56,30 @@ class ReviewController extends Controller
         }
 
         $reviews = $reviewsQuery
-            ->paginate(min(max((int) $request->query('per_page', 10), 1), 10))
-            ->through(fn (ProductReview $review) => $this->publicReviewPayload($review, $visitorHash));
+            ->paginate(min(max((int) $request->query('per_page', 10), 1), 10));
+
+        $reviewIds = $reviews->getCollection()
+            ->flatMap(function (ProductReview $review) {
+                return collect([(int) $review->id])
+                    ->merge($review->visibleReplies->pluck('id')->map(fn ($id) => (int) $id));
+            })
+            ->filter()
+            ->unique()
+            ->values();
+
+        $likedReviewIds = $reviewIds->isEmpty()
+            ? []
+            : ProductReviewLike::query()
+                ->whereIn('product_review_id', $reviewIds->all())
+                ->where('customer_ip_hash', $visitorHash)
+                ->pluck('product_review_id')
+                ->mapWithKeys(fn ($id) => [(int) $id => true])
+                ->all();
+
+        $reviews->setCollection(
+            $reviews->getCollection()
+                ->map(fn (ProductReview $review) => $this->publicReviewPayload($review, $likedReviewIds))
+        );
 
         $summary = $this->summaryForProduct($product);
 
@@ -933,10 +955,17 @@ class ReviewController extends Controller
 
     private function reviewUnreadSummary(): array
     {
+        $summary = ProductReview::query()
+            ->whereNull('admin_seen_at')
+            ->selectRaw('COUNT(*) as total')
+            ->selectRaw('SUM(CASE WHEN parent_id IS NULL THEN 1 ELSE 0 END) as reviews')
+            ->selectRaw('SUM(CASE WHEN parent_id IS NOT NULL THEN 1 ELSE 0 END) as replies')
+            ->first();
+
         return [
-            'total' => ProductReview::query()->whereNull('admin_seen_at')->count(),
-            'reviews' => ProductReview::query()->whereNull('admin_seen_at')->whereNull('parent_id')->count(),
-            'replies' => ProductReview::query()->whereNull('admin_seen_at')->whereNotNull('parent_id')->count(),
+            'total' => (int) ($summary->total ?? 0),
+            'reviews' => (int) ($summary->reviews ?? 0),
+            'replies' => (int) ($summary->replies ?? 0),
         ];
     }
 
@@ -1004,9 +1033,14 @@ class ReviewController extends Controller
         return $product->reviewSummary();
     }
 
-    private function publicReviewPayload(ProductReview $review, string $visitorHash): array
+    private function publicReviewPayload(ProductReview $review, array $likedReviewIds): array
     {
-        $review->loadMissing('visibleReplies');
+        if (!$review->isReply()) {
+            $review->loadMissing(['visibleReplies' => function ($query) {
+                $query->with('user')->withCount('likes')->oldest();
+            }]);
+        }
+
         $likesCount = (int) ($review->likes_count ?? $review->likes()->count());
 
         return [
@@ -1019,11 +1053,11 @@ class ReviewController extends Controller
             'comment' => $this->maskPhoneNumbers($review->comment),
             'helpful_count' => (int) $review->helpful_count,
             'likes_count' => $likesCount,
-            'is_liked' => $review->likes()->where('customer_ip_hash', $visitorHash)->exists(),
+            'is_liked' => isset($likedReviewIds[(int) $review->id]),
             'created_at' => optional($review->created_at)->toIso8601String(),
             'is_admin_reply' => $review->author_type === 'admin',
-            'replies' => $review->visibleReplies
-                ->map(fn (ProductReview $reply) => $this->publicReviewPayload($reply, $visitorHash))
+            'replies' => ($review->isReply() ? collect() : $review->visibleReplies)
+                ->map(fn (ProductReview $reply) => $this->publicReviewPayload($reply, $likedReviewIds))
                 ->values(),
         ];
     }

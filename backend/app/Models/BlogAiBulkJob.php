@@ -9,7 +9,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class BlogAiBulkJob extends Model
 {
     public const STATUS_PENDING = 'pending';
+    public const STATUS_SCANNING = 'scanning';
+    public const STATUS_SCANNED = 'scanned';
     public const STATUS_RUNNING = 'running';
+    public const STATUS_PAUSED = 'paused';
     public const STATUS_COMPLETED = 'completed';
     public const STATUS_COMPLETED_WITH_ERRORS = 'completed_with_errors';
     public const STATUS_FAILED = 'failed';
@@ -66,5 +69,10 @@ class BlogAiBulkJob extends Model
     public function logs(): HasMany
     {
         return $this->hasMany(BlogAiBulkJobLog::class)->orderBy('id');
+    }
+
+    public function urlImportItems(): HasMany
+    {
+        return $this->hasMany(BlogAiUrlImportItem::class)->orderBy('position')->orderBy('id');
     }
 }

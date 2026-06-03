@@ -9,6 +9,8 @@ use Illuminate\Support\Str;
 
 class ProductParentRetailPriceSyncService
 {
+    private array $productLinkColumnCache = [];
+
     public function syncProductAndParents(Product|int $product): array
     {
         $product = $product instanceof Product
@@ -135,8 +137,8 @@ class ProductParentRetailPriceSyncService
                 'selected_variants.price as variant_price',
                 'selected_variants.status as variant_status',
                 'selected_variants.deleted_at as variant_deleted_at',
-                ...(Schema::hasColumn('product_links', 'bundle_option_uid') ? ['product_links.bundle_option_uid'] : []),
-                ...(Schema::hasColumn('product_links', 'bundle_option_status') ? ['product_links.bundle_option_status'] : []),
+                ...($this->hasProductLinkColumn('bundle_option_uid') ? ['product_links.bundle_option_uid'] : []),
+                ...($this->hasProductLinkColumn('bundle_option_status') ? ['product_links.bundle_option_status'] : []),
             ]);
 
         if ($rows->isEmpty()) {
@@ -271,7 +273,7 @@ class ProductParentRetailPriceSyncService
 
     private function isVisibleBundleOptionRow(object $row): bool
     {
-        if (!Schema::hasColumn('product_links', 'bundle_option_status')) {
+        if (!$this->hasProductLinkColumn('bundle_option_status')) {
             return true;
         }
 
@@ -290,7 +292,7 @@ class ProductParentRetailPriceSyncService
 
     private function bundleOptionGroupKey(object $row): string
     {
-        if (Schema::hasColumn('product_links', 'bundle_option_uid')) {
+        if ($this->hasProductLinkColumn('bundle_option_uid')) {
             $uid = trim((string) ($row->bundle_option_uid ?? ''));
             if ($uid !== '') {
                 return 'uid:' . $uid;
@@ -304,6 +306,15 @@ class ProductParentRetailPriceSyncService
         $title = Str::lower(Str::squish((string) ($row->option_title ?? '')));
 
         return 'title:' . ($title !== '' ? $title : 'mac dinh');
+    }
+
+    private function hasProductLinkColumn(string $column): bool
+    {
+        if (!array_key_exists($column, $this->productLinkColumnCache)) {
+            $this->productLinkColumnCache[$column] = Schema::hasColumn('product_links', $column);
+        }
+
+        return $this->productLinkColumnCache[$column];
     }
 
     private function normalizeIds(array $ids): array

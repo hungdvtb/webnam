@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom';
 import { blogApi, cmsApi } from '../../services/api';
 import BlogAiBulkModal from '../../components/admin/BlogAiBulkModal';
+import BlogAiUrlImportModal from '../../components/admin/BlogAiUrlImportModal';
 import { useUI } from '../../context/UIContext';
 import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
 import { resolveMediaUrl } from '../../utils/mediaUrl';
@@ -153,6 +154,7 @@ const BlogList = () => {
     const [exportingBundle, setExportingBundle] = useState(false);
     const [importResult, setImportResult] = useState(null);
     const [showAiBulkModal, setShowAiBulkModal] = useState(false);
+    const [showAiUrlImportModal, setShowAiUrlImportModal] = useState(false);
 
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -1187,6 +1189,14 @@ const BlogList = () => {
                     >
                         Tạo bài AI từ Excel
                     </button>
+                    <button
+                        type="button"
+                        onClick={() => setShowAiUrlImportModal(true)}
+                        disabled={importingBundle || exportingBundle}
+                        className="h-9 px-4 bg-white border border-primary/25 text-primary hover:bg-primary/5 rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center disabled:opacity-60"
+                    >
+                        Tạo bài AI từ URL
+                    </button>
                     <Link to="/admin/blog/new" className="h-9 px-4 bg-brick text-white hover:bg-umber rounded-sm text-[10px] font-bold uppercase tracking-widest inline-flex items-center">Tạo bài mới</Link>
                 </div>
             </div>
@@ -1694,6 +1704,11 @@ const BlogList = () => {
             <BlogAiBulkModal
                 open={showAiBulkModal}
                 onClose={() => setShowAiBulkModal(false)}
+                onCompleted={handleAiBulkCompleted}
+            />
+            <BlogAiUrlImportModal
+                open={showAiUrlImportModal}
+                onClose={() => setShowAiUrlImportModal(false)}
                 onCompleted={handleAiBulkCompleted}
             />
         </div>

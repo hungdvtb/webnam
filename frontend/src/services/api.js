@@ -370,7 +370,7 @@ const receiptBootstrapCacheKey = (params = {}) => (
 
 export const productApi = {
     getAll: (params, signal) => api.get('/products', { params, signal }),
-    getOne: (id) => api.get(`/products/${id}`),
+    getOne: (id, params) => api.get(`/products/${id}`, params ? { params } : undefined),
     downloadExcel: (params) => api.get('/products/export', { params, responseType: 'blob' }),
     downloadImportTemplate: () => api.get('/products/import/template', { responseType: 'blob' }),
     importExcel: (data) => api.post('/products/import', data, multipartConfig(data)),
@@ -987,6 +987,14 @@ export const blogApi = {
     createAiBulkJob: (formData) => api.post('/blog/ai-bulk/jobs', formData, multipartConfig(formData)),
     getAiBulkJob: (jobId) => api.get(`/blog/ai-bulk/jobs/${jobId}`),
     runAiBulkJob: (jobId) => api.post(`/blog/ai-bulk/jobs/${jobId}/run`),
+    listAiUrlJobs: (params) => api.get('/blog/ai-url/jobs', { params }),
+    createAiUrlJob: (data) => api.post('/blog/ai-url/jobs', data),
+    getAiUrlJob: (jobId) => api.get(`/blog/ai-url/jobs/${jobId}`),
+    runAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/run`),
+    scanAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/scan`),
+    processNextAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/process-next`),
+    pauseAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/pause`),
+    resetFailedAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/reset-failed`),
 };
 
 export const invoiceApi = {

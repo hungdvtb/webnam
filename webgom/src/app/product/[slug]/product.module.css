@@ -1269,6 +1269,18 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  scroll-margin-top: 6rem;
+}
+
+.variantGroupMissing {
+  border-radius: 0.65rem;
+  background: rgba(197, 160, 101, 0.07);
+  outline: 2px solid rgba(197, 160, 101, 0.48);
+  outline-offset: 0.25rem;
+}
+
+.variantGroupMissing .variantLabel {
+  color: #8e5229;
 }
 
 .variantLabel {
@@ -1288,6 +1300,8 @@
   font-weight: 700;
   line-height: 1.45;
   padding: 0.45rem 0.6rem;
+  position: static;
+  pointer-events: none;
 }
 
 .variantOptions {
@@ -1699,6 +1713,90 @@
 
 .btnOutline:hover {
   background-color: rgba(197, 160, 101, 0.05);
+}
+
+@media (min-width: 769px) {
+  .actionSectionMB {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 0.75rem;
+    padding: 0.65rem;
+  }
+
+  .actionSectionMB .quantitySection {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    margin-top: 0;
+    min-height: 3.5rem;
+    padding: 0 0.5rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    justify-content: center;
+    justify-items: center;
+    gap: 0.3rem;
+    border: 1px solid rgba(27, 54, 93, 0.12);
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .actionSectionMB .quantityLabel {
+    display: none;
+  }
+
+  .actionSectionMB .quantityControl {
+    width: 100%;
+    min-width: 0;
+    max-width: 9rem;
+    justify-self: center;
+    display: grid;
+    grid-template-columns: 2.25rem minmax(2.25rem, 1fr) 2.25rem;
+    align-items: center;
+  }
+
+  .actionSectionMB .qBtn {
+    width: 100%;
+    height: 2.5rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .actionSectionMB .qInput {
+    width: 100%;
+    min-width: 0;
+    height: 2.5rem;
+    padding: 0;
+    background: transparent;
+    appearance: textfield;
+    font-size: 0.95rem;
+  }
+
+  .actionSectionMB .qInput::-webkit-outer-spin-button,
+  .actionSectionMB .qInput::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .actionSectionMB .buyGrid {
+    grid-column: span 2;
+    height: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .actionSectionMB .btnPrimary,
+  .actionSectionMB .btnOutline {
+    width: 100%;
+    min-width: 0;
+    min-height: 3.5rem;
+    padding: 0.75rem;
+    white-space: nowrap;
+  }
 }
 
 .trustBadges {

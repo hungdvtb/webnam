@@ -3042,12 +3042,12 @@ class ProductController extends Controller
         ])->save();
     }
 
-    protected function productResourceRelations(): array
+    protected function productResourceRelations(bool $includeReviews = true): array
     {
         $attributeSummaryColumns = Attribute::relationColumnString(['id', 'name', 'code']);
         $attributeResourceColumns = Attribute::relationColumnString(['id', 'name', 'code', 'frontend_type']);
 
-        return [
+        $relations = [
             'category:id,name',
             'categories:id,name',
             'supplier:id,name,code',
@@ -3090,8 +3090,69 @@ class ProductController extends Controller
                         'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
             },
-            'approvedReviews.user:id,name',
         ];
+
+        if ($includeReviews) {
+            $relations[] = 'approvedReviews.user:id,name';
+        }
+
+        return $relations;
+    }
+
+    protected function isProductEditContext(Request $request): bool
+    {
+        $context = Str::lower(trim((string) $request->query('context', '')));
+
+        return in_array($context, ['edit', 'admin_edit', 'admin-edit'], true)
+            || $request->boolean('admin_edit')
+            || $request->boolean('edit');
+    }
+
+    protected function trimAdminProductEditPayload(Product $product): Product
+    {
+        $visited = [];
+        $this->hideAdminProductEditComputedFields($product, $visited);
+
+        return $product;
+    }
+
+    protected function hideAdminProductEditComputedFields(Product $product, array &$visited): void
+    {
+        $objectId = spl_object_id($product);
+        if (isset($visited[$objectId])) {
+            return;
+        }
+
+        $visited[$objectId] = true;
+        $product->makeHidden(self::ADMIN_PRODUCT_LIST_HIDDEN_PRODUCT_APPENDS);
+
+        if ($product->relationLoaded('images')) {
+            $product->images->each(function ($image): void {
+                if ($image instanceof ProductImage) {
+                    $image->makeHidden(self::ADMIN_PRODUCT_LIST_HIDDEN_IMAGE_APPENDS);
+                }
+            });
+        }
+
+        foreach (['parentConfigurable', 'variations', 'groupedItems', 'bundleItems', 'linkedProducts', 'parentProducts'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $related = $product->getRelation($relation);
+            if ($related instanceof Product) {
+                $this->hideAdminProductEditComputedFields($related, $visited);
+                continue;
+            }
+
+            if ($related instanceof Collection) {
+                $related->each(function ($item) use (&$visited): void {
+                    if ($item instanceof Product) {
+                        $this->hideAdminProductEditComputedFields($item, $visited);
+                    }
+                });
+            }
+        }
     }
 
     protected function appendSupplierMeta(Product $product): Product
@@ -4603,41 +4664,7 @@ class ProductController extends Controller
         $nameContainsLike = ($includeNameMatches && $normalizedName !== '')
             ? '%' . $this->escapeLike($normalizedName) . '%'
             : null;
-        $codeContainsSearch = function (Builder $searchQuery) use (
-            $skuExpr,
-            $compactSkuExpr,
-            $codeContainsLike,
-            $compactCodeContainsLike
-        ) {
-            $searchQuery
-                ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
-                    $directQuery->whereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
-
-                    if ($compactCodeContainsLike !== null) {
-                        $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
-                    }
-                })
-                ->orWhereHas('variations', function (Builder $variationQuery) use ($codeContainsLike, $compactCodeContainsLike) {
-                    $variationSkuExpr = $this->loweredSearchExpression('sku');
-                    $variationCompactSkuExpr = $this->compactSearchExpression('sku');
-
-                    $variationQuery->where('status', true)
-                        ->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $codeContainsLike, $compactCodeContainsLike) {
-                            $directVariationQuery->whereRaw("{$variationSkuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
-
-                            if ($compactCodeContainsLike !== null) {
-                                $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
-                            }
-                        });
-                });
-        };
-
-        $exactCodeMatchCount = $hasExactCodeMatch
-            ? (clone $query)->where($exactCodeSearch)->count('products.id')
-            : 0;
-        $codeContainsMatchCount = (clone $query)->where($codeContainsSearch)->count('products.id');
-
-        if ($hasExactCodeMatch && (!$includeNameMatches || $codeContainsMatchCount <= $exactCodeMatchCount)) {
+        if ($hasExactCodeMatch) {
             $searchRankingParts = [
                 "CASE WHEN {$skuExpr} = ? THEN 5000 ELSE 0 END",
             ];
@@ -5680,28 +5707,23 @@ class ProductController extends Controller
         ];
     }
 
-    protected function buildAdminProductListBaseQuery(Request $request): array
+    protected function buildAdminProductListBaseQuery(Request $request, bool $includeNestedProducts = true): array
     {
-        $query = Product::query()
-            ->select([
-                'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-                'supplier_id', 'inventory_unit_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description',
-                'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
-                'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
-            ])
-            ->withCount('suppliers')
-            ->with([
-                'categories:id,name,code,slug',
-                'category:id,name,code,slug',
-                'supplier:id,name,code',
-                'suppliers:id,name,code',
-                'parentConfigurable:id,name,sku,type',
-                'unit:id,name',
-                'siteDomain:id,domain',
-                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'attributeValues:id,product_id,attribute_id,value',
-                'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
+        $relations = [
+            'categories:id,name,code,slug',
+            'category:id,name,code,slug',
+            'supplier:id,name,code',
+            'suppliers:id,name,code',
+            'parentConfigurable:id,name,sku,type',
+            'unit:id,name',
+            'siteDomain:id,domain',
+            'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'attributeValues:id,product_id,attribute_id,value',
+            'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
+        ];
+
+        if ($includeNestedProducts) {
+            $relations = array_merge($relations, [
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
                 'variations.parentConfigurable:id,name,sku,type',
                 'variations.category:id,name,code,slug',
@@ -5725,8 +5747,20 @@ class ProductController extends Controller
                 'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
-                'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order'
+                'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             ]);
+        }
+
+        $query = Product::query()
+            ->select([
+                'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+                'supplier_id', 'inventory_unit_id', 'sort_order',
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description',
+                'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
+                'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
+            ])
+            ->withCount('suppliers')
+            ->with($relations);
 
         $stockContext = $this->attachActualStockSubqueries($query, $request);
         $actualStockSql = $stockContext['actual_stock_sql'];
@@ -6238,7 +6272,8 @@ class ProductController extends Controller
             return $this->pickerIndex($request);
         }
 
-        [$query, $actualStockSql] = $this->buildAdminProductListBaseQuery($request);
+        $includeNestedProducts = ! $request->boolean('summary');
+        [$query, $actualStockSql] = $this->buildAdminProductListBaseQuery($request, $includeNestedProducts);
 
         // Handle Trash View
         if ($request->boolean('is_trash')) {
@@ -6712,7 +6747,7 @@ class ProductController extends Controller
                 return response()->json($paginatedMatches);
             }
 
-            [$resourceQuery] = $this->buildAdminProductListBaseQuery($request);
+            [$resourceQuery] = $this->buildAdminProductListBaseQuery($request, $includeNestedProducts);
             if ($request->boolean('is_trash')) {
                 $resourceQuery->onlyTrashed();
             }
@@ -9721,12 +9756,14 @@ class ProductController extends Controller
      */
     public function show(Request $request, $id)
     {
-        $product = Product::with($this->productResourceRelations())->findOrFail($id);
+        $isEditContext = $this->isProductEditContext($request);
+        $relations = $this->productResourceRelations(! $isEditContext);
+        $product = Product::with($relations)->findOrFail($id);
 
         if (in_array($product->type, ['configurable', 'bundle'], true)
             && $this->productParentRetailPriceSyncService->syncParentProduct($product)
         ) {
-            $product = Product::with($this->productResourceRelations())->findOrFail($id);
+            $product = Product::with($relations)->findOrFail($id);
         }
 
         if ($product->type === 'configurable') {
@@ -9765,8 +9802,14 @@ class ProductController extends Controller
             $product->setRelation('variations', $variations);
         }
 
+        $product = $this->appendSupplierMeta($product);
+
+        if ($isEditContext) {
+            $product = $this->trimAdminProductEditPayload($product);
+        }
+
         return response()->json(
-            $this->syncProductResourceInventoryStocks($request, $this->appendSupplierMeta($product))
+            $this->syncProductResourceInventoryStocks($request, $product)
         );
     }
 

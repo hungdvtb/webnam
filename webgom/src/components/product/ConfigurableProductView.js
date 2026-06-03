@@ -61,6 +61,7 @@ export default function ConfigurableProductView({
   handleAddToCart,
   handleBuyNow,
   variantSelectionNotice,
+  missingVariantAttributeCodes = [],
   additionalInfo
 }) {
   const [variantActionId, setVariantActionId] = useState(null);
@@ -328,8 +329,15 @@ export default function ConfigurableProductView({
                   // If no valid options for this attribute group, don't render it at all
                   if (validOptions.length === 0) return null;
 
+                  const isMissing = missingVariantAttributeCodes.includes(attr.code);
+
                   return (
-                    <div key={attr.id} className={styles.variantGroup}>
+                    <div
+                      key={attr.id}
+                      className={`${styles.variantGroup} ${isMissing ? styles.variantGroupMissing : ''}`}
+                      data-variant-attribute-code={attr.code}
+                      aria-invalid={isMissing ? 'true' : undefined}
+                    >
                       <h4 className={styles.variantLabel}>
                         {attr.name}
                       </h4>

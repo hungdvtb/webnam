@@ -863,6 +863,32 @@ function normalizeQuickEditProductType(value) {
     return String(value || '').trim().toLowerCase();
 }
 
+function isExpandableAdminListProduct(product) {
+    return ['configurable', 'grouped', 'bundle'].includes(normalizeQuickEditProductType(product?.type));
+}
+
+function hasLoadedAdminListChildren(product) {
+    if (!isExpandableAdminListProduct(product)) {
+        return true;
+    }
+
+    if (product?._children_loaded) {
+        return true;
+    }
+
+    return Array.isArray(product?.variations)
+        || Array.isArray(product?.grouped_items)
+        || Array.isArray(product?.bundle_items);
+}
+
+function mergeAdminProductDetail(summaryProduct, detailProduct) {
+    return {
+        ...(summaryProduct || {}),
+        ...(detailProduct || {}),
+        _children_loaded: true,
+    };
+}
+
 function getQuickEditConfigurableSourceId(product) {
     if (!product || typeof product !== 'object') {
         return null;
@@ -1265,6 +1291,11 @@ const ProductList = () => {
     const [copiedText, setCopiedText] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
     const [expandedRows, setExpandedRows] = useState(() => sanitizeStoredIdList(savedWorkingState?.expandedRows));
+    const [loadingExpandedIds, setLoadingExpandedIds] = useState([]);
+    const loadingExpandedIdSet = useMemo(
+        () => new Set(loadingExpandedIds.map((id) => String(id))),
+        [loadingExpandedIds],
+    );
     const [exportColumnIds, setExportColumnIds] = useState(DEFAULT_EXPORT_COLUMN_IDS);
     const [exportOnlySelected, setExportOnlySelected] = useState(false);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
@@ -1284,13 +1315,50 @@ const ProductList = () => {
     const [isProductSortDirty, setIsProductSortDirty] = useState(false);
     const productSortSnapshotRef = useRef([]);
 
-    const toggleExpandRow = (productId, e) => {
+    const toggleExpandRow = async (productId, e) => {
         if (e) e.stopPropagation();
-        setExpandedRows(prev => 
-            prev.includes(productId)
-                ? prev.filter(id => id !== productId)
-                : [...prev, productId]
-        );
+
+        const productKey = String(productId);
+        const isCurrentlyExpanded = expandedRows.some((id) => String(id) === productKey);
+        if (isCurrentlyExpanded) {
+            setExpandedRows((prev) => prev.filter((id) => String(id) !== productKey));
+            return;
+        }
+
+        if (loadingExpandedIdSet.has(productKey)) {
+            return;
+        }
+
+        const product = products.find((item) => String(item?.id) === productKey);
+        if (product && isExpandableAdminListProduct(product) && !hasLoadedAdminListChildren(product)) {
+            setLoadingExpandedIds((prev) => (
+                prev.some((id) => String(id) === productKey) ? prev : [...prev, productId]
+            ));
+
+            try {
+                const response = await productApi.getOne(productId, { context: 'edit' });
+                const detailProduct = response.data || {};
+                setProducts((prevProducts) => prevProducts.map((item) => (
+                    String(item?.id) === productKey
+                        ? mergeAdminProductDetail(item, detailProduct)
+                        : item
+                )));
+            } catch (error) {
+                console.error('Product row detail load error:', error);
+                setNotification({
+                    type: 'error',
+                    message: error?.response?.data?.message || 'Không tải được chi tiết sản phẩm.',
+                });
+                setTimeout(() => setNotification(null), 4000);
+                return;
+            } finally {
+                setLoadingExpandedIds((prev) => prev.filter((id) => String(id) !== productKey));
+            }
+        }
+
+        setExpandedRows((prev) => (
+            prev.some((id) => String(id) === productKey) ? prev : [...prev, productId]
+        ));
     };
 
 
@@ -1703,11 +1771,16 @@ const ProductList = () => {
                 }
             });
 
-            const missingIds = normalizedIds.filter((id) => !selectedLookup.has(String(id)));
+            const missingIds = normalizedIds.filter((id) => {
+                const matchedProduct = selectedLookup.get(String(id));
+
+                return !matchedProduct
+                    || (isExpandableAdminListProduct(matchedProduct) && !hasLoadedAdminListChildren(matchedProduct));
+            });
             let failedCount = 0;
             if (missingIds.length > 0) {
                 const loadedProducts = await Promise.allSettled(
-                    missingIds.map((id) => productApi.getOne(id)),
+                    missingIds.map((id) => productApi.getOne(id, { context: 'edit' })),
                 );
 
                 loadedProducts.forEach((result, index) => {
@@ -1738,14 +1811,25 @@ const ProductList = () => {
             );
 
             const configurableLookup = new Map();
+            configurableSourceIds.forEach((id) => {
+                const selectedProduct = selectedLookup.get(String(id));
+                if (selectedProduct) {
+                    configurableLookup.set(String(id), selectedProduct);
+                }
+            });
+            const configurableSourceIdsToLoad = configurableSourceIds.filter((id) => {
+                const cachedProduct = configurableLookup.get(String(id));
+
+                return !cachedProduct || !hasLoadedAdminListChildren(cachedProduct);
+            });
             let failedConfigurableCount = 0;
-            if (configurableSourceIds.length > 0) {
+            if (configurableSourceIdsToLoad.length > 0) {
                 const loadedConfigurableProducts = await Promise.allSettled(
-                    configurableSourceIds.map((id) => productApi.getOne(id)),
+                    configurableSourceIdsToLoad.map((id) => productApi.getOne(id, { context: 'edit' })),
                 );
 
                 loadedConfigurableProducts.forEach((result, index) => {
-                    const targetId = configurableSourceIds[index];
+                    const targetId = configurableSourceIdsToLoad[index];
                     if (result.status === 'fulfilled' && result.value?.data) {
                         configurableLookup.set(String(targetId), result.value.data);
                     } else {
@@ -2873,8 +2957,11 @@ const ProductList = () => {
         try {
             const normalizedFilters = sanitizeProductFilters(currentFilters, attributeCatalog);
             const params = buildQueryParams(page, normalizedFilters, currentSort, limit, attributeCatalog);
+            params.summary = 1;
             const response = await productApi.getAll(params);
             setProducts(response.data.data);
+            setExpandedRows([]);
+            setLoadingExpandedIds([]);
             setPagination({
                 current_page: response.data.current_page,
                 last_page: response.data.last_page,
@@ -3780,7 +3867,7 @@ const ProductList = () => {
         setBulkCopySourceItems(createEmptyBulkCopySelectionState());
         setBulkCopySelectedItemKeys(createEmptyBulkCopySelectionState());
 
-        productApi.getOne(bulkCopySourceProduct.id)
+        productApi.getOne(bulkCopySourceProduct.id, { context: 'edit' })
             .then((response) => {
                 if (!isCurrent || bulkCopySourceRequestRef.current !== requestId) return;
 
@@ -6141,6 +6228,7 @@ const ProductList = () => {
                                 
                                 const renderRow = (p, isSubRow = false) => {
                                     const pIsParent = p.type === 'configurable' || p.type === 'grouped' || p.type === 'bundle';
+                                    const pIsExpansionLoading = loadingExpandedIdSet.has(String(p.id));
                                     const pIsChild = isSubRow || isVariantChildProduct(p);
                                     const pUsesChildRowStyle = isSubRow
                                         ? product.type === 'configurable'
@@ -6208,10 +6296,11 @@ const ProductList = () => {
                                                     {!isSubRow && pIsParent ? (
                                                         <button
                                                             onClick={(e) => toggleExpandRow(p.id, e)}
-                                                            className={`size-6 flex items-center justify-center rounded-full border border-gold/30 text-gold transition-all expand-btn ${isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'}`}
+                                                            disabled={pIsExpansionLoading}
+                                                            className={`size-6 flex items-center justify-center rounded-full border border-gold/30 text-gold transition-all expand-btn ${isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'} ${pIsExpansionLoading ? 'cursor-wait opacity-70' : ''}`}
                                                             title={isExpanded ? 'Thu gọn' : (p.type === 'grouped' ? 'Xem thành phần' : (p.type === 'bundle' ? 'Xem tùy chọn bundle' : 'Xem biến thể'))}
                                                         >
-                                                            <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+                                                            <span className="material-symbols-outlined text-[18px]">{pIsExpansionLoading ? 'progress_activity' : 'chevron_right'}</span>
                                                         </button>
                                                     ) : !isSubRow ? (
                                                         <div className="size-6" /> // Spacer for non-configurable items

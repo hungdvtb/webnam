@@ -90,6 +90,7 @@ class BlogAiBulkGenerationService
             'source_disk' => 'local',
             'source_path' => $storedPath,
             'metadata' => [
+                'source_type' => 'keyword_excel',
                 'mime_type' => $file->getClientMimeType(),
                 'size_bytes' => $file->getSize(),
                 'extension' => $extension,

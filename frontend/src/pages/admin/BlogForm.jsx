@@ -18,6 +18,7 @@ import {
     registerBlogMediaGalleryBlot,
     renderBlogMediaGalleryNode,
 } from '../../utils/blogMediaGallery';
+import { normalizeBlogContentHtml } from '../../utils/blogContentHtml';
 import { resolveMediaUrl } from '../../utils/mediaUrl';
 import { buildPublicBlogUrl } from '../../utils/publicSiteLinks';
 import 'react-quill-new/dist/quill.snow.css';
@@ -35,7 +36,6 @@ const QUILL_FORMATS = [
     'bold', 'italic', 'underline', 'strike', 'blockquote',
     'list', 'indent',
     'link', 'image', 'video', 'mediaGallery',
-    'alt', 'title',
 ];
 
 const BlogForm = () => {
@@ -100,12 +100,13 @@ const BlogForm = () => {
     };
 
     const normalizeMediaGalleryHtmlForStorage = (html) => {
-        if (typeof document === 'undefined' || !html || !String(html).includes(GALLERY_BLOCK_CLASS)) {
-            return html || '';
+        const normalizedContent = normalizeBlogContentHtml(html || '');
+        if (typeof document === 'undefined' || !normalizedContent || !String(normalizedContent).includes(GALLERY_BLOCK_CLASS)) {
+            return normalizedContent || '';
         }
 
         const template = document.createElement('template');
-        template.innerHTML = String(html || '');
+        template.innerHTML = String(normalizedContent || '');
         template.content.querySelectorAll(`.${GALLERY_BLOCK_CLASS}`).forEach((node) => {
             renderBlogMediaGalleryNode(node, readGalleryItemsFromNode(node), { interactive: false });
         });
@@ -172,7 +173,7 @@ const BlogForm = () => {
                 meta_title: data.meta_title || '',
                 meta_description: data.meta_description || '',
                 meta_keywords: data.meta_keywords || '',
-                content: data.content || '',
+                content: normalizeBlogContentHtml(data.content || ''),
                 featured_image: data.featured_image || '',
                 is_ai_generated: Boolean(data.is_ai_generated),
                 is_published: data.is_published ?? true,
@@ -945,7 +946,7 @@ const BlogForm = () => {
                 meta_title: formData.meta_title,
                 meta_description: formData.meta_description,
                 meta_keywords: formData.meta_keywords,
-                content: serializeEditorContent(getQuillEditor()) || formData.content,
+                content: normalizeBlogContentHtml(serializeEditorContent(getQuillEditor()) || formData.content),
                 featured_image: formData.featured_image,
                 is_ai_generated: Boolean(formData.is_ai_generated),
                 is_published: formData.is_published,
@@ -1010,16 +1011,18 @@ const BlogForm = () => {
                     title: formData.title || 'Bài viết mới',
                     seo_keyword: formData.seo_keyword || '',
                     excerpt: fallback.slice(0, 180),
-                    content: `<p>${fallback}</p>`,
+                    content: normalizeBlogContentHtml(fallback),
                 };
             }
+
+            const normalizedContent = normalizeBlogContentHtml(aiData.content || '');
 
             setFormData((prev) => ({
                 ...prev,
                 title: aiData.title || prev.title,
                 seo_keyword: aiData.seo_keyword || prev.seo_keyword,
                 excerpt: aiData.excerpt || prev.excerpt,
-                content: aiData.content || prev.content,
+                content: normalizedContent || prev.content,
                 is_ai_generated: true,
                 is_published: true,
             }));
@@ -1119,8 +1122,7 @@ const BlogForm = () => {
     };
 
     const handleApplyContentHtmlPaste = (html) => {
-        let normalizedHtml = String(html || '').trim();
-        normalizedHtml = normalizedHtml.replace(/^```(?:html)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        const normalizedHtml = normalizeBlogContentHtml(html || '');
 
         if (!normalizedHtml) {
             showToast({ message: 'HTML đang trống.', type: 'warning' });
@@ -1165,7 +1167,7 @@ const BlogForm = () => {
                 ? data.meta_keywords.join(', ')
                 : String(data.meta_keywords ?? prev.meta_keywords ?? ''),
             featured_image: String(data.featured_image ?? prev.featured_image ?? ''),
-            content: contentHtml !== undefined ? String(contentHtml || '') : prev.content,
+            content: contentHtml !== undefined ? normalizeBlogContentHtml(String(contentHtml || '')) : prev.content,
         }));
         setBulkPasteOpen(false);
         showToast({ message: 'Đã áp dụng toàn bộ dữ liệu bài viết.', type: 'success' });

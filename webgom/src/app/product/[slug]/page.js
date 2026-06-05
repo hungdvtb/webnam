@@ -26,13 +26,63 @@ function buildRelatedViewAllHref(product, relatedMeta) {
     : '/products';
 }
 
+function getSearchParamValue(searchParams, ...keys) {
+  for (const key of keys) {
+    const rawValue = searchParams?.[key];
+    const value = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    const normalizedValue = String(value || '').trim();
+
+    if (normalizedValue) {
+      return normalizedValue;
+    }
+  }
+
+  return '';
+}
+
+function getRequestedBundleOptionParams(searchParams) {
+  const compactOption = getSearchParamValue(searchParams, 'o', 'bo');
+  let requestedBundleOptionUid = getSearchParamValue(searchParams, 'bundle_option_uid', 'option_uid');
+  let requestedBundleOptionKey = getSearchParamValue(searchParams, 'bundle_option_key', 'bk', 'option_key');
+  let requestedBundleOptionTitle = getSearchParamValue(searchParams, 'bundle_option', 'bundle_option_title', 'bn', 'option');
+
+  if (compactOption) {
+    const compactIsUidKey = compactOption.startsWith('uid:');
+    const compactIsStructuredKey = compactIsUidKey
+      || compactOption.startsWith('post:')
+      || compactOption.startsWith('title:');
+
+    if (!requestedBundleOptionKey && compactIsStructuredKey) {
+      requestedBundleOptionKey = compactOption;
+    }
+
+    if (!requestedBundleOptionUid) {
+      requestedBundleOptionUid = compactIsUidKey
+        ? compactOption.slice(4).trim()
+        : (compactIsStructuredKey ? '' : compactOption);
+    }
+
+    if (!requestedBundleOptionKey && !requestedBundleOptionUid && !requestedBundleOptionTitle) {
+      requestedBundleOptionTitle = compactOption;
+    }
+  }
+
+  return {
+    requestedBundleOptionUid,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+  };
+}
+
 export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
-  const requestedBundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
-  const requestedBundleOptionKey = String(resolvedSearchParams?.bundle_option_key || '').trim();
-  const requestedBundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const {
+    requestedBundleOptionUid,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+  } = getRequestedBundleOptionParams(resolvedSearchParams);
   const isBundlePreviewRequest = String(resolvedSearchParams?.bundle_preview || '').trim() === '1';
   const requestedVariantId = Number.parseInt(
     String(resolvedSearchParams?.variant_id || '').trim(),
@@ -147,12 +197,15 @@ export async function generateMetadata({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
-  const bundleOptionUid = String(resolvedSearchParams?.bundle_option_uid || '').trim();
-  const bundleOptionTitle = String(resolvedSearchParams?.bundle_option || '').trim();
+  const {
+    requestedBundleOptionUid: bundleOptionUid,
+    requestedBundleOptionKey: bundleOptionKey,
+    requestedBundleOptionTitle: bundleOptionTitle,
+  } = getRequestedBundleOptionParams(resolvedSearchParams);
   const isBundlePreviewRequest = String(resolvedSearchParams?.bundle_preview || '').trim() === '1';
   const hasBundleOptionRequest = Boolean(
     bundleOptionUid
-    || String(resolvedSearchParams?.bundle_option_key || '').trim()
+    || bundleOptionKey
     || bundleOptionTitle
   );
 

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
-import { leadApi } from '../../services/api';
+import { describeApiConnectionError, isRetryableRequestError, leadApi } from '../../services/api';
 import { ACTIVE_ACCOUNT_CHANGED_EVENT, readActiveAccountId } from '../../utils/activeAccount';
 import {
     createDefaultLeadNotificationSettings,
@@ -21,6 +21,7 @@ import {
 const POLL_DELAY_MS = 2000;
 const FAST_POLL_DELAY_MS = 350;
 const ERROR_POLL_DELAY_MS = 5000;
+const MAX_ERROR_POLL_DELAY_MS = 60000;
 
 const LeadRealtimeNotifier = ({ enabled = true }) => {
     const { user } = useAuth();
@@ -33,6 +34,7 @@ const LeadRealtimeNotifier = ({ enabled = true }) => {
 
     const cursorRef = useRef({ changedAt: '', id: 0 });
     const requestInFlightRef = useRef(false);
+    const pollErrorCountRef = useRef(0);
     const audioElementRef = useRef(null);
     const audioContextRef = useRef(null);
     const queuedSoundRef = useRef(false);
@@ -230,8 +232,8 @@ const LeadRealtimeNotifier = ({ enabled = true }) => {
         const initialize = async () => {
             try {
                 const [notificationResponse, realtimeResponse] = await Promise.allSettled([
-                    leadApi.getNotifications(),
-                    leadApi.realtime({ init: 1 }),
+                    leadApi.getNotifications(undefined, { maxRetries: 0 }),
+                    leadApi.realtime({ init: 1 }, { maxRetries: 0 }),
                 ]);
 
                 if (disposed) return;
@@ -285,7 +287,8 @@ const LeadRealtimeNotifier = ({ enabled = true }) => {
                 const response = await leadApi.realtime(
                     cursor.changedAt
                         ? { after_changed_at: cursor.changedAt, after_id: cursor.id || 0 }
-                        : { init: 1 }
+                        : { init: 1 },
+                    { maxRetries: 0 }
                 );
 
                 if (disposed) return;
@@ -317,9 +320,13 @@ const LeadRealtimeNotifier = ({ enabled = true }) => {
                 if (payload.has_more === true) {
                     nextDelay = FAST_POLL_DELAY_MS;
                 }
+                pollErrorCountRef.current = 0;
             } catch (error) {
-                console.error('Lead realtime notifier polling failed', error);
-                nextDelay = ERROR_POLL_DELAY_MS;
+                pollErrorCountRef.current += 1;
+                if (!isRetryableRequestError(error) || pollErrorCountRef.current === 1 || pollErrorCountRef.current % 5 === 0) {
+                    console.warn('Lead realtime notifier polling paused:', describeApiConnectionError(error));
+                }
+                nextDelay = Math.min(ERROR_POLL_DELAY_MS * (2 ** Math.max(pollErrorCountRef.current - 1, 0)), MAX_ERROR_POLL_DELAY_MS);
             } finally {
                 requestInFlightRef.current = false;
                 scheduleNextPoll(nextDelay);

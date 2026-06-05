@@ -58,20 +58,23 @@ class GeminiClientFactory
         return $uniqueKeys;
     }
 
-    public function make(?string $apiKey): GeminiClient
+    public function make(?string $apiKey, array $options = []): GeminiClient
     {
         $normalizedApiKey = trim((string) $apiKey);
         if ($normalizedApiKey === '' || !$this->isConfiguredApiKey($normalizedApiKey)) {
             throw new InvalidArgumentException('Chua cau hinh Gemini API key hop le.');
         }
 
+        $timeout = max((int) ($options['timeout'] ?? config('services.gemini.timeout', 60)), 5);
+        $connectTimeout = max((int) ($options['connect_timeout'] ?? config('services.gemini.connect_timeout', 15)), 3);
+
         return Gemini::factory()
             ->withApiKey($normalizedApiKey)
             ->withBaseUrl((string) config('services.gemini.base_url', 'https://generativelanguage.googleapis.com/v1beta/'))
             ->withHttpClient(new GuzzleClient([
                 'verify' => $this->resolveVerifyOption(),
-                'timeout' => (int) config('services.gemini.timeout', 60),
-                'connect_timeout' => (int) config('services.gemini.connect_timeout', 15),
+                'timeout' => $timeout,
+                'connect_timeout' => $connectTimeout,
             ]))
             ->make();
     }

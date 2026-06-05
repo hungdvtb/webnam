@@ -51,11 +51,11 @@ class GeminiService
         ];
     }
 
-    public function generateText(string $prompt, ?int $accountId = null, ?string $model = null): array
+    public function generateText(string $prompt, ?int $accountId = null, ?string $model = null, array $options = []): array
     {
         $config = $this->assertAvailable($accountId, $model);
 
-        return $this->generateContentWithFallback($config, $prompt);
+        return $this->generateContentWithFallback($config, $prompt, null, $options);
     }
 
     public function readImage(
@@ -179,9 +179,14 @@ class GeminiService
         ];
     }
 
-    private function generateContentWithFallback(array $config, string $prompt, ?Blob $blob = null): array
+    private function generateContentWithFallback(array $config, string $prompt, ?Blob $blob = null, array $options = []): array
     {
         $allApiKeys = $config['all_api_keys'] ?: [$config['api_key']];
+        $maxApiKeys = (int) ($options['max_api_keys'] ?? 0);
+        if ($maxApiKeys > 0) {
+            $allApiKeys = array_slice($allApiKeys, 0, $maxApiKeys);
+        }
+
         $lastException = null;
 
         $requestedModels = preg_split('/[\s,;]+/', $config['model'], -1, PREG_SPLIT_NO_EMPTY);
@@ -189,8 +194,16 @@ class GeminiService
             array_map(fn($m) => $this->normalizeModelName($m), $requestedModels),
             self::FALLBACK_MODELS
         )));
+        $maxModelCandidates = (int) ($options['max_model_candidates'] ?? 0);
+        if ($maxModelCandidates > 0) {
+            $modelCandidates = array_slice($modelCandidates, 0, $maxModelCandidates);
+        }
 
         $brokenKeys = [];
+        $transientRetryDelaysMs = array_values(array_filter(
+            (array) ($options['transient_retry_delays_ms'] ?? self::TRANSIENT_RETRY_DELAYS_MS),
+            fn ($delayMs) => is_numeric($delayMs) && (int) $delayMs >= 0
+        ));
 
         foreach ($allApiKeys as $keyIndex => $apiKey) {
             // Kiểm tra cache xem key này có đang bị rate limit không
@@ -207,20 +220,54 @@ class GeminiService
                     continue;
                 }
 
-                $attemptCount = count(self::TRANSIENT_RETRY_DELAYS_MS) + 1;
+                $attemptCount = count($transientRetryDelaysMs) + 1;
 
                 for ($attempt = 0; $attempt < $attemptCount; $attempt++) {
+                    $requestSent = false;
+                    $usage = null;
+
                     try {
-                        $client = $this->geminiClientFactory->make($apiKey);
+                        $client = $this->geminiClientFactory->make($apiKey, $options);
+                        $requestSent = true;
                         $response = $blob === null
                             ? $client->generativeModel($model)->generateContent($prompt)
                             : $client->generativeModel($model)->generateContent($prompt, $blob);
+                        $usageMetadata = $response->usageMetadata ?? null;
+                        $usage = $this->normalizeUsageMetadata(
+                            is_object($usageMetadata) && method_exists($usageMetadata, 'toArray')
+                                ? $usageMetadata->toArray()
+                                : null
+                        );
+                        $text = trim((string) $response->text());
+
+                        $this->notifyRequestAttempt($options, [
+                            'provider' => 'gemini',
+                            'status' => 'success',
+                            'model' => $model,
+                            'key_index' => $keyIndex + 1,
+                            'attempt' => $attempt + 1,
+                            'usage' => $usage,
+                        ]);
 
                         return [
-                            'text' => trim((string) $response->text()),
+                            'text' => $text,
                             'model' => $model,
+                            'usage' => $usage,
                         ];
                     } catch (\Throwable $exception) {
+                        if (($requestSent ?? false) === true) {
+                            $this->notifyRequestAttempt($options, [
+                                'provider' => 'gemini',
+                                'status' => 'failed',
+                                'model' => $model,
+                                'key_index' => $keyIndex + 1,
+                                'attempt' => $attempt + 1,
+                                'usage' => isset($usage) ? $this->normalizeUsageMetadata($usage) : null,
+                                'error_class' => $exception::class,
+                                'error_message' => $exception->getMessage(),
+                            ]);
+                        }
+
                         $lastException = $exception;
                         $message = strtolower($exception->getMessage());
 
@@ -243,7 +290,7 @@ class GeminiService
                         }
 
                         // 4. Nếu lỗi tạm thời (Mạng, Demand cao) -> Thử lại chính khóa + model này
-                        $delayMs = self::TRANSIENT_RETRY_DELAYS_MS[$attempt] ?? null;
+                        $delayMs = $transientRetryDelaysMs[$attempt] ?? null;
                         if ($delayMs !== null && $this->shouldRetryTransientFailure($exception)) {
                             usleep($delayMs * 1000);
                             continue;
@@ -352,6 +399,39 @@ class GeminiService
         }
 
         return false;
+    }
+
+    private function notifyRequestAttempt(array $options, array $payload): void
+    {
+        $callback = $options['on_request_attempt'] ?? null;
+        if (!is_callable($callback)) {
+            return;
+        }
+
+        try {
+            $callback($payload);
+        } catch (\Throwable) {
+            // Telemetry callbacks must not affect the actual AI request flow.
+        }
+    }
+
+    private function normalizeUsageMetadata(mixed $usage): array
+    {
+        if (!is_array($usage)) {
+            return [
+                'promptTokenCount' => null,
+                'candidatesTokenCount' => null,
+                'totalTokenCount' => null,
+                'cachedContentTokenCount' => null,
+            ];
+        }
+
+        return [
+            'promptTokenCount' => isset($usage['promptTokenCount']) ? (int) $usage['promptTokenCount'] : null,
+            'candidatesTokenCount' => isset($usage['candidatesTokenCount']) ? (int) $usage['candidatesTokenCount'] : null,
+            'totalTokenCount' => isset($usage['totalTokenCount']) ? (int) $usage['totalTokenCount'] : null,
+            'cachedContentTokenCount' => isset($usage['cachedContentTokenCount']) ? (int) $usage['cachedContentTokenCount'] : null,
+        ];
     }
 
     private function normalizeBoolean(mixed $value, bool $default = false): bool

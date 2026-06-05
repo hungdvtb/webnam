@@ -223,22 +223,21 @@ class ProductController extends Controller
         }
 
         $hasBundleOptionUid = $this->hasProductLinksBundleOptionUid();
+        $hasBundleOptionStatus = $this->hasProductLinksBundleOptionStatus();
         $bundleOptionUidSelectSql = $hasBundleOptionUid ? 'bundle_option_uid' : 'NULL as bundle_option_uid';
+        $bundleOptionStatusSelectSql = $hasBundleOptionStatus ? 'bundle_option_status' : 'NULL as bundle_option_status';
         $bundleOptionUidGroupColumns = $hasBundleOptionUid
             ? ['bundle_option_uid', 'option_post_id', 'option_title']
             : ['option_post_id', 'option_title'];
+        if ($hasBundleOptionStatus) {
+            $bundleOptionUidGroupColumns[] = 'bundle_option_status';
+        }
 
         $optionRows = DB::table('product_links')
             ->where('product_id', $product->id)
             ->where('link_type', 'bundle')
-            ->when($this->hasProductLinksBundleOptionStatus(), function ($query) {
-                $query->where(function ($visibleQuery) {
-                    $visibleQuery
-                        ->whereNull('bundle_option_status')
-                        ->orWhere('bundle_option_status', '<>', self::BUNDLE_OPTION_STATUS_INTERNAL);
-                });
-            })
             ->selectRaw($bundleOptionUidSelectSql)
+            ->selectRaw($bundleOptionStatusSelectSql)
             ->addSelect('option_post_id', 'option_title')
             ->selectRaw('MIN(position) as first_position')
             ->groupBy(...$bundleOptionUidGroupColumns)
@@ -255,6 +254,9 @@ class ProductController extends Controller
             $optionUid = $this->normalizeBundleOptionUid($row->bundle_option_uid ?? null);
             $optionKey = $this->normalizeBundleOptionKey($optionPostId, $optionTitle);
             $optionKeyCandidates = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle, $optionUid);
+            $optionStatus = $this->isInternalBundleOptionStatus($row->bundle_option_status ?? null)
+                ? self::BUNDLE_OPTION_STATUS_INTERNAL
+                : 'visible';
 
             $matchesUid = $normalizedRequestedUid !== null && $optionUid !== null && $normalizedRequestedUid === $optionUid;
             $matchesKey = $normalizedRequestedKey !== ''
@@ -268,11 +270,14 @@ class ProductController extends Controller
                     'option_key' => $optionKey,
                     'option_post_id' => $optionPostId,
                     'option_title' => $optionTitle,
+                    'option_status' => $optionStatus,
+                    'matched' => true,
                 ];
             }
         }
 
-        $fallbackRow = $optionRows->first();
+        $fallbackRow = $optionRows->first(fn ($row) => ! $this->isInternalBundleOptionStatus($row->bundle_option_status ?? null))
+            ?: $optionRows->first();
         $fallbackPostId = filled($fallbackRow->option_post_id ?? null) ? (int) $fallbackRow->option_post_id : null;
         $fallbackTitle = Str::squish((string) ($fallbackRow->option_title ?? '')) ?: 'Mặc định';
 
@@ -281,6 +286,10 @@ class ProductController extends Controller
             'option_key' => $this->normalizeBundleOptionKey($fallbackPostId, $fallbackTitle),
             'option_post_id' => $fallbackPostId,
             'option_title' => $fallbackTitle,
+            'option_status' => $this->isInternalBundleOptionStatus($fallbackRow->bundle_option_status ?? null)
+                ? self::BUNDLE_OPTION_STATUS_INTERNAL
+                : 'visible',
+            'matched' => false,
         ];
     }
 
@@ -815,7 +824,7 @@ class ProductController extends Controller
         })->all();
     }
 
-    private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts, ?Product $bundleProduct = null): array
+    private function buildBundleOptionCatalogForItems($bundleItems, Collection $variantMap, Collection $optionPosts, ?Product $bundleProduct = null, bool $includeInternalOptions = false): array
     {
         $catalog = [];
         $catalogAliases = [];
@@ -825,7 +834,7 @@ class ProductController extends Controller
                 continue;
             }
 
-            if ($this->isInternalBundleOptionStatus($bundleItem->pivot?->bundle_option_status ?? null)) {
+            if (!$includeInternalOptions && $this->isInternalBundleOptionStatus($bundleItem->pivot?->bundle_option_status ?? null)) {
                 continue;
             }
 
@@ -838,6 +847,11 @@ class ProductController extends Controller
             $catalogKey = $optionUid !== null ? 'uid:' . $optionUid : $optionKey;
             $optionAliases = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle, $optionUid);
             $optionPost = $optionPostId ? $optionPosts->get($optionPostId) : null;
+            $optionStatus = $this->isInternalBundleOptionStatus($bundleItem->pivot?->bundle_option_status ?? null)
+                ? self::BUNDLE_OPTION_STATUS_INTERNAL
+                : 'visible';
+            $optionVideoUrl = trim((string) ($bundleItem->pivot?->option_video_url ?? ''));
+            $optionVideoSource = trim((string) ($bundleItem->pivot?->option_video_source ?? ''));
             $selectedVariant = $this->resolveBundleItemVariantFromMap($bundleItem, $variantMap);
             $quantity = max(1, (int) ($bundleItem->pivot?->quantity ?? 1));
             $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
@@ -860,8 +874,14 @@ class ProductController extends Controller
                     'bundle_option_post_id' => $optionPostId,
                     'bundle_option_post_title' => Str::squish((string) ($optionPost?->title ?? '')) ?: null,
                     'bundle_option_post_slug' => Str::squish((string) ($optionPost?->slug ?? '')) ?: null,
+                    'bundle_option_status' => $optionStatus,
                     'primary_image' => $displayImage,
                     'main_image' => $this->extractImageUrl($displayImage),
+                    'option_image_url' => $this->extractImageUrl($displayImage),
+                    'option_video_url' => $optionVideoUrl !== '' ? $optionVideoUrl : null,
+                    'option_video_source' => $optionVideoSource !== '' ? $optionVideoSource : null,
+                    'video_url' => $optionVideoUrl !== '' ? $optionVideoUrl : null,
+                    'video_urls' => $optionVideoUrl !== '' ? [$optionVideoUrl] : [],
                     'price' => 0.0,
                     'current_price' => 0.0,
                     'special_price' => null,
@@ -889,6 +909,14 @@ class ProductController extends Controller
                     ?? $this->resolveBundleOptionGalleryImage($bundleProduct, $optionTitle);
                 $catalog[$catalogKey]['primary_image'] = $displayImage;
                 $catalog[$catalogKey]['main_image'] = $this->extractImageUrl($displayImage);
+                $catalog[$catalogKey]['option_image_url'] = $this->extractImageUrl($displayImage);
+            }
+
+            if (empty($catalog[$catalogKey]['option_video_url']) && $optionVideoUrl !== '') {
+                $catalog[$catalogKey]['option_video_url'] = $optionVideoUrl;
+                $catalog[$catalogKey]['option_video_source'] = $optionVideoSource !== '' ? $optionVideoSource : null;
+                $catalog[$catalogKey]['video_url'] = $optionVideoUrl;
+                $catalog[$catalogKey]['video_urls'] = [$optionVideoUrl];
             }
 
             $catalog[$catalogKey]['current_price'] += $currentUnitPrice * $quantity;
@@ -1005,6 +1033,18 @@ class ProductController extends Controller
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true);
         $selectedCategoryIds = [];
+
+        $typeInput = $request->query('types', $request->query('type'));
+        $requestedTypes = collect(is_array($typeInput) ? $typeInput : explode(',', (string) $typeInput))
+            ->flatMap(fn ($value) => explode(',', (string) $value))
+            ->map(fn ($value) => Str::lower(Str::squish((string) $value)))
+            ->filter(fn ($value) => in_array($value, ['simple', 'configurable', 'grouped', 'virtual', 'bundle', 'downloadable'], true))
+            ->unique()
+            ->values();
+
+        if ($requestedTypes->isNotEmpty()) {
+            $query->whereIn('products.type', $requestedTypes->all());
+        }
 
         // Filter by category slug
         if ($request->filled('category')) {
@@ -1755,13 +1795,49 @@ class ProductController extends Controller
             $accountId = $this->getAccountId($request);
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
-            $requestedKey = trim((string) $request->query('bundle_option_key', ''));
-            $requestedUid = $this->normalizeBundleOptionUid($request->query('bundle_option_uid', ''));
+            $compactRequestedOption = trim((string) (
+                $request->query('o')
+                ?? $request->query('bo')
+                ?? ''
+            ));
+            $requestedKey = trim((string) (
+                $request->query('bundle_option_key')
+                ?? $request->query('bk')
+                ?? $request->query('option_key')
+                ?? ''
+            ));
+            $requestedUid = $this->normalizeBundleOptionUid(
+                $request->query('bundle_option_uid')
+                ?? $request->query('option_uid')
+                ?? ''
+            );
             $requestedTitle = Str::squish((string) (
                 $request->query('bundle_option')
                 ?? $request->query('bundle_option_title')
+                ?? $request->query('bn')
+                ?? $request->query('option')
                 ?? ''
             ));
+
+            if ($compactRequestedOption !== '') {
+                $compactIsUidKey = Str::startsWith($compactRequestedOption, 'uid:');
+                $compactIsStructuredKey = $compactIsUidKey
+                    || Str::startsWith($compactRequestedOption, ['post:', 'title:']);
+
+                if ($requestedKey === '' && $compactIsStructuredKey) {
+                    $requestedKey = $compactRequestedOption;
+                }
+
+                if ($requestedUid === null) {
+                    $requestedUid = $compactIsUidKey
+                        ? $this->normalizeBundleOptionUid(Str::after($compactRequestedOption, 'uid:'))
+                        : ($compactIsStructuredKey ? null : $this->normalizeBundleOptionUid($compactRequestedOption));
+                }
+
+                if ($requestedKey === '' && $requestedUid === null && $requestedTitle === '') {
+                    $requestedTitle = Str::squish($compactRequestedOption);
+                }
+            }
 
             $product = Product::query()
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
@@ -1798,6 +1874,8 @@ class ProductController extends Controller
             }
 
             $optionMatch = $this->resolveRequestedBundleOptionMatch($product, $requestedKey, $requestedTitle, $requestedUid);
+            $includeInternalOption = (bool) ($optionMatch['matched'] ?? false)
+                && $this->isInternalBundleOptionStatus($optionMatch['option_status'] ?? null);
             $stepStartedAt = $this->markTiming($timings, 'resolve_option', $stepStartedAt);
 
             $bundleItemsQuery = $product->bundleItems()
@@ -1806,7 +1884,9 @@ class ProductController extends Controller
                     'images',
                     'attributeValues.attribute',
                 ]);
-            $this->applyVisibleBundleOptionConstraint($bundleItemsQuery);
+            if (!$includeInternalOption) {
+                $this->applyVisibleBundleOptionConstraint($bundleItemsQuery);
+            }
 
             if ($optionMatch && filled($optionMatch['option_uid'] ?? null)) {
                 $bundleItemsQuery->wherePivot('bundle_option_uid', $optionMatch['option_uid']);
@@ -1896,6 +1976,7 @@ class ProductController extends Controller
                 $variantMap,
                 $bundleOptionPosts,
                 $product,
+                $includeInternalOption,
             );
             $stepStartedAt = $this->markTiming($timings, 'selected_catalog', $stepStartedAt);
 
@@ -1942,6 +2023,127 @@ class ProductController extends Controller
             return $this->timedJsonResponse($responseData, $timings);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Error in ProductController@bundleOptionDetail for slug '{$slug}': " . $e->getMessage());
+
+            if ($e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {
+                return response()->json(['message' => 'Product not found'], 404);
+            }
+
+            return response()->json([
+                'message' => 'Internal server error',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function bundleItemsSummary(Request $request, $slug)
+    {
+        try {
+            $accountId = $this->getAccountId($request);
+            $requestedKey = trim((string) (
+                $request->query('bundle_option_key')
+                ?? $request->query('bk')
+                ?? $request->query('option_key')
+                ?? ''
+            ));
+            $requestedUid = $this->normalizeBundleOptionUid(
+                $request->query('bundle_option_uid')
+                ?? $request->query('option_uid')
+                ?? ''
+            );
+            $requestedTitle = Str::squish((string) (
+                $request->query('bundle_option')
+                ?? $request->query('bundle_option_title')
+                ?? $request->query('option')
+                ?? ''
+            ));
+
+            $product = Product::query()
+                ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                ->where('status', true)
+                ->with([
+                    'bundleItems' => function ($query) {
+                        $query->where('status', true);
+                        $this->applyVisibleBundleOptionConstraint($query);
+                    },
+                ])
+                ->where(function ($query) use ($slug) {
+                    $query->where('slug', $slug);
+                    if (is_numeric($slug)) {
+                        $query->orWhere('id', (int) $slug);
+                    }
+                })
+                ->firstOrFail();
+
+            $bundleItems = $product->bundleItems instanceof Collection
+                ? $product->bundleItems
+                : collect();
+
+            if ($requestedUid || $requestedKey !== '' || $requestedTitle !== '') {
+                $bundleItems = $bundleItems->filter(function (Product $bundleItem) use ($requestedUid, $requestedKey, $requestedTitle) {
+                    $optionPostId = data_get($bundleItem, 'pivot.option_post_id');
+                    $optionTitle = Str::squish((string) data_get($bundleItem, 'pivot.option_title', ''));
+                    $optionUid = $this->normalizeBundleOptionUid(data_get($bundleItem, 'pivot.bundle_option_uid'));
+                    $optionKeys = $this->getBundleOptionKeyCandidates(null, $optionPostId, $optionTitle, $optionUid);
+
+                    if ($requestedUid && $optionUid === $requestedUid) {
+                        return true;
+                    }
+
+                    if ($requestedKey !== '' && in_array($requestedKey, $optionKeys, true)) {
+                        return true;
+                    }
+
+                    return $requestedTitle !== ''
+                        && Str::lower($optionTitle) === Str::lower($requestedTitle);
+                })->values();
+            }
+
+            $variantIds = $bundleItems
+                ->pluck('pivot.variant_id')
+                ->filter(fn ($variantId) => filled($variantId))
+                ->map(fn ($variantId) => (int) $variantId)
+                ->unique()
+                ->values();
+
+            $variantMap = $variantIds->isNotEmpty()
+                ? Product::query()
+                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+                    ->whereIn('id', $variantIds->all())
+                    ->get()
+                    ->keyBy(fn (Product $variant) => (int) $variant->id)
+                : collect();
+
+            $items = $bundleItems
+                ->map(function (Product $bundleItem) use ($variantMap) {
+                    $selectedVariant = $this->resolveBundleItemVariantFromMap($bundleItem, $variantMap);
+                    $displayProduct = $selectedVariant instanceof Product ? $selectedVariant : $bundleItem;
+                    $optionPostId = data_get($bundleItem, 'pivot.option_post_id');
+                    $optionTitle = Str::squish((string) data_get($bundleItem, 'pivot.option_title', '')) ?: 'Mặc định';
+                    $optionUid = $this->normalizeBundleOptionUid(data_get($bundleItem, 'pivot.bundle_option_uid'));
+                    $quantity = max(1, (int) (data_get($bundleItem, 'pivot.quantity') ?? 1));
+                    $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
+                    $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
+
+                    return [
+                        'id' => $displayProduct->id,
+                        'name' => $displayProduct->name,
+                        'sku' => $displayProduct->sku,
+                        'quantity' => $quantity,
+                        'current_price' => $currentUnitPrice,
+                        'price' => $baseUnitPrice,
+                        'option_uid' => $optionUid,
+                        'option_key' => $this->normalizeBundleOptionKey($optionPostId, $optionTitle),
+                        'option_title' => $optionTitle,
+                    ];
+                })
+                ->values()
+                ->all();
+
+            return response()->json(Utf8Sanitizer::normalize([
+                'items' => $items,
+            ]));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error("Error in ProductController@bundleItemsSummary for slug '{$slug}': " . $e->getMessage());
 
             if ($e instanceof \Illuminate\Database\Eloquent\ModelNotFoundException) {
                 return response()->json(['message' => 'Product not found'], 404);

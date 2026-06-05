@@ -43,7 +43,8 @@ Route::get('/product-groups/{id}', [ProductGroupController::class , 'show']);
 
 Route::get('/blog', [\App\Http\Controllers\Api\BlogController::class , 'index']);
 Route::get('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'categories']);
-Route::get('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'show']);
+Route::get('/blog/{id}', [\App\Http\Controllers\Api\BlogController::class , 'show'])
+    ->where('id', '^(?!seo-keywords$|ai-bulk$|ai-url$|bulk-seo-keyword$|bulk-category$)[^/]+$');
 
 // Public account resolution by site_code (for frontend)
 Route::get('/accounts/resolve/{code}', [\App\Http\Controllers\AccountController::class , 'resolveBySiteCode']);
@@ -484,7 +485,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
         Route::get('/blog/ai-url/jobs/{jobId}', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'show'])->whereNumber('jobId');
         Route::post('/blog/ai-url/jobs/{jobId}/run', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'run'])->whereNumber('jobId');
         Route::post('/blog/ai-url/jobs/{jobId}/scan', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'scan'])->whereNumber('jobId');
-        Route::post('/blog/ai-url/jobs/{jobId}/process-next', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'run'])->whereNumber('jobId');
+        Route::post('/blog/ai-url/jobs/{jobId}/process-next', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'processNext'])->whereNumber('jobId');
         Route::post('/blog/ai-url/jobs/{jobId}/pause', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'pause'])->whereNumber('jobId');
         Route::post('/blog/ai-url/jobs/{jobId}/reset-failed', [\App\Http\Controllers\Api\BlogAiUrlImportController::class , 'resetFailed'])->whereNumber('jobId');
         Route::post('/blog/categories', [\App\Http\Controllers\Api\BlogController::class , 'storeCategory']);
@@ -615,6 +616,7 @@ Route::group(['prefix' => 'storefront'], function () {
 Route::group(['prefix' => 'web-api'], function () {
     Route::get('/products', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'index']);
     Route::get('/products/{slug}/bundle-option-detail', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'bundleOptionDetail']);
+    Route::get('/products/{slug}/bundle-items-summary', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'bundleItemsSummary']);
     Route::get('/products/{slug}', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'show']);
     Route::get('/products/{slug}/related', [\App\Http\Controllers\StorefrontApi\ProductController::class, 'related']);
     Route::get('/categories', [\App\Http\Controllers\StorefrontApi\CategoryController::class, 'index']);

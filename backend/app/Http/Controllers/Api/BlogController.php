@@ -12,6 +12,7 @@ use App\Services\BlogExcelService;
 use App\Services\BlogMediaGallerySupport;
 use App\Services\BlogSystemPostService;
 use App\Services\MediaService;
+use App\Support\BlogContentHtmlNormalizer;
 use App\Support\PublicSiteUrlResolver;
 use DOMDocument;
 use DOMXPath;
@@ -651,7 +652,7 @@ class BlogController extends Controller
             $validated['blog_category_id'] ?? null
         );
         $validated['seo_keyword'] = $this->normalizeKeyword($validated['seo_keyword'] ?? null);
-        $validated['content'] = BlogMediaGallerySupport::normalizeHtml((string) ($validated['content'] ?? ''));
+        $validated['content'] = $this->normalizeBlogContentHtml((string) ($validated['content'] ?? ''));
         $validated['is_published'] = array_key_exists('is_published', $validated)
             ? (bool) $validated['is_published']
             : true;
@@ -772,7 +773,7 @@ class BlogController extends Controller
         }
 
         if (array_key_exists('content', $validated)) {
-            $validated['content'] = BlogMediaGallerySupport::normalizeHtml((string) $validated['content']);
+            $validated['content'] = $this->normalizeBlogContentHtml((string) $validated['content']);
         }
 
         if (array_key_exists('blog_category_id', $validated)) {
@@ -1336,6 +1337,13 @@ class BlogController extends Controller
         $post['public_url'] = $resolver->buildBlogUrl($slug, $accountId);
 
         return $post;
+    }
+
+    private function normalizeBlogContentHtml(string $content): string
+    {
+        return BlogMediaGallerySupport::normalizeHtml(
+            BlogContentHtmlNormalizer::normalize($content)
+        );
     }
 
     private function prepareFeaturedImageForPersistence(array &$payload): void

@@ -68,6 +68,60 @@ const buildRelatedViewAllHref = (product, relatedMeta) => {
     : '/products';
 };
 
+const normalizeBundleIdentity = (value = '') => String(value ?? '').trim();
+
+const collectBundleOptionIdentityCandidates = (product = {}) => [
+  ...(Array.isArray(product?.bundle_options) ? product.bundle_options : []),
+  ...(Array.isArray(product?.bundle_items) ? product.bundle_items : []),
+  ...(Array.isArray(product?.grouped_items) ? product.grouped_items : []),
+];
+
+const productIncludesRequestedBundleOption = (
+  product,
+  requestedUid = '',
+  requestedKey = '',
+  requestedTitle = '',
+) => {
+  const normalizedUid = normalizeBundleIdentity(requestedUid);
+  const normalizedKey = normalizeBundleIdentity(requestedKey);
+  const normalizedTitle = normalizeBundleIdentity(requestedTitle);
+
+  if (!normalizedUid && !normalizedKey && !normalizedTitle) {
+    return true;
+  }
+
+  return collectBundleOptionIdentityCandidates(product).some((item) => {
+    const optionUid = normalizeBundleIdentity(
+      item?.bundle_option_uid
+      || item?.bundleOptionUid
+      || item?.option_uid
+      || item?.uid
+      || item?.pivot?.bundle_option_uid
+    );
+    const optionKey = normalizeBundleIdentity(
+      item?.bundle_option_key
+      || item?.bundleOptionKey
+      || item?.option_key
+      || item?.key
+      || item?.pivot?.option_key
+    );
+    const optionTitle = normalizeBundleIdentity(
+      item?.bundle_option_title
+      || item?.bundleOptionTitle
+      || item?.option_title
+      || item?.title
+      || item?.name
+      || item?.pivot?.option_title
+    );
+
+    return (
+      (normalizedUid && optionUid === normalizedUid)
+      || (normalizedKey && optionKey === normalizedKey)
+      || (normalizedTitle && optionTitle === normalizedTitle)
+    );
+  });
+};
+
 function DeferredDescription({ product, descriptionReady }) {
   const descriptionHtml = useMemo(
     () => buildProductDescriptionHtml(product?.description || ''),
@@ -387,9 +441,20 @@ export default function ProductDetailClientShell({
         const fullProduct = productResult.status === 'fulfilled' ? productResult.value : product;
 
         if (productResult.status === 'fulfilled') {
-          setProduct(productResult.value);
+          const canReplaceCurrentProduct = !hasRequestedBundleOption
+            || productIncludesRequestedBundleOption(
+              productResult.value,
+              requestedBundleOptionUid,
+              requestedBundleOptionKey,
+              requestedBundleOptionTitle,
+            );
+
+          if (canReplaceCurrentProduct) {
+            setProduct(productResult.value);
+            cacheBundleProductDetail(productResult.value, slug);
+          }
+
           setFullProductReady(true);
-          cacheBundleProductDetail(productResult.value, slug);
         } else {
           console.error('Failed to fetch deferred product detail:', productResult.reason);
         }
@@ -425,6 +490,9 @@ export default function ProductDetailClientShell({
     deferFullProduct,
     hasRequestedBundleOption,
     product,
+    requestedBundleOptionKey,
+    requestedBundleOptionTitle,
+    requestedBundleOptionUid,
     slug,
   ]);
 

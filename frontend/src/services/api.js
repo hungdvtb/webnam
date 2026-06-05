@@ -164,6 +164,22 @@ export const isRetryableRequestError = (error) => (
     isRetryableNetworkError(error) || isRetryableResponseError(error)
 );
 
+export const describeApiConnectionError = (error) => {
+    if (isRetryableNetworkError(error)) {
+        return `Khong ket noi duoc backend API (${API_BASE_URL}). Kiem tra frontend :3003 va backend :8003 co dang chay dung port khong.`;
+    }
+
+    const status = Number(error?.response?.status || 0);
+    if ([502, 503, 504].includes(status)) {
+        return `Backend API dang gian doan (${status}). He thong se tu giam tan suat polling.`;
+    }
+
+    return error?.response?.data?.message
+        || error?.response?.data?.error
+        || error?.message
+        || 'Khong the ket noi backend API.';
+};
+
 const shouldRetryRequest = (error) => {
     const config = error?.config;
     if (!config || config.signal?.aborted || !requestAllowsRetry(config)) {
@@ -695,8 +711,8 @@ export const leadApi = {
     restore: (id) => api.post(`/leads/${id}/restore`),
     bulkDelete: (ids) => api.post('/leads/bulk-delete', { ids }),
     bulkRestore: (ids) => api.post('/leads/bulk-restore', { ids }),
-    realtime: (params) => api.get('/leads/realtime', { params }),
-    getNotifications: (params) => api.get('/leads/notifications', params ? { params } : {}),
+    realtime: (params, config = {}) => api.get('/leads/realtime', { params, ...config }),
+    getNotifications: (params, config = {}) => api.get('/leads/notifications', params ? { params, ...config } : config),
     markNotificationsRead: (data) => api.post('/leads/notifications/read', data),
     updateNotificationSettings: (data) => api.post('/leads/notification-settings', data, multipartConfig(data)),
     getNotes: (id) => api.get(`/leads/${id}/notes`),
@@ -943,7 +959,7 @@ export const reviewApi = {
     adminBulkImport: (data) => api.post('/admin/reviews/bulk-import', data, multipartConfig(data)),
     adminExport: (params) => api.get('/admin/reviews/export', { params, responseType: 'blob' }),
     seedSample: (data) => api.post('/admin/reviews/seed-sample', data),
-    unreadSummary: () => api.get('/admin/reviews/unread-summary'),
+    unreadSummary: (config = {}) => api.get('/admin/reviews/unread-summary', config),
     markSeen: () => api.post('/admin/reviews/mark-seen'),
     adminUpdate: (id, data) => api.put(`/admin/reviews/${id}`, data),
     adminDelete: (id) => api.delete(`/admin/reviews/${id}`),
@@ -987,14 +1003,14 @@ export const blogApi = {
     createAiBulkJob: (formData) => api.post('/blog/ai-bulk/jobs', formData, multipartConfig(formData)),
     getAiBulkJob: (jobId) => api.get(`/blog/ai-bulk/jobs/${jobId}`),
     runAiBulkJob: (jobId) => api.post(`/blog/ai-bulk/jobs/${jobId}/run`),
-    listAiUrlJobs: (params) => api.get('/blog/ai-url/jobs', { params }),
-    createAiUrlJob: (data) => api.post('/blog/ai-url/jobs', data),
-    getAiUrlJob: (jobId) => api.get(`/blog/ai-url/jobs/${jobId}`),
-    runAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/run`),
-    scanAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/scan`),
-    processNextAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/process-next`),
-    pauseAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/pause`),
-    resetFailedAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/reset-failed`),
+    listAiUrlJobs: (params, config = {}) => api.get('/blog/ai-url/jobs', { params, ...config }),
+    createAiUrlJob: (data) => api.post('/blog/ai-url/jobs', data, { retryPolicy: 'never' }),
+    getAiUrlJob: (jobId, config = {}) => api.get(`/blog/ai-url/jobs/${jobId}`, config),
+    runAiUrlJob: (jobId, data = {}) => api.post(`/blog/ai-url/jobs/${jobId}/run`, data, { retryPolicy: 'never' }),
+    scanAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/scan`, {}, { retryPolicy: 'never' }),
+    processNextAiUrlJob: (jobId, data = {}) => api.post(`/blog/ai-url/jobs/${jobId}/process-next`, data, { retryPolicy: 'never' }),
+    pauseAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/pause`, {}, { retryPolicy: 'never' }),
+    resetFailedAiUrlJob: (jobId) => api.post(`/blog/ai-url/jobs/${jobId}/reset-failed`, {}, { retryPolicy: 'never' }),
 };
 
 export const invoiceApi = {

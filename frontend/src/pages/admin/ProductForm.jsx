@@ -2242,6 +2242,41 @@ const isFileLikeValue = (value) => (
     && value instanceof File
 );
 
+const AD_TRACKING_LINK_DEFINITIONS = [
+    { key: 'facebook', label: 'Link Facebook', source: 'facebook', helper: 'utm_source=facebook' },
+    { key: 'google', label: 'Link Google', source: 'google', helper: 'utm_source=google' },
+    { key: 'tiktok', label: 'Link TikTok', source: 'tiktok', helper: 'utm_source=tiktok' },
+];
+
+const normalizeBundleOptionLinkText = (value) => String(value ?? '').trim();
+
+const normalizeBundleOptionKeyText = (value) => (
+    normalizeBundleOptionLinkText(value)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ')
+);
+
+const buildBundleOptionLinkKey = (option = {}) => {
+    const postId = normalizeBundleOptionLinkText(option.post_id ?? option.bundle_option_post_id);
+    if (/^\d+$/.test(postId)) {
+        return `post:${Number(postId)}`;
+    }
+
+    return `title:${normalizeBundleOptionKeyText(option.title ?? option.bundle_option_title) || 'mac dinh'}`;
+};
+
+const buildCompactBundleOptionLinkValue = (option = {}) => {
+    const optionUid = normalizeBundleOptionLinkText(option.uid ?? option.bundle_option_uid);
+
+    return optionUid || buildBundleOptionLinkKey(option);
+};
+
 const ProductForm = () => {
     const { id } = useParams();
     const isEdit = !!id;
@@ -7622,26 +7657,69 @@ const ProductForm = () => {
         }
     }, []);
 
-    const trackingLinks = useMemo(() => ([
-        {
-            key: 'facebook',
-            label: 'Link Facebook',
-            helper: 'utm_source=facebook',
-            url: buildTrackingLink(baseProductLink, 'facebook'),
-        },
-        {
-            key: 'google',
-            label: 'Link Google',
-            helper: 'utm_source=google',
-            url: buildTrackingLink(baseProductLink, 'google'),
-        },
-        {
-            key: 'tiktok',
-            label: 'Link TikTok',
-            helper: 'utm_source=tiktok',
-            url: buildTrackingLink(baseProductLink, 'tiktok'),
-        },
-    ]), [baseProductLink, buildTrackingLink]);
+    const buildUrlWithQueryParams = useCallback((url, params = {}) => {
+        if (!url) {
+            return '';
+        }
+
+        const entries = Object.entries(params)
+            .map(([key, value]) => [key, normalizeBundleOptionLinkText(value)])
+            .filter(([, value]) => value !== '');
+
+        if (entries.length === 0) {
+            return url;
+        }
+
+        try {
+            const nextUrl = new URL(url);
+            entries.forEach(([key, value]) => nextUrl.searchParams.set(key, value));
+            return nextUrl.toString();
+        } catch (error) {
+            const query = new URLSearchParams(entries).toString();
+            return `${url}${url.includes('?') ? '&' : '?'}${query}`;
+        }
+    }, []);
+
+    const buildBundleOptionUrl = useCallback((option = {}) => {
+        return buildUrlWithQueryParams(baseProductLink, {
+            o: buildCompactBundleOptionLinkValue(option),
+        });
+    }, [baseProductLink, buildUrlWithQueryParams]);
+
+    const trackingLinks = useMemo(() => (
+        AD_TRACKING_LINK_DEFINITIONS.map((definition) => ({
+            ...definition,
+            url: buildTrackingLink(baseProductLink, definition.source),
+        }))
+    ), [baseProductLink, buildTrackingLink]);
+
+    const bundleOptionLinks = useMemo(() => {
+        if (formData.type !== 'bundle' || !Array.isArray(bundleOptions) || bundleOptions.length === 0) {
+            return [];
+        }
+
+        return bundleOptions.map((option, index) => {
+            const title = normalizeBundleOptionLinkText(option.title ?? option.bundle_option_title) || `Tuy chon ${index + 1}`;
+            const uid = normalizeBundleOptionLinkText(option.uid ?? option.bundle_option_uid);
+            const optionKey = buildBundleOptionLinkKey(option);
+            const compactValue = buildCompactBundleOptionLinkValue(option);
+            const url = buildBundleOptionUrl(option);
+
+            return {
+                id: option.id || uid || `${optionKey}-${index}`,
+                title,
+                uid,
+                optionKey,
+                compactValue,
+                isInternal: isInternalBundleOption(option),
+                url,
+                trackingLinks: AD_TRACKING_LINK_DEFINITIONS.map((definition) => ({
+                    ...definition,
+                    url: buildTrackingLink(url, definition.source),
+                })),
+            };
+        });
+    }, [buildBundleOptionUrl, buildTrackingLink, bundleOptions, formData.type]);
 
     const copyTextToClipboard = useCallback((value, successMessage) => {
         if (!value) {
@@ -11860,9 +11938,9 @@ const ProductForm = () => {
                             initial={{ opacity: 0, scale: 0.95, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                            className="relative w-full max-w-lg bg-white shadow-premium-lg rounded-sm overflow-hidden"
+                            className="relative flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col bg-white shadow-premium-lg rounded-sm overflow-hidden"
                         >
-                            <div className="bg-[#fcfaf7] px-6 py-4 border-b border-gold/10 flex justify-between items-center">
+                            <div className="shrink-0 bg-[#fcfaf7] px-6 py-4 border-b border-gold/10 flex justify-between items-center">
                                 <div className="flex items-center gap-3">
                                     <span className="material-symbols-outlined text-gold">link</span>
                                     <h3 className="font-sans text-[16px] font-bold text-primary uppercase tracking-tight">Quản lý đường dẫn hiển thị</h3>
@@ -11871,7 +11949,7 @@ const ProductForm = () => {
                                     <span className="material-symbols-outlined">close</span>
                                 </button>
                             </div>
-                            <div className="p-6">
+                            <div className="p-6 overflow-y-auto custom-scrollbar">
                                 <div className="mb-6">
                                     <label className="block text-[11px] font-black uppercase text-stone/40 mb-2 tracking-widest">Xem trước URL sản phẩm</label>
                                     <div
@@ -11928,6 +12006,69 @@ const ProductForm = () => {
                                     </div>
                                 </div>
 
+                                {bundleOptionLinks.length > 0 && (
+                                    <div className="mb-6 rounded-sm border border-primary/10 bg-white p-4 shadow-sm">
+                                        <div className="mb-3 flex items-center justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <h4 className="text-[12px] font-black uppercase tracking-[0.14em] text-primary">Link riêng từng tùy chọn</h4>
+                                                <p className="mt-1 text-[11px] text-stone/50">
+                                                    Mỗi link giữ slug sản phẩm, mã/tên tùy chọn và UTM nguồn quảng cáo.
+                                                </p>
+                                            </div>
+                                            <span className="shrink-0 rounded-full bg-gold/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-primary">
+                                                {bundleOptionLinks.length} tùy chọn
+                                            </span>
+                                        </div>
+
+                                        <div className="max-h-[360px] space-y-3 overflow-y-auto pr-1 custom-scrollbar">
+                                            {bundleOptionLinks.map((optionLink) => (
+                                                <div key={optionLink.id} className="rounded-sm border border-stone/10 bg-[#fcfaf7] p-3">
+                                                    <div className="mb-2 flex items-start justify-between gap-3">
+                                                        <div className="min-w-0">
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                <div className="text-[12px] font-black text-primary">{optionLink.title}</div>
+                                                                <span className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${optionLink.isInternal ? 'bg-brick/10 text-brick' : 'bg-emerald-50 text-emerald-700'}`}>
+                                                                    {optionLink.isInternal ? 'Nội bộ' : 'Hiển thị'}
+                                                                </span>
+                                                            </div>
+                                                            <div className="mt-1 truncate text-[10px] font-medium text-stone/45" title={[optionLink.compactValue ? `o=${optionLink.compactValue}` : '', optionLink.uid ? `uid=${optionLink.uid}` : '', `key=${optionLink.optionKey}`].filter(Boolean).join(' | ')}>
+                                                                {[optionLink.compactValue ? `o=${optionLink.compactValue}` : '', optionLink.uid ? `uid=${optionLink.uid}` : '', `key=${optionLink.optionKey}`].filter(Boolean).join(' | ')}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => copyTextToClipboard(optionLink.url, `Đã sao chép link tùy chọn ${optionLink.title}!`)}
+                                                            className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-gold/15 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.14em] text-primary transition-all hover:border-gold hover:bg-gold/10"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">content_copy</span>
+                                                            Copy link
+                                                        </button>
+                                                    </div>
+
+                                                    <div className="truncate rounded-sm bg-white px-2.5 py-2 text-[11px] text-stone/65" title={optionLink.url || 'Chưa có link tùy chọn'}>
+                                                        {optionLink.url || 'Sản phẩm cần có domain và slug để sinh link tùy chọn.'}
+                                                    </div>
+
+                                                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                                                        {optionLink.trackingLinks.map((trackingLink) => (
+                                                            <button
+                                                                key={`${optionLink.id}-${trackingLink.key}`}
+                                                                type="button"
+                                                                onClick={() => copyTextToClipboard(trackingLink.url, `Đã sao chép ${trackingLink.label.toLowerCase()} cho ${optionLink.title}!`)}
+                                                                className="inline-flex min-w-0 items-center justify-between gap-2 rounded-sm border border-stone/10 bg-white px-2.5 py-2 text-left text-[10px] font-black uppercase tracking-[0.1em] text-primary transition-all hover:border-gold/40 hover:bg-gold/5"
+                                                                title={trackingLink.url || 'Chưa có link tracking'}
+                                                            >
+                                                                <span className="truncate">{trackingLink.label.replace('Link ', '')}</span>
+                                                                <span className="material-symbols-outlined shrink-0 text-[14px]">content_copy</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="space-y-6">
                                     <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white">
                                         <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-gold tracking-widest leading-none uppercase">
@@ -11972,7 +12113,7 @@ const ProductForm = () => {
                                     </div>
                                 </div>
                             </div>
-                            <div className="p-4 bg-stone/5 border-t border-stone/10 flex justify-end gap-3">
+                            <div className="shrink-0 p-4 bg-stone/5 border-t border-stone/10 flex justify-end gap-3">
                                 <button
                                     onClick={() => setShowSlugModal(false)}
                                     className="px-6 py-2 text-[11px] font-bold uppercase tracking-widest text-stone hover:text-primary transition-all"

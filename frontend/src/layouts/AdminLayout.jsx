@@ -5,7 +5,11 @@ import { INVENTORY_NAV_ITEMS, buildInventoryPath } from '../config/adminInventor
 import useUserSettingsBootstrap from '../hooks/useUserSettingsBootstrap';
 import { normalizeAdminPermissions } from '../utils/adminPermissions';
 import LeadRealtimeNotifier from '../components/admin/LeadRealtimeNotifier';
-import { reviewApi } from '../services/api';
+import { describeApiConnectionError, isRetryableRequestError, reviewApi } from '../services/api';
+
+const REVIEW_UNREAD_POLL_DELAY_MS = 60000;
+const REVIEW_UNREAD_ERROR_DELAY_MS = 10000;
+const REVIEW_UNREAD_MAX_ERROR_DELAY_MS = 120000;
 
 
 const SidebarText = ({ isExpanded, className = '', children }) => (
@@ -175,14 +179,34 @@ const AdminLayout = () => {
         }
 
         let isMounted = true;
+        let timeoutId = null;
+        let retryCount = 0;
+
+        const scheduleUnreadSync = (delayMs = REVIEW_UNREAD_POLL_DELAY_MS) => {
+            if (!isMounted) return;
+            if (timeoutId) window.clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(syncUnread, delayMs);
+        };
+
         const syncUnread = () => {
-            reviewApi.unreadSummary()
+            reviewApi.unreadSummary({ maxRetries: 0 })
                 .then((response) => {
                     if (!isMounted) return;
+                    retryCount = 0;
                     setReviewUnreadCount(Number(response?.data?.total || 0));
                 })
-                .catch(() => {
+                .catch((error) => {
+                    retryCount += 1;
+                    if (!isRetryableRequestError(error) || retryCount === 1 || retryCount % 5 === 0) {
+                        console.warn('Review unread polling paused:', describeApiConnectionError(error));
+                    }
                     if (isMounted) setReviewUnreadCount(0);
+                })
+                .finally(() => {
+                    const delayMs = retryCount > 0
+                        ? Math.min(REVIEW_UNREAD_ERROR_DELAY_MS * (2 ** Math.max(retryCount - 1, 0)), REVIEW_UNREAD_MAX_ERROR_DELAY_MS)
+                        : REVIEW_UNREAD_POLL_DELAY_MS;
+                    scheduleUnreadSync(delayMs);
                 });
         };
 
@@ -196,12 +220,11 @@ const AdminLayout = () => {
         };
 
         syncUnread();
-        const intervalId = window.setInterval(syncUnread, 60000);
         window.addEventListener('admin:review-unread-updated', handleUnreadUpdate);
 
         return () => {
             isMounted = false;
-            window.clearInterval(intervalId);
+            if (timeoutId) window.clearTimeout(timeoutId);
             window.removeEventListener('admin:review-unread-updated', handleUnreadUpdate);
         };
     }, [user, loading, settingsReady]);

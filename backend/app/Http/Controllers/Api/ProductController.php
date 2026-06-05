@@ -5466,6 +5466,11 @@ class ProductController extends Controller
             ->all();
     }
 
+    protected function productQuickFiltersEnabled(Request $request): bool
+    {
+        return ! $request->has('quick_filter_enabled') || $request->boolean('quick_filter_enabled');
+    }
+
     protected function normalizedSortExpression(string $expression): string
     {
         $expression = "COALESCE({$expression}, '')";
@@ -6076,6 +6081,7 @@ class ProductController extends Controller
 
     protected function pickerIndex(Request $request)
     {
+        $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
         $query = Product::query()->select([
             'products.id',
             'products.sku',
@@ -6108,11 +6114,13 @@ class ProductController extends Controller
             }
         }
 
-        $this->applyProductAttributeFilters($query, $request->input('attributes'), [
-            'include_variations' => true,
-            'include_bundle_items' => true,
-        ]);
-        $this->applyProductBundleQuickFilters($query, $request->input('bundle_filters'));
+        if ($quickFiltersEnabled) {
+            $this->applyProductAttributeFilters($query, $request->input('attributes'), [
+                'include_variations' => true,
+                'include_bundle_items' => true,
+            ]);
+            $this->applyProductBundleQuickFilters($query, $request->input('bundle_filters'));
+        }
 
         if ($request->filled('search')) {
             [$searchRankingSql, $searchRankingBindings] = $this->applyProductSearch(
@@ -6125,7 +6133,7 @@ class ProductController extends Controller
             $query->whereDoesntHave('parentConfigurable');
         }
 
-        $pickerAttributeFilters = $request->input('attributes');
+        $pickerAttributeFilters = $quickFiltersEnabled ? $request->input('attributes') : null;
 
         $query->with([
             'unit:id,name',
@@ -6603,10 +6611,12 @@ class ProductController extends Controller
         }
 
         // Filter by EAV Attributes
-        $this->applyProductAttributeFilters($query, $request->input('attributes'), [
-            'include_variations' => true,
-            'include_bundle_items' => false,
-        ]);
+        if ($this->productQuickFiltersEnabled($request)) {
+            $this->applyProductAttributeFilters($query, $request->input('attributes'), [
+                'include_variations' => true,
+                'include_bundle_items' => false,
+            ]);
+        }
         // Mặc định luôn ẩn sản phẩm con (biến thể) ở danh sách chính
         // Sản phẩm con chỉ hiển thị khi bấm mở rộng sản phẩm cha ở frontend
         $searchTerm = trim((string) $request->input('search', ''));

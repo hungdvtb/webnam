@@ -10,6 +10,8 @@ use ZipArchive;
 
 class SimpleXlsxService
 {
+    private const NUMBER_STYLE_INDEX = 1;
+
     /**
      * @param  array<int, string>  $headers
      * @param  array<int, array<string, mixed>>  $rows
@@ -52,8 +54,12 @@ class SimpleXlsxService
      * Write raw 2D array to XLSX without header mapping.
      *
      * @param  array<int, array<int, mixed>>  $rows
+     * @param  array{
+     *     numeric_columns?: array<int, int>,
+     *     numeric_start_row?: int
+     * }  $options
      */
-    public function writeRaw(string $absolutePath, array $rows, string $sheetName = 'Sheet1'): void
+    public function writeRaw(string $absolutePath, array $rows, string $sheetName = 'Sheet1', array $options = []): void
     {
         $directory = dirname($absolutePath);
         if (!is_dir($directory) && !mkdir($directory, 0755, true) && !is_dir($directory)) {
@@ -67,7 +73,7 @@ class SimpleXlsxService
 
         $sheetRows = [];
         foreach ($rows as $row) {
-            $sheetRows[] = array_map(fn ($cell) => $this->stringifyCellValue($cell), array_values($row));
+            $sheetRows[] = array_values($row);
         }
 
         $zip->addFromString('[Content_Types].xml', $this->contentTypesXml());
@@ -77,7 +83,7 @@ class SimpleXlsxService
         $zip->addFromString('xl/workbook.xml', $this->workbookXml($sheetName));
         $zip->addFromString('xl/_rels/workbook.xml.rels', $this->workbookRelationshipsXml());
         $zip->addFromString('xl/styles.xml', $this->stylesXml());
-        $zip->addFromString('xl/worksheets/sheet1.xml', $this->worksheetXml($sheetRows));
+        $zip->addFromString('xl/worksheets/sheet1.xml', $this->worksheetXml($sheetRows, $options));
         $zip->close();
     }
 
@@ -190,22 +196,27 @@ class SimpleXlsxService
     }
 
     /**
-     * @param  array<int, array<int, string>>  $rows
+     * @param  array<int, array<int, mixed>>  $rows
+     * @param  array{
+     *     numeric_columns?: array<int, int>,
+     *     numeric_start_row?: int
+     * }  $options
      */
-    private function worksheetXml(array $rows): string
+    private function worksheetXml(array $rows, array $options = []): string
     {
         $sheetData = [];
+        $numericColumns = array_fill_keys(array_map('intval', $options['numeric_columns'] ?? []), true);
+        $numericStartRow = max(1, (int) ($options['numeric_start_row'] ?? 1));
 
         foreach ($rows as $rowIndex => $row) {
             $cells = [];
 
             foreach ($row as $columnIndex => $value) {
                 $cellRef = $this->columnLetters($columnIndex + 1) . ($rowIndex + 1);
-                $text = $this->escapeXmlText($value);
-                $cells[] = sprintf(
-                    '<c r="%s" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>',
+                $cells[] = $this->cellXml(
                     $cellRef,
-                    $text
+                    $value,
+                    isset($numericColumns[$columnIndex]) && ($rowIndex + 1) >= $numericStartRow
                 );
             }
 
@@ -224,6 +235,77 @@ class SimpleXlsxService
             . '<sheetFormatPr defaultRowHeight="15"/>'
             . '<sheetData>' . implode('', $sheetData) . '</sheetData>'
             . '</worksheet>';
+    }
+
+    private function cellXml(string $cellRef, mixed $value, bool $forceNumeric): string
+    {
+        if ($forceNumeric) {
+            $style = ' s="' . self::NUMBER_STYLE_INDEX . '"';
+            $numericValue = $this->numericCellValue($value);
+
+            if ($numericValue === null) {
+                return sprintf('<c r="%s"%s/>', $cellRef, $style);
+            }
+
+            return sprintf(
+                '<c r="%s"%s><v>%s</v></c>',
+                $cellRef,
+                $style,
+                $this->escapeXmlText($numericValue)
+            );
+        }
+
+        $text = $this->escapeXmlText($this->stringifyCellValue($value));
+
+        return sprintf(
+            '<c r="%s" t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>',
+            $cellRef,
+            $text
+        );
+    }
+
+    private function numericCellValue(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_int($value)) {
+            return (string) $value;
+        }
+
+        if (is_float($value)) {
+            if (!is_finite($value)) {
+                return null;
+            }
+
+            $formatted = rtrim(rtrim(sprintf('%.14F', $value), '0'), '.');
+
+            return $formatted === '-0' ? '0' : ($formatted !== '' ? $formatted : '0');
+        }
+
+        $text = preg_replace('/[\s\x{00A0}\x{20AB}đĐ]+/u', '', trim((string) $value)) ?? '';
+        if ($text === '') {
+            return null;
+        }
+
+        if (preg_match('/^-?\d+$/', $text) === 1) {
+            return $text;
+        }
+
+        if (preg_match('/^-?\d{1,3}([.,]\d{3})+$/', $text) === 1) {
+            return str_replace([',', '.'], '', $text);
+        }
+
+        if (preg_match('/^-?\d+[.,]0+$/', $text) === 1) {
+            return preg_replace('/[.,]0+$/', '', $text) ?: '0';
+        }
+
+        return null;
     }
 
     private function contentTypesXml(): string
@@ -355,8 +437,9 @@ XML;
     <cellStyleXfs count="1">
         <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
     </cellStyleXfs>
-    <cellXfs count="1">
+    <cellXfs count="2">
         <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+        <xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
     </cellXfs>
     <cellStyles count="1">
         <cellStyle name="Normal" xfId="0" builtinId="0"/>

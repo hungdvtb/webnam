@@ -8,6 +8,18 @@ use Illuminate\Support\Collection;
 
 class ViettelPostExportService
 {
+    private const DATA_START_ROW_NUMBER = 7;
+    private const NUMERIC_COLUMN_INDEXES = [
+        0,  // STT
+        6,  // Số lượng
+        7,  // Trọng lượng
+        8,  // Giá trị hàng
+        9,  // COD
+        15, // Dài
+        16, // Rộng
+        17, // Cao
+    ];
+
     // ViettelPost Excel template constants
     private const HEADER_ROW_TITLE = [
         '', '', '', 'TẬP ĐOÀN CÔNG NGHIỆP - VIỄN THÔNG QUÂN ĐỘI', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
@@ -106,6 +118,9 @@ class ViettelPostExportService
             ];
         }
 
-        $this->xlsx->writeRaw($outputPath, $rows, 'Danh sach van don');
+        $this->xlsx->writeRaw($outputPath, $rows, 'Danh sach van don', [
+            'numeric_columns' => self::NUMERIC_COLUMN_INDEXES,
+            'numeric_start_row' => self::DATA_START_ROW_NUMBER,
+        ]);
     }
 }

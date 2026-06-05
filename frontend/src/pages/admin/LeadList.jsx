@@ -4,7 +4,7 @@ import Pagination from '../../components/Pagination';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
-import { leadApi } from '../../services/api';
+import { describeApiConnectionError, isRetryableRequestError, leadApi } from '../../services/api';
 import { consumeLeadListReturnHint, readLeadListViewState, writeLeadListViewState } from '../../utils/leadListViewState';
 import {
     dispatchLeadNotificationSettingsEvent,
@@ -23,6 +23,10 @@ const leadStatusSelectClassName = 'h-8 w-full min-w-0 max-w-full rounded-sm bord
 const LEAD_SELECT_COLUMN_WIDTH = 56;
 const MAX_NOTIFICATION_ITEMS = 12;
 const LEAD_LIST_COPY_RESET_MS = 1800;
+const LEAD_REALTIME_POLL_DELAY_MS = 2000;
+const LEAD_REALTIME_FAST_POLL_DELAY_MS = 350;
+const LEAD_REALTIME_ERROR_POLL_DELAY_MS = 5000;
+const LEAD_REALTIME_MAX_ERROR_POLL_DELAY_MS = 60000;
 const emptyFilters = { status: '', tag: '', date_from: '', date_to: '' };
 const LEAD_COLUMNS = [
     { id: 'placed_at', label: 'Thời gian đặt', minWidth: '150px' },
@@ -1800,6 +1804,7 @@ const LeadList = () => {
     const notificationSoundQueuedRef = useRef(false);
     const notificationInteractionReadyRef = useRef(false);
     const realtimeRequestInFlightRef = useRef(false);
+    const realtimePollErrorCountRef = useRef(0);
     const browserNotificationRef = useRef(null);
     const hydratedFromCacheRef = useRef(Boolean(initialLeadListViewState?.leads?.length));
     const isTrashViewRef = useRef(false);
@@ -2476,7 +2481,7 @@ const LeadList = () => {
         let isDisposed = false;
         let timeoutId = null;
 
-        const scheduleNextPoll = (delay = 2000) => {
+        const scheduleNextPoll = (delay = LEAD_REALTIME_POLL_DELAY_MS) => {
             if (isDisposed) return;
             timeoutId = window.setTimeout(pollRealtime, delay);
         };
@@ -2488,14 +2493,15 @@ const LeadList = () => {
             }
 
             realtimeRequestInFlightRef.current = true;
-            let nextDelay = 2000;
+            let nextDelay = LEAD_REALTIME_POLL_DELAY_MS;
 
             try {
                 const currentCursor = realtimeCursorRef.current || {};
                 const response = await leadApi.realtime(
                     currentCursor.changedAt
                         ? { after_changed_at: currentCursor.changedAt, after_id: currentCursor.id || latestIdRef.current || 0 }
-                        : { after_id: latestIdRef.current || 0 }
+                        : { after_id: latestIdRef.current || 0 },
+                    { maxRetries: 0 }
                 );
                 if (isDisposed) return;
 
@@ -2519,7 +2525,8 @@ const LeadList = () => {
                             : nextRealtimeCursor
                     ));
                 }
-                if (hasMore) nextDelay = 350;
+                if (hasMore) nextDelay = LEAD_REALTIME_FAST_POLL_DELAY_MS;
+                realtimePollErrorCountRef.current = 0;
                 if (!incoming.length) return;
 
                 setNotificationItems((prev) => mergeNotificationItems(incoming, prev));
@@ -2540,7 +2547,14 @@ const LeadList = () => {
 
                 fetchLeads(activePage, { silent: true, replaceData: activePage === 1 && matchedIncoming.length === 0 });
             } catch (error) {
-                console.error('Lead realtime polling failed', error);
+                realtimePollErrorCountRef.current += 1;
+                if (!isRetryableRequestError(error) || realtimePollErrorCountRef.current === 1 || realtimePollErrorCountRef.current % 5 === 0) {
+                    console.warn('Lead realtime polling paused:', describeApiConnectionError(error));
+                }
+                nextDelay = Math.min(
+                    LEAD_REALTIME_ERROR_POLL_DELAY_MS * (2 ** Math.max(realtimePollErrorCountRef.current - 1, 0)),
+                    LEAD_REALTIME_MAX_ERROR_POLL_DELAY_MS
+                );
             } finally {
                 realtimeRequestInFlightRef.current = false;
                 scheduleNextPoll(nextDelay);

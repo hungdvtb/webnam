@@ -481,6 +481,70 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BAT-HUONG-LAM-018');
     }
 
+    public function test_picker_quick_filter_disabled_ignores_stale_attribute_filters(): void
+    {
+        $account = $this->authenticate();
+        $glazeAttribute = $this->createProductAttribute($account, 'Loai men', [
+            'Men lam',
+            'Men ran',
+        ]);
+
+        $lamProduct = $this->createProduct($account, [
+            'name' => 'Ong huong quicktoggle men lam',
+            'sku' => 'QTOGGLE-LAM',
+        ]);
+        $this->attachProductAttributeValue($lamProduct, $glazeAttribute, 'Men lam');
+
+        $ranProduct = $this->createProduct($account, [
+            'name' => 'Ong huong quicktoggle men ran',
+            'sku' => 'QTOGGLE-RAN',
+        ]);
+        $this->attachProductAttributeValue($ranProduct, $glazeAttribute, 'Men ran');
+
+        $enabledResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'search' => 'quicktoggle',
+                'per_page' => 20,
+                'quick_filter_enabled' => 1,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $enabledResponse
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $lamProduct->id);
+
+        $disabledResponse = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'search' => 'quicktoggle',
+                'per_page' => 20,
+                'quick_filter_enabled' => 0,
+                'attributes' => [
+                    $glazeAttribute->id => 'Men lam',
+                ],
+            ]));
+
+        $disabledResponse
+            ->assertOk()
+            ->assertJsonPath('total', 2);
+
+        $returnedIds = collect($disabledResponse->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertEqualsCanonicalizing(
+            [$lamProduct->id, $ranProduct->id],
+            $returnedIds
+        );
+    }
+
     public function test_picker_attribute_filter_keeps_only_variations_matching_combined_parent_and_variant_values(): void
     {
         $account = $this->authenticate();

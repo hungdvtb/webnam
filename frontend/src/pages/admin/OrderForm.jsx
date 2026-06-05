@@ -1348,47 +1348,6 @@ const buildProductQuickFilterCriterion = (attribute, value) => {
         compareValue: normalizeProductSearchText(normalizedValue),
     };
 };
-const buildProductAttributeQuickFilterCriterion = (attribute, value) => {
-    const normalizedValue = normalizeQuickFilterOptionValue(value);
-    if (!attribute || !normalizedValue || isBundleProductQuickFilterAttribute(attribute)) return null;
-
-    return {
-        attribute,
-        value: normalizedValue,
-    };
-};
-const productMatchesBundleQuickFilterCriteria = (entry, criteria = []) => {
-    if (!Array.isArray(criteria) || criteria.length === 0) return true;
-    if (String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT) !== SEARCH_ENTRY_BUNDLE_OPTION) return false;
-
-    return criteria.every((criterion) => {
-        if (!criterion?.kind || !criterion?.compareValue) return true;
-
-        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE) {
-            const values = [
-                entry?.bundle_option_title,
-                entry?.option_post_title,
-                entry?.raw_bundle_option_title,
-            ];
-            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
-        }
-
-        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_TITLE) {
-            const values = [entry?.bundle_title, entry?.bundle_config_title];
-            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
-        }
-
-        if (criterion.kind === PRODUCT_QUICK_FILTER_KIND_BUNDLE_STATUS) {
-            const values = [
-                entry?.bundle_option_status,
-                getBundleQuickFilterStatusLabel(entry?.bundle_option_status),
-            ];
-            return values.some((value) => normalizeProductSearchText(value) === criterion.compareValue);
-        }
-
-        return true;
-    });
-};
 const productMatchesQuickFilterValue = (product, attribute, value) => {
     const normalizedValue = normalizeQuickFilterOptionValue(value);
     if (!product || !attribute || !normalizedValue) return false;
@@ -1402,13 +1361,6 @@ const productMatchesQuickFilterValue = (product, attribute, value) => {
 
     return getProductQuickFilterDisplayValues(product, attribute)
         .some((displayValue) => selectedValues.has(normalizeProductSearchText(displayValue)));
-};
-const productMatchesAttributeQuickFilterCriteria = (entry, criteria = []) => {
-    if (!Array.isArray(criteria) || criteria.length === 0) return true;
-
-    return criteria.every((criterion) => (
-        productMatchesQuickFilterValue(entry, criterion.attribute, criterion.value)
-    ));
 };
 const buildDependentProductQuickFilterOptions = (products, primaryAttribute, primaryValue, secondaryAttribute) => {
     if (!primaryAttribute || !primaryValue || !secondaryAttribute) {
@@ -3881,16 +3833,6 @@ const OrderForm = () => {
         normalizedProductQuickFilterValues2,
     ]);
     const hasActiveProductBundleQuickFilter = activeProductBundleQuickFilterCriteria.length > 0;
-    const activeProductAttributeQuickFilterCriteria = useMemo(() => ([
-        buildProductAttributeQuickFilterCriterion(activeProductQuickFilterAttribute, normalizedProductQuickFilterValues[0]),
-        buildProductAttributeQuickFilterCriterion(activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2[0]),
-    ].filter(Boolean)), [
-        activeProductQuickFilterAttribute,
-        activeProductQuickFilterAttribute2,
-        normalizedProductQuickFilterValues,
-        normalizedProductQuickFilterValues2,
-    ]);
-    const hasActiveProductAttributeQuickFilter = activeProductAttributeQuickFilterCriteria.length > 0;
     const activeProductQuickSetupKey = useMemo(() => {
         if (!hasActiveProductQuickFilter) return '';
 
@@ -5909,19 +5851,23 @@ const OrderForm = () => {
     // handleCancel now handles navigation directly without confirm for a faster experience
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
+        const shouldApplyQuickFilter = Boolean(filterOverrides.applyQuickFilter);
         const params = {
             per_page: isCompactCompositeProductSearch(term) ? 200 : 100,
             picker: 1,
+            quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
         };
         if (term) params.search = term;
 
-        const activeFilterAttribute = filterOverrides.attribute || activeProductQuickFilterAttribute;
-        const activeFilterValues = Array.isArray(filterOverrides.values)
-            ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
-            : normalizedProductQuickFilterValues;
+        if (shouldApplyQuickFilter) {
+            const activeFilterAttribute = filterOverrides.attribute || activeProductQuickFilterAttribute;
+            const activeFilterValues = Array.isArray(filterOverrides.values)
+                ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
+                : normalizedProductQuickFilterValues;
 
-        appendProductQuickFilterParams(params, activeFilterAttribute, activeFilterValues);
-        appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+            appendProductQuickFilterParams(params, activeFilterAttribute, activeFilterValues);
+            appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+        }
 
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
@@ -6331,19 +6277,9 @@ const OrderForm = () => {
         const searchableEntries = isProductQuickModeActive
             ? quickModeSearchEntries
             : buildProductSearchEntries(products, {
-                includeNested: Boolean(searchTerm.trim()) || hasActiveProductBundleQuickFilter || hasActiveProductAttributeQuickFilter,
+                includeNested: Boolean(searchTerm.trim()),
             });
         const preparedProducts = searchableEntries
-            .filter((product) => (
-                !isProductQuickModeActive && hasActiveProductAttributeQuickFilter
-                    ? productMatchesAttributeQuickFilterCriteria(product, activeProductAttributeQuickFilterCriteria)
-                    : true
-            ))
-            .filter((product) => (
-                !isProductQuickModeActive && hasActiveProductBundleQuickFilter
-                    ? productMatchesBundleQuickFilterCriteria(product, activeProductBundleQuickFilterCriteria)
-                    : true
-            ))
             .map((product) => ({
                 ...product,
                 __alreadyInOrder: isSearchEntryAlreadyInOrder(formData.items, product),
@@ -6370,16 +6306,33 @@ const OrderForm = () => {
             ))
             .slice(0, 50);
     }, [
-        activeProductAttributeQuickFilterCriteria,
-        activeProductBundleQuickFilterCriteria,
         formData.items,
-        hasActiveProductAttributeQuickFilter,
-        hasActiveProductBundleQuickFilter,
         isProductQuickModeActive,
         products,
         quickModeSearchEntries,
         searchTerm,
     ]);
+
+    const productSearchEmptyMessage = useMemo(() => {
+        const hasSearchText = searchTerm.trim() !== '';
+
+        if (isProductQuickModeActive && hasSearchText) {
+            return 'Không có sản phẩm trong lọc nhanh khớp từ khóa hiện tại.';
+        }
+
+        if (isProductQuickModeActive) {
+            return 'Bộ lọc nhanh đang bật nhưng danh sách đã lưu không còn sản phẩm khả dụng.';
+        }
+
+        if (hasSearchText) {
+            return 'Không có sản phẩm khớp từ khóa hiện tại.';
+        }
+
+        return 'Không có sản phẩm khả dụng để hiển thị.';
+    }, [isProductQuickModeActive, searchTerm]);
+
+    const shouldShowProductSearchEmptyState = rankedSearchProducts.length === 0
+        && (searchTerm.trim() !== '' || isProductQuickModeActive);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -6404,16 +6357,13 @@ const OrderForm = () => {
     useEffect(() => {
         if (isProductQuickModeActive) return;
 
-        if (showSearchDropdown || debouncedSearchTerm.trim() !== '' || hasActiveProductQuickFilter) {
+        if (showSearchDropdown || debouncedSearchTerm.trim() !== '') {
             fetchProducts(debouncedSearchTerm);
         }
     }, [
         fetchProducts,
         debouncedSearchTerm,
-        hasActiveProductQuickFilter,
         isProductQuickModeActive,
-        productQuickFilterAttributeId,
-        normalizedProductQuickFilterValues,
         showSearchDropdown
     ]);
 
@@ -8778,13 +8728,13 @@ const OrderForm = () => {
                                 key={p.entry_id || p.id}
                                 product={p}
                                 onSelect={addProductById}
-                                quickFilterAttribute={activeProductQuickFilterAttribute}
+                                quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                 isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
                             />
                         ))}
-                        {(searchTerm.trim() !== '' || hasActiveProductQuickFilter) && rankedSearchProducts.length === 0 && (
+                        {shouldShowProductSearchEmptyState && (
                             <div className={`p-4 text-center italic text-primary/20 ${mobile ? 'text-[13px] font-semibold' : 'text-[11px] font-black uppercase tracking-widest'}`}>
-                                Không có kết quả khả dụng...
+                                {productSearchEmptyMessage}
                             </div>
                         )}
                     </div>
@@ -9345,12 +9295,12 @@ const OrderForm = () => {
                                                         key={p.entry_id || p.id}
                                                         product={p}
                                                         onSelect={addProductById}
-                                                        quickFilterAttribute={activeProductQuickFilterAttribute}
+                                                        quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                                         isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
                                                     />
                                                 ))}
-                                                {(searchTerm.trim() !== '' || hasActiveProductQuickFilter) && rankedSearchProducts.length === 0 && (
-                                                    <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">Không có kết quả khả dụng...</div>
+                                                {shouldShowProductSearchEmptyState && (
+                                                    <div className="p-4 text-center italic text-primary/20 text-[11px] uppercase font-black tracking-widest">{productSearchEmptyMessage}</div>
                                                 )}
                                             </div>
                                         )}

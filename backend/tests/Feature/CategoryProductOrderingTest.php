@@ -451,6 +451,50 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame(['Ban than tai - Men lam'], collect($selectedResponse->json('bundle_options'))->pluck('bundle_option_title')->all());
     }
 
+    public function test_web_api_bundle_option_detail_allows_direct_internal_option_link(): void
+    {
+        $bundle = $this->createProduct(
+            null,
+            'Tron bo do tho men ran',
+            'tron-bo-do-tho-men-ran',
+            Carbon::parse('2026-03-15 08:00:00'),
+            null,
+            'bundle'
+        );
+        $visibleItem = $this->createProduct(null, 'Bat huong visible', 'bat-huong-visible', Carbon::parse('2026-03-15 09:00:00'));
+        $internalItem = $this->createProduct(null, 'Den tho internal', 'den-tho-internal', Carbon::parse('2026-03-15 10:00:00'));
+
+        $this->attachBundleItem($bundle, $visibleItem, Carbon::parse('2026-03-15 09:30:00'), [
+            'option_title' => 'Ban tho visible',
+            'bundle_option_uid' => 'visible-option-uid',
+            'bundle_option_status' => 'visible',
+            'price' => 1000000,
+        ]);
+        $this->attachBundleItem($bundle, $internalItem, Carbon::parse('2026-03-15 10:30:00'), [
+            'option_title' => 'Ban than tai internal',
+            'bundle_option_uid' => 'internal-option-uid',
+            'bundle_option_status' => 'internal',
+            'option_image_url' => 'https://example.com/internal-option.jpg',
+            'option_video_url' => 'https://www.youtube.com/watch?v=abc12345678',
+            'price' => 2000000,
+        ]);
+
+        $defaultResponse = $this->getJson("/api/web-api/products/{$bundle->slug}/bundle-option-detail")
+            ->assertOk();
+
+        $this->assertSame(['Ban tho visible'], collect($defaultResponse->json('bundle_options'))->pluck('bundle_option_title')->all());
+        $this->assertCount(1, $defaultResponse->json('bundle_items'));
+
+        $internalResponse = $this->getJson("/api/web-api/products/{$bundle->slug}/bundle-option-detail?o=internal-option-uid&utm_source=facebook")
+            ->assertOk();
+
+        $this->assertCount(1, $internalResponse->json('bundle_items'));
+        $this->assertSame(['Ban than tai internal'], collect($internalResponse->json('bundle_options'))->pluck('bundle_option_title')->all());
+        $this->assertSame('internal', $internalResponse->json('bundle_options.0.bundle_option_status'));
+        $this->assertSame('https://example.com/internal-option.jpg', $internalResponse->json('bundle_options.0.option_image_url'));
+        $this->assertSame('https://www.youtube.com/watch?v=abc12345678', $internalResponse->json('bundle_options.0.option_video_url'));
+    }
+
     private function seedCategoryWithVariantAndBundleOptionAssignments(): array
     {
         $account = $this->createAccount();

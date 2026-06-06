@@ -447,6 +447,7 @@ export default function WholesaleProductRow({
     : stock;
   const parentOrderKey = getParentOrderKey(product);
   const productOrderKey = getProductOrderKey(product);
+  const productOrderImageSrc = galleryImages[0]?.src || imageSrc || FALLBACK_PRODUCT_IMAGE;
   const productOrderItem = {
     key: productOrderKey,
     parentKey: productOrderKey,
@@ -454,6 +455,7 @@ export default function WholesaleProductRow({
     parentName: product.name,
     price: wholesalePrice,
     stock: displayStock,
+    imageSrc: productOrderImageSrc,
   };
   const productOrderQuantity = getOrderQuantity(orderItems, productOrderKey);
   const productLineTotal = productOrderQuantity * wholesalePrice;
@@ -698,6 +700,11 @@ export default function WholesaleProductRow({
                       const label = getVariantLabel(product, variant);
                       const variantStock = Number(variant.display_stock || 0);
                       const variantOrderKey = getVariantOrderKey(product, variant, label);
+                      const ownVariantGalleryImages = buildWholesaleMediaImages(variant, `${product.name} - ${label}`);
+                      const variantGalleryImages = ownVariantGalleryImages.length > 0 ? ownVariantGalleryImages : galleryImages;
+                      const ownVariantVideoItems = buildWholesaleVideoItems(variant, `${product.name} - ${label}`);
+                      const variantVideoItems = ownVariantVideoItems.length > 0 ? ownVariantVideoItems : videoItems;
+                      const variantVideoHref = variantVideoItems[0]?.href || buildWholesaleVideoHref(variant);
                       const variantOrderItem = {
                         key: variantOrderKey,
                         parentKey: parentOrderKey,
@@ -705,14 +712,10 @@ export default function WholesaleProductRow({
                         parentName: product.name,
                         price: variantWholesalePrice,
                         stock: variantStock,
+                        imageSrc: variantGalleryImages[0]?.src || imageSrc || FALLBACK_PRODUCT_IMAGE,
                       };
                       const variantOrderQuantity = getOrderQuantity(orderItems, variantOrderKey);
                       const variantLineTotal = variantOrderQuantity * variantWholesalePrice;
-                      const ownVariantGalleryImages = buildWholesaleMediaImages(variant, `${product.name} - ${label}`);
-                      const variantGalleryImages = ownVariantGalleryImages.length > 0 ? ownVariantGalleryImages : galleryImages;
-                      const ownVariantVideoItems = buildWholesaleVideoItems(variant, `${product.name} - ${label}`);
-                      const variantVideoItems = ownVariantVideoItems.length > 0 ? ownVariantVideoItems : videoItems;
-                      const variantVideoHref = variantVideoItems[0]?.href || buildWholesaleVideoHref(variant);
 
                       return (
                         <tr key={`${variant.id || variant.sku || label}-${index}`} className={styles.variantTableRow}>

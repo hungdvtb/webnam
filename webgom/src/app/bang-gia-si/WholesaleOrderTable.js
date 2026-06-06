@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { downloadWholesaleOrderImage } from "@/lib/wholesaleOrderImage";
 import { WholesaleSearchForm } from "./WholesaleControls";
 import WholesaleProductRow from "./WholesaleProductRow";
 import styles from "./wholesale.module.css";
@@ -71,17 +72,22 @@ const buildOrderMessage = (items = [], total = 0) => {
 export default function WholesaleOrderTable({
   rows = [],
   contactHref = "",
+  contactPhone = "",
   currentSearch = "",
 }) {
   const [orderItems, setOrderItems] = useState({});
   const [expandAllOpen, setExpandAllOpen] = useState(false);
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
   const [copyState, setCopyState] = useState("");
+  const [imageState, setImageState] = useState("");
+  const [isSavingOrderImage, setIsSavingOrderImage] = useState(false);
   const stickyScopeRef = useRef(null);
   const orderSummaryRef = useRef(null);
   const columnHeaderRef = useRef(null);
   const columnHeaderScrollerRef = useRef(null);
   const tableScrollerRef = useRef(null);
+  const imageStateTimeoutRef = useRef(null);
+  const isSavingOrderImageRef = useRef(false);
   const hasRows = rows.length > 0;
 
   const selectedItems = useMemo(
@@ -173,6 +179,12 @@ export default function WholesaleOrderTable({
     };
   }, [hasRows]);
 
+  useEffect(() => () => {
+    if (imageStateTimeoutRef.current) {
+      window.clearTimeout(imageStateTimeoutRef.current);
+    }
+  }, []);
+
   const setOrderQuantity = (item, nextQuantity) => {
     if (!item?.key) {
       return;
@@ -217,6 +229,62 @@ export default function WholesaleOrderTable({
     } catch {
       setCopyState("Không sao chép được");
       window.setTimeout(() => setCopyState(""), 1800);
+    }
+  };
+
+  const emitMobileOrderNotice = (message) => {
+    if (typeof window === "undefined" || !message) {
+      return;
+    }
+
+    window.dispatchEvent(
+      new CustomEvent("webgom:mobile-order-notice", {
+        detail: { message },
+      }),
+    );
+  };
+
+  const setTemporaryImageState = (message, duration = 1800) => {
+    if (imageStateTimeoutRef.current) {
+      window.clearTimeout(imageStateTimeoutRef.current);
+    }
+
+    setImageState(message);
+
+    if (duration > 0) {
+      imageStateTimeoutRef.current = window.setTimeout(() => setImageState(""), duration);
+    }
+  };
+
+  const saveOrderImage = async () => {
+    if (isSavingOrderImageRef.current) {
+      emitMobileOrderNotice("Ảnh đơn hàng đang được tạo, vui lòng chờ thêm một chút.");
+      return;
+    }
+
+    if (selectedItems.length === 0) {
+      return;
+    }
+
+    isSavingOrderImageRef.current = true;
+    setIsSavingOrderImage(true);
+    setTemporaryImageState("Đang tạo ảnh...", 0);
+
+    try {
+      await downloadWholesaleOrderImage({
+        items: selectedItems,
+        total: orderTotal,
+        contactPhone,
+      });
+      setTemporaryImageState("Đã tải ảnh");
+      emitMobileOrderNotice("Ảnh đơn hàng đã được tải xuống máy.");
+    } catch (error) {
+      console.error("Failed to download wholesale order image:", error);
+      setTemporaryImageState("Không tạo được ảnh");
+      emitMobileOrderNotice("Không thể tạo ảnh đơn hàng. Vui lòng thử lại.");
+    } finally {
+      isSavingOrderImageRef.current = false;
+      setIsSavingOrderImage(false);
     }
   };
 
@@ -386,6 +454,17 @@ export default function WholesaleOrderTable({
               <button type="button" className={styles.copyOrderButton} onClick={copyOrderMessage}>
                 <span className="material-symbols-outlined" aria-hidden="true">content_copy</span>
                 {copyState || "Sao chép nội dung"}
+              </button>
+              <button
+                type="button"
+                className={styles.saveOrderImageButton}
+                onClick={() => { void saveOrderImage(); }}
+                disabled={isSavingOrderImage || selectedLineCount === 0}
+              >
+                <span className="material-symbols-outlined" aria-hidden="true">
+                  {isSavingOrderImage ? "hourglass_top" : "download"}
+                </span>
+                {imageState || "Lưu ảnh đơn hàng"}
               </button>
               <a
                 href={contactHref || "#wholesale-table"}

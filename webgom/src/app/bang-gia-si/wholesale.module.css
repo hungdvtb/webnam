@@ -1493,7 +1493,7 @@
 
 .orderModalFooter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   padding: 14px 18px 18px;
   border-top: 1px solid rgba(23, 47, 80, 0.09);
@@ -1501,6 +1501,7 @@
 }
 
 .copyOrderButton,
+.saveOrderImageButton,
 .zaloOrderButton,
 .continueOrderButton {
   display: inline-flex;
@@ -1523,6 +1524,12 @@
   color: #172f50;
 }
 
+.saveOrderImageButton {
+  border: 1px solid rgba(21, 115, 71, 0.22);
+  background: #f0fbf5;
+  color: #157347;
+}
+
 .zaloOrderButton {
   border: 1px solid #a64b2a;
   background: #a64b2a;
@@ -1530,12 +1537,14 @@
 }
 
 .continueOrderButton {
+  grid-column: 1 / -1;
   border: 1px solid transparent;
   background: transparent;
   color: rgba(23, 47, 80, 0.72);
 }
 
 .copyOrderButton:hover,
+.saveOrderImageButton:hover,
 .continueOrderButton:hover {
   border-color: rgba(166, 75, 42, 0.24);
   background: #fff4ea;
@@ -1546,7 +1555,16 @@
   background: #8f3f24;
 }
 
+.copyOrderButton:disabled,
+.saveOrderImageButton:disabled,
+.zaloOrderButton:disabled,
+.continueOrderButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .copyOrderButton span,
+.saveOrderImageButton span,
 .zaloOrderButton span {
   font-size: 17px;
 }
@@ -2853,6 +2871,7 @@
   .orderItem span,
   .orderMessageBox,
   .copyOrderButton,
+  .saveOrderImageButton,
   .zaloOrderButton,
   .continueOrderButton,
   .videoButton,

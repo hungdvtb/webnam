@@ -3301,17 +3301,24 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
         .join('\n');
     const hasLogo = Boolean(quoteSettings.quote_logo_url);
     const sheetTitle = orderId ? `Báo giá đơn #${orderId}` : 'Báo giá sản phẩm';
+    const storeName = quoteSettings.quote_store_name || 'Gốm Đại Thành';
+    const selectedTemplateName = getSelectedQuoteTemplateLabel(template, formData.items);
+    const customerName = String(formData.customer_name || '').trim();
+    const createdDate = new Date().toLocaleDateString('vi-VN');
     const resolvedPricingSummary = pricingSummary || buildOrderPricingSummary(formData);
     const quoteSubtotal = resolvedPricingSummary.subtotal;
     const quoteExtraRows = resolvedPricingSummary.extraRows;
 
     return (
-        <div ref={captureRef} className="w-[1125px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: 'var(--font-roboto)' }}>
+        <div ref={captureRef} className="w-[1200px] bg-white text-slate-900 shadow-2xl" style={{ fontFamily: 'var(--font-roboto)' }}>
             <div className="border-[2px] border-[#2F1A14]">
-                <div className="grid grid-cols-[250px_minmax(0,1fr)] min-h-[210px]">
-                    <div className="border-r border-[#2F1A14] flex items-center justify-center p-6">
+                <div className="border-b border-[#2F1A14] bg-[#FCF8F3]">
+                    <div className="h-[18px] bg-[#243447]" />
+                    <div className="h-1 bg-[#C8A56A]" />
+                    <div className="grid min-h-[250px] grid-cols-[210px_minmax(0,1fr)_386px] gap-7 px-8 py-7">
+                    <div className="flex items-center justify-center">
                         {hasLogo ? (
-                            <img src={quoteSettings.quote_logo_url} alt="Logo" className="max-w-full max-h-[150px] object-contain" />
+                            <img src={quoteSettings.quote_logo_url} alt="Logo" className="max-h-[150px] max-w-full object-contain" />
                         ) : (
                             <div className="w-full h-[150px] border border-dashed border-[#C59A6A] flex items-center justify-center text-[#C59A6A] text-[28px] font-bold tracking-[0.2em]">
                                 LOGO
@@ -3319,33 +3326,54 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                         )}
                     </div>
 
-                    <div className="p-6 flex flex-col justify-center text-center">
-                        <div className="text-[16px] font-bold uppercase tracking-[0.06em] leading-snug">
-                            {quoteSettings.quote_store_name || 'Thông tin xưởng / cửa hàng'}
+                    <div className="min-w-0 py-1 text-left">
+                        <div className="text-[42px] font-black uppercase leading-none text-[#243447]">
+                            BẢNG BÁO GIÁ
                         </div>
-                        <div className="mt-4 whitespace-pre-line text-[12px] leading-6">
+                        <div className="mt-7 text-[28px] font-bold leading-tight text-slate-800">
+                            {storeName}
+                        </div>
+                        <div className="mt-5 whitespace-pre-line break-words text-[20px] leading-[1.35] text-[#7C6A58]">
                             {headerAddress || 'Cấu hình địa chỉ và số điện thoại trong phần Cài đặt web > Báo giá.'}
                         </div>
-                        <div className="mt-4 inline-flex self-center border border-[#2F1A14] px-4 py-1 text-[12px] font-bold uppercase tracking-[0.14em]">
+                    </div>
+
+                    <div className="min-w-0 border border-[#D8C4AF] bg-white p-6">
+                        <div className="border border-[#E6D7C9] bg-[#F8F4EE] px-4 py-3 text-center text-[20px] font-bold uppercase leading-tight text-[#243447] break-words">
                             {sheetTitle}
                         </div>
+                        <div className="mt-5 text-[20px] font-bold leading-tight text-[#7C6A58]">
+                            Mẫu đã chọn
+                        </div>
+                        <div className="mt-2 break-words text-[20px] font-bold leading-tight text-slate-900">
+                            {selectedTemplateName}
+                        </div>
+                        {customerName && (
+                            <div className="mt-4 break-words text-[20px] font-bold leading-tight text-slate-900">
+                                Tên khách hàng: {customerName}
+                            </div>
+                        )}
+                        <div className="mt-4 break-words text-[20px] font-semibold leading-tight text-[#7C6A58]">
+                            Ngày tạo: {createdDate}
+                        </div>
+                    </div>
                     </div>
                 </div>
 
                 <table className="w-full border-collapse table-fixed">
                     <thead>
                         <tr className="bg-[#6B0F0F] text-white">
-                            <th className="w-[240px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Hình ảnh sản phẩm</th>
-                            <th className="border border-[#2F1A14] px-3 py-3 text-[12px] font-bold">Tên sản phẩm</th>
-                            <th className="w-[84px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-center">SL</th>
-                            <th className="w-[96px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-center">ÄVT</th>
-                            <th className="w-[150px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Đơn giá</th>
-                            <th className="w-[170px] border border-[#2F1A14] px-3 py-3 text-[12px] font-bold text-right">Thành tiền</th>
+                            <th className="w-[168px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight">Ảnh bộ / mẫu</th>
+                            <th className="border border-[#2F1A14] px-3 py-3 text-left text-[25px] font-bold leading-tight">Tên sản phẩm</th>
+                            <th className="w-[84px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-center">Số lượng</th>
+                            <th className="w-[96px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-center">Đơn vị tính</th>
+                            <th className="w-[150px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-right">Đơn giá</th>
+                            <th className="w-[170px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-right">Thành tiền</th>
                         </tr>
                     </thead>
                     <tbody>
                         {formData.items.map((item, index) => (
-                            <tr key={`${template?.id || 'template'}-${item.line_id || item.product_id}-${index}`} className="align-top">
+                            <tr key={`${template?.id || 'template'}-${item.line_id || item.product_id}-${index}`} className="align-middle">
                                 {index === 0 && (
                                     <td rowSpan={formData.items.length} className="border border-[#2F1A14] bg-[#8E0B0B] p-4 align-middle">
                                         <div className="flex h-full flex-col items-center justify-between text-white">
@@ -3365,7 +3393,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                         </div>
                                     </td>
                                 )}
-                                <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] leading-6">{item.name}</td>
+                                <td className="border border-[#D5CEC9] px-4 py-3 align-middle text-[12px] leading-6">{item.name}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{getOrderUnitDisplay(item)}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right">{formatQuoteMoney(item.price)}</td>
@@ -3373,18 +3401,17 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                             </tr>
                         ))}
                         <tr className="bg-[#F5E7BF]">
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold uppercase" colSpan={2}>Tổng món</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">{totalQuantity}</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">&nbsp;</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-center">Tổng tiền</td>
-                            <td className="border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right">{formatQuoteMoney(quoteSubtotal)}</td>
+                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold uppercase leading-tight" colSpan={2}>Tổng món</td>
+                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-center">{totalQuantity}</td>
+                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right" colSpan={2}>Tổng tiền</td>
+                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right">{formatQuoteMoney(quoteSubtotal)}</td>
                         </tr>
                         {quoteExtraRows.map((row) => (
                             <tr key={row.key} className={row.isEmphasis ? 'bg-[#F5E7BF]' : 'bg-[#FCF8F3]'}>
-                                <td className="border border-[#2F1A14] px-4 py-3" colSpan={4}>&nbsp;</td>
-                                <td className="border border-[#2F1A14] px-4 py-3 text-[12px] font-bold text-right">{row.label}</td>
-                                <td className={`border border-[#2F1A14] px-4 py-3 text-[13px] font-bold text-right ${row.isDeduction ? 'text-[#8E0B0B]' : 'text-slate-900'}`}>
-                                    {row.prefix || ''}{formatQuoteMoney(row.value)}
+                                <td className="border border-[#2F1A14] px-5 py-4" colSpan={3}>&nbsp;</td>
+                                <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right" colSpan={2}>{row.label}</td>
+                                <td className={`border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right ${row.isDeduction ? 'text-[#8E0B0B]' : 'text-slate-900'}`}>
+                                    {row.prefix ?? (row.isDeduction ? '-' : '')}{formatQuoteMoney(row.value)}
                                 </td>
                             </tr>
                         ))}
@@ -7676,20 +7703,18 @@ const OrderForm = () => {
             if (!ctx) throw new Error('CANVAS_CONTEXT_UNAVAILABLE');
 
             const pageWidth = quoteCanvasPageWidth;
-            const headerHeight = 248;
-            const tableHeaderHeight = 52;
-            const imageColWidth = 260;
-            const qtyColWidth = 92;
-            const unitColWidth = 108;
-            const priceColWidth = 170;
-            const totalColWidth = 180;
+            const tableHeaderHeight = 76;
+            const imageColWidth = 182;
+            const qtyColWidth = 112;
+            const unitColWidth = 135;
+            const priceColWidth = 125;
+            const totalColWidth = 150;
             const nameColWidth = pageWidth - imageColWidth - qtyColWidth - unitColWidth - priceColWidth - totalColWidth;
             const xName = imageColWidth;
             const xQty = xName + nameColWidth;
             const xUnit = xQty + qtyColWidth;
             const xPrice = xUnit + unitColWidth;
             const xTotal = xPrice + priceColWidth;
-            const bodyStartY = headerHeight + tableHeaderHeight;
             const borderColor = '#D7C7B8';
             const borderStrong = '#B79D86';
             const textPrimary = '#1F2937';
@@ -7700,21 +7725,98 @@ const OrderForm = () => {
             const footerBg = '#F6E7C8';
             const imagePanelBg = '#F9F5EF';
             const subtleBg = '#F8F4EE';
+            const tableHeaderFontSize = 25;
+            const rowTextFontSize = 20;
+            const rowLineHeight = 28;
+            const rowMinHeight = 66;
+            const rowPaddingY = 16;
+            const nameCellPaddingX = 18;
+            const numericCellPaddingX = 16;
+            const footerRowHeight = 58;
+            const footerPaddingY = 14;
+            const footerTextFontSize = 20;
+            const footerTitleFontSize = footerTextFontSize;
+            const logoCardX = 34;
+            const logoCardY = 44;
+            const logoCardSize = 176;
+            const centerColX = 246;
+            const rightCardX = 780;
+            const rightCardY = 46;
+            const rightCardWidth = 386;
+            const headerColumnGap = 28;
+            const centerColWidth = rightCardX - centerColX - headerColumnGap;
+            const headerBottomPadding = 34;
+            const addressFontSize = 20;
+            const addressLineHeight = 28;
+            const phoneFontSize = 20;
+            const phoneLineHeight = 28;
+            const rightTitleFontSize = 20;
+            const rightTitleLineHeight = 26;
+            const rightLabelFontSize = 20;
+            const rightLabelLineHeight = 26;
+            const rightValueFontSize = 20;
+            const rightValueLineHeight = 27;
+            const rightMetaFontSize = 20;
+            const rightMetaLineHeight = 27;
+            const rightCardPaddingX = 24;
+            const rightCardPaddingY = 18;
+            const rightInnerWidth = rightCardWidth - (rightCardPaddingX * 2);
+            const quoteBadgeText = normalizeCanvasText(id ? `Báo giá đơn #${id}` : 'Báo giá sản phẩm');
+            const storeName = normalizeCanvasText(quoteSettings.quote_store_name || 'Gốm Đại Thành');
+            const addressText = normalizeCanvasText(quoteSettings.quote_store_address || 'Bổ sung địa chỉ cửa hàng trong Cài đặt web > Báo giá');
+            const phoneText = normalizeCanvasText(quoteSettings.quote_store_phone || 'Chưa có số điện thoại');
+            const selectedTemplateName = getSelectedQuoteTemplateLabel(template, formData.items);
+            const customerName = String(formData.customer_name || '').trim();
+            const hasCustomerName = customerName !== '';
+            const createdDateText = normalizeCanvasText(`Ngày tạo: ${new Date().toLocaleDateString('vi-VN')}`);
 
             const measureCanvas = document.createElement('canvas');
             const measureCtx = measureCanvas.getContext('2d');
             if (!measureCtx) throw new Error('MEASURE_CONTEXT_UNAVAILABLE');
-            measureCtx.font = `15px ${quoteCanvasFontFamily}`;
+            measureCtx.font = `400 ${addressFontSize}px ${quoteCanvasFontFamily}`;
+            const addressLines = wrapCanvasText(measureCtx, addressText, centerColWidth);
+            measureCtx.font = `600 ${phoneFontSize}px ${quoteCanvasFontFamily}`;
+            const phoneLines = wrapCanvasText(measureCtx, `Điện thoại: ${phoneText}`, centerColWidth);
+            measureCtx.font = `700 ${rightTitleFontSize}px ${quoteCanvasFontFamily}`;
+            const rightTitleLines = wrapCanvasText(measureCtx, quoteBadgeText.toUpperCase(), rightInnerWidth - 28);
+            measureCtx.font = `700 ${rightValueFontSize}px ${quoteCanvasFontFamily}`;
+            const rawSelectedTemplateLines = wrapCanvasText(measureCtx, selectedTemplateName, rightInnerWidth);
+            const selectedTemplateLines = rawSelectedTemplateLines.length > 2
+                ? [
+                    rawSelectedTemplateLines[0],
+                    fitCanvasText(measureCtx, rawSelectedTemplateLines.slice(1).join(' '), rightInnerWidth),
+                ]
+                : rawSelectedTemplateLines;
+            const rightTitleBoxHeight = Math.max(64, (rightTitleLines.length * rightTitleLineHeight) + 28);
+            const selectedTemplateBlockHeight = rightLabelLineHeight + 8 + (selectedTemplateLines.length * rightValueLineHeight);
+            const customerBlockHeight = hasCustomerName ? rightMetaLineHeight + 14 : 0;
+            const rightCardHeight = rightCardPaddingY
+                + rightTitleBoxHeight
+                + 22
+                + selectedTemplateBlockHeight
+                + customerBlockHeight
+                + rightMetaLineHeight
+                + rightCardPaddingY;
+            const leftInfoBottomY = 166
+                + (addressLines.length * addressLineHeight)
+                + 12
+                + (phoneLines.length * phoneLineHeight);
+            const headerHeight = Math.ceil(Math.max(
+                248,
+                logoCardY + logoCardSize,
+                leftInfoBottomY,
+                rightCardY + rightCardHeight,
+            ) + headerBottomPadding);
+            const bodyStartY = headerHeight + tableHeaderHeight;
+            measureCtx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
 
             const rowHeights = formData.items.map((item) => {
-                const lines = wrapCanvasText(measureCtx, item.name || '', nameColWidth - 30);
-                return Math.max(48, (lines.length * 18) + 16);
+                const lines = wrapCanvasText(measureCtx, item.name || '', nameColWidth - (nameCellPaddingX * 2));
+                return Math.max(rowMinHeight, (lines.length * rowLineHeight) + (rowPaddingY * 2));
             });
 
             const itemsHeight = rowHeights.reduce((sum, height) => sum + height, 0);
             const quoteFooterRows = quotePricingSummary.extraRows;
-            const footerRowHeight = 34;
-            const footerPaddingY = 10;
             const footerHeight = (footerPaddingY * 2) + ((1 + quoteFooterRows.length) * footerRowHeight);
             const pageHeight = headerHeight + tableHeaderHeight + itemsHeight + footerHeight;
 
@@ -7743,10 +7845,6 @@ const OrderForm = () => {
             ctx.lineWidth = 1;
             ctx.strokeRect(0.5, 0.5, pageWidth - 1, pageHeight - 1);
 
-            const logoCardX = 34;
-            const logoCardY = 44;
-            const logoCardSize = 176;
-
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#E6D7C9';
             ctx.lineWidth = 1;
@@ -7769,19 +7867,6 @@ const OrderForm = () => {
                 ctx.fillText(normalizeCanvasText('Cấu hình trong hệ thống'), logoCardX + (logoCardSize / 2), logoCardY + 102);
             }
 
-            const centerColX = 246;
-            const centerColWidth = 600;
-            const rightCardX = 884;
-            const rightCardWidth = 282;
-            const quoteBadgeText = normalizeCanvasText(id ? `Báo giá đơn #${id}` : 'Báo giá sản phẩm');
-            const storeName = normalizeCanvasText(quoteSettings.quote_store_name || 'Thông tin cửa hàng / xưởng');
-            const addressText = normalizeCanvasText(quoteSettings.quote_store_address || 'Bổ sung địa chỉ cửa hàng trong Cài đặt web > Báo giá');
-            const phoneText = normalizeCanvasText(quoteSettings.quote_store_phone || 'Chưa có số điện thoại');
-            const selectedTemplateName = getSelectedQuoteTemplateLabel(template, formData.items);
-            const customerName = String(formData.customer_name || '').trim();
-            const hasCustomerName = customerName !== '';
-            const rightCardHeight = hasCustomerName ? 176 : 156;
-
             ctx.fillStyle = brandDark;
             ctx.font = `800 42px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'left';
@@ -7792,55 +7877,76 @@ const OrderForm = () => {
             ctx.fillText(storeName, centerColX, 128);
 
             ctx.fillStyle = textMuted;
-            ctx.font = `400 14px ${quoteCanvasFontFamily}`;
-            const addressLines = wrapCanvasText(ctx, addressText, centerColWidth);
-            drawTextLines(ctx, addressLines, centerColX, 166, 24, 'left');
-            drawTextLines(ctx, [`Điện thoại: ${phoneText}`], centerColX, 166 + (addressLines.length * 24) + 8, 22, 'left');
+            ctx.font = `400 ${addressFontSize}px ${quoteCanvasFontFamily}`;
+            drawTextLines(ctx, addressLines, centerColX, 166, addressLineHeight, 'left');
+            ctx.font = `600 ${phoneFontSize}px ${quoteCanvasFontFamily}`;
+            drawTextLines(ctx, phoneLines, centerColX, 166 + (addressLines.length * addressLineHeight) + 12, phoneLineHeight, 'left');
 
             ctx.fillStyle = '#ffffff';
             ctx.strokeStyle = '#D8C4AF';
-            ctx.fillRect(rightCardX, 46, rightCardWidth, rightCardHeight);
-            ctx.strokeRect(rightCardX, 46, rightCardWidth, rightCardHeight);
+            ctx.fillRect(rightCardX, rightCardY, rightCardWidth, rightCardHeight);
+            ctx.strokeRect(rightCardX, rightCardY, rightCardWidth, rightCardHeight);
 
+            const rightContentX = rightCardX + rightCardPaddingX;
+            const rightTitleBoxX = rightContentX;
+            const rightTitleBoxY = rightCardY + rightCardPaddingY;
             ctx.fillStyle = subtleBg;
-            ctx.fillRect(rightCardX + 18, 64, rightCardWidth - 36, 40);
+            ctx.fillRect(rightTitleBoxX, rightTitleBoxY, rightInnerWidth, rightTitleBoxHeight);
             ctx.strokeStyle = '#E6D7C9';
-            ctx.strokeRect(rightCardX + 18, 64, rightCardWidth - 36, 40);
+            ctx.strokeRect(rightTitleBoxX, rightTitleBoxY, rightInnerWidth, rightTitleBoxHeight);
             ctx.fillStyle = brandDark;
-            ctx.font = `700 12px ${quoteCanvasFontFamily}`;
-            ctx.textAlign = 'center';
-            ctx.fillText(quoteBadgeText.toUpperCase(), rightCardX + (rightCardWidth / 2), 78);
+            ctx.font = `700 ${rightTitleFontSize}px ${quoteCanvasFontFamily}`;
+            drawTextLines(
+                ctx,
+                rightTitleLines,
+                rightCardX + (rightCardWidth / 2),
+                rightTitleBoxY + 14,
+                rightTitleLineHeight,
+                'center'
+            );
 
-            ctx.textAlign = 'left';
+            let rightContentY = rightTitleBoxY + rightTitleBoxHeight + 22;
             ctx.fillStyle = textMuted;
-            ctx.font = `700 12px ${quoteCanvasFontFamily}`;
-            ctx.fillText(normalizeCanvasText('Mẫu đã chọn'), rightCardX + 24, 126);
+            ctx.font = `700 ${rightLabelFontSize}px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(normalizeCanvasText('Mẫu đã chọn'), rightContentX, rightContentY);
+            rightContentY += rightLabelLineHeight + 8;
+
             ctx.fillStyle = textPrimary;
-            drawFittedCanvasText(ctx, selectedTemplateName, rightCardX + 24, 148, rightCardWidth - 48);
+            ctx.font = `700 ${rightValueFontSize}px ${quoteCanvasFontFamily}`;
+            drawTextLines(ctx, selectedTemplateLines, rightContentX, rightContentY, rightValueLineHeight, 'left');
+            rightContentY += (selectedTemplateLines.length * rightValueLineHeight) + 14;
+
             if (hasCustomerName) {
                 ctx.fillStyle = textPrimary;
-                ctx.font = `700 13px ${quoteCanvasFontFamily}`;
+                ctx.font = `700 ${rightMetaFontSize}px ${quoteCanvasFontFamily}`;
                 ctx.fillText(
-                    fitCanvasText(ctx, `Tên khách hàng: ${customerName}`, rightCardWidth - 48),
-                    rightCardX + 24,
-                    176
+                    fitCanvasText(ctx, `Tên khách hàng: ${customerName}`, rightInnerWidth),
+                    rightContentX,
+                    rightContentY
                 );
+                rightContentY += rightMetaLineHeight + 14;
             }
+
             ctx.fillStyle = textMuted;
-            ctx.font = `400 13px ${quoteCanvasFontFamily}`;
-            ctx.fillText(normalizeCanvasText(`Ngày tạo: ${new Date().toLocaleDateString('vi-VN')}`), rightCardX + 24, hasCustomerName ? 198 : 180);
+            ctx.font = `600 ${rightMetaFontSize}px ${quoteCanvasFontFamily}`;
+            ctx.fillText(fitCanvasText(ctx, createdDateText, rightInnerWidth), rightContentX, rightContentY);
 
             ctx.fillStyle = brandDark;
             ctx.fillRect(0, headerHeight, pageWidth, tableHeaderHeight);
             ctx.fillStyle = '#ffffff';
-            ctx.font = `700 13px ${quoteCanvasFontFamily}`;
+            ctx.font = `700 ${tableHeaderFontSize}px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'center';
-            ctx.fillText(normalizeCanvasText('Ảnh bộ / mẫu'), imageColWidth / 2, headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Tên sản phẩm'), xName + (nameColWidth / 2), headerHeight + 18);
-            ctx.fillText('SL', xQty + (qtyColWidth / 2), headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('ĐVT'), xUnit + (unitColWidth / 2), headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Đơn giá'), xPrice + (priceColWidth / 2), headerHeight + 18);
-            ctx.fillText(normalizeCanvasText('Thành tiền'), xTotal + (totalColWidth / 2), headerHeight + 18);
+            ctx.textBaseline = 'middle';
+            const tableHeaderTextY = headerHeight + (tableHeaderHeight / 2);
+            ctx.fillText(normalizeCanvasText('Ảnh bộ / mẫu'), imageColWidth / 2, tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('Tên sản phẩm'), xName + (nameColWidth / 2), tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('S\u1ed1 l\u01b0\u1ee3ng'), xQty + (qtyColWidth / 2), tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('\u0110\u01a1n v\u1ecb t\u00ednh'), xUnit + (unitColWidth / 2), tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('Đơn giá'), xPrice + (priceColWidth / 2), tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('Thành tiền'), xTotal + (totalColWidth / 2), tableHeaderTextY);
+            ctx.textBaseline = 'top';
 
             ctx.fillStyle = imagePanelBg;
             ctx.fillRect(0, bodyStartY, imageColWidth, itemsHeight);
@@ -7876,7 +7982,8 @@ const OrderForm = () => {
             let currentY = bodyStartY;
             formData.items.forEach((item, index) => {
                 const rowHeight = rowHeights[index];
-                const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - 30);
+                ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
+                const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - (nameCellPaddingX * 2));
 
                 ctx.fillStyle = index % 2 === 0 ? '#FFFFFF' : '#FBF8F4';
                 ctx.fillRect(xName, currentY, pageWidth - xName, rowHeight);
@@ -7888,24 +7995,24 @@ const OrderForm = () => {
                 ctx.strokeRect(xTotal + 0.5, currentY + 0.5, totalColWidth - 1, rowHeight - 1);
 
                 ctx.fillStyle = textPrimary;
-                ctx.font = `400 15px ${quoteCanvasFontFamily}`;
-                const nameBlockHeight = nameLines.length * 18;
-                const nameTextY = currentY + Math.max(10, (rowHeight - nameBlockHeight) / 2);
-                drawTextLines(ctx, nameLines, xName + 14, nameTextY, 18, 'left');
+                ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
+                const nameBlockHeight = nameLines.length * rowLineHeight;
+                const nameTextY = currentY + ((rowHeight - nameBlockHeight) / 2);
+                drawTextLines(ctx, nameLines, xName + nameCellPaddingX, nameTextY, rowLineHeight, 'left');
 
                 const valueY = currentY + (rowHeight / 2);
                 ctx.textAlign = 'center';
-                ctx.font = `400 13px ${quoteCanvasFontFamily}`;
+                ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 ctx.textBaseline = 'middle';
                 ctx.fillText(String(item.quantity || 0), xQty + (qtyColWidth / 2), valueY);
                 ctx.fillText(getOrderUnitDisplay(item), xUnit + (unitColWidth / 2), valueY);
 
                 ctx.textAlign = 'right';
                 ctx.fillStyle = textPrimary;
-                ctx.font = `400 13px ${quoteCanvasFontFamily}`;
-                ctx.fillText(formatQuoteMoney(item.price), xPrice + priceColWidth - 14, valueY);
-                ctx.font = `700 13px ${quoteCanvasFontFamily}`;
-                ctx.fillText(formatQuoteMoney(item.price * item.quantity), xTotal + totalColWidth - 14, valueY);
+                ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
+                ctx.fillText(formatQuoteMoney(item.price), xPrice + priceColWidth - numericCellPaddingX, valueY);
+                ctx.font = `700 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
+                ctx.fillText(formatQuoteMoney(item.price * item.quantity), xTotal + totalColWidth - numericCellPaddingX, valueY);
                 ctx.textBaseline = 'top';
 
                 currentY += rowHeight;
@@ -7923,7 +8030,7 @@ const OrderForm = () => {
             });
 
             ctx.fillStyle = textPrimary;
-            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'left';
             ctx.fillText(normalizeCanvasText('Tổng món'), 18, bodyStartY + itemsHeight + 18);
             ctx.textAlign = 'center';
@@ -7939,7 +8046,7 @@ const OrderForm = () => {
                 ctx.stroke();
             });
             ctx.fillStyle = textPrimary;
-            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'center';
             ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), bodyStartY + itemsHeight + 18);
             ctx.fillText(normalizeCanvasText('Tá»•ng tiá»n'), xPrice + (priceColWidth / 2), bodyStartY + itemsHeight + 18);
@@ -7953,7 +8060,7 @@ const OrderForm = () => {
                 ctx.stroke();
             });
             ctx.fillStyle = textPrimary;
-            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
             ctx.textAlign = 'center';
             ctx.fillText(normalizeCanvasText('\u0054\u1ed5ng ti\u1ec1n'), xPrice + (priceColWidth / 2), bodyStartY + itemsHeight + 18);
             ctx.textAlign = 'right';
@@ -7972,15 +8079,17 @@ const OrderForm = () => {
 
             const footerFirstRowY = bodyStartY + itemsHeight + footerPaddingY + (footerRowHeight / 2);
             ctx.fillStyle = textPrimary;
-            ctx.font = `700 15px ${quoteCanvasFontFamily}`;
             ctx.textBaseline = 'middle';
             ctx.textAlign = 'left';
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
             ctx.fillText(normalizeCanvasText('Tổng món'), 18, footerFirstRowY);
             ctx.textAlign = 'center';
             ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), footerFirstRowY);
-            ctx.fillText(normalizeCanvasText('Tổng tiền'), xPrice + (priceColWidth / 2), footerFirstRowY);
             ctx.textAlign = 'right';
-            ctx.fillText(formatQuoteMoney(subtotalAmount), pageWidth - 18, footerFirstRowY);
+            ctx.font = `700 ${footerTitleFontSize}px ${quoteCanvasFontFamily}`;
+            ctx.fillText(normalizeCanvasText('Tổng tiền'), xTotal - numericCellPaddingX, footerFirstRowY);
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
+            ctx.fillText(formatQuoteMoney(subtotalAmount), pageWidth - numericCellPaddingX, footerFirstRowY);
 
             quoteFooterRows.forEach((row, index) => {
                 const dividerY = bodyStartY + itemsHeight + footerPaddingY + ((index + 1) * footerRowHeight);
@@ -7991,11 +8100,51 @@ const OrderForm = () => {
 
                 const rowY = dividerY + (footerRowHeight / 2);
                 ctx.fillStyle = row.isDeduction ? '#8E0B0B' : textPrimary;
-                ctx.font = `${row.isEmphasis ? '700' : '600'} 14px ${quoteCanvasFontFamily}`;
-                ctx.textAlign = 'center';
-                ctx.fillText(normalizeCanvasText(row.label), xPrice + (priceColWidth / 2), rowY);
                 ctx.textAlign = 'right';
-                ctx.fillText(`${row.isDeduction ? '-' : ''}${formatQuoteMoney(row.value)}`, pageWidth - 18, rowY);
+                ctx.font = `${row.isEmphasis ? '700' : '600'} ${footerTitleFontSize}px ${quoteCanvasFontFamily}`;
+                ctx.fillText(normalizeCanvasText(row.label), xTotal - numericCellPaddingX, rowY);
+                ctx.font = `${row.isEmphasis ? '700' : '600'} ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
+                ctx.fillText(`${row.isDeduction ? '-' : ''}${formatQuoteMoney(row.value)}`, pageWidth - numericCellPaddingX, rowY);
+            });
+            ctx.textBaseline = 'top';
+
+            const normalizedFooterTopY = bodyStartY + itemsHeight;
+            ctx.fillStyle = footerBg;
+            ctx.fillRect(0, normalizedFooterTopY, pageWidth, footerHeight);
+            ctx.strokeStyle = borderStrong;
+            ctx.strokeRect(0.5, normalizedFooterTopY + 0.5, pageWidth - 1, footerHeight - 1);
+            [xQty, xUnit, xTotal].forEach((x) => {
+                ctx.beginPath();
+                ctx.moveTo(x, normalizedFooterTopY);
+                ctx.lineTo(x, pageHeight);
+                ctx.stroke();
+            });
+
+            const normalizedFooterFirstRowY = normalizedFooterTopY + footerPaddingY + (footerRowHeight / 2);
+            ctx.fillStyle = textPrimary;
+            ctx.textBaseline = 'middle';
+            ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
+            ctx.textAlign = 'left';
+            ctx.fillText(normalizeCanvasText('Tổng món'), numericCellPaddingX, normalizedFooterFirstRowY);
+            ctx.textAlign = 'center';
+            ctx.fillText(String(quoteTotalQuantity), xQty + (qtyColWidth / 2), normalizedFooterFirstRowY);
+            ctx.textAlign = 'right';
+            ctx.fillText(normalizeCanvasText('Tổng tiền'), xTotal - numericCellPaddingX, normalizedFooterFirstRowY);
+            ctx.fillText(formatQuoteMoney(subtotalAmount), pageWidth - numericCellPaddingX, normalizedFooterFirstRowY);
+
+            quoteFooterRows.forEach((row, index) => {
+                const dividerY = normalizedFooterTopY + footerPaddingY + ((index + 1) * footerRowHeight);
+                ctx.beginPath();
+                ctx.moveTo(0, dividerY);
+                ctx.lineTo(pageWidth, dividerY);
+                ctx.stroke();
+
+                const rowY = dividerY + (footerRowHeight / 2);
+                ctx.fillStyle = row.isDeduction ? '#8E0B0B' : textPrimary;
+                ctx.textAlign = 'right';
+                ctx.font = `700 ${footerTextFontSize}px ${quoteCanvasFontFamily}`;
+                ctx.fillText(normalizeCanvasText(row.label), xTotal - numericCellPaddingX, rowY);
+                ctx.fillText(`${row.prefix ?? (row.isDeduction ? '-' : '')}${formatQuoteMoney(row.value)}`, pageWidth - numericCellPaddingX, rowY);
             });
             ctx.textBaseline = 'top';
 

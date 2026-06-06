@@ -168,6 +168,21 @@ const resolveZaloContactHref = (settings = {}) => {
   return normalizeContactHref(settings?.contact_phone || settings?.footer_hotline || "", "zalo");
 };
 
+const resolveContactPhone = (settings = {}) => {
+  const firstStore = Array.isArray(settings?.store_locations)
+    ? settings.store_locations.find((item) => item?.is_active !== false)
+    : null;
+
+  return String(
+    settings?.contact_phone
+    || settings?.footer_hotline
+    || settings?.quote_store_phone
+    || firstStore?.hotline
+    || firstStore?.phone
+    || "",
+  ).trim();
+};
+
 const categoryHasWholesaleProducts = async (category = {}) => {
   const slug = String(category?.slug || "").trim();
 
@@ -384,6 +399,7 @@ export default async function WholesalePricePage({ searchParams }) {
     .filter((product) => ["simple", "configurable"].includes(String(product?.type || "").toLowerCase()))
     .filter((product) => String(product?.item_type || product?.itemType || "product") !== "bundle_option");
   const contactHref = resolveZaloContactHref(siteSettings);
+  const contactPhone = resolveContactPhone(siteSettings);
   const paginationParams = {
     search: currentSearch,
     category: effectiveCategorySlug,
@@ -456,6 +472,7 @@ export default async function WholesalePricePage({ searchParams }) {
         <div className={styles.tablePanel}>
           <WholesaleOrderTable
             contactHref={contactHref}
+            contactPhone={contactPhone}
             currentSearch={currentSearch}
             rows={visibleProducts.map((product, index) => {
               const imageSrc = resolveEntityImageUrl(product, "medium", FALLBACK_PRODUCT_IMAGE);

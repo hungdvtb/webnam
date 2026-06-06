@@ -19,6 +19,7 @@ const SOURCE_OPTIONS = [
     { value: 'customer_web', label: 'Khách gửi từ website' },
     { value: 'admin_manual', label: 'Mẫu admin' },
     { value: 'admin_import', label: 'Import JSON' },
+    { value: 'admin_ai', label: 'AI tao tu dong' },
     { value: 'admin_sample', label: 'Bình luận ảo/test' },
 ];
 
@@ -38,6 +39,7 @@ const SOURCE_BADGE_CLASS = {
     customer_web: 'border-sky-200 bg-sky-50 text-sky-700',
     admin_manual: 'border-violet-200 bg-violet-50 text-violet-700',
     admin_import: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700',
+    admin_ai: 'border-cyan-200 bg-cyan-50 text-cyan-700',
     admin_sample: 'border-orange-200 bg-orange-50 text-orange-700',
 };
 

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\GenerateProductReviewsForProductJob;
 use App\Jobs\SyncGoogleMerchantProductJob;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
@@ -207,6 +208,18 @@ class ProductController extends Controller
             ->filter()
             ->unique()
             ->each(fn (int $productId) => SyncGoogleMerchantProductJob::dispatch($productId, 'out_of_stock')->afterResponse());
+    }
+
+    private function queueProductReviewAiGeneration(Product $product): void
+    {
+        if (! (bool) config('product_review_ai.enabled', true)) {
+            return;
+        }
+
+        $delayMinutes = max(0, (int) config('product_review_ai.delay_minutes', 3));
+
+        GenerateProductReviewsForProductJob::dispatch((int) $product->id)
+            ->delay(now()->addMinutes($delayMinutes));
     }
 
     private function productImportSelectableFieldIds(): array
@@ -10304,6 +10317,7 @@ class ProductController extends Controller
         }
 
         $this->queueGoogleMerchantProductSync($product);
+        $this->queueProductReviewAiGeneration($product);
 
         return response()->json($this->loadProductResource($product), 201);
     }

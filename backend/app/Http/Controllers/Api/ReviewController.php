@@ -27,6 +27,7 @@ class ReviewController extends Controller
         ProductReview::SOURCE_ADMIN_MANUAL,
         ProductReview::SOURCE_ADMIN_IMPORT,
         ProductReview::SOURCE_ADMIN_SAMPLE,
+        ProductReview::SOURCE_ADMIN_AI,
     ];
     private const BULK_IMPORT_TEXT_MAX_CHARS = 10000000;
     private const BULK_IMPORT_FILE_MAX_KB = 51200;
@@ -450,6 +451,7 @@ class ReviewController extends Controller
                             ProductReview::SOURCE_ADMIN_MANUAL,
                             ProductReview::SOURCE_ADMIN_IMPORT,
                             ProductReview::SOURCE_ADMIN_SAMPLE,
+                            ProductReview::SOURCE_ADMIN_AI,
                         ])
                         ->pluck('id');
 
@@ -594,6 +596,7 @@ class ReviewController extends Controller
                 ProductReview::SOURCE_ADMIN_MANUAL,
                 ProductReview::SOURCE_ADMIN_IMPORT,
                 ProductReview::SOURCE_ADMIN_SAMPLE,
+                ProductReview::SOURCE_ADMIN_AI,
             ]);
         } elseif ($sourceScope === 'customer_web') {
             $query->where('source_type', ProductReview::SOURCE_CUSTOMER_WEB);
@@ -989,6 +992,7 @@ class ReviewController extends Controller
             ProductReview::SOURCE_ADMIN_MANUAL => 'Mẫu admin',
             ProductReview::SOURCE_ADMIN_IMPORT => 'Import JSON',
             ProductReview::SOURCE_ADMIN_SAMPLE => 'Bình luận ảo/test',
+            ProductReview::SOURCE_ADMIN_AI => 'AI tạo tự động',
             ProductReview::SOURCE_CUSTOMER_WEB => 'Khách gửi từ website',
             default => 'Không rõ nguồn',
         };

@@ -576,8 +576,12 @@
   color: #fff;
 }
 
-.expandAllButton span {
+.expandAllButton span[class*="material-symbols"] {
   font-size: 18px;
+}
+
+.expandAllLabel {
+  font-size: 12px;
 }
 
 .tableScroller {

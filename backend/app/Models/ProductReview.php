@@ -17,6 +17,7 @@ class ProductReview extends Model
     public const SOURCE_ADMIN_MANUAL = 'admin_manual';
     public const SOURCE_ADMIN_IMPORT = 'admin_import';
     public const SOURCE_ADMIN_SAMPLE = 'admin_sample';
+    public const SOURCE_ADMIN_AI = 'admin_ai';
 
     protected $fillable = [
         'account_id',

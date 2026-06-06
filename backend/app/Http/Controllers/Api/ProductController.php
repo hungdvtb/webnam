@@ -19,6 +19,7 @@ use App\Models\MediaAsset;
 use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
+use App\Services\AI\AiExceptionClassifier;
 use App\Services\AI\ProductReviewAiGenerationService;
 use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
@@ -31,6 +32,7 @@ use App\Support\SimpleXlsx;
 use Illuminate\Http\Request;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -223,7 +225,7 @@ class ProductController extends Controller
             ->delay(now()->addMinutes($delayMinutes));
     }
 
-    public function regenerateAiReviews(Request $request, $id, ProductReviewAiGenerationService $reviewAiService)
+    public function regenerateAiReviews(Request $request, $id)
     {
         @set_time_limit(1200);
 
@@ -243,27 +245,52 @@ class ProductController extends Controller
         $max = max($min, (int) ($validated['max'] ?? config('product_review_ai.max_reviews', 100)));
 
         $product = Product::query()->findOrFail($id);
-        $result = $reviewAiService->generateForProduct($product, [
-            'replace' => $request->boolean('replace', true),
-            'min' => $min,
-            'max' => $max,
-        ]);
 
-        if (! empty($result['skipped'])) {
+        try {
+            $result = app(ProductReviewAiGenerationService::class)->generateForProduct($product, [
+                'replace' => $request->boolean('replace', true),
+                'min' => $min,
+                'max' => $max,
+            ]);
+
+            if (! empty($result['skipped'])) {
+                return response()->json([
+                    'message' => 'Sản phẩm đã có review AI, chưa tạo lại vì replace=false.',
+                    'result' => $result,
+                ]);
+            }
+
             return response()->json([
-                'message' => 'Sản phẩm đã có review AI, chưa tạo lại vì replace=false.',
+                'message' => sprintf(
+                    'Đã tạo %d review AI và %d phản hồi shop cho sản phẩm.',
+                    (int) ($result['reviews'] ?? 0),
+                    (int) ($result['replies'] ?? 0)
+                ),
                 'result' => $result,
             ]);
-        }
+        } catch (Throwable $exception) {
+            $error = app(AiExceptionClassifier::class)->classify($exception);
+            Log::error('AI product review regeneration failed.', [
+                'product_id' => (int) $product->id,
+                'error_code' => $error['error_code'] ?? 'AI_INTERNAL_ERROR',
+                'status' => $error['status'] ?? 500,
+                'exception_class' => $exception::class,
+                'message' => $exception->getMessage(),
+            ]);
 
-        return response()->json([
-            'message' => sprintf(
-                'Đã tạo %d review AI và %d phản hồi shop cho sản phẩm.',
-                (int) ($result['reviews'] ?? 0),
-                (int) ($result['replies'] ?? 0)
-            ),
-            'result' => $result,
-        ]);
+            $message = str_replace(
+                ['tạo SEO AI', 'tạo SEO hàng loạt', 'tạo SEO', 'để tạo SEO'],
+                ['tạo review AI', 'tạo review AI', 'tạo review', 'để tạo review'],
+                (string) ($error['message'] ?? 'Không thể tạo review AI cho sản phẩm.')
+            );
+
+            return response()->json([
+                'message' => $message,
+                'error_code' => $error['error_code'] ?? 'AI_INTERNAL_ERROR',
+                'detail' => $error['detail'] ?? null,
+                'retryable' => $error['retryable'] ?? false,
+            ], (int) ($error['status'] ?? 500));
+        }
     }
 
     private function productImportSelectableFieldIds(): array

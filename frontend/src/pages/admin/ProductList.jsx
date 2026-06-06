@@ -3698,6 +3698,7 @@ const ProductList = () => {
 
         let successCount = 0;
         let failedCount = 0;
+        let firstErrorMessage = '';
 
         try {
             for (let index = 0; index < normalizedIds.length; index += 1) {
@@ -3723,11 +3724,13 @@ const ProductList = () => {
                     }));
                 } catch (error) {
                     failedCount += 1;
+                    const errorMessage = error?.response?.data?.message || 'Không tạo được review AI';
+                    firstErrorMessage ||= errorMessage;
                     setAiReviewProductStates((current) => ({
                         ...current,
                         [productKey]: {
                             status: 'error',
-                            message: error?.response?.data?.message || 'Không tạo được review AI',
+                            message: errorMessage,
                         },
                     }));
                 }
@@ -3740,7 +3743,9 @@ const ProductList = () => {
             setNotification({
                 type: failedCount > 0 ? 'error' : 'success',
                 message: failedCount > 0
-                    ? `Đã tạo review AI cho ${successCount} sản phẩm, lỗi ${failedCount} sản phẩm.`
+                    ? (successCount > 0
+                        ? `Đã tạo review AI cho ${successCount} sản phẩm, lỗi ${failedCount} sản phẩm: ${firstErrorMessage}`
+                        : `Không tạo được review AI: ${firstErrorMessage}`)
                     : `Đã tạo lại review AI cho ${successCount} sản phẩm.`,
             });
             setTimeout(() => setNotification(null), 6000);

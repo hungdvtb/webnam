@@ -46,14 +46,24 @@ class ProductReviewAiGenerationService
         $generatedRows = [];
         $usedComments = [];
         $lastModel = null;
+        $fallbackUsed = false;
 
         foreach (array_chunk($plans, $batchSize) as $batchIndex => $planBatch) {
-            $result = $this->generateBatch($context, $planBatch, $usedComments);
-            $lastModel = $result['model'] ?? $lastModel;
-            $generatedRows = array_merge(
-                $generatedRows,
-                $this->normalizeGeneratedRows($context, $planBatch, $result['reviews'], $usedComments)
-            );
+            try {
+                $result = $this->generateBatch($context, $planBatch, $usedComments);
+                $lastModel = $result['model'] ?? $lastModel;
+                $generatedRows = array_merge(
+                    $generatedRows,
+                    $this->normalizeGeneratedRows($context, $planBatch, $result['reviews'], $usedComments)
+                );
+            } catch (\Throwable) {
+                $fallbackUsed = true;
+                $lastModel = $lastModel ?: 'local_fallback';
+                $generatedRows = array_merge(
+                    $generatedRows,
+                    $this->fallbackGeneratedRows($context, $planBatch, $usedComments)
+                );
+            }
 
             if ($batchIndex < (int) ceil(count($plans) / $batchSize) - 1) {
                 sleep(2);
@@ -69,13 +79,32 @@ class ProductReviewAiGenerationService
 
             $topUpPlans = $this->buildReviewPlans($needed, count($plans));
             $plans = array_merge($plans, $topUpPlans);
-            $result = $this->generateBatch($context, $topUpPlans, $usedComments);
-            $lastModel = $result['model'] ?? $lastModel;
+            try {
+                $result = $this->generateBatch($context, $topUpPlans, $usedComments);
+                $lastModel = $result['model'] ?? $lastModel;
+                $generatedRows = array_merge(
+                    $generatedRows,
+                    $this->normalizeGeneratedRows($context, $topUpPlans, $result['reviews'], $usedComments)
+                );
+            } catch (\Throwable) {
+                $fallbackUsed = true;
+                $lastModel = $lastModel ?: 'local_fallback';
+                $generatedRows = array_merge(
+                    $generatedRows,
+                    $this->fallbackGeneratedRows($context, $topUpPlans, $usedComments)
+                );
+            }
+            $topUpAttempts++;
+        }
+
+        if (count($generatedRows) < $min) {
+            $fallbackPlans = $this->buildReviewPlans($min - count($generatedRows), count($plans));
+            $fallbackUsed = true;
+            $lastModel = $lastModel ?: 'local_fallback';
             $generatedRows = array_merge(
                 $generatedRows,
-                $this->normalizeGeneratedRows($context, $topUpPlans, $result['reviews'], $usedComments)
+                $this->fallbackGeneratedRows($context, $fallbackPlans, $usedComments)
             );
-            $topUpAttempts++;
         }
 
         if (count($generatedRows) < $min) {
@@ -89,6 +118,7 @@ class ProductReviewAiGenerationService
             'replies' => 0,
             'deleted_existing' => 0,
             'model' => $lastModel,
+            'fallback_used' => $fallbackUsed,
         ];
 
         DB::transaction(function () use ($product, $replace, $generatedRows, &$stats) {
@@ -369,6 +399,267 @@ class ProductReviewAiGenerationService
         return $rows;
     }
 
+    private function fallbackGeneratedRows(array $context, array $plans, array &$usedComments): array
+    {
+        $rows = [];
+
+        foreach ($plans as $plan) {
+            $comment = '';
+
+            for ($attempt = 0; $attempt < 80; $attempt++) {
+                $candidate = $this->cleanGeneratedText($this->fallbackComment($context, $plan, $attempt));
+                if ($this->validComment($candidate, $context, $usedComments)) {
+                    $comment = $candidate;
+                    break;
+                }
+            }
+
+            if ($comment === '') {
+                for ($attempt = 0; $attempt < 180; $attempt++) {
+                    $candidate = $this->cleanGeneratedText($this->fallbackComment($context, $plan, $attempt + 1000));
+                    if ($this->validFallbackComment($candidate, $context, $usedComments)) {
+                        $comment = $candidate;
+                        break;
+                    }
+                }
+            }
+
+            if ($comment === '') {
+                continue;
+            }
+
+            $usedComments[$this->commentKey($comment)] = $comment;
+            $createdAt = $this->randomReviewDate($context);
+            $reply = '';
+            $replyCreatedAt = null;
+
+            if (! empty($plan['reply_required'])) {
+                $reply = $this->fallbackReply((int) $plan['item_index']);
+                $replyCreatedAt = $this->replyDate($createdAt);
+            }
+
+            $rows[] = [
+                'customer_name' => $plan['customer_name'],
+                'rating' => (float) $plan['rating'],
+                'comment' => $comment,
+                'reply' => $reply,
+                'created_at' => $createdAt,
+                'reply_created_at' => $replyCreatedAt,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function fallbackComment(array $context, array $plan, int $attempt): string
+    {
+        $seed = ((int) $plan['item_index'] * 37) + ($attempt * 19) + ((int) round(((float) $plan['rating']) * 10));
+        $terms = array_values(array_filter($context['generic_terms'] ?? [])) ?: ['hàng', 'sản phẩm', 'mẫu này', 'cái này'];
+        $term = $this->pick($terms, $seed);
+        $pack = $this->pick([
+            'gói kỹ',
+            'chèn cẩn thận',
+            'đóng gói chắc',
+            'bọc khá cẩn thận',
+            'ship xa vẫn nguyên',
+            'mở ra không sứt mẻ',
+        ], $seed + 3);
+        $color = $this->pick([
+            'màu men dịu',
+            'màu ngoài đời dễ nhìn',
+            'men nhìn ổn',
+            'màu hơi nhạt hơn ảnh tí',
+            'nhìn ngoài đẹp hơn ảnh',
+            'màu men ưng',
+        ], $seed + 7);
+        $feel = $this->pick([
+            'cầm chắc tay',
+            'nhìn không bị thô',
+            'đặt lên thấy gọn',
+            'hợp nhà mình',
+            'bố mẹ mình cũng ưng',
+            'tầm giá này ổn',
+        ], $seed + 11);
+        $service = $this->pick([
+            'shop tư vấn dễ hiểu',
+            'shop rep nhanh',
+            'nhận đúng hẹn',
+            'giao hơi lâu xíu nhưng hàng ổn',
+            'mình hỏi thêm shop trả lời khá nhanh',
+            'lần sau cần mình xem thêm',
+        ], $seed + 13);
+        $space = $this->pick([
+            'đặt lên nhìn gọn',
+            'hợp góc nhà mình',
+            'để trên bàn nhìn vừa mắt',
+            'nhìn không bị rối không gian',
+            'đặt cạnh mấy món cũ vẫn hợp',
+            'nhà mình dùng thấy ổn',
+            'bàn thờ nhìn sáng hơn chút',
+            'để lên thấy sạch sẽ',
+        ], $seed + 17);
+        $family = $this->pick([
+            'mẹ mình khen ổn',
+            'bố mình cũng ưng',
+            'cả nhà nhìn đều bảo được',
+            'mua tặng người thân thấy hợp',
+            'chị mình xem cũng thích',
+            'nhà mình khá ưng',
+            'người lớn trong nhà bảo đẹp',
+            'mình mua hộ mẹ, mẹ nhận thấy thích',
+        ], $seed + 23);
+        $value = $this->pick([
+            'tầm giá này ổn',
+            'đáng tiền',
+            'so với giá là được',
+            'mình thấy hợp lý',
+            'không quá đắt so với chất lượng',
+            'mua vậy thấy yên tâm',
+            'giá này mình không đòi hỏi hơn',
+            'lần sau cần sẽ xem thêm',
+        ], $seed + 29);
+        $note = $this->pick([
+            'nhìn thật hơn ảnh',
+            'không bị lòe loẹt',
+            'màu không quá chói',
+            'mở hộp ra khá yên tâm',
+            'hơi khác ảnh chút nhưng ổn',
+            'cầm lên thấy chắc',
+            'nhìn kỹ thấy men khá đều',
+            'không thấy lỗi gì lớn',
+        ], $seed + 31);
+        $tail = $this->pick([
+            'nói chung mình hài lòng',
+            'với mình vậy là được',
+            'mình thấy ổn áp',
+            'nhận xong thấy yên tâm hơn',
+            'nhà mình dùng thấy hợp',
+            'không có gì phải chê nhiều',
+            'mua lần này thấy ổn',
+            'mình sẽ xem thêm khi cần',
+        ], $seed + 37);
+
+        $shortTemplates = [
+            'hàng đẹp nha',
+            'đóng gói kỹ',
+            'màu men ưng',
+            'cầm chắc tay',
+            'ổn áp',
+            'gói kỹ, nhận nguyên',
+            'đẹp hơn mình nghĩ',
+            'shop rep nhanh',
+            'ưng cái này',
+            'màu dịu, dễ nhìn',
+            'hàng ok nha',
+            'đc, không sứt mẻ',
+            '{term} ổn nha',
+            '{term} ok đó',
+            '{pack} nha',
+            '{color}',
+            '{feel}',
+            '{service}',
+            '{space}',
+            '{family}',
+            '{value}',
+            '{note}',
+            'mở ra thấy ổn',
+            'nhận hàng nguyên',
+            'màu khá ưng',
+            'nhà mình khen',
+            'giao ổn',
+            'shop tư vấn được',
+            'đặt lên vừa mắt',
+            'không sứt mẻ',
+            'mẫu này được',
+            'nhìn gọn ghê',
+        ];
+
+        $mediumTemplates = [
+            '{term} nhìn ngoài ổn hơn ảnh. {pack}, nhận không bị sứt mẻ.',
+            'mình thấy {color}, đặt lên khá gọn. {service}.',
+            '{term} {feel}, không bị nhẹ quá. tầm giá này mình thấy được.',
+            'Giao hơi lâu chút nhưng {term} ổn. {pack} nên mở ra yên tâm.',
+            '{color}, nhìn không bị chói. Nhà mình đặt lên thấy hợp.',
+            'Shop tư vấn nhanh, hỏi gì cũng trả lời dễ hiểu. {term} nhận về đúng như mong.',
+            'mua tặng người thân, cả nhà khen {color}. {pack}.',
+            '{term} ổn nha, không quá cầu kỳ nhưng nhìn sạch và chắc. Mình ưng.',
+            'ban đầu hơi phân vân màu, nhận rồi thấy {color}. {feel}.',
+            '{pack}, hàng về nguyên vẹn. Màu ngoài đời hơi khác ảnh xíu nhưng vẫn đẹp.',
+            'Mình đặt thử 1 món trước, thấy {term} ổn. Shop đóng gói cẩn thận.',
+            '{term} nhìn khá chỉn chu, {feel}. Nếu cần thêm chắc mình quay lại xem.',
+            '{space}. {color}, nhìn lâu thấy dễ chịu.',
+            '{family}. {pack}, mở ra không thấy vấn đề gì.',
+            '{term} không quá cầu kỳ nhưng {note}. {value}.',
+            'mình mua về đặt thử, thấy {space}. {term} {feel}.',
+            '{service}, nên chọn cũng đỡ lăn tăn. Nhận về thấy {note}.',
+            'Màu ngoài đời hơi khác ảnh tí nhưng {color}. {tail}.',
+            '{pack}, giao tới nơi vẫn nguyên. {family}.',
+            '{term} nhìn sạch, {feel}. {value}.',
+            'mình hơi kỹ khoản đóng gói, may là {pack}. {tail}.',
+            'nhận xong thấy {note}. {space}, không bị thô.',
+            'hàng về đúng hẹn, {pack}. {term} nhìn khá ổn.',
+            '{family}, mình cũng thấy {value}.',
+            'lúc đầu sợ màu chói, nhận rồi thấy {color}. {space}.',
+            '{term} dùng trong nhà nhìn vừa phải. {service}.',
+            'đóng gói nhìn cẩn thận, {note}. Mình thấy được.',
+        ];
+
+        $longTemplates = [
+            'Mình nhận {term} rồi, mở hộp thấy {pack}. {color}, nhìn bên ngoài dễ chịu hơn mình nghĩ. {feel}. Nói chung tầm giá này ổn.',
+            'Đặt về cho nhà dùng nên mình cũng hơi kỹ tính. May là {term} về nguyên, không thấy sứt mẻ. {service}. Màu men nhìn thật hơn ảnh một chút.',
+            '{term} không bị thô, nhìn gọn khi đặt lên. {pack} nên lúc nhận khá yên tâm. Bố mẹ mình xem cũng khen màu ổn. Lần sau cần thêm mình sẽ xem tiếp.',
+            'Giao có hơi lâu xíu, chắc do xa. Bù lại {pack}, mở ra nguyên vẹn. {color}. Mình thấy dùng trong nhà khá hợp.',
+            'Shop tư vấn khá dễ hiểu, mình hỏi mấy lần vẫn trả lời nhanh. {term} nhận về {feel}. Màu ngoài đời không quá rực, nhìn lâu thấy dịu. Mình hài lòng.',
+            'Mua lần đầu nên cũng chưa biết thế nào. Nhận hàng thấy {pack}, cầm lên {feel}. {color}. Có dịp mình sẽ đặt thêm món khác.',
+            'Mình chọn mẫu này vì nhìn đơn giản. Nhận ngoài đời thấy {term} ổn, không bị lòe loẹt. {service}. Đặt lên nhà mình thấy vừa mắt.',
+            '{pack}, mở hộp ra không có vấn đề gì. {term} {feel}, màu men nhìn sạch. Có chút khác ảnh nhưng không đáng kể. Với giá này mình thấy hợp lý.',
+            'Mình đặt về cho nhà nên cũng xem khá kỹ. {pack}, mở ra thấy {note}. {space}. {tail}.',
+            'Ban đầu mình hơi phân vân vì xem ảnh khó đoán màu. Nhận rồi thấy {color}, không bị quá rực. {term} {feel}. {value}.',
+            'Shop trả lời mấy câu hỏi của mình khá nhanh. Khi nhận thì {pack}, không thấy sứt mẻ. {family}. Nhìn chung mình hài lòng.',
+            '{term} nhìn ngoài không quá bóng bẩy kiểu quảng cáo. {note}. Đặt lên thì {space}. Với mình như vậy là ổn.',
+            'Giao hàng không quá nhanh nhưng vẫn trong mức chờ được. Bù lại {pack}. {color}. {family}.',
+            'Mình mua thử trước một món để xem chất lượng. Nhận về thấy {term} {feel}. {space}. Nếu cần thêm chắc sẽ đặt tiếp.',
+            'Màu men bên ngoài nhìn dịu hơn trên ảnh một chút. {pack}, mở hộp không bị sứt mẻ. {value}. Nhà mình thấy hợp.',
+            'Không phải kiểu quá nổi bật nhưng nhìn thật khá ổn. {term} {feel}. {service}. {tail}.',
+        ];
+
+        $templates = match ($plan['length'] ?? 'medium') {
+            'short' => $shortTemplates,
+            'long' => $longTemplates,
+            default => $mediumTemplates,
+        };
+
+        if ((float) ($plan['rating'] ?? 5) < 5 && ($seed % 3) === 0) {
+            $templates = [
+                'giao hơi lâu chút nhưng hàng ổn',
+                'màu ngoài đời nhạt hơn ảnh tí nhưng vẫn đẹp',
+                'hộp hơi móp nhẹ, may là bên trong không sao',
+                'shop rep hơi chậm lúc đầu nhưng tư vấn rõ',
+                '{term} ổn, chỉ là màu khác ảnh một chút.',
+                'Mình chờ hơi lâu xíu. Bù lại {pack}, {term} nhìn ổn.',
+                'màu không giống ảnh 100% nhưng nhìn ngoài vẫn dễ chịu',
+                'giao chậm hơn dự kiến chút, may là {pack}',
+                '{term} được, chỉ hơi khác mình tưởng tượng ban đầu.',
+                'đóng gói ổn, bên ngoài hộp hơi cấn nhẹ',
+                'shop trả lời hơi lâu lúc đầu nhưng sau tư vấn rõ',
+                'mình thấy {value}, chỉ mong lần sau giao nhanh hơn.',
+            ];
+        }
+
+        return strtr($this->pick($templates, $seed), [
+            '{term}' => $term,
+            '{pack}' => $pack,
+            '{color}' => $color,
+            '{feel}' => $feel,
+            '{service}' => $service,
+            '{space}' => $space,
+            '{family}' => $family,
+            '{value}' => $value,
+            '{note}' => $note,
+            '{tail}' => $tail,
+        ]);
+    }
+
     private function validComment(string $comment, array $context, array $usedComments): bool
     {
         $length = mb_strlen($comment);
@@ -388,6 +679,32 @@ class ProductReviewAiGenerationService
         foreach (array_keys($usedComments) as $usedKey) {
             similar_text($key, $usedKey, $percent);
             if ($percent >= 86) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function validFallbackComment(string $comment, array $context, array $usedComments): bool
+    {
+        $length = mb_strlen($comment);
+        if ($length < 6 || $length > 800) {
+            return false;
+        }
+
+        if ($this->containsContactInfo($comment) || $this->containsFullProductName($comment, $context['name'])) {
+            return false;
+        }
+
+        $key = $this->commentKey($comment);
+        if (isset($usedComments[$key])) {
+            return false;
+        }
+
+        foreach (array_keys($usedComments) as $usedKey) {
+            similar_text($key, $usedKey, $percent);
+            if ($percent >= 94) {
                 return false;
             }
         }

@@ -988,9 +988,14 @@ class ProductController extends Controller
             $totalPrice = $finalPrice;
         }
 
+        $optionImages = array_values(array_filter([
+            $primaryImage,
+            ...($product['images'] ?? []),
+        ]));
+
         return [
             ...$product,
-            'images' => array_values(array_filter([$primaryImage])),
+            'images' => $optionImages,
             'variations' => [],
             'item_type' => 'bundle_option',
             'name' => $optionMeta['name'] ?? ($bundleOptionTitle ?: ($product['name'] ?? '')),
@@ -1507,9 +1512,11 @@ class ProductController extends Controller
                 }
 
                 if (!is_array($optionMeta)) {
+                    $productImages = array_values(array_filter($product['images'] ?? []));
+
                     return [[
                         ...$product,
-                        'images' => array_values(array_filter([$primaryImage])),
+                        'images' => $productImages,
                         'variations' => [],
                         'name' => $itemType === 'bundle_option' && $bundleOptionTitle
                             ? $bundleOptionTitle
@@ -2065,6 +2072,7 @@ class ProductController extends Controller
                         $query->where('status', true);
                         $this->applyVisibleBundleOptionConstraint($query);
                     },
+                    'bundleItems.images',
                 ])
                 ->where(function ($query) use ($slug) {
                     $query->where('slug', $slug);
@@ -2109,6 +2117,7 @@ class ProductController extends Controller
                 ? Product::query()
                     ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
                     ->whereIn('id', $variantIds->all())
+                    ->with('images')
                     ->get()
                     ->keyBy(fn (Product $variant) => (int) $variant->id)
                 : collect();
@@ -2123,11 +2132,29 @@ class ProductController extends Controller
                     $quantity = max(1, (int) (data_get($bundleItem, 'pivot.quantity') ?? 1));
                     $currentUnitPrice = $this->resolveBundleItemCurrentUnitPrice($bundleItem, $selectedVariant);
                     $baseUnitPrice = $this->resolveBundleItemBaseUnitPrice($bundleItem, $selectedVariant, $currentUnitPrice);
+                    $optionVideoUrl = trim((string) data_get($bundleItem, 'pivot.option_video_url', ''));
+                    $displayVideoUrls = is_array($displayProduct->video_urls) ? $displayProduct->video_urls : [];
+
+                    if ($displayProduct->video_url) {
+                        array_unshift($displayVideoUrls, ['title' => 'Video 1', 'url' => $displayProduct->video_url]);
+                    }
+
+                    if ($optionVideoUrl !== '') {
+                        array_unshift($displayVideoUrls, ['title' => $optionTitle, 'url' => $optionVideoUrl]);
+                    }
 
                     return [
                         'id' => $displayProduct->id,
                         'name' => $displayProduct->name,
                         'sku' => $displayProduct->sku,
+                        'main_image' => $displayProduct->main_image,
+                        'primary_image' => $displayProduct->primary_image,
+                        'images' => $displayProduct->relationLoaded('images')
+                            ? $this->mapProductImages($displayProduct)
+                            : [],
+                        'video_url' => $optionVideoUrl !== '' ? $optionVideoUrl : $displayProduct->video_url,
+                        'video_urls' => array_values($displayVideoUrls),
+                        'option_video_url' => $optionVideoUrl !== '' ? $optionVideoUrl : null,
                         'quantity' => $quantity,
                         'current_price' => $currentUnitPrice,
                         'price' => $baseUnitPrice,

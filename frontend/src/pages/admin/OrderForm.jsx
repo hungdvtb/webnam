@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { orderAiTrainingApi, orderApi, productApi, leadApi } from '../../services/api';
+import api, { orderAiTrainingApi, orderApi, productApi, leadApi, cmsApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -108,6 +108,7 @@ const productQuickFilterAttributeStorageKey = 'order_form_product_quick_filter_a
 const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filter_attribute_id_2_map';
 const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
+const orderProductQuickModeDefaultSettingKey = 'order_product_quick_mode_default_enabled';
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
 const PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE = 'attribute';
 const PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE = 'bundle_option_title';
@@ -855,6 +856,40 @@ const normalizeStoredQuickFilterBoolean = (value, fallbackValue = true) => {
 
     return fallbackValue;
 };
+const hasStoredProductQuickModePreference = (user = null) => {
+    if (typeof window === 'undefined') return false;
+
+    try {
+        const raw = window.localStorage.getItem(getProductQuickFilterStorageKey(user));
+        const parsed = raw ? JSON.parse(raw) : null;
+
+        return Boolean(
+            parsed
+            && typeof parsed === 'object'
+            && !Array.isArray(parsed)
+            && (
+                Object.prototype.hasOwnProperty.call(parsed, 'quickModeEnabled')
+                || Object.prototype.hasOwnProperty.call(parsed, 'quick_mode_enabled')
+            )
+        );
+    } catch (error) {
+        console.error('Unable to read product quick mode preference', error);
+        return false;
+    }
+};
+const getActiveAccountIdForSiteSettings = () => {
+    if (typeof window === 'undefined') return '';
+
+    try {
+        const activeAccountId = String(window.localStorage.getItem('activeAccountId') || '').trim();
+        return activeAccountId && activeAccountId !== 'all' && activeAccountId !== 'default'
+            ? activeAccountId
+            : '';
+    } catch (error) {
+        console.error('Unable to resolve active account id for order picker settings', error);
+        return '';
+    }
+};
 const normalizeStoredProductQuickFilterState = (value = {}) => {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 
@@ -1119,6 +1154,8 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                     bundle_option_status: normalizeCanvasText(item?.bundle_option_status || 'visible'),
                     bundle_title: normalizeCanvasText(item?.bundle_title || item?.bundle_config_title),
                     bundle_config_title: normalizeCanvasText(item?.bundle_config_title || item?.bundle_title),
+                    bundle_option_total_price: resolveMoneyValue(item?.bundle_option_total_price, item?.price, 0),
+                    bundle_option_discounted_price: resolveMoneyValue(item?.bundle_option_discounted_price, item?.price, 0),
                     option_post_id: Number(item?.option_post_id) || undefined,
                     option_post_title: normalizeCanvasText(item?.option_post_title),
                     bundle_items: bundleItems,
@@ -1362,6 +1399,15 @@ const productMatchesQuickFilterValue = (product, attribute, value) => {
     return getProductQuickFilterDisplayValues(product, attribute)
         .some((displayValue) => selectedValues.has(normalizeProductSearchText(displayValue)));
 };
+const scoreProductQuickFilterPriority = (product, criteria = []) => (
+    (Array.isArray(criteria) ? criteria : []).reduce((score, criterion, index) => {
+        if (!criterion?.attribute || !criterion?.value) return score;
+
+        return productMatchesQuickFilterValue(product, criterion.attribute, criterion.value)
+            ? score + Math.max(1000, 10000 - (index * 1000))
+            : score;
+    }, 0)
+);
 const buildDependentProductQuickFilterOptions = (products, primaryAttribute, primaryValue, secondaryAttribute) => {
     if (!primaryAttribute || !primaryValue || !secondaryAttribute) {
         return secondaryAttribute?.options || [];
@@ -2012,6 +2058,37 @@ const normalizeProductPickerEntry = (product) => {
             : product?.bundle_options,
     };
 };
+const isBundleOptionPickerEntry = (entry) => (
+    String(entry?.entry_kind || '').trim() === SEARCH_ENTRY_BUNDLE_OPTION
+);
+const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
+    const normalizedEntry = normalizeProductPickerEntry(entry);
+    if (!latest || typeof latest !== 'object') {
+        return normalizedEntry;
+    }
+
+    if (isBundleOptionPickerEntry(normalizedEntry)) {
+        const inventorySnapshot = resolveInventorySnapshot(latest, normalizedEntry);
+
+        return normalizeProductPickerEntry({
+            ...normalizedEntry,
+            computed_stock: inventorySnapshot.computed_stock,
+            pending_export_quantity: inventorySnapshot.pending_export_quantity,
+            available_to_sell: inventorySnapshot.available_to_sell,
+            unit_name: normalizedEntry?.unit_name || resolveOrderUnitLabel(latest, normalizedEntry),
+            main_image: normalizedEntry?.main_image || latest?.main_image || latest?.primary_image?.url || latest?.image_url || '',
+            type: normalizedEntry?.type || latest?.type || '',
+            bundle_title: normalizedEntry?.bundle_title || latest?.bundle_title || '',
+            bundle_config_title: normalizedEntry?.bundle_config_title || normalizedEntry?.bundle_title || latest?.bundle_title || '',
+            price: normalizedEntry?.price,
+            expected_cost: normalizedEntry?.expected_cost,
+            cost_price: normalizedEntry?.cost_price,
+            bundle_items: normalizedEntry?.bundle_items,
+        });
+    }
+
+    return normalizeProductPickerEntry({ ...normalizedEntry, ...latest });
+};
 const calculateItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
     0
@@ -2506,14 +2583,43 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         const bundleOptionTitle = resolveBundleOptionTitle(entry);
         const bundleOptionKey = normalizeCanvasText(entry?.bundle_option_key || resolveBundleOptionKey(entry));
 
-        return (Array.isArray(entry?.bundle_items) ? entry.bundle_items : [])
-            .map((bundleItem) => createOrderLineItem({
+        const bundleItems = Array.isArray(entry?.bundle_items) ? entry.bundle_items : [];
+        const optionPrice = resolveMoneyValue(
+            entry?.bundle_option_discounted_price,
+            entry?.price,
+            entry?.bundle_option_total_price,
+            0
+        );
+        const rawBundleTotal = bundleItems.reduce((sum, bundleItem) => {
+            const quantity = Math.max(1, Number(bundleItem?.quantity) || 1);
+            return sum + ((Number(bundleItem?.price ?? 0) || 0) * quantity);
+        }, 0);
+        const shouldAllocateOptionPrice = optionPrice > 0
+            && rawBundleTotal > 0
+            && Math.abs(optionPrice - rawBundleTotal) >= 0.5;
+        let allocatedLineTotal = 0;
+
+        return bundleItems
+            .map((bundleItem, index) => {
+                const quantity = Math.max(1, Number(bundleItem?.quantity) || 1);
+                const rawUnitPrice = Number(bundleItem?.price ?? 0) || 0;
+                let unitPrice = rawUnitPrice;
+
+                if (shouldAllocateOptionPrice) {
+                    const lineTotal = index === bundleItems.length - 1
+                        ? Math.max(0, optionPrice - allocatedLineTotal)
+                        : (optionPrice * ((rawUnitPrice * quantity) / rawBundleTotal));
+                    allocatedLineTotal += lineTotal;
+                    unitPrice = quantity > 0 ? lineTotal / quantity : lineTotal;
+                }
+
+                return createOrderLineItem({
                 product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
                 name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
                 sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
                 unit_name: resolveOrderUnitLabel(bundleItem),
-                quantity: Math.max(1, Number(bundleItem?.quantity) || 1),
-                price: Number(bundleItem?.price ?? 0) || 0,
+                quantity,
+                price: unitPrice,
                 cost_price: resolveProductCostPrice(bundleItem),
                 computed_stock: bundleItem?.computed_stock,
                 pending_export_quantity: bundleItem?.pending_export_quantity,
@@ -2533,7 +2639,8 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                     variant_name: normalizeCanvasText(bundleItem?.variant_name),
                     search_entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
                 },
-            }))
+            });
+        })
             .filter((item) => item.product_id > 0);
     }
 
@@ -2687,9 +2794,19 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 buildAttributeValueSummary(product),
             ].filter(Boolean),
         };
+        const hasBundleOptionRows = Array.isArray(product?.bundle_options)
+            && product.bundle_options.some((bundleOption) => (
+                Array.isArray(bundleOption?.items) && bundleOption.items.length > 0
+            ));
+        const shouldExposeBundleParentEntry = !(
+            includeNested
+            && baseEntry.type === 'bundle'
+            && hasBundleOptionRows
+        );
 
         if (
             baseEntry.id > 0
+            && shouldExposeBundleParentEntry
             && !(baseEntry.type === 'configurable' && Array.isArray(product?.variations) && product.variations.length > 0)
         ) {
             pushEntry(baseEntry);
@@ -2767,9 +2884,32 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             }
 
             const firstBundleImage = bundleItems.find((bundleItem) => bundleItem.main_image)?.main_image || baseEntry.main_image;
-            const subtotal = Number(bundleOption?.subtotal ?? bundleItems.reduce((sum, bundleItem) => (
+            const optionBaseTotal = bundleItems.reduce((sum, bundleItem) => (
                 sum + ((Number(bundleItem.price) || 0) * (Number(bundleItem.quantity) || 0))
-            ), 0)) || 0;
+            ), 0);
+            const optionPrice = resolveMoneyValue(
+                bundleOption?.bundle_option_discounted_price,
+                bundleOption?.discounted_price,
+                bundleOption?.subtotal,
+                optionBaseTotal,
+                0
+            );
+            const optionTotalPrice = resolveMoneyValue(
+                bundleOption?.bundle_option_total_price,
+                bundleOption?.total_price,
+                bundleOption?.subtotal,
+                optionPrice,
+                0
+            );
+            const optionCostTotal = bundleItems.reduce((sum, bundleItem) => (
+                sum + (resolveRoundedImportCostValue(bundleItem.cost_price, 0) * (Number(bundleItem.quantity) || 0))
+            ), 0);
+            const bundleDisplayName = [baseEntry.name, bundleOptionTitle]
+                .filter((part, index, source) => (
+                    part
+                    && source.findIndex((candidate) => normalizeProductSearchText(candidate) === normalizeProductSearchText(part)) === index
+                ))
+                .join(' - ');
 
             pushEntry({
                 entry_id: `bundle-option-${baseEntry.id}-${bundleOptionKey}`,
@@ -2787,13 +2927,14 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 option_post_id: Number(bundleOption?.option_post_id) || undefined,
                 option_post_title: normalizeCanvasText(bundleOption?.option_post_title),
                 name: baseEntry.name,
-                display_name: baseEntry.name,
+                display_name: bundleDisplayName || baseEntry.name,
                 sku: baseEntry.sku,
                 display_sku: baseEntry.sku,
-                price: subtotal,
-                cost_price: bundleItems.reduce((sum, bundleItem) => (
-                    sum + (resolveRoundedImportCostValue(bundleItem.cost_price, 0) * (Number(bundleItem.quantity) || 0))
-                ), 0),
+                price: optionPrice,
+                expected_cost: optionCostTotal,
+                cost_price: optionCostTotal,
+                bundle_option_total_price: optionTotalPrice,
+                bundle_option_discounted_price: optionPrice,
                 type: baseEntry.type,
                 main_image: firstBundleImage,
                 bundle_items: bundleItems,
@@ -3668,6 +3809,7 @@ const OrderForm = () => {
     const [productQuickFilterValues2, setProductQuickFilterValues2] = useState(() => initialProductQuickFilterState.values2);
     const [productQuickSetupStore, setProductQuickSetupStore] = useState(() => getStoredProductQuickSetupStore());
     const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(() => initialProductQuickFilterState.quickModeEnabled);
+    const [productQuickModeDefaultEnabled, setProductQuickModeDefaultEnabled] = useState(true);
     const [showProductQuickSetupPanel, setShowProductQuickSetupPanel] = useState(false);
     const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
@@ -3748,6 +3890,60 @@ const OrderForm = () => {
     }, []);
 
     useEffect(() => {
+        let isDisposed = false;
+
+        const loadProductQuickModeDefault = async () => {
+            try {
+                const response = await cmsApi.settings.get();
+                const settings = response.data && typeof response.data === 'object' ? response.data : {};
+                const hasBackendDefault = Object.prototype.hasOwnProperty.call(
+                    settings,
+                    orderProductQuickModeDefaultSettingKey
+                );
+                const nextDefaultEnabled = normalizeStoredQuickFilterBoolean(
+                    settings?.[orderProductQuickModeDefaultSettingKey],
+                    true
+                );
+
+                if (isDisposed) return;
+
+                setProductQuickModeDefaultEnabled(nextDefaultEnabled);
+                if (!hasStoredProductQuickModePreference(user)) {
+                    setProductQuickModeEnabled(nextDefaultEnabled);
+                }
+
+                if (!hasBackendDefault) {
+                    const activeAccountId = getActiveAccountIdForSiteSettings();
+                    if (activeAccountId) {
+                        cmsApi.settings.update({
+                            account_id: activeAccountId,
+                            settings: {
+                                [orderProductQuickModeDefaultSettingKey]: true,
+                            },
+                        }).catch((error) => {
+                            console.error('Unable to seed order product quick mode default setting', error);
+                        });
+                    }
+                }
+            } catch (error) {
+                if (isDisposed) return;
+
+                console.error('Unable to load order product quick mode default setting', error);
+                setProductQuickModeDefaultEnabled(true);
+                if (!hasStoredProductQuickModePreference(user)) {
+                    setProductQuickModeEnabled(true);
+                }
+            }
+        };
+
+        loadProductQuickModeDefault();
+
+        return () => {
+            isDisposed = true;
+        };
+    }, [productQuickFilterStorageKey, user]);
+
+    useEffect(() => {
         if (typeof window === 'undefined') return undefined;
 
         const mediaQuery = window.matchMedia('(max-width: 1023px)');
@@ -3823,6 +4019,21 @@ const OrderForm = () => {
         productQuickFilterScopeProducts,
     ]);
     const activeProductQuickFilterCount = normalizedProductQuickFilterValues.length + normalizedProductQuickFilterValues2.length;
+    const activeProductQuickFilterRankCriteria = useMemo(() => ([
+        {
+            attribute: activeProductQuickFilterAttribute,
+            value: normalizedProductQuickFilterValues[0],
+        },
+        {
+            attribute: activeProductQuickFilterAttribute2,
+            value: normalizedProductQuickFilterValues2[0],
+        },
+    ].filter((criterion) => criterion.attribute && criterion.value)), [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
     const activeProductBundleQuickFilterCriteria = useMemo(() => ([
         buildProductQuickFilterCriterion(activeProductQuickFilterAttribute, normalizedProductQuickFilterValues[0]),
         buildProductQuickFilterCriterion(activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2[0]),
@@ -3858,8 +4069,13 @@ const OrderForm = () => {
         const syncCacheRef = (cacheRef) => {
             cacheRef.current.forEach((entries, key) => {
                 const nextEntries = (Array.isArray(entries) ? entries : []).map((product) => {
-                    const latest = latestMap.get(Number(product?.id ?? product?.product_id));
-                    return latest ? normalizeProductPickerEntry({ ...product, ...latest }) : normalizeProductPickerEntry(product);
+                    const latest = latestMap.get(Number(
+                        product?.target_product_id
+                        ?? product?.product_id
+                        ?? product?.bundle_parent_id
+                        ?? product?.id
+                    ));
+                    return mergeLatestProductSnapshotIntoPickerEntry(product, latest);
                 });
 
                 cacheRef.current.set(key, nextEntries);
@@ -3872,8 +4088,13 @@ const OrderForm = () => {
 
         setProductQuickFilterScopeProducts((prev) => (
             (Array.isArray(prev) ? prev : []).map((product) => {
-                const latest = latestMap.get(Number(product?.id ?? product?.product_id));
-                return latest ? normalizeProductPickerEntry({ ...product, ...latest }) : normalizeProductPickerEntry(product);
+                const latest = latestMap.get(Number(
+                    product?.target_product_id
+                    ?? product?.product_id
+                    ?? product?.bundle_parent_id
+                    ?? product?.id
+                ));
+                return mergeLatestProductSnapshotIntoPickerEntry(product, latest);
             })
         ));
 
@@ -3886,20 +4107,35 @@ const OrderForm = () => {
                         Object.entries(groupMap || {}).map(([groupKey, items]) => [
                             groupKey,
                             (Array.isArray(items) ? items : []).map((item) => {
-                                const latest = latestMap.get(Number(item?.product_id ?? item?.id));
+                                const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+                                const isBundleOptionEntry = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                const latest = latestMap.get(Number(
+                                    item?.target_product_id
+                                    ?? item?.product_id
+                                    ?? item?.bundle_parent_id
+                                    ?? item?.id
+                                ));
                                 if (!latest) return item;
 
                                 hasChanged = true;
 
                                 return {
                                     ...item,
-                                    sku: latest.sku ?? item?.sku ?? '',
-                                    display_sku: item?.display_sku ?? latest.sku ?? item?.sku ?? '',
-                                    name: latest.name ?? item?.name ?? '',
-                                    display_name: latest.display_name ?? latest.name ?? item?.display_name ?? item?.name ?? '',
-                                    price: resolveMoneyValue(latest.price, item?.price, 0),
-                                    expected_cost: parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
-                                    cost_price: resolveProductCostPrice({ ...item, ...latest }),
+                                    sku: isBundleOptionEntry ? (item?.sku ?? '') : (latest.sku ?? item?.sku ?? ''),
+                                    display_sku: isBundleOptionEntry ? (item?.display_sku ?? item?.sku ?? '') : (item?.display_sku ?? latest.sku ?? item?.sku ?? ''),
+                                    name: isBundleOptionEntry ? (item?.name ?? '') : (latest.name ?? item?.name ?? ''),
+                                    display_name: isBundleOptionEntry
+                                        ? (item?.display_name ?? item?.name ?? '')
+                                        : (latest.display_name ?? latest.name ?? item?.display_name ?? item?.name ?? ''),
+                                    price: isBundleOptionEntry
+                                        ? (Number(item?.price ?? 0) || 0)
+                                        : resolveMoneyValue(latest.price, item?.price, 0),
+                                    expected_cost: isBundleOptionEntry
+                                        ? parseMoneyNumber(item?.expected_cost)
+                                        : parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
+                                    cost_price: isBundleOptionEntry
+                                        ? resolveProductCostPrice(item)
+                                        : resolveProductCostPrice({ ...item, ...latest }),
                                     unit_name: resolveOrderUnitLabel(latest, item),
                                     ...resolveInventorySnapshot(latest, item),
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
@@ -4467,12 +4703,16 @@ const OrderForm = () => {
         setProductQuickFilterValues(storedState.values);
         setProductQuickFilterAttributeId2(storedState.attributeId2);
         setProductQuickFilterValues2(storedState.values2);
-        setProductQuickModeEnabled(storedState.quickModeEnabled);
+        setProductQuickModeEnabled(
+            hasStoredProductQuickModePreference(user)
+                ? storedState.quickModeEnabled
+                : productQuickModeDefaultEnabled
+        );
         setShowProductQuickFilterPanel(false);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
-    }, [productQuickFilterStorageKey, user]);
+    }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled, user]);
 
     useEffect(() => {
         if (skipNextProductQuickFilterPersistRef.current) {
@@ -5852,14 +6092,19 @@ const OrderForm = () => {
 
     const fetchProducts = useCallback(async (term = '', filterOverrides = {}) => {
         const shouldApplyQuickFilter = Boolean(filterOverrides.applyQuickFilter);
+        const shouldRankQuickFilter = Boolean(filterOverrides.rankQuickFilter);
+        const shouldSendQuickFilterParams = shouldApplyQuickFilter || shouldRankQuickFilter;
         const params = {
             per_page: isCompactCompositeProductSearch(term) ? 200 : 100,
             picker: 1,
             quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
         };
         if (term) params.search = term;
+        if (shouldRankQuickFilter && !shouldApplyQuickFilter) {
+            params.quick_filter_rank = 1;
+        }
 
-        if (shouldApplyQuickFilter) {
+        if (shouldSendQuickFilterParams) {
             const activeFilterAttribute = filterOverrides.attribute || activeProductQuickFilterAttribute;
             const activeFilterValues = Array.isArray(filterOverrides.values)
                 ? filterOverrides.values.map(normalizeQuickFilterOptionValue).filter(Boolean)
@@ -5997,7 +6242,7 @@ const OrderForm = () => {
         setProductQuickFilterValues([]);
         setProductQuickFilterValues2([]);
         setProductQuickFilterAttributeId2('');
-        setProductQuickModeEnabled(false);
+        setProductQuickModeEnabled(productQuickModeDefaultEnabled);
         setShowProductQuickFilterPanel(false);
         setShowProductQuickSetupPanel(false);
         setShowSearchDropdown(true);
@@ -6009,7 +6254,7 @@ const OrderForm = () => {
             window.localStorage.removeItem(productQuickFilterAttributeStorageKey);
             window.localStorage.removeItem(productQuickFilterAttribute2MapStorageKey);
         }
-    }, [productQuickFilterStorageKey]);
+    }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled]);
 
     const saveActiveProductQuickSetupItems = useCallback((items) => {
         if (!activeProductQuickSetupKey) return;
@@ -6085,6 +6330,8 @@ const OrderForm = () => {
                     bundle_option_status: product.bundle_option_status ?? 'visible',
                     bundle_title: product.bundle_title ?? product.bundle_config_title ?? '',
                     bundle_config_title: product.bundle_config_title ?? product.bundle_title ?? '',
+                    bundle_option_total_price: resolveMoneyValue(product?.bundle_option_total_price, product?.price, 0),
+                    bundle_option_discounted_price: resolveMoneyValue(product?.bundle_option_discounted_price, product?.price, 0),
                     option_post_id: Number(product?.option_post_id) || undefined,
                     option_post_title: product.option_post_title ?? '',
                     bundle_items: normalizeStoredProductQuickSetupBundleItems(product.bundle_items),
@@ -6272,8 +6519,12 @@ const OrderForm = () => {
         () => buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems),
         [activeProductQuickSetupItems]
     );
+    const shouldRankInactiveProductQuickFilters = !isProductQuickModeActive && activeProductQuickFilterRankCriteria.length > 0;
 
     const rankedSearchProducts = useMemo(() => {
+        const quickFilterRankCriteria = shouldRankInactiveProductQuickFilters
+            ? activeProductQuickFilterRankCriteria
+            : [];
         const searchableEntries = isProductQuickModeActive
             ? quickModeSearchEntries
             : buildProductSearchEntries(products, {
@@ -6291,26 +6542,49 @@ const OrderForm = () => {
             ));
 
         if (!searchTerm.trim()) {
-            return preparedProducts.slice(0, 50);
+            if (quickFilterRankCriteria.length === 0) {
+                return preparedProducts.slice(0, 50);
+            }
+
+            return preparedProducts
+                .map((product) => ({
+                    ...product,
+                    __quickFilterScore: scoreProductQuickFilterPriority(product, quickFilterRankCriteria),
+                }))
+                .sort((left, right) => (
+                    right.__quickFilterScore - left.__quickFilterScore
+                    || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
+                ))
+                .slice(0, 50);
         }
 
         return preparedProducts
-            .map((product) => ({
-                ...product,
-                __searchScore: scoreProductSearchResult(product, searchTerm)
-            }))
+            .map((product) => {
+                const searchScore = scoreProductSearchResult(product, searchTerm);
+
+                return {
+                    ...product,
+                    __searchScore: searchScore,
+                    __quickFilterScore: searchScore > 0
+                        ? scoreProductQuickFilterPriority(product, quickFilterRankCriteria)
+                        : 0,
+                };
+            })
             .filter((product) => product.__searchScore > 0)
             .sort((left, right) => (
-                right.__searchScore - left.__searchScore
+                right.__quickFilterScore - left.__quickFilterScore
+                || right.__searchScore - left.__searchScore
                 || String(left.name || '').localeCompare(String(right.name || ''), 'vi')
             ))
             .slice(0, 50);
     }, [
+        activeProductQuickFilterRankCriteria,
         formData.items,
         isProductQuickModeActive,
         products,
         quickModeSearchEntries,
         searchTerm,
+        shouldRankInactiveProductQuickFilters,
     ]);
 
     const productSearchEmptyMessage = useMemo(() => {
@@ -6358,12 +6632,15 @@ const OrderForm = () => {
         if (isProductQuickModeActive) return;
 
         if (showSearchDropdown || debouncedSearchTerm.trim() !== '') {
-            fetchProducts(debouncedSearchTerm);
+            fetchProducts(debouncedSearchTerm, {
+                rankQuickFilter: shouldRankInactiveProductQuickFilters,
+            });
         }
     }, [
         fetchProducts,
         debouncedSearchTerm,
         isProductQuickModeActive,
+        shouldRankInactiveProductQuickFilters,
         showSearchDropdown
     ]);
 

@@ -243,7 +243,9 @@ export default function WholesaleOrderTable({
             <span className="material-symbols-outlined" aria-hidden="true">
               {expandAllOpen ? "unfold_less" : "unfold_more"}
             </span>
-            {expandAllOpen ? "Thu gọn tất cả mẫu và size" : "Hiển thị tất cả mẫu và size"}
+            <span className={styles.expandAllLabel}>
+              {expandAllOpen ? "Thu gọn tất cả mẫu và size" : "Hiển thị tất cả mẫu và size"}
+            </span>
           </button>
         </div>
         <button
@@ -314,6 +316,7 @@ export default function WholesaleOrderTable({
                 imageSrc={row.imageSrc}
                 galleryImages={row.galleryImages}
                 videoHref={row.videoHref}
+                videoItems={row.videoItems}
                 wholesalePrice={row.wholesalePrice}
                 stock={row.stock}
                 orderItems={orderItems}
@@ -357,9 +360,10 @@ export default function WholesaleOrderTable({
                     <div key={item.key} className={styles.orderItem}>
                       <div>
                         <strong>{itemTitle}</strong>
-                        <span>{formatNumber(item.quantity)} x {formatWholesalePrice(item.price)}</span>
+                        <span className={styles.orderItemFormula}>
+                          {formatNumber(item.quantity)} x {formatWholesalePrice(item.price)} = <b>{formatWholesalePrice(lineTotal)}</b>
+                        </span>
                       </div>
-                      <b>{formatWholesalePrice(lineTotal)}</b>
                     </div>
                   );
                 })}

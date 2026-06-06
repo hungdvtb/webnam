@@ -4111,6 +4111,44 @@ class ProductController extends Controller
         return preg_replace('/[^a-z0-9]+/', '', $this->normalizeNameSearchText($value)) ?? '';
     }
 
+    protected function compactCodeLooseLike(string $compactCode): ?string
+    {
+        if (!preg_match('/^([a-z]{2,})(\d+)$/', $compactCode, $matches)) {
+            return null;
+        }
+
+        return '%' . $this->escapeLike($matches[1]) . '%' . $this->escapeLike($matches[2]) . '%';
+    }
+
+    protected function codeSearchNameAliases(string $compactCode): array
+    {
+        if (!preg_match('/^([a-z]{2,})(\d+)$/', $compactCode, $matches)) {
+            return [];
+        }
+
+        $aliasesByPrefix = [
+            'bh' => ['bat huong'],
+            'bhr' => ['bat huong rong'],
+            'bhl' => ['bat huong lam'],
+        ];
+
+        $prefix = $matches[1];
+        $digits = $matches[2];
+        $aliases = $aliasesByPrefix[$prefix] ?? [];
+
+        if ($aliases === [] && str_starts_with($prefix, 'bh')) {
+            $aliases = $aliasesByPrefix['bh'];
+        }
+
+        return collect($aliases)
+            ->map(fn (string $alias) => [
+                'words_like' => '%' . $this->escapeLike($alias) . '%',
+                'digit_like' => '%' . $this->escapeLike($digits) . '%',
+            ])
+            ->values()
+            ->all();
+    }
+
     protected function splitCompactNameSearchTokens(string $value): array
     {
         if ($value === '') {
@@ -4603,6 +4641,14 @@ class ProductController extends Controller
         }
 
         if ($this->looksLikeProductCodeSearch($trimmedSearch)) {
+            $compactSearch = $this->compactSearchText($trimmedSearch);
+            if (
+                preg_match('/[a-z]/', $compactSearch) === 1
+                && preg_match('/\d/', $compactSearch) === 1
+            ) {
+                return $this->applyProductCodeSearch($query, $trimmedSearch, $includeVariationMatches);
+            }
+
             $codeProbeQuery = clone $query;
             [$codeSearchRankingSql] = $this->applyProductCodeSearch($codeProbeQuery, $trimmedSearch, $includeVariationMatches);
 
@@ -4661,6 +4707,9 @@ class ProductController extends Controller
         $codeContainsLike = '%' . $this->escapeLike($normalizedCode) . '%';
         $compactCodePrefixLike = $compactCode !== '' ? $this->escapeLike($compactCode) . '%' : null;
         $compactCodeContainsLike = $compactCode !== '' ? '%' . $this->escapeLike($compactCode) . '%' : null;
+        $compactCodeLooseLike = $compactCode !== '' ? $this->compactCodeLooseLike($compactCode) : null;
+        $nameAliasConstraints = $compactCode !== '' ? $this->codeSearchNameAliases($compactCode) : [];
+        $useDirectAttributeCodeSearch = $compactCode !== '' && !str_starts_with($compactCode, 'bh');
         $nameContainsLike = ($includeNameMatches && $normalizedName !== '')
             ? '%' . $this->escapeLike($normalizedName) . '%'
             : null;
@@ -4708,6 +4757,11 @@ class ProductController extends Controller
             $searchRankingBindings[] = $compactCodeContainsLike;
         }
 
+        if ($compactCodeLooseLike !== null) {
+            $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1450 ELSE 0 END";
+            $searchRankingBindings[] = $compactCodeLooseLike;
+        }
+
         if ($includeNameMatches && $nameExpr !== null && $nameContainsLike !== null) {
             $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' THEN 1600 ELSE 0 END";
             $searchRankingBindings[] = $nameContainsLike;
@@ -4718,6 +4772,14 @@ class ProductController extends Controller
             $searchRankingBindings[] = $compactCodeContainsLike;
         }
 
+        if ($includeNameMatches && $nameExpr !== null && $compactNameExpr !== null) {
+            foreach ($nameAliasConstraints as $constraint) {
+                $searchRankingParts[] = "CASE WHEN {$nameExpr} LIKE ? ESCAPE '\\' AND {$compactNameExpr} LIKE ? ESCAPE '\\' THEN 1350 ELSE 0 END";
+                $searchRankingBindings[] = $constraint['words_like'];
+                $searchRankingBindings[] = $constraint['digit_like'];
+            }
+        }
+
         $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
         $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
         $query->where(function (Builder $searchQuery) use (
@@ -4725,27 +4787,49 @@ class ProductController extends Controller
             $compactSkuExpr,
             $codeContainsLike,
             $compactCodeContainsLike,
+            $compactCodeLooseLike,
             $includeNameMatches,
             $nameExpr,
             $compactNameExpr,
             $nameContainsLike,
+            $nameAliasConstraints,
+            $useDirectAttributeCodeSearch,
             $includeVariationMatches
         ) {
+            $attributeWordLikes = $useDirectAttributeCodeSearch
+                ? collect([$nameContainsLike])
+                    ->filter()
+                    ->values()
+                    ->all()
+                : [];
+            $attributeCompactLikes = $useDirectAttributeCodeSearch
+                ? collect([$compactCodeContainsLike, $compactCodeLooseLike])
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->all()
+                : [];
             $searchQuery
                 ->where(function (Builder $directQuery) use (
                     $skuExpr,
                     $compactSkuExpr,
                     $codeContainsLike,
                     $compactCodeContainsLike,
+                    $compactCodeLooseLike,
                     $includeNameMatches,
                     $nameExpr,
                     $compactNameExpr,
-                    $nameContainsLike
+                    $nameContainsLike,
+                    $nameAliasConstraints
                 ) {
                     $directQuery->whereRaw("{$skuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
 
                     if ($compactCodeContainsLike !== null) {
                         $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
+                    }
+
+                    if ($compactCodeLooseLike !== null) {
+                        $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeLooseLike]);
                     }
 
                     if ($includeNameMatches && $nameExpr !== null && $nameContainsLike !== null) {
@@ -4755,14 +4839,26 @@ class ProductController extends Controller
                     if ($includeNameMatches && $compactNameExpr !== null && $compactCodeContainsLike !== null) {
                         $directQuery->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
                     }
+
+                    if ($includeNameMatches && $nameExpr !== null && $compactNameExpr !== null) {
+                        foreach ($nameAliasConstraints as $constraint) {
+                            $directQuery->orWhere(function (Builder $aliasQuery) use ($nameExpr, $compactNameExpr, $constraint) {
+                                $aliasQuery
+                                    ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$constraint['words_like']])
+                                    ->whereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$constraint['digit_like']]);
+                            });
+                        }
+                    }
                 });
 
             if ($includeVariationMatches) {
                 $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use (
                     $codeContainsLike,
                     $compactCodeContainsLike,
+                    $compactCodeLooseLike,
                     $includeNameMatches,
-                    $nameContainsLike
+                    $nameContainsLike,
+                    $nameAliasConstraints
                 ) {
                     $variationSkuExpr = $this->loweredSearchExpression('sku');
                     $variationCompactSkuExpr = $this->compactSearchExpression('sku');
@@ -4777,13 +4873,19 @@ class ProductController extends Controller
                             $variationCompactNameExpr,
                             $codeContainsLike,
                             $compactCodeContainsLike,
+                            $compactCodeLooseLike,
                             $includeNameMatches,
-                            $nameContainsLike
+                            $nameContainsLike,
+                            $nameAliasConstraints
                         ) {
                             $directVariationQuery->whereRaw("{$variationSkuExpr} LIKE ? ESCAPE '\\'", [$codeContainsLike]);
 
                             if ($compactCodeContainsLike !== null) {
                                 $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
+                            }
+
+                            if ($compactCodeLooseLike !== null) {
+                                $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeLooseLike]);
                             }
 
                             if ($includeNameMatches && $variationNameExpr !== null && $nameContainsLike !== null) {
@@ -4793,9 +4895,37 @@ class ProductController extends Controller
                             if ($includeNameMatches && $variationCompactNameExpr !== null && $compactCodeContainsLike !== null) {
                                 $directVariationQuery->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$compactCodeContainsLike]);
                             }
+
+                            if ($includeNameMatches && $variationNameExpr !== null && $variationCompactNameExpr !== null) {
+                                foreach ($nameAliasConstraints as $constraint) {
+                                    $directVariationQuery->orWhere(function (Builder $aliasQuery) use ($variationNameExpr, $variationCompactNameExpr, $constraint) {
+                                        $aliasQuery
+                                            ->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$constraint['words_like']])
+                                            ->whereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$constraint['digit_like']]);
+                                    });
+                                }
+                            }
                         });
                 });
             }
+
+            if ($attributeWordLikes !== [] || $attributeCompactLikes !== []) {
+                $searchQuery->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeWordLikes, $attributeCompactLikes) {
+                    $this->applyProductCodeAttributeValueConstraint($attributeValueQuery, $attributeWordLikes, $attributeCompactLikes);
+                });
+
+                if ($includeVariationMatches) {
+                    $searchQuery->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeWordLikes, $attributeCompactLikes) {
+                        $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
+                            $productQuery->where('status', true);
+                        });
+                        $this->applyProductCodeAttributeValueConstraint($attributeValueQuery, $attributeWordLikes, $attributeCompactLikes);
+                    });
+                }
+            }
+
+            $this->applyProductCodeNameAliasConstraint($searchQuery, $nameAliasConstraints, $includeVariationMatches);
+            $this->applyProductCodeBundleOptionConstraint($searchQuery, $attributeWordLikes, $attributeCompactLikes);
 
         });
 
@@ -4807,6 +4937,95 @@ class ProductController extends Controller
         $valueExpr = $this->normalizedWordsExpression('value');
 
         $query->whereRaw("{$valueExpr} LIKE ? ESCAPE '\\'", [$likeValue]);
+    }
+
+    protected function applyProductSearchAttributeValueCompactLikeConstraint(Builder $query, string $likeValue): void
+    {
+        $valueExpr = $this->compactSearchExpression('value');
+
+        $query->whereRaw("{$valueExpr} LIKE ? ESCAPE '\\'", [$likeValue]);
+    }
+
+    protected function applyProductCodeAttributeValueConstraint(Builder $query, array $wordLikes, array $compactLikes): void
+    {
+        $valueExpr = $this->normalizedWordsExpression('value');
+        $compactValueExpr = $this->compactSearchExpression('value');
+
+        $query->where(function (Builder $valueQuery) use ($valueExpr, $compactValueExpr, $wordLikes, $compactLikes) {
+            foreach ($wordLikes as $wordLike) {
+                $valueQuery->orWhereRaw("{$valueExpr} LIKE ? ESCAPE '\\'", [$wordLike]);
+            }
+
+            foreach ($compactLikes as $compactLike) {
+                $valueQuery->orWhereRaw("{$compactValueExpr} LIKE ? ESCAPE '\\'", [$compactLike]);
+            }
+        });
+    }
+
+    protected function applyProductCodeBundleOptionConstraint(Builder $query, array $wordLikes, array $compactLikes): void
+    {
+        if ($wordLikes === [] && $compactLikes === []) {
+            return;
+        }
+
+        $query->orWhereHas('bundleItems', function (Builder $bundleQuery) use ($wordLikes, $compactLikes) {
+            $bundleOptionExpr = $this->normalizedWordsExpression('product_links.option_title');
+            $bundleOptionCompactExpr = $this->compactSearchExpression('product_links.option_title');
+
+            $bundleQuery->where(function (Builder $optionQuery) use ($bundleOptionExpr, $bundleOptionCompactExpr, $wordLikes, $compactLikes) {
+                foreach ($wordLikes as $wordLike) {
+                    $optionQuery->orWhereRaw("{$bundleOptionExpr} LIKE ? ESCAPE '\\'", [$wordLike]);
+                }
+
+                foreach ($compactLikes as $compactLike) {
+                    $optionQuery->orWhereRaw("{$bundleOptionCompactExpr} LIKE ? ESCAPE '\\'", [$compactLike]);
+                }
+            });
+        });
+    }
+
+    protected function applyProductCodeNameAliasConstraint(
+        Builder $query,
+        array $nameAliasConstraints,
+        bool $includeVariationMatches = true
+    ): void {
+        if ($nameAliasConstraints === []) {
+            return;
+        }
+
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+
+        $query->orWhere(function (Builder $aliasQuery) use ($nameAliasConstraints, $nameExpr, $compactNameExpr, $includeVariationMatches) {
+            foreach ($nameAliasConstraints as $constraint) {
+                $aliasQuery->orWhere(function (Builder $singleAliasQuery) use ($constraint, $nameExpr, $compactNameExpr, $includeVariationMatches) {
+                    $wordsLike = $constraint['words_like'] ?? null;
+                    $digitLike = $constraint['digit_like'] ?? null;
+                    if (!$wordsLike || !$digitLike) {
+                        $singleAliasQuery->whereRaw('1 = 0');
+                        return;
+                    }
+
+                    $singleAliasQuery
+                        ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$wordsLike])
+                        ->where(function (Builder $digitQuery) use ($compactNameExpr, $digitLike, $includeVariationMatches) {
+                            $digitQuery->whereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$digitLike])
+                                ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($digitLike) {
+                                    $this->applyProductSearchAttributeValueCompactLikeConstraint($attributeValueQuery, $digitLike);
+                                });
+
+                            if ($includeVariationMatches) {
+                                $digitQuery->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($digitLike) {
+                                    $attributeValueQuery->whereHas('product', function (Builder $productQuery) {
+                                        $productQuery->where('status', true);
+                                    });
+                                    $this->applyProductSearchAttributeValueCompactLikeConstraint($attributeValueQuery, $digitLike);
+                                });
+                            }
+                        });
+                });
+            }
+        });
     }
 
     protected function applyBundleNamePhraseConstraint(Builder $query, string $nameContainsLike, ?string $compactNameContainsLike = null): void
@@ -5471,6 +5690,317 @@ class ProductController extends Controller
         return ! $request->has('quick_filter_enabled') || $request->boolean('quick_filter_enabled');
     }
 
+    protected function productQuickFilterRankRequested(Request $request): bool
+    {
+        return $request->boolean('quick_filter_rank') && ! $this->productQuickFiltersEnabled($request);
+    }
+
+    protected function sqlPlaceholders(array $values): string
+    {
+        return implode(', ', array_fill(0, count($values), '?'));
+    }
+
+    protected function buildAttributeValueMatchSql(string $alias, int $attributeId, array $valueArray): array
+    {
+        $exactValueCandidates = $this->buildExactAttributeValueCandidates($valueArray);
+        $normalizedValueCandidates = collect($valueArray)
+            ->map(fn ($value) => $this->normalizeAttributeFilterValue((string) $value))
+            ->filter(fn ($value) => $value !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($exactValueCandidates) && empty($normalizedValueCandidates)) {
+            return ['1 = 0', []];
+        }
+
+        $valueColumn = "{$alias}.value";
+        $attributeIdColumn = "{$alias}.attribute_id";
+        $normalizedValueExpression = $this->normalizedAttributeFilterExpression($valueColumn);
+        $valueSqlParts = [];
+        $bindings = [$attributeId];
+
+        foreach ($exactValueCandidates as $candidate) {
+            $valueSqlParts[] = "{$valueColumn} = ?";
+            $bindings[] = $candidate;
+        }
+
+        foreach ($normalizedValueCandidates as $candidate) {
+            $valueSqlParts[] = "{$normalizedValueExpression} = ?";
+            $bindings[] = $candidate;
+        }
+
+        return [
+            "{$attributeIdColumn} = ? AND (" . implode(' OR ', $valueSqlParts) . ')',
+            $bindings,
+        ];
+    }
+
+    protected function buildAttributeValueExistsSql(string $productIdExpression, array $filterGroup, string $alias): array
+    {
+        [$matchSql, $bindings] = $this->buildAttributeValueMatchSql(
+            $alias,
+            (int) $filterGroup['attribute_id'],
+            $filterGroup['values']
+        );
+
+        return [
+            "EXISTS (
+                SELECT 1
+                FROM product_attribute_values AS {$alias}
+                WHERE {$alias}.product_id = {$productIdExpression}
+                    AND {$matchSql}
+            )",
+            $bindings,
+        ];
+    }
+
+    protected function buildOwnAttributeFilterGroupsSql(array $filterGroups, string $productIdExpression, string $aliasPrefix): array
+    {
+        $parts = [];
+        $bindings = [];
+
+        foreach ($filterGroups as $index => $filterGroup) {
+            [$existsSql, $existsBindings] = $this->buildAttributeValueExistsSql(
+                $productIdExpression,
+                $filterGroup,
+                "{$aliasPrefix}{$index}"
+            );
+
+            $parts[] = $existsSql;
+            $bindings = array_merge($bindings, $existsBindings);
+        }
+
+        if (empty($parts)) {
+            return ['1 = 0', []];
+        }
+
+        return ['(' . implode(' AND ', $parts) . ')', $bindings];
+    }
+
+    protected function buildVariationAttributeFilterGroupsSql(
+        array $filterGroups,
+        string $variationIdExpression,
+        string $parentIdExpression,
+        string $aliasPrefix
+    ): array {
+        $parts = [];
+        $bindings = [];
+
+        foreach ($filterGroups as $index => $filterGroup) {
+            $attributeId = (int) $filterGroup['attribute_id'];
+            [$ownSql, $ownBindings] = $this->buildAttributeValueExistsSql(
+                $variationIdExpression,
+                $filterGroup,
+                "{$aliasPrefix}own{$index}"
+            );
+            [$parentSql, $parentBindings] = $this->buildAttributeValueExistsSql(
+                $parentIdExpression,
+                $filterGroup,
+                "{$aliasPrefix}parent{$index}"
+            );
+            $anyOwnAlias = "{$aliasPrefix}any{$index}";
+
+            $parts[] = "(
+                {$ownSql}
+                OR (
+                    NOT EXISTS (
+                        SELECT 1
+                        FROM product_attribute_values AS {$anyOwnAlias}
+                        WHERE {$anyOwnAlias}.product_id = {$variationIdExpression}
+                            AND {$anyOwnAlias}.attribute_id = ?
+                    )
+                    AND {$parentSql}
+                )
+            )";
+            $bindings = array_merge($bindings, $ownBindings, [$attributeId], $parentBindings);
+        }
+
+        if (empty($parts)) {
+            return ['1 = 0', []];
+        }
+
+        return ['(' . implode(' AND ', $parts) . ')', $bindings];
+    }
+
+    protected function buildProductAttributeQuickFilterMatchSql(array $filterGroups): array
+    {
+        if (empty($filterGroups)) {
+            return [null, []];
+        }
+
+        [$ownSql, $ownBindings] = $this->buildOwnAttributeFilterGroupsSql(
+            $filterGroups,
+            'products.id',
+            'qfqown'
+        );
+        [$variationFilterSql, $variationBindings] = $this->buildVariationAttributeFilterGroupsSql(
+            $filterGroups,
+            'qfqv.id',
+            'products.id',
+            'qfqvar'
+        );
+        [$bundleItemSql, $bundleItemBindings] = $this->buildOwnAttributeFilterGroupsSql(
+            $filterGroups,
+            'qfqbi.id',
+            'qfqbiown'
+        );
+        [$bundleVariationFilterSql, $bundleVariationBindings] = $this->buildVariationAttributeFilterGroupsSql(
+            $filterGroups,
+            'qfqbv.id',
+            'qfqbi.id',
+            'qfqbvar'
+        );
+
+        $variationSql = "EXISTS (
+            SELECT 1
+            FROM product_links AS qfqvlink
+            INNER JOIN products AS qfqv ON qfqv.id = qfqvlink.linked_product_id
+            WHERE qfqvlink.product_id = products.id
+                AND qfqvlink.link_type = 'super_link'
+                AND qfqv.status = ?
+                AND {$variationFilterSql}
+        )";
+        $bundleSql = "EXISTS (
+            SELECT 1
+            FROM product_links AS qfqbilink
+            INNER JOIN products AS qfqbi ON qfqbi.id = qfqbilink.linked_product_id
+            WHERE qfqbilink.product_id = products.id
+                AND qfqbilink.link_type = 'bundle'
+                AND (
+                    {$bundleItemSql}
+                    OR EXISTS (
+                        SELECT 1
+                        FROM product_links AS qfqbvlink
+                        INNER JOIN products AS qfqbv ON qfqbv.id = qfqbvlink.linked_product_id
+                        WHERE qfqbvlink.product_id = qfqbi.id
+                            AND qfqbvlink.link_type = 'super_link'
+                            AND qfqbv.status = ?
+                            AND {$bundleVariationFilterSql}
+                    )
+                )
+        )";
+
+        return [
+            "({$ownSql} OR {$variationSql} OR {$bundleSql})",
+            array_merge(
+                $ownBindings,
+                [true],
+                $variationBindings,
+                $bundleItemBindings,
+                [true],
+                $bundleVariationBindings
+            ),
+        ];
+    }
+
+    protected function buildBundleQuickFilterRankingParts($inputFilters): array
+    {
+        if (!is_array($inputFilters) || empty($inputFilters)) {
+            return [[], []];
+        }
+
+        $rankingParts = [];
+        $bindings = [];
+        $score = 10000;
+        $optionTitleValues = $this->normalizeBundleQuickFilterTextValues(
+            $inputFilters['option_title']
+            ?? $inputFilters['bundle_option_title']
+            ?? null
+        );
+
+        if (!empty($optionTitleValues)) {
+            $placeholders = $this->sqlPlaceholders($optionTitleValues);
+            $rankingParts[] = "CASE WHEN (
+                products.type = 'bundle'
+                AND EXISTS (
+                    SELECT 1
+                    FROM product_links AS qfqbot
+                    WHERE qfqbot.product_id = products.id
+                        AND qfqbot.link_type = 'bundle'
+                        AND (
+                            LOWER(TRIM(COALESCE(NULLIF(qfqbot.option_title, ''), 'Mặc định'))) IN ({$placeholders})
+                            OR EXISTS (
+                                SELECT 1
+                                FROM posts AS qfqpost
+                                WHERE qfqpost.id = qfqbot.option_post_id
+                                    AND LOWER(TRIM(COALESCE(qfqpost.title, ''))) IN ({$placeholders})
+                            )
+                        )
+                )
+            ) THEN {$score} ELSE 0 END";
+            $bindings = array_merge($bindings, $optionTitleValues, $optionTitleValues);
+            $score = max(1000, $score - 1000);
+        }
+
+        $bundleTitleValues = $this->normalizeBundleQuickFilterTextValues(
+            $inputFilters['bundle_title']
+            ?? $inputFilters['bundle_config_title']
+            ?? null
+        );
+
+        if (!empty($bundleTitleValues)) {
+            $placeholders = $this->sqlPlaceholders($bundleTitleValues);
+            $rankingParts[] = "CASE WHEN (
+                products.type = 'bundle'
+                AND LOWER(TRIM(COALESCE(products.bundle_title, ''))) IN ({$placeholders})
+            ) THEN {$score} ELSE 0 END";
+            $bindings = array_merge($bindings, $bundleTitleValues);
+            $score = max(1000, $score - 1000);
+        }
+
+        $statusValues = $this->normalizeBundleQuickFilterStatusValues(
+            $inputFilters['option_status']
+            ?? $inputFilters['bundle_option_status']
+            ?? null
+        );
+
+        if (!empty($statusValues) && Schema::hasColumn('product_links', 'bundle_option_status')) {
+            $placeholders = $this->sqlPlaceholders($statusValues);
+            $rankingParts[] = "CASE WHEN (
+                products.type = 'bundle'
+                AND EXISTS (
+                    SELECT 1
+                    FROM product_links AS qfqbos
+                    WHERE qfqbos.product_id = products.id
+                        AND qfqbos.link_type = 'bundle'
+                        AND LOWER(COALESCE(NULLIF(TRIM(qfqbos.bundle_option_status), ''), '" . self::BUNDLE_OPTION_STATUS_VISIBLE . "')) IN ({$placeholders})
+                )
+            ) THEN {$score} ELSE 0 END";
+            $bindings = array_merge($bindings, $statusValues);
+        }
+
+        return [$rankingParts, $bindings];
+    }
+
+    protected function buildProductQuickFilterRankingExpression(Request $request): array
+    {
+        $rankingParts = [];
+        $bindings = [];
+        $attributeFilterGroups = $this->normalizeAttributeFilterGroups($request->input('attributes'));
+
+        foreach ($attributeFilterGroups as $index => $filterGroup) {
+            [$matchSql, $matchBindings] = $this->buildProductAttributeQuickFilterMatchSql([$filterGroup]);
+            if ($matchSql === null) {
+                continue;
+            }
+
+            $score = max(1000, 10000 - ($index * 1000));
+            $rankingParts[] = "CASE WHEN {$matchSql} THEN {$score} ELSE 0 END";
+            $bindings = array_merge($bindings, $matchBindings);
+        }
+
+        [$bundleRankingParts, $bundleBindings] = $this->buildBundleQuickFilterRankingParts($request->input('bundle_filters'));
+        $rankingParts = array_merge($rankingParts, $bundleRankingParts);
+        $bindings = array_merge($bindings, $bundleBindings);
+
+        if (empty($rankingParts)) {
+            return [null, []];
+        }
+
+        return ['(' . implode(' + ', $rankingParts) . ')', $bindings];
+    }
+
     protected function normalizedSortExpression(string $expression): string
     {
         $expression = "COALESCE({$expression}, '')";
@@ -6058,6 +6588,7 @@ class ProductController extends Controller
                         'variant_name' => $selectedVariant?->name,
                     ];
                 })->values();
+                $subtotal = (float) $resolvedItems->sum(fn (array $item) => ((float) $item['price']) * ((int) $item['quantity']));
 
                 return [
                     'key' => $groupKey,
@@ -6070,7 +6601,10 @@ class ProductController extends Controller
                     'option_post_title' => filled($firstItem->pivot?->option_post_title ?? null)
                         ? (string) $firstItem->pivot->option_post_title
                         : null,
-                    'subtotal' => (float) $resolvedItems->sum(fn (array $item) => ((float) $item['price']) * ((int) $item['quantity'])),
+                    'subtotal' => $subtotal,
+                    'bundle_option_total_price' => $subtotal,
+                    'bundle_option_discounted_price' => $subtotal,
+                    'bundle_option_discount_amount' => 0.0,
                     'items' => $resolvedItems->all(),
                 ];
             })
@@ -6098,6 +6632,8 @@ class ProductController extends Controller
 
         $searchRankingSql = null;
         $searchRankingBindings = [];
+        $quickFilterRankingSql = null;
+        $quickFilterRankingBindings = [];
 
         // Apply parent variation filter if requested
         if ($request->filled('parent_id')) {
@@ -6127,6 +6663,13 @@ class ProductController extends Controller
                 $query,
                 (string) $request->input('search')
             );
+        }
+
+        if ($this->productQuickFilterRankRequested($request)) {
+            [$quickFilterRankingSql, $quickFilterRankingBindings] = $this->buildProductQuickFilterRankingExpression($request);
+            if ($quickFilterRankingSql !== null) {
+                $query->selectRaw("{$quickFilterRankingSql} AS quick_filter_rank_score", $quickFilterRankingBindings);
+            }
         }
 
         if (!$request->filled('type') && !$request->boolean('allow_variants') && !$request->filled('parent_id')) {
@@ -6161,6 +6704,10 @@ class ProductController extends Controller
             'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
         ]);
+
+        if ($quickFilterRankingSql !== null) {
+            $query->orderByDesc('quick_filter_rank_score');
+        }
 
         if ($searchRankingSql !== null) {
             $query->orderByRaw("{$searchRankingSql} DESC", $searchRankingBindings)

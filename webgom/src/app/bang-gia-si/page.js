@@ -6,7 +6,7 @@ import {
 import { buildProductCardKey } from "@/lib/productLinks";
 import WholesaleControls from "./WholesaleControls";
 import WholesaleOrderTable from "./WholesaleOrderTable";
-import { buildWholesaleMediaImages, buildWholesaleVideoHref } from "./wholesaleMedia";
+import { buildWholesaleMediaImages, buildWholesaleVideoHref, buildWholesaleVideoItems } from "./wholesaleMedia";
 import styles from "./wholesale.module.css";
 
 const PRODUCTS_PER_PAGE = 36;
@@ -405,6 +405,12 @@ export default async function WholesalePricePage({ searchParams }) {
               display: none !important;
             }
 
+            @media (max-width: 768px) {
+              .site-content-shell {
+                padding-top: 0 !important;
+              }
+            }
+
             .site-footer {
               display: none !important;
             }
@@ -454,7 +460,8 @@ export default async function WholesalePricePage({ searchParams }) {
             rows={visibleProducts.map((product, index) => {
               const imageSrc = resolveEntityImageUrl(product, "medium", FALLBACK_PRODUCT_IMAGE);
               const galleryImages = buildWholesaleMediaImages(product, product.name);
-              const videoHref = buildWholesaleVideoHref(product);
+              const videoItems = buildWholesaleVideoItems(product, product.name);
+              const videoHref = videoItems[0]?.href || buildWholesaleVideoHref(product);
               const wholesalePrice = calculateWholesalePrice(product);
               const stock = buildDisplayStock(product, index);
 
@@ -464,6 +471,7 @@ export default async function WholesalePricePage({ searchParams }) {
                 imageSrc,
                 galleryImages,
                 videoHref,
+                videoItems,
                 wholesalePrice,
                 stock,
               };

@@ -31,6 +31,11 @@ class SiteSettingController extends Controller
         'ga_active',
         'tt_pixel_active',
         'ai_gemini_enabled',
+        'order_product_quick_mode_default_enabled',
+    ];
+
+    private const DEFAULT_SETTING_VALUES = [
+        'order_product_quick_mode_default_enabled' => true,
     ];
 
     private const SECRET_SETTING_KEYS = [
@@ -95,6 +100,12 @@ class SiteSettingController extends Controller
 
                 $settings[$setting->key] = $value;
             });
+
+        foreach (self::DEFAULT_SETTING_VALUES as $key => $value) {
+            if (!array_key_exists($key, $settings)) {
+                $settings[$key] = $value;
+            }
+        }
 
         $aiStatus = $this->geminiService->status($accountId);
 

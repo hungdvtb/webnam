@@ -1,7 +1,9 @@
 import {
+  getEntityVideoCandidates,
   resolveCanonicalVideoUrl,
   resolveEntityPrimaryVideoUrl,
   resolveImageObjectUrl,
+  resolveVideoThumbnailUrl,
 } from "@/lib/media";
 
 const toArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
@@ -72,4 +74,27 @@ export const buildWholesaleMediaImages = (entity = {}, productName = "") => {
 export const buildWholesaleVideoHref = (entity = {}) => {
   const videoUrl = resolveEntityPrimaryVideoUrl(entity);
   return resolveCanonicalVideoUrl(videoUrl) || videoUrl;
+};
+
+export const buildWholesaleVideoItems = (entity = {}, productName = "") => {
+  const seen = new Set();
+
+  return getEntityVideoCandidates(entity)
+    .map((videoUrl, index) => {
+      const href = resolveCanonicalVideoUrl(videoUrl) || videoUrl;
+      const key = normalizeText(href).toLowerCase();
+
+      if (!href || seen.has(key)) {
+        return null;
+      }
+
+      seen.add(key);
+
+      return {
+        href,
+        title: `${normalizeText(productName) || "Sản phẩm"} - Video ${index + 1}`,
+        thumbnailSrc: resolveVideoThumbnailUrl(href),
+      };
+    })
+    .filter(Boolean);
 };

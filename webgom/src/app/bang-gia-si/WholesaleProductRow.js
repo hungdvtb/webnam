@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchFromApi } from "@/lib/api";
 import WholesaleGalleryButton from "./WholesaleGalleryButton";
-import { buildWholesaleMediaImages, buildWholesaleVideoHref } from "./wholesaleMedia";
+import { buildWholesaleMediaImages, buildWholesaleVideoHref, buildWholesaleVideoItems } from "./wholesaleMedia";
 import styles from "./wholesale.module.css";
 
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
@@ -363,6 +363,7 @@ export default function WholesaleProductRow({
   imageSrc,
   galleryImages = [],
   videoHref = "",
+  videoItems = [],
   wholesalePrice = 0,
   stock = 0,
   orderItems = {},
@@ -382,6 +383,7 @@ export default function WholesaleProductRow({
   const isVariantProduct = hasVariantRows(product);
   const canExpand = isBundleDetail || isVariantProduct;
   const toggleLabel = isBundleDetail ? "Tùy chọn" : "Mẫu và size";
+  const mobileToggleLabel = isBundleDetail ? "Xem tùy chọn" : "Xem mẫu và size";
 
   const loaded = detailRows.length > 0 || detailError;
 
@@ -465,16 +467,25 @@ export default function WholesaleProductRow({
 
   return (
     <>
-      <tr>
+      <tr className={`${styles.productTableRow} ${hasDirectOrderControls ? styles.directProductRow : styles.selectionProductRow}`}>
         <td data-label="Media" className={styles.mediaCell}>
           <WholesaleGalleryButton
             productName={product.name}
             images={galleryImages}
             videoHref={videoHref}
+            videoItems={videoItems}
           />
         </td>
         <td data-label="Sản phẩm">
-          <div className={styles.productImageLink}>
+          <WholesaleGalleryButton
+            productName={product.name}
+            images={galleryImages}
+            videoHref={videoHref}
+            videoItems={videoItems}
+            trigger="custom"
+            triggerClassName={styles.productImageLink}
+            triggerAriaLabel={`Xem hinh anh va video ${product.name}`}
+          >
             <Image
               src={imageSrc || FALLBACK_PRODUCT_IMAGE}
               alt={product.name || "Sản phẩm gốm sứ"}
@@ -484,12 +495,12 @@ export default function WholesaleProductRow({
               unoptimized
               className={styles.productImage}
             />
-            {videoHref ? (
+            {videoHref || videoItems.length > 0 ? (
               <span className={styles.imageVideoBadge} aria-label="Sản phẩm có video">
                 <span className="material-symbols-outlined" aria-hidden="true">play_arrow</span>
               </span>
             ) : null}
-          </div>
+          </WholesaleGalleryButton>
         </td>
         <td data-label="Thông tin">
           <div className={styles.productInfo}>
@@ -524,7 +535,7 @@ export default function WholesaleProductRow({
             />
           ) : (
             <span className={styles.parentOrderHint}>
-              {parentSelectedQuantity > 0 ? formatNumber(parentSelectedQuantity) : "Chọn mẫu"}
+              {formatNumber(parentSelectedQuantity)}
             </span>
           )}
         </td>
@@ -554,7 +565,12 @@ export default function WholesaleProductRow({
               aria-expanded={isOpen}
             >
               <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
-              {isOpen ? "Đóng" : (parentSelectedQuantity > 0 ? `Đã chọn ${formatNumber(parentSelectedQuantity)}` : "Chọn mẫu")}
+              {isOpen ? "Đóng" : (parentSelectedQuantity > 0 ? `Đã chọn ${formatNumber(parentSelectedQuantity)}` : (
+                <>
+                  <span className={styles.desktopActionLabel}>Chọn mẫu</span>
+                  <span className={styles.mobileActionLabel}>{mobileToggleLabel}{isBundleDetail ? "" : summaryCount}</span>
+                </>
+              ))}
             </button>
           )}
         </td>
@@ -616,8 +632,11 @@ export default function WholesaleProductRow({
                               const itemName = normalizeText(item.name || item.product_name || item.title || item.variant?.name) || "Sản phẩm trong bộ";
                               const quantity = getBundleItemQuantity(item);
                               const itemWholesalePrice = calculateWholesalePrice({ current_price: getBundleItemPrice(item) });
-                              const itemGalleryImages = buildWholesaleMediaImages(item, itemName);
-                              const itemVideoHref = buildWholesaleVideoHref(item);
+                              const ownItemGalleryImages = buildWholesaleMediaImages(item, itemName);
+                              const itemGalleryImages = ownItemGalleryImages.length > 0 ? ownItemGalleryImages : galleryImages;
+                              const ownItemVideoItems = buildWholesaleVideoItems(item, itemName);
+                              const itemVideoItems = ownItemVideoItems.length > 0 ? ownItemVideoItems : videoItems;
+                              const itemVideoHref = itemVideoItems[0]?.href || buildWholesaleVideoHref(item);
 
                               return (
                                 <div key={`${item.id || itemName}-${index}`} className={styles.detailItem}>
@@ -626,6 +645,7 @@ export default function WholesaleProductRow({
                                       productName={itemName}
                                       images={itemGalleryImages}
                                       videoHref={itemVideoHref}
+                                      videoItems={itemVideoItems}
                                     />
                                   </div>
                                   <div className={styles.detailItemMain}>
@@ -642,8 +662,11 @@ export default function WholesaleProductRow({
                           const itemName = normalizeText(item.name || item.product_name || item.title || item.variant?.name) || "Sản phẩm trong bộ";
                           const quantity = getBundleItemQuantity(item);
                           const itemWholesalePrice = calculateWholesalePrice({ current_price: getBundleItemPrice(item) });
-                          const itemGalleryImages = buildWholesaleMediaImages(item, itemName);
-                          const itemVideoHref = buildWholesaleVideoHref(item);
+                          const ownItemGalleryImages = buildWholesaleMediaImages(item, itemName);
+                          const itemGalleryImages = ownItemGalleryImages.length > 0 ? ownItemGalleryImages : galleryImages;
+                          const ownItemVideoItems = buildWholesaleVideoItems(item, itemName);
+                          const itemVideoItems = ownItemVideoItems.length > 0 ? ownItemVideoItems : videoItems;
+                          const itemVideoHref = itemVideoItems[0]?.href || buildWholesaleVideoHref(item);
 
                           return (
                             <div key={`${item.id || itemName}-${index}`} className={styles.detailItem}>
@@ -652,6 +675,7 @@ export default function WholesaleProductRow({
                                   productName={itemName}
                                   images={itemGalleryImages}
                                   videoHref={itemVideoHref}
+                                  videoItems={itemVideoItems}
                                 />
                               </div>
                               <div className={styles.detailItemMain}>
@@ -684,8 +708,11 @@ export default function WholesaleProductRow({
                       };
                       const variantOrderQuantity = getOrderQuantity(orderItems, variantOrderKey);
                       const variantLineTotal = variantOrderQuantity * variantWholesalePrice;
-                      const variantGalleryImages = buildWholesaleMediaImages(variant, `${product.name} - ${label}`);
-                      const variantVideoHref = buildWholesaleVideoHref(variant);
+                      const ownVariantGalleryImages = buildWholesaleMediaImages(variant, `${product.name} - ${label}`);
+                      const variantGalleryImages = ownVariantGalleryImages.length > 0 ? ownVariantGalleryImages : galleryImages;
+                      const ownVariantVideoItems = buildWholesaleVideoItems(variant, `${product.name} - ${label}`);
+                      const variantVideoItems = ownVariantVideoItems.length > 0 ? ownVariantVideoItems : videoItems;
+                      const variantVideoHref = variantVideoItems[0]?.href || buildWholesaleVideoHref(variant);
 
                       return (
                         <tr key={`${variant.id || variant.sku || label}-${index}`} className={styles.variantTableRow}>
@@ -694,6 +721,7 @@ export default function WholesaleProductRow({
                               productName={`${product.name} - ${label}`}
                               images={variantGalleryImages}
                               videoHref={variantVideoHref}
+                              videoItems={variantVideoItems}
                             />
                           </td>
                           <td data-label="Sản phẩm" className={styles.variantLeadCell}>

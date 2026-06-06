@@ -399,6 +399,10 @@ export const productApi = {
     }, // POST for multipart support
     destroy: (id) => api.delete(`/products/${id}`),
     duplicate: (id) => api.post(`/products/${id}/duplicate`),
+    regenerateAiReviews: (id, data = {}) => api.post(`/products/${id}/reviews/ai/regenerate`, data, {
+        timeout: 20 * 60 * 1000,
+        retryPolicy: 'never',
+    }),
     restore: (id) => api.post(`/products/${id}/restore`),
     forceDelete: (id) => api.delete(`/products/${id}/force`),
     bulkDelete: (ids) => api.delete('/products/bulk-delete', { data: { ids } }),

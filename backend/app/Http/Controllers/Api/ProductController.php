@@ -19,6 +19,7 @@ use App\Models\MediaAsset;
 use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
+use App\Services\AI\ProductReviewAiGenerationService;
 use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
@@ -220,6 +221,49 @@ class ProductController extends Controller
 
         GenerateProductReviewsForProductJob::dispatch((int) $product->id)
             ->delay(now()->addMinutes($delayMinutes));
+    }
+
+    public function regenerateAiReviews(Request $request, $id, ProductReviewAiGenerationService $reviewAiService)
+    {
+        @set_time_limit(1200);
+
+        if (! (bool) config('product_review_ai.enabled', true)) {
+            return response()->json([
+                'message' => 'Tính năng tạo review AI đang tắt.',
+            ], 403);
+        }
+
+        $validated = $request->validate([
+            'replace' => 'nullable|boolean',
+            'min' => 'nullable|integer|min:1|max:150',
+            'max' => 'nullable|integer|min:1|max:150',
+        ]);
+
+        $min = (int) ($validated['min'] ?? config('product_review_ai.min_reviews', 90));
+        $max = max($min, (int) ($validated['max'] ?? config('product_review_ai.max_reviews', 100)));
+
+        $product = Product::query()->findOrFail($id);
+        $result = $reviewAiService->generateForProduct($product, [
+            'replace' => $request->boolean('replace', true),
+            'min' => $min,
+            'max' => $max,
+        ]);
+
+        if (! empty($result['skipped'])) {
+            return response()->json([
+                'message' => 'Sản phẩm đã có review AI, chưa tạo lại vì replace=false.',
+                'result' => $result,
+            ]);
+        }
+
+        return response()->json([
+            'message' => sprintf(
+                'Đã tạo %d review AI và %d phản hồi shop cho sản phẩm.',
+                (int) ($result['reviews'] ?? 0),
+                (int) ($result['replies'] ?? 0)
+            ),
+            'result' => $result,
+        ]);
     }
 
     private function productImportSelectableFieldIds(): array

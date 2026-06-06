@@ -104,9 +104,10 @@ class Product extends Model
     public function reviewDistribution(): array
     {
         $counts = $this->approvedReviews()
-            ->selectRaw('LEAST(5, GREATEST(1, ROUND(rating))) as rating_bucket, COUNT(*) as total')
+            ->selectRaw('CASE WHEN ROUND(rating) < 1 THEN 1 WHEN ROUND(rating) > 5 THEN 5 ELSE ROUND(rating) END as rating_bucket, COUNT(*) as total')
             ->groupBy('rating_bucket')
             ->pluck('total', 'rating_bucket')
+            ->mapWithKeys(fn ($total, $bucket) => [(int) $bucket => (int) $total])
             ->all();
 
         return collect(range(1, 5))
@@ -117,14 +118,14 @@ class Product extends Model
     public function reviewSummary(): array
     {
         $distribution = $this->reviewDistribution();
-        $total = array_sum($distribution);
-        $sum = collect($distribution)->reduce(
-            fn (int $carry, int $count, int $rating) => $carry + ($rating * $count),
-            0
-        );
+        $summary = $this->approvedReviews()
+            ->selectRaw('COUNT(*) as total_reviews')
+            ->selectRaw('AVG(rating) as average_rating')
+            ->first();
+        $total = (int) ($summary->total_reviews ?? 0);
 
         return [
-            'average_rating' => $total > 0 ? round($sum / $total, 1) : 0.0,
+            'average_rating' => $total > 0 ? round((float) ($summary->average_rating ?? 0), 1) : 0.0,
             'total_reviews' => $total,
             'distribution' => $distribution,
         ];

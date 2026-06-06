@@ -120,6 +120,7 @@ class ProductReviewAiGenerationService
                     'comment' => $row['comment'],
                     'status' => ProductReview::STATUS_VISIBLE,
                     'is_approved' => true,
+                    'helpful_count' => 0,
                     'created_at' => $row['created_at'],
                     'admin_seen_at' => now(),
                 ]);
@@ -140,6 +141,7 @@ class ProductReviewAiGenerationService
                         'comment' => $row['reply'],
                         'status' => ProductReview::STATUS_VISIBLE,
                         'is_approved' => true,
+                        'helpful_count' => 0,
                         'created_at' => $row['reply_created_at'],
                         'admin_seen_at' => now(),
                     ]);
@@ -208,6 +210,8 @@ class ProductReviewAiGenerationService
             'price' => $product->special_price ?: $product->price,
             'weight' => $this->cleanText($product->weight),
             'unit' => $this->cleanText($product->unit?->name),
+            'created_at' => $product->created_at?->copy(),
+            'created_at_label' => $product->created_at?->toDateTimeString() ?: '',
             'attributes' => $attributes,
             'composite_items' => $compositeItems,
         ];
@@ -217,13 +221,13 @@ class ProductReviewAiGenerationService
     {
         $ratings = $this->ratingsForTargetAverage($count);
         $nameProfiles = $this->profileList($count, [
-            'full' => 0.38,
+            'full' => 0.4,
             'short' => 0.2,
             'facebook' => 0.15,
             'plain' => 0.1,
             'abbreviated' => 0.05,
             'compact' => 0.05,
-            'nickname' => 0.07,
+            'nickname' => 0.05,
         ]);
         $lengthProfiles = $this->profileList($count, [
             'short' => 0.22,
@@ -280,6 +284,7 @@ class ProductReviewAiGenerationService
             'price' => $context['price'],
             'weight' => $context['weight'],
             'unit' => $context['unit'],
+            'product_created_at' => $context['created_at_label'],
             'attributes' => $context['attributes'],
             'bundle_or_group_items' => $context['composite_items'],
         ];
@@ -298,6 +303,8 @@ class ProductReviewAiGenerationService
             . "6. Do not change customer_name. Use it only as context for voice.\n"
             . "7. If reply_required is true, write a short shop reply. If false, reply must be empty string.\n"
             . "8. Replies are from the shop, polite and short, not salesy.\n\n"
+            . "9. Respect length in Review plan: short = 2-8 Vietnamese words, medium = 1-2 short sentences, long = 3-4 natural sentences.\n"
+            . "10. Rotate topics: careful packaging, glaze color, hand feel, fit with home/altar space, shop advice, delivery, family reaction, and fair price.\n\n"
             . "JSON schema:\n"
             . "{\"reviews\":[{\"item_index\":0,\"comment\":\"...\",\"reply\":\"...\"}]}\n\n"
             . "Product data:\n"
@@ -337,7 +344,7 @@ class ProductReviewAiGenerationService
             $commentKey = $this->commentKey($comment);
             $usedComments[$commentKey] = $comment;
 
-            $createdAt = $this->randomReviewDate();
+            $createdAt = $this->randomReviewDate($context);
             $reply = '';
             $replyCreatedAt = null;
 
@@ -519,21 +526,60 @@ class ProductReviewAiGenerationService
         return $name;
     }
 
-    private function randomReviewDate(): Carbon
+    private function randomReviewDate(array $context): Carbon
     {
-        return now()
-            ->subDays(random_int(3, 540))
-            ->subHours(random_int(0, 23))
-            ->subMinutes(random_int(0, 59));
+        $now = now();
+        $earliest = $now->copy()->subDays(540);
+        $latest = $now->copy()->subDays(3);
+        $productCreatedAt = $context['created_at'] instanceof Carbon
+            ? $context['created_at']->copy()
+            : null;
+
+        if ($productCreatedAt && $productCreatedAt->greaterThan($earliest)) {
+            $earliest = $productCreatedAt;
+        }
+
+        if ($latest->lessThanOrEqualTo($earliest)) {
+            $latest = $now->copy()->subMinutes(10);
+        }
+
+        if ($latest->lessThanOrEqualTo($earliest)) {
+            $latest = $now->copy()->subMinute();
+        }
+
+        if ($latest->lessThanOrEqualTo($earliest)) {
+            return $earliest->lessThanOrEqualTo($now) ? $earliest : $now;
+        }
+
+        return Carbon::createFromTimestamp(
+            random_int($earliest->timestamp, $latest->timestamp),
+            $now->timezone
+        );
     }
 
     private function replyDate(Carbon $reviewDate): Carbon
     {
-        $replyDate = $reviewDate->copy()->addMinutes(random_int(45, 7200));
+        $earliest = $reviewDate->copy()->addMinutes(45);
+        $latest = $reviewDate->copy()->addHours(72);
+        $nowLimit = now()->subMinutes(5);
 
-        return $replyDate->greaterThan(now()->subHours(2))
-            ? now()->subHours(random_int(2, 36))
-            : $replyDate;
+        if ($latest->greaterThan($nowLimit)) {
+            $latest = $nowLimit;
+        }
+
+        if ($latest->lessThanOrEqualTo($earliest)) {
+            $earliest = $reviewDate->copy()->addMinutes(5);
+            $latest = now()->subMinute();
+        }
+
+        if ($latest->lessThanOrEqualTo($earliest)) {
+            return $reviewDate->copy();
+        }
+
+        return Carbon::createFromTimestamp(
+            random_int($earliest->timestamp, $latest->timestamp),
+            $reviewDate->timezone
+        );
     }
 
     private function decodeStructuredResponse(string $rawText, ?int $accountId, ?string $model): array

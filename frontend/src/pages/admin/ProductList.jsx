@@ -1404,6 +1404,9 @@ const ProductList = () => {
     const [bulkSeoGenerating, setBulkSeoGenerating] = useState(false);
     const [bulkSeoProgress, setBulkSeoProgress] = useState({ current: 0, total: 0, failed: 0 });
     const [syncingGoogleMerchant, setSyncingGoogleMerchant] = useState(false);
+    const [generatingAiReviews, setGeneratingAiReviews] = useState(false);
+    const [aiReviewProgress, setAiReviewProgress] = useState({ current: 0, total: 0, failed: 0 });
+    const [aiReviewProductStates, setAiReviewProductStates] = useState({});
 
     const [editingProductId, setEditingProductId] = useState(null);
     const [editForm, setEditForm] = useState({ price: '', expected_cost: '' });
@@ -3658,6 +3661,95 @@ const ProductList = () => {
         }
     };
 
+    const handleRegenerateAiReviews = async (ids, event = null) => {
+        event?.stopPropagation();
+
+        const normalizedIds = Array.from(
+            new Map(
+                (Array.isArray(ids) ? ids : [ids])
+                    .map((value) => normalizeStoredId(value))
+                    .filter((value) => value !== null)
+                    .map((value) => [String(value), value]),
+            ).values(),
+        );
+
+        if (normalizedIds.length === 0 || isTrashView) {
+            setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 sản phẩm đang bán để tạo review AI.' });
+            setTimeout(() => setNotification(null), 4000);
+            return;
+        }
+
+        if (!aiAvailable) {
+            setNotification({ type: 'error', message: disabledReason || 'AI chưa sẵn sàng.' });
+            setTimeout(() => setNotification(null), 5000);
+            return;
+        }
+
+        if (generatingAiReviews) {
+            return;
+        }
+
+        if (!window.confirm(`Tạo lại review AI cho ${normalizedIds.length} sản phẩm? Review AI cũ của các sản phẩm này sẽ được thay bằng 90-100 review mới.`)) {
+            return;
+        }
+
+        setGeneratingAiReviews(true);
+        setAiReviewProgress({ current: 0, total: normalizedIds.length, failed: 0 });
+
+        let successCount = 0;
+        let failedCount = 0;
+
+        try {
+            for (let index = 0; index < normalizedIds.length; index += 1) {
+                const productId = normalizedIds[index];
+                const productKey = String(productId);
+
+                setAiReviewProgress({ current: index, total: normalizedIds.length, failed: failedCount });
+                setAiReviewProductStates((current) => ({
+                    ...current,
+                    [productKey]: { status: 'running', message: 'Đang tạo review AI' },
+                }));
+
+                try {
+                    const response = await productApi.regenerateAiReviews(productId, { replace: true });
+                    const result = response?.data?.result || {};
+                    successCount += 1;
+                    setAiReviewProductStates((current) => ({
+                        ...current,
+                        [productKey]: {
+                            status: 'success',
+                            message: `${result.reviews || 0} review, ${result.replies || 0} phản hồi`,
+                        },
+                    }));
+                } catch (error) {
+                    failedCount += 1;
+                    setAiReviewProductStates((current) => ({
+                        ...current,
+                        [productKey]: {
+                            status: 'error',
+                            message: error?.response?.data?.message || 'Không tạo được review AI',
+                        },
+                    }));
+                }
+
+                setAiReviewProgress({ current: index + 1, total: normalizedIds.length, failed: failedCount });
+            }
+
+            await fetchProducts(pagination.current_page, filters, sortConfig, pagination.per_page);
+
+            setNotification({
+                type: failedCount > 0 ? 'error' : 'success',
+                message: failedCount > 0
+                    ? `Đã tạo review AI cho ${successCount} sản phẩm, lỗi ${failedCount} sản phẩm.`
+                    : `Đã tạo lại review AI cho ${successCount} sản phẩm.`,
+            });
+            setTimeout(() => setNotification(null), 6000);
+        } finally {
+            setGeneratingAiReviews(false);
+            setAiReviewProgress({ current: 0, total: 0, failed: 0 });
+        }
+    };
+
     const handleSyncAllGoogleMerchant = async () => {
         if (isTrashView) return;
         if (!window.confirm('Đồng bộ sản phẩm đang bán và xóa khỏi Merchant các sản phẩm tạm ngừng đã từng đồng bộ?')) return;
@@ -5453,6 +5545,22 @@ const ProductList = () => {
                                 <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
                             </button>
                             <button
+                                type="button"
+                                disabled={selectedIds.length === 0 || isTrashView || !aiAvailable || !canUpdateProducts || generatingAiReviews}
+                                onClick={(event) => handleRegenerateAiReviews(selectedIds, event)}
+                                className={`p-1.5 rounded-sm w-9 h-9 transition-all flex items-center justify-center ${
+                                    selectedIds.length > 0 && !isTrashView && aiAvailable && canUpdateProducts && !generatingAiReviews
+                                        ? 'bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white shadow-sm'
+                                        : 'bg-slate-100 text-primary/30 cursor-not-allowed opacity-50 grayscale'
+                                }`}
+                                title={!aiAvailable ? disabledReason : 'Tạo lại review AI cho các sản phẩm đã chọn'}
+                                aria-label="Tạo lại review AI cho các sản phẩm đã chọn"
+                            >
+                                <span className={`material-symbols-outlined text-[18px] ${generatingAiReviews ? 'animate-refresh-spin' : ''}`}>
+                                    {generatingAiReviews ? 'progress_activity' : 'rate_review'}
+                                </span>
+                            </button>
+                            <button
                                 disabled={selectedIds.length === 0 || !canCreateProducts}
                                 onClick={requestBulkDuplicate}
                                 className={`p-1.5 rounded-sm w-9 h-9 transition-all ${selectedIds.length > 0 && canCreateProducts ? 'bg-primary/10 text-primary hover:bg-primary hover:text-white shadow-sm' : 'text-primary/30 cursor-not-allowed opacity-50 grayscale'}`}
@@ -5548,6 +5656,12 @@ const ProductList = () => {
                                     {bulkSeoGenerating && (
                                         <span className="text-[11px] font-bold text-emerald-700 whitespace-nowrap">
                                             AI {bulkSeoProgress.current}/{bulkSeoProgress.total}
+                                        </span>
+                                    )}
+                                    {generatingAiReviews && (
+                                        <span className="text-[11px] font-bold text-cyan-700 whitespace-nowrap">
+                                            Review AI {aiReviewProgress.current}/{aiReviewProgress.total}
+                                            {aiReviewProgress.failed > 0 ? `, lỗi ${aiReviewProgress.failed}` : ''}
                                         </span>
                                     )}
                                     <button onClick={handleClearSelectedProducts} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
@@ -6234,6 +6348,11 @@ const ProductList = () => {
                                         ? product.type === 'configurable'
                                         : isConfigurableVariantChildProduct(p);
                                     const editTargetId = getProductEditTargetId(p);
+                                    const aiReviewState = aiReviewProductStates[String(p.id)] || null;
+                                    const aiReviewRunning = aiReviewState?.status === 'running';
+                                    const aiReviewTitle = aiReviewState?.message
+                                        ? `Review AI: ${aiReviewState.message}`
+                                        : 'Tạo lại review AI cho sản phẩm này';
                                     
                                     // Custom aggregate price display for parent products
                                     let displayCostPrice = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price);
@@ -6632,6 +6751,7 @@ const ProductList = () => {
                                                             ) : (
                                                                 <React.Fragment>
                                                                     {canUpdateProducts && <button onClick={(e) => handleSyncGoogleMerchantProduct(p.id, e)} className="p-1 hover:text-blue-700" title="Đồng bộ Google Merchant"><span className="material-symbols-outlined text-[18px]">cloud_sync</span></button>}
+                                                                    {canUpdateProducts && <button onClick={(e) => handleRegenerateAiReviews([p.id], e)} disabled={!aiAvailable || generatingAiReviews} className={`p-1 disabled:cursor-not-allowed disabled:opacity-40 ${aiReviewState?.status === 'success' ? 'text-cyan-700' : aiReviewState?.status === 'error' ? 'text-red-600' : 'hover:text-cyan-700'}`} title={!aiAvailable ? disabledReason : aiReviewTitle}><span className={`material-symbols-outlined text-[18px] ${aiReviewRunning ? 'animate-refresh-spin' : ''}`}>{aiReviewRunning ? 'progress_activity' : 'rate_review'}</span></button>}
                                                                     {canCreateProducts && <button onClick={(e) => { e.stopPropagation(); requestDuplicate(p.id); }} className="p-1 hover:text-gold" title="Nhân bản"><span className="material-symbols-outlined text-[18px]">content_copy</span></button>}
                                                                     {canUpdateProducts && <button onClick={(e) => openQuickEditModal([p.id], e)} data-quick-edit-trigger={`row-${p.id}`} className="p-1 hover:text-sky-600" title="Sửa nhanh"><span className="material-symbols-outlined text-[18px]">flash_on</span></button>}
                                                                     {canUpdateProducts && <button onClick={(e) => { e.stopPropagation(); navigateToProductForm(`/admin/products/edit/${editTargetId}`); }} className="p-1 hover:text-primary" title="Sửa"><span className="material-symbols-outlined text-[18px]">edit</span></button>}

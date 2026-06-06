@@ -19,7 +19,7 @@ const SOURCE_OPTIONS = [
     { value: 'customer_web', label: 'Khách gửi từ website' },
     { value: 'admin_manual', label: 'Mẫu admin' },
     { value: 'admin_import', label: 'Import JSON' },
-    { value: 'admin_ai', label: 'AI tao tu dong' },
+    { value: 'admin_ai', label: 'AI tạo tự động' },
     { value: 'admin_sample', label: 'Bình luận ảo/test' },
 ];
 

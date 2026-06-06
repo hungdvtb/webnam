@@ -93,6 +93,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/products/reorder', [ProductController::class , 'reorder']);
     Route::post('/products/{id}/duplicate', [ProductController::class , 'duplicate']);
     Route::post('/products/{id}/convert-to-configurable', [ProductController::class , 'convertToConfigurable'])->where('id', '[0-9]+');
+    Route::post('/products/{id}/reviews/ai/regenerate', [ProductController::class , 'regenerateAiReviews'])->where('id', '[0-9]+');
     Route::post('/products/{id}', [ProductController::class , 'update']); // Use POST for update to handle file uploads
     Route::delete('/products/{id}', [ProductController::class , 'destroy']);
     Route::post('/products/{id}/restore', [ProductController::class , 'restore']);

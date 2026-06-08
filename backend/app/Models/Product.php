@@ -63,6 +63,19 @@ class Product extends Model
         return $this->hasMany(ProductReview::class);
     }
 
+    public function faqs()
+    {
+        return $this->hasMany(ProductFaq::class)->ordered();
+    }
+
+    public function appliedFaqs()
+    {
+        return $this->belongsToMany(ProductFaq::class, 'product_faq_product', 'product_id', 'product_faq_id')
+            ->withPivot(['account_id'])
+            ->withTimestamps()
+            ->ordered();
+    }
+
     public function approvedReviews()
     {
         return $this->hasMany(ProductReview::class)

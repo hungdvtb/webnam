@@ -143,6 +143,36 @@ class ViettelPostReconciliationService
         );
     }
 
+    private function detectSuspiciousReceivedCod(Shipment $shipment, float $codAmount, float $totalFee, string $reconciliationStatus, string $trackingCode): ?array
+    {
+        if ($reconciliationStatus !== 'received_cod') {
+            return null;
+        }
+
+        $systemCodAmount = round((float) $shipment->cod_amount, 2);
+        $importedReceivedAmount = round($codAmount - $totalFee, 2);
+        $systemReceivedAmount = round($systemCodAmount - $totalFee, 2);
+
+        if ($importedReceivedAmount >= 0 || $systemReceivedAmount <= 0) {
+            return null;
+        }
+
+        return [
+            'status' => 'error',
+            'tracking_code' => $trackingCode,
+            'shipment_id' => $shipment->id,
+            'shipment_number' => $shipment->shipment_number,
+            'cod_amount' => $codAmount,
+            'system_cod_amount' => $systemCodAmount,
+            'total_fee' => $totalFee,
+            'message' => 'COD doi soat VTP bat thuong, bo qua cap nhat tien. '
+                . "Ma VD: {$trackingCode}. "
+                . 'COD file: ' . number_format($codAmount) . 'd. '
+                . 'COD he thong: ' . number_format($systemCodAmount) . 'd. '
+                . 'Tong phi: ' . number_format($totalFee) . 'd.',
+        ];
+    }
+
     private function detectReturnSuffix(string $trackingCode): ?array
     {
         $code = trim($trackingCode);
@@ -622,6 +652,11 @@ class ViettelPostReconciliationService
                 'system_status' => $shipment->shipment_status,
                 'message' => "Đơn đang xử lý ({$vtpStatus}), cập nhật COD: {$reconciliationStatus}.",
             ];
+        }
+
+        $suspiciousCodResult = $this->detectSuspiciousReceivedCod($shipment, $codAmount, $totalFee, $reconciliationStatus, $trackingCode);
+        if ($suspiciousCodResult !== null) {
+            return $suspiciousCodResult;
         }
 
         $receivedAmount = $codAmount - $totalFee;

@@ -9,7 +9,6 @@ use App\Models\ProductReviewLike;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Response;
 use Illuminate\Validation\Rule;
@@ -290,59 +289,6 @@ class ReviewController extends Controller
         return response()->json([
             'message' => 'Đã đánh dấu đã xem.',
             ...$this->reviewUnreadSummary(),
-        ]);
-    }
-
-    public function adminSeedSample(Request $request)
-    {
-        if (! app()->environment(['local', 'testing', 'staging', 'development'])) {
-            return response()->json([
-                'message' => 'Tính năng tạo bình luận ảo/test chỉ được phép chạy ở local/staging/testing.',
-            ], 403);
-        }
-
-        $validated = $request->validate([
-            'min' => 'nullable|integer|min:1|max:100',
-            'max' => 'nullable|integer|min:1|max:100',
-            'years' => 'nullable|integer|min:1|max:10',
-            'status' => ['nullable', Rule::in(self::STATUS_VALUES)],
-            'replace' => 'nullable|boolean',
-            'all_products' => 'nullable|boolean',
-        ]);
-
-        $min = (int) ($validated['min'] ?? 70);
-        $max = max($min, (int) ($validated['max'] ?? 100));
-        $status = $validated['status'] ?? ProductReview::STATUS_VISIBLE;
-
-        $parameters = [
-            '--min' => $min,
-            '--max' => $max,
-            '--years' => (int) ($validated['years'] ?? 4),
-            '--status' => $status,
-        ];
-
-        if ($request->boolean('replace', true)) {
-            $parameters['--replace'] = true;
-        }
-
-        if ($request->boolean('all_products')) {
-            $parameters['--all-products'] = true;
-        }
-
-        $exitCode = Artisan::call('reviews:seed-sample', $parameters);
-        $output = trim(Artisan::output());
-
-        if ($exitCode !== 0) {
-            return response()->json([
-                'message' => 'Không thể tạo bình luận ảo/test.',
-                'output' => $output,
-            ], 500);
-        }
-
-        return response()->json([
-            'message' => 'Đã tạo bình luận ảo/test cho sản phẩm.',
-            'summary' => $this->sampleReviewSummary(),
-            'output' => $output,
         ]);
     }
 
@@ -969,20 +915,6 @@ class ReviewController extends Controller
             'total' => (int) ($summary->total ?? 0),
             'reviews' => (int) ($summary->reviews ?? 0),
             'replies' => (int) ($summary->replies ?? 0),
-        ];
-    }
-
-    private function sampleReviewSummary(): array
-    {
-        $baseQuery = ProductReview::query()
-            ->where('source_type', ProductReview::SOURCE_ADMIN_SAMPLE);
-        $topLevelQuery = (clone $baseQuery)->whereNull('parent_id');
-
-        return [
-            'products' => (clone $topLevelQuery)->distinct('product_id')->count('product_id'),
-            'reviews' => (clone $topLevelQuery)->count(),
-            'visible_reviews' => (clone $topLevelQuery)->visible()->count(),
-            'replies' => (clone $baseQuery)->whereNotNull('parent_id')->count(),
         ];
     }
 

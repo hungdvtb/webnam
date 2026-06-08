@@ -838,6 +838,78 @@ class ShipmentStatusMappingToggleTest extends TestCase
         $this->assertSame('carrier', (string) $order->shipping_status_source);
     }
 
+    public function test_viettel_post_reconciliation_rejects_received_cod_row_that_would_make_received_amount_negative(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $this->ensureCarrier('viettel_post', 'Viettel Post');
+
+        $order = $this->createOrder($account, $user, [
+            'status' => 'shipping',
+            'shipping_status' => 'out_for_delivery',
+            'shipment_status' => 'out_for_delivery',
+            'total_price' => 13900000,
+        ]);
+        $shipment = $this->createShipment($order, $user, [
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'tracking_number' => '139763959535',
+            'carrier_tracking_code' => '139763959535',
+            'shipment_status' => 'out_for_delivery',
+            'status' => 'out_for_delivery',
+            'cod_amount' => 13900000,
+            'shipping_cost' => 450000,
+            'actual_received_amount' => 13450000,
+            'reconciled_amount' => null,
+        ]);
+
+        $this->createMapping($account, [
+            'carrier_code' => 'viettel_post',
+            'carrier_raw_status' => 'Giao thÃ nh cÃ´ng',
+            'internal_shipment_status' => 'delivered',
+            'mapped_order_status' => 'completed',
+            'is_active' => true,
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            [
+                'MÃ£ Váº­n ÄÆ¡n',
+                'CÆ°á»›c váº­n chuyá»ƒn (3)= (1+2)',
+                'Tiá»n thu há»™ (4)',
+                'Tá»•ng phÃ­ (9)= (3)+(5)+(6)+(7)-(8)',
+                'Tráº¡ng ThÃ¡i',
+                'Tráº¡ng thÃ¡i Ä‘á»‘i soÃ¡t COD',
+            ],
+            [
+                '139763959535',
+                '393874',
+                '1397',
+                '393874',
+                'Giao thÃ nh cÃ´ng',
+                'ÄÃ£ nháº­n COD',
+            ],
+        ]);
+        $this->app->instance(SimpleXlsxService::class, $xlsxService);
+
+        $result = $this->app->make(ViettelPostReconciliationService::class)->processFile('fake.xlsx', $user->id, $account->id);
+
+        $this->assertTrue($result['success']);
+        $this->assertSame(0, $result['summary']['received_cod']);
+        $this->assertCount(1, $result['summary']['errors']);
+        $this->assertStringContainsString('COD doi soat VTP bat thuong', $result['summary']['errors'][0]);
+
+        $shipment->refresh();
+        $order->refresh();
+
+        $this->assertSame('delivered', (string) $shipment->shipment_status);
+        $this->assertSame('completed', (string) $order->status);
+        $this->assertNull($shipment->reconciled_amount);
+        $this->assertSame(0.0, (float) $shipment->reconciliation_diff_amount);
+        $this->assertDatabaseMissing('shipment_reconciliations', [
+            'shipment_id' => $shipment->id,
+        ]);
+    }
+
     public function test_viettel_post_return_reconciliation_preserves_manual_return_status_for_special_orders(): void
     {
         [$account, $user] = $this->authenticate();

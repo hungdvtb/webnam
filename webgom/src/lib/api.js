@@ -189,6 +189,12 @@ export async function likeWebProductReview(reviewId) {
     });
 }
 
+export async function getWebProductFaqs(productId) {
+    return fetchFromApi(`/products/${productId}/faqs`, {
+        cache: 'no-store',
+    });
+}
+
 export async function placeWebOrder(orderData) {
     return fetchFromApi('/storefront/order', {
         method: 'POST',

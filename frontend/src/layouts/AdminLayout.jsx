@@ -46,6 +46,7 @@ const AdminLayout = () => {
     const isDesignRoute =
         location.pathname.startsWith('/admin/categories') ||
         location.pathname.startsWith('/admin/reviews') ||
+        location.pathname.startsWith('/admin/product-faqs') ||
         location.pathname.startsWith('/admin/blog');
     const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
 
@@ -298,6 +299,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/accounts')) return 'accounts';
         if (path.startsWith('/admin/products')) return 'products';
         if (path.startsWith('/admin/reviews')) return 'products';
+        if (path.startsWith('/admin/product-faqs')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
@@ -305,6 +307,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/reports')) return 'reports';
         if (path.startsWith('/admin/finance/daily-profit')) return 'reports';
         if (path.startsWith('/admin/finance/monthly-profit')) return 'reports';
+        if (path.startsWith('/admin/finance/revenue-reconciliation')) return 'reports';
         if (path.startsWith('/admin/payroll')) return 'payroll';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
         if (path.startsWith('/admin/attributes')) return 'attributes';
@@ -663,6 +666,18 @@ const AdminLayout = () => {
                                             ) : null}
                                         </Link>
                                     )}
+                                    {canAccess('products') && (
+                                        <Link
+                                            to="/admin/product-faqs"
+                                            title="Hỏi đáp khách hàng"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/product-faqs' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/product-faqs' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>contact_support</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                Hỏi đáp khách hàng
+                                            </SidebarText>
+                                        </Link>
+                                    )}
                                     {canAccess('blog') && (
                                         <Link
                                             to="/admin/blog"
@@ -751,6 +766,18 @@ const AdminLayout = () => {
                         <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/monthly-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>calendar_month</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
                             Báo cáo lãi lỗ tháng
+                        </SidebarText>
+                    </Link>
+
+                    <Link
+                        to="/admin/finance/revenue-reconciliation"
+                        aria-label="Đối soát doanh thu"
+                        title={collapsedTitle('Đối soát doanh thu')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/revenue-reconciliation' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>difference</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Đối soát doanh thu
                         </SidebarText>
                     </Link>
 

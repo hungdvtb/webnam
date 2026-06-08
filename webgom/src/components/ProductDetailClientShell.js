@@ -524,9 +524,7 @@ export default function ProductDetailClientShell({
         descriptionReady={deferredSectionsReady && fullProductReady}
       />
 
-      {deferredSectionsReady && fullProductReady ? (
-        <ProductReviews product={product} />
-      ) : null}
+      {deferredSectionsReady && fullProductReady ? <ProductReviews product={product} /> : null}
 
       {deferredSectionsReady ? (
         <RelatedProductsSection

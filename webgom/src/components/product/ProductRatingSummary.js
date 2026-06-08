@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import styles from '@/app/product/[slug]/product.module.css';
+import ProductFaqs from './ProductFaqs';
 
 const REVIEW_SECTION_ID = 'product-review-section';
 const REVIEW_SUMMARY_EVENT = 'webgom:reviews-summary-updated';
@@ -72,40 +73,43 @@ export default function ProductRatingSummary({ product }) {
   }, [product?.id]);
 
   return (
-    <button
-      type="button"
-      className={styles.ratingJump}
-      onClick={scrollToReviews}
-      aria-label="Xem đánh giá và bình luận sản phẩm"
-    >
-      <span className={styles.ratingJumpStars} aria-hidden="true">
-        {[1, 2, 3, 4, 5].map((star) => {
-          const value = Math.max(0, Math.min(5, Number(summary.average) || 0));
-          const fillPercent = Math.max(0, Math.min(100, (value - (star - 1)) * 100));
-          const isFull = fillPercent >= 99.5;
-          const isEmpty = fillPercent <= 0.5;
+    <div className={styles.ratingFaqRow}>
+      <button
+        type="button"
+        className={styles.ratingJump}
+        onClick={scrollToReviews}
+        aria-label="Xem đánh giá và bình luận sản phẩm"
+      >
+        <span className={styles.ratingJumpStars} aria-hidden="true">
+          {[1, 2, 3, 4, 5].map((star) => {
+            const value = Math.max(0, Math.min(5, Number(summary.average) || 0));
+            const fillPercent = Math.max(0, Math.min(100, (value - (star - 1)) * 100));
+            const isFull = fillPercent >= 99.5;
+            const isEmpty = fillPercent <= 0.5;
 
-          return (
-            <span key={star} className={styles.reviewStarFrame}>
-              {isFull ? (
-                <StarSvg className={`${styles.reviewStarIcon} ${styles.reviewStarFull}`} />
-              ) : isEmpty ? (
-                <StarSvg className={`${styles.reviewStarIcon} ${styles.reviewStarBase}`} />
-              ) : (
-                <>
+            return (
+              <span key={star} className={styles.reviewStarFrame}>
+                {isFull ? (
+                  <StarSvg className={`${styles.reviewStarIcon} ${styles.reviewStarFull}`} />
+                ) : isEmpty ? (
                   <StarSvg className={`${styles.reviewStarIcon} ${styles.reviewStarBase}`} />
-                  <span className={styles.reviewStarFill} style={{ width: `${fillPercent}%` }}>
-                    <StarSvg className={styles.reviewStarIcon} />
-                  </span>
-                </>
-              )}
-            </span>
-          );
-        })}
-      </span>
-      <span className={styles.ratingJumpScore}>{summary.average.toFixed(1)}</span>
-      <span className={styles.ratingJumpCount}>{summary.total} đánh giá</span>
-    </button>
+                ) : (
+                  <>
+                    <StarSvg className={`${styles.reviewStarIcon} ${styles.reviewStarBase}`} />
+                    <span className={styles.reviewStarFill} style={{ width: `${fillPercent}%` }}>
+                      <StarSvg className={styles.reviewStarIcon} />
+                    </span>
+                  </>
+                )}
+              </span>
+            );
+          })}
+        </span>
+        <span className={styles.ratingJumpScore}>{summary.average.toFixed(1)}</span>
+        <span className={styles.ratingJumpCount}>{summary.total} đánh giá</span>
+      </button>
+      <ProductFaqs product={product} compact />
+    </div>
   );
 }
 

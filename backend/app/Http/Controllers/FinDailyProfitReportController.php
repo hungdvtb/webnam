@@ -1220,6 +1220,245 @@ class FinDailyProfitReportController extends Controller
         ]);
     }
 
+    private function revenueReconciliationOrders(string $startDate, string $endDate, array $filters = []): Collection
+    {
+        $query = Order::query()
+            ->whereBetween('officialized_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
+            ->where(function ($kindQuery) {
+                $kindQuery->where('order_kind', Order::KIND_OFFICIAL)
+                    ->orWhereNull('order_kind')
+                    ->orWhere('order_kind', '');
+            });
+
+        $this->applyReportAdChannelOrderFilter(
+            $query,
+            $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
+        );
+
+        return $query
+            ->get([
+                'id',
+                'order_number',
+                'customer_name',
+                'customer_phone',
+                'source',
+                'status',
+                'order_type',
+                'officialized_at',
+                'total_price',
+                'report_revenue_total',
+            ]);
+    }
+
+    private function isDailyRevenueReconciliationOrder(Order $order): bool
+    {
+        $status = $order->status === null ? null : strtolower(trim((string) $order->status));
+        $orderType = strtolower(trim((string) $order->order_type));
+
+        return $status !== null
+            && !in_array($status, self::EXCLUDED_ORDER_STATUSES, true)
+            && !in_array($orderType, [
+                Order::TYPE_EXCHANGE_RETURN,
+                Order::TYPE_PARTIAL_DELIVERY,
+            ], true);
+    }
+
+    private function isMonthlyRevenueReconciliationOrder(Order $order): bool
+    {
+        $status = strtolower(trim((string) $order->status));
+        $orderType = strtolower(trim((string) $order->order_type));
+        $isStandardOrder = $orderType === ''
+            || $orderType === Order::TYPE_STANDARD;
+
+        return $status === self::MONTHLY_REPORT_INCLUDED_STATUS && $isStandardOrder;
+    }
+
+    private function revenueReconciliationReasons(
+        Order $order,
+        bool $dailyIncluded,
+        bool $monthlyIncluded,
+        float $dailyRevenue,
+        float $monthlyRevenue
+    ): array {
+        $reasons = [];
+        $status = strtolower(trim((string) $order->status));
+        $orderType = strtolower(trim((string) $order->order_type));
+        $isMonthlyStandardOrder = $orderType === ''
+            || $orderType === Order::TYPE_STANDARD;
+
+        if ($dailyIncluded && !$monthlyIncluded) {
+            if ($status !== self::MONTHLY_REPORT_INCLUDED_STATUS) {
+                $reasons[] = [
+                    'code' => 'status_not_completed',
+                    'label' => 'Đơn chưa hoàn thành nên báo cáo tháng không tính',
+                ];
+            }
+
+            if (!$isMonthlyStandardOrder) {
+                $reasons[] = [
+                    'code' => 'order_type_mismatch',
+                    'label' => 'Loại đơn không thuộc doanh thu đơn thường của báo cáo tháng',
+                ];
+            }
+        }
+
+        if ($dailyIncluded && $monthlyIncluded && abs($dailyRevenue - $monthlyRevenue) >= 0.005) {
+            if ($monthlyRevenue === 0.0 && $dailyRevenue !== 0.0) {
+                $reasons[] = [
+                    'code' => 'report_revenue_zero',
+                    'label' => 'Doanh thu báo cáo của đơn đang bằng 0',
+                ];
+            } else {
+                $reasons[] = [
+                    'code' => 'amount_mismatch',
+                    'label' => 'Tổng tiền đơn khác doanh thu dùng cho báo cáo tháng',
+                ];
+            }
+        }
+
+        if (!$dailyIncluded && $monthlyIncluded) {
+            $reasons[] = [
+                'code' => 'daily_excluded',
+                'label' => 'Đơn được báo cáo tháng tính nhưng báo cáo ngày loại ra',
+            ];
+        }
+
+        if ($reasons === []) {
+            $reasons[] = [
+                'code' => 'other',
+                'label' => 'Khác biệt dữ liệu giữa hai cách tính',
+            ];
+        }
+
+        return $reasons;
+    }
+
+    public function getRevenueReconciliation(Request $request)
+    {
+        $request->validate([
+            'month' => ['required', 'regex:/^\d{4}-\d{2}$/'],
+            'ad_channel' => ['nullable', 'string'],
+        ]);
+
+        try {
+            $monthStart = Carbon::createFromFormat('Y-m-d', (string) $request->input('month') . '-01')
+                ->startOfMonth();
+        } catch (\Throwable) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Tháng đối soát không hợp lệ.',
+            ], 422);
+        }
+
+        $monthEnd = (clone $monthStart)->endOfMonth();
+        $startDate = $monthStart->format('Y-m-d');
+        $endDate = $monthEnd->format('Y-m-d');
+        $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $orders = $this->revenueReconciliationOrders($startDate, $endDate, [
+            'ad_channel' => $adChannel,
+        ]);
+
+        $dailyRevenueTotal = 0.0;
+        $monthlyRevenueTotal = 0.0;
+        $rows = [];
+
+        foreach ($orders as $order) {
+            $dailyIncluded = $this->isDailyRevenueReconciliationOrder($order);
+            $monthlyIncluded = $this->isMonthlyRevenueReconciliationOrder($order);
+            $dailyRevenue = $dailyIncluded ? (float) ($order->total_price ?? 0) : 0.0;
+            $monthlyRevenue = $monthlyIncluded
+                ? (float) ($order->report_revenue_total ?? $order->total_price ?? 0)
+                : 0.0;
+            $difference = round($dailyRevenue - $monthlyRevenue, 2);
+
+            $dailyRevenueTotal += $dailyRevenue;
+            $monthlyRevenueTotal += $monthlyRevenue;
+
+            if (abs($difference) < 0.005) {
+                continue;
+            }
+
+            $reasons = $this->revenueReconciliationReasons(
+                $order,
+                $dailyIncluded,
+                $monthlyIncluded,
+                $dailyRevenue,
+                $monthlyRevenue
+            );
+
+            $rows[] = [
+                'id' => (int) $order->id,
+                'order_number' => (string) $order->order_number,
+                'customer_name' => (string) ($order->customer_name ?? ''),
+                'customer_phone' => (string) ($order->customer_phone ?? ''),
+                'source' => (string) ($order->source ?? ''),
+                'officialized_at' => optional($order->officialized_at)?->format('Y-m-d H:i:s'),
+                'status' => (string) ($order->status ?? ''),
+                'order_type' => (string) ($order->order_type ?: Order::TYPE_STANDARD),
+                'daily_included' => $dailyIncluded,
+                'monthly_included' => $monthlyIncluded,
+                'daily_revenue' => round($dailyRevenue, 2),
+                'monthly_revenue' => round($monthlyRevenue, 2),
+                'difference' => $difference,
+                'reason_codes' => array_column($reasons, 'code'),
+                'reason_labels' => array_column($reasons, 'label'),
+            ];
+        }
+
+        usort($rows, function (array $left, array $right) {
+            $differenceComparison = abs((float) $right['difference']) <=> abs((float) $left['difference']);
+
+            if ($differenceComparison !== 0) {
+                return $differenceComparison;
+            }
+
+            return strcmp((string) $right['officialized_at'], (string) $left['officialized_at']);
+        });
+
+        $reasonSummary = collect($rows)
+            ->flatMap(function (array $row) {
+                return collect($row['reason_codes'])->map(function (string $code, int $index) use ($row) {
+                    return [
+                        'code' => $code,
+                        'label' => $row['reason_labels'][$index] ?? $code,
+                        'difference' => (float) $row['difference'],
+                    ];
+                });
+            })
+            ->groupBy('code')
+            ->map(function (Collection $items, string $code) {
+                return [
+                    'code' => $code,
+                    'label' => (string) ($items->first()['label'] ?? $code),
+                    'order_count' => $items->count(),
+                    'difference' => round((float) $items->sum('difference'), 2),
+                ];
+            })
+            ->sortByDesc('order_count')
+            ->values()
+            ->all();
+
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                'month_key' => $monthStart->format('Y-m'),
+                'month_label' => sprintf('Tháng %d/%d', (int) $monthStart->format('n'), (int) $monthStart->format('Y')),
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'ad_channel' => $adChannel,
+                'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
+                'summary' => [
+                    'daily_revenue' => round($dailyRevenueTotal, 2),
+                    'monthly_revenue' => round($monthlyRevenueTotal, 2),
+                    'difference' => round($dailyRevenueTotal - $monthlyRevenueTotal, 2),
+                    'different_order_count' => count($rows),
+                ],
+                'reason_summary' => $reasonSummary,
+                'orders' => $rows,
+            ],
+        ]);
+    }
+
     public function getReport(Request $request)
     {
         $startDate = $request->start_date ?: date('Y-m-01');

@@ -6700,6 +6700,7 @@ class ProductController extends Controller
     protected function pickerIndex(Request $request)
     {
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
+        $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $query = Product::query()->select([
             'products.id',
             'products.sku',
@@ -6756,7 +6757,7 @@ class ProductController extends Controller
             }
         }
 
-        if (!$request->filled('type') && !$request->boolean('allow_variants') && !$request->filled('parent_id')) {
+        if (($parentOnly || (!$request->filled('type') && !$request->boolean('allow_variants'))) && !$request->filled('parent_id')) {
             $query->whereDoesntHave('parentConfigurable');
         }
 
@@ -6911,6 +6912,7 @@ class ProductController extends Controller
             return $this->pickerIndex($request);
         }
 
+        $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
         $includeNestedProducts = ! $request->boolean('summary');
         [$query, $actualStockSql] = $this->buildAdminProductListBaseQuery($request, $includeNestedProducts);
 
@@ -7439,7 +7441,7 @@ class ProductController extends Controller
             );
         }
 
-        if (!$typeFilterApplied) {
+        if ($parentOnly || !$typeFilterApplied) {
             $query->whereDoesntHave('parentConfigurable');
         }
 

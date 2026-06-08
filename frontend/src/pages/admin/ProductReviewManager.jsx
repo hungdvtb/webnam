@@ -191,7 +191,6 @@ export default function ProductReviewManager() {
     const [exportSourceScope, setExportSourceScope] = useState('admin_created');
     const [exportStatus, setExportStatus] = useState('');
     const [exportSaving, setExportSaving] = useState(false);
-    const [sampleSeeding, setSampleSeeding] = useState(false);
     const [unreadSummary, setUnreadSummary] = useState({ total: 0, reviews: 0, replies: 0 });
     const [productSearch, setProductSearch] = useState('');
     const [products, setProducts] = useState([]);
@@ -478,36 +477,6 @@ export default function ProductReviewManager() {
             .finally(() => setExportSaving(false));
     };
 
-    const seedSampleReviews = () => {
-        setSampleSeeding(true);
-        setError('');
-        setMessage('');
-
-        reviewApi.seedSample({
-            min: 70,
-            max: 100,
-            years: 4,
-            status: 'visible',
-            replace: true,
-        })
-            .then((response) => {
-                const summary = response?.data?.summary || {};
-                setMessage(`Đã tạo bình luận ảo/test: ${summary.reviews || 0} đánh giá, ${summary.replies || 0} phản hồi cho ${summary.products || 0} sản phẩm.`);
-                const nextFilters = {
-                    ...filters,
-                    source_type: 'admin_sample',
-                    status: 'visible',
-                    type: 'review',
-                };
-                setFilters(nextFilters);
-                loadReviews(1, nextFilters);
-            })
-            .catch((err) => {
-                setError(err?.response?.data?.message || 'Không thể tạo bình luận ảo/test.');
-            })
-            .finally(() => setSampleSeeding(false));
-    };
-
     const setStatus = (review, nextStatus) => {
         const request = nextStatus === 'visible' ? reviewApi.approve(review.id) : reviewApi.hide(review.id);
         request
@@ -560,15 +529,6 @@ export default function ProductReviewManager() {
                     >
                         <span className="material-symbols-outlined text-[20px]">download</span>
                         Xuất JSON
-                    </button>
-                    <button
-                        type="button"
-                        onClick={seedSampleReviews}
-                        disabled={sampleSeeding}
-                        className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-orange-200 bg-orange-50 px-5 py-2.5 text-sm font-black text-orange-700 shadow-sm transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        <span className="material-symbols-outlined text-[20px]">auto_awesome</span>
-                        {sampleSeeding ? 'Đang tạo...' : 'Tạo đánh giá mẫu cho tất cả sản phẩm'}
                     </button>
                     <button
                         type="button"

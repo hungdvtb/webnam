@@ -414,6 +414,11 @@ export const productApi = {
     reorder: (productIds) => api.post('/products/reorder', { product_ids: productIds }),
 };
 
+export const productGroupApi = {
+    getAll: () => api.get('/product-groups'),
+    getOne: (id) => api.get(`/product-groups/${id}`),
+};
+
 export const productSeoBulkApi = {
     listRuns: (params) => api.get('/products/seo-bulk/runs', { params }),
     createRun: (data, config = {}) => api.post('/products/seo-bulk/runs', data, {
@@ -900,6 +905,7 @@ export const financeApi = {
     getDailyPnlReport: (params) => api.get('/finance/daily-pnl/report', { params }),
     getMonthlyPnlReport: (params) => api.get('/finance/daily-pnl/monthly-report', { params }),
     getMonthlyPnlReportDrilldown: (params) => api.get('/finance/daily-pnl/monthly-report/drilldown', { params }),
+    getRevenueReconciliation: (params) => api.get('/finance/daily-pnl/revenue-reconciliation', { params }),
     getDailyPnlConfig: () => api.get('/finance/daily-pnl/config'),
     updateDailyPnlConfig: (data) => api.post('/finance/daily-pnl/config', data),
     getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),
@@ -962,13 +968,23 @@ export const reviewApi = {
     adminCreate: (data) => api.post('/admin/reviews', data),
     adminBulkImport: (data) => api.post('/admin/reviews/bulk-import', data, multipartConfig(data)),
     adminExport: (params) => api.get('/admin/reviews/export', { params, responseType: 'blob' }),
-    seedSample: (data) => api.post('/admin/reviews/seed-sample', data),
     unreadSummary: (config = {}) => api.get('/admin/reviews/unread-summary', config),
     markSeen: () => api.post('/admin/reviews/mark-seen'),
     adminUpdate: (id, data) => api.put(`/admin/reviews/${id}`, data),
     adminDelete: (id) => api.delete(`/admin/reviews/${id}`),
     approve: (id) => api.post(`/admin/reviews/${id}/approve`),
     hide: (id) => api.post(`/admin/reviews/${id}/hide`),
+};
+
+export const productFaqApi = {
+    getByProduct: (productId) => api.get(`/products/${productId}/faqs`),
+    adminList: (params) => api.get('/admin/product-faqs', { params }),
+    adminProducts: (params) => api.get('/admin/product-faqs/products', { params }),
+    resolveTargets: (data) => api.post('/admin/product-faqs/resolve-targets', data),
+    adminCreate: (data) => api.post('/admin/product-faqs', data, multipartConfig(data)),
+    adminUpdate: (id, data) => api.post(`/admin/product-faqs/${id}`, data, multipartConfig(data)),
+    adminDelete: (id) => api.delete(`/admin/product-faqs/${id}`),
+    reorder: (data) => api.post('/admin/product-faqs/reorder', data),
 };
 
 export const wishlistApi = {

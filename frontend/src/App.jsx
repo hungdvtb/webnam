@@ -27,6 +27,7 @@ import AdminDashboard from './pages/admin/Dashboard';
 import ProductList from './pages/admin/ProductList';
 import ProductForm from './pages/admin/ProductForm';
 import ProductReviewManager from './pages/admin/ProductReviewManager';
+import ProductFaqManager from './pages/admin/ProductFaqManager';
 import CategoryList from './pages/admin/CategoryList';
 import AttributeList from './pages/admin/AttributeList';
 import MenuList from './pages/admin/MenuList';
@@ -53,6 +54,7 @@ import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
 import DailyProfitReport from './pages/admin/DailyProfitReport';
 import MonthlyProfitReport from './pages/admin/MonthlyProfitReport';
+import RevenueReconciliationReport from './pages/admin/RevenueReconciliationReport';
 import PayrollManagement from './pages/admin/PayrollManagement';
 import FloatingContactButtons from './components/FloatingContactButtons';
 
@@ -164,6 +166,7 @@ function App() {
                 <Route path="products/new" element={<ProductForm />} />
                 <Route path="products/edit/:id" element={<ProductForm />} />
                 <Route path="reviews" element={<ProductReviewManager />} />
+                <Route path="product-faqs" element={<ProductFaqManager />} />
                 <Route path="categories" element={<CategoryList />} />
                 <Route path="attributes" element={<AttributeList />} />
                 <Route path="menus" element={<MenuList />} />
@@ -192,6 +195,7 @@ function App() {
                 <Route path="finance/debts" element={<DebtManagement />} />
                 <Route path="finance/daily-profit" element={<DailyProfitReport />} />
                 <Route path="finance/monthly-profit" element={<MonthlyProfitReport />} />
+                <Route path="finance/revenue-reconciliation" element={<RevenueReconciliationReport />} />
                 <Route path="payroll" element={<PayrollManagement />} />
                 <Route path="finance/*" element={<Navigate to="/admin" replace />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />

@@ -547,7 +547,7 @@ export default function ProductFaqs({ product, compact = false }) {
     moveLightbox(deltaX < 0 ? 1 : -1);
   };
 
-  if (!isOpen && faqProductIds.length === 0) {
+  if (!isOpen && (faqProductIds.length === 0 || loading || errorMessage || faqs.length === 0)) {
     return null;
   }
 

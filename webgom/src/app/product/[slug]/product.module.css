@@ -6395,6 +6395,11 @@
   scroll-margin-top: 100px;
 }
 
+.faqEntrySectionPlaceholder {
+  pointer-events: none;
+  visibility: hidden;
+}
+
 .faqEntryButton {
   width: 100%;
   display: grid;

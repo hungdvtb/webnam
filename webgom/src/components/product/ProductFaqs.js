@@ -548,6 +548,15 @@ export default function ProductFaqs({ product, compact = false }) {
   };
 
   if (!isOpen && (faqProductIds.length === 0 || loading || errorMessage || faqs.length === 0)) {
+    if (compact) {
+      return (
+        <section
+          className={`${styles.faqEntrySectionInline} ${styles.faqEntrySectionPlaceholder}`}
+          aria-hidden="true"
+        />
+      );
+    }
+
     return null;
   }
 

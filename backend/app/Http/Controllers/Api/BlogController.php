@@ -77,6 +77,8 @@ class BlogController extends Controller
                 'title',
                 'slug',
                 'excerpt',
+                'featured_image',
+                'featured_media_asset_id',
                 'is_system',
                 'is_published',
                 'published_at',

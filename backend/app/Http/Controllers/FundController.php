@@ -28,8 +28,8 @@ class FundController extends Controller
                 ['name' => 'Chuyển quỹ', 'type' => 'expense', 'color' => '#009688'],
                 ['name' => 'Khác', 'type' => 'expense', 'color' => '#9e9e9e'],
             ];
-            foreach ($categories as $cat) {
-                FinCategory::create($cat);
+            foreach ($categories as $index => $cat) {
+                FinCategory::create(array_merge($cat, ['sort_order' => $index + 1]));
             }
         }
     }
@@ -67,7 +67,7 @@ class FundController extends Controller
         $this->ensureDefaults();
         return response()->json([
             'status' => 'success',
-            'data' => FinCategory::orderBy('name')->get()
+            'data' => $this->orderedCategories()
         ]);
     }
 
@@ -146,6 +146,8 @@ class FundController extends Controller
                 $cat = FinCategory::firstOrCreate([
                     'name' => $request->new_category_name,
                     'type' => $type
+                ], [
+                    'sort_order' => FinCategory::nextSortOrder()
                 ]);
                 $category_id = $cat->id;
             }
@@ -242,7 +244,11 @@ class FundController extends Controller
             // Find or create 'Chuyển quỹ' category
             $category = FinCategory::firstOrCreate(
                 ['name' => 'Chuyển quỹ'],
-                ['type' => 'expense', 'color' => '#009688']
+                [
+                    'type' => 'expense',
+                    'color' => '#009688',
+                    'sort_order' => FinCategory::nextSortOrder(),
+                ]
             );
 
             // Create Expense (Withdraw) from source
@@ -361,16 +367,56 @@ class FundController extends Controller
             $cat = FinCategory::findOrFail($request->id);
             $cat->update($request->only(['name', 'type', 'color']));
         } else {
-            $cat = FinCategory::create($request->only(['name', 'type', 'color']));
+            $cat = FinCategory::create(array_merge(
+                $request->only(['name', 'type', 'color']),
+                ['sort_order' => FinCategory::nextSortOrder()]
+            ));
         }
 
         return response()->json(['status' => 'success', 'data' => $cat]);
+    }
+
+    public function reorderCategories(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'required|integer|distinct|exists:fin_categories,id',
+        ]);
+
+        $ids = array_map('intval', $validated['ids']);
+        if (count($ids) !== FinCategory::count()) {
+            return response()->json([
+                'message' => 'Danh sách hạng mục đã thay đổi. Vui lòng tải lại và thử lại.',
+                'errors' => [
+                    'ids' => ['Danh sách sắp xếp phải chứa đầy đủ các hạng mục hiện tại.'],
+                ],
+            ], 422);
+        }
+
+        DB::transaction(function () use ($ids) {
+            foreach ($ids as $index => $id) {
+                FinCategory::whereKey($id)->update(['sort_order' => $index + 1]);
+            }
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $this->orderedCategories(),
+        ]);
     }
 
     public function deleteCategory($id)
     {
         FinCategory::findOrFail($id)->delete();
         return response()->json(['status' => 'success']);
+    }
+
+    private function orderedCategories()
+    {
+        return FinCategory::query()
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
     }
 
     public function report(Request $request)

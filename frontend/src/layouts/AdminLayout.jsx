@@ -49,6 +49,7 @@ const AdminLayout = () => {
         location.pathname.startsWith('/admin/product-faqs') ||
         location.pathname.startsWith('/admin/blog');
     const isInventoryRoute = location.pathname.startsWith('/admin/inventory');
+    const isFundRoute = location.pathname === '/admin/finance/funds';
 
     const [isSettingsOpen, setIsSettingsOpen] = React.useState(isSettingsRoute);
     const [isOrdersOpen, setIsOrdersOpen] = React.useState(isOrdersRoute);
@@ -878,7 +879,7 @@ const AdminLayout = () => {
 
             <main className={`relative flex min-h-0 min-w-0 flex-col overflow-hidden bg-background-light ${shouldReserveSidebarSpace ? 'col-start-2' : 'h-full w-full'}`}>
                 <LeadRealtimeNotifier enabled={canAccessLeadBoard} />
-                {isSidebarDrawerMode && (
+                {isSidebarDrawerMode && !isFundRoute && (
                     <div className="relative z-[80] shrink-0 border-b border-primary/10 bg-background-light/95 px-3 py-3 backdrop-blur">
                         <button
                             type="button"
@@ -892,7 +893,7 @@ const AdminLayout = () => {
                         </button>
                     </div>
                 )}
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' ? 'overflow-auto p-0' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {
@@ -906,7 +907,15 @@ const AdminLayout = () => {
                                 </div>
                             );
                         }
-                        return <Outlet />;
+                        return (
+                            <Outlet
+                                context={{
+                                    isMobileSidebarOpen,
+                                    isSidebarDrawerMode,
+                                    toggleMobileSidebar
+                                }}
+                            />
+                        );
                     })()}
                 </div>
             </main>

@@ -5,6 +5,16 @@ import { saveOrderReportDrilldownScope } from '../../utils/orderReportDrilldown'
 
 const formatNumber = (value) =>
     new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
+const formatPercent = (value, revenue) => {
+    const denominator = Number(revenue || 0);
+    const numerator = Number(value || 0);
+
+    if (!Number.isFinite(denominator) || denominator === 0 || !Number.isFinite(numerator)) {
+        return '0.0%';
+    }
+
+    return `${((numerator / denominator) * 100).toFixed(1)}%`;
+};
 
 const padNumber = (value) => String(value).padStart(2, '0');
 
@@ -41,14 +51,32 @@ const normalizeMonthlyProfitRow = (row = {}) => {
 };
 const hasAdsSpendBreakdown = (taxedValue, rawValue) =>
     Math.abs(Number(taxedValue || 0) - Number(rawValue || 0)) > 1;
-const renderAdsSpendBreakdown = (taxedValue, rawValue, rawClassName) => (
-    <div className="flex flex-col items-center">
-        <span>{formatNumber(taxedValue)}</span>
+const renderValueWithPercent = (content, value, revenue, percentClassName) => (
+    <div className="flex flex-col items-center leading-tight">
+        <span>{content}</span>
+        <span className={`mt-0.5 text-[13px] font-normal ${percentClassName}`}>
+            {formatPercent(value, revenue)}
+        </span>
+    </div>
+);
+const renderAdsSpendBreakdown = (
+    taxedValue,
+    rawValue,
+    rawClassName,
+    revenue,
+    percentClassName,
+    showZeroAsDash = false
+) => (
+    <div className="flex flex-col items-center leading-tight">
+        <span>{showZeroAsDash && Number(taxedValue || 0) === 0 ? '-' : formatNumber(taxedValue)}</span>
         {hasAdsSpendBreakdown(taxedValue, rawValue) ? (
             <span className={`mt-0.5 text-[12px] font-normal ${rawClassName}`}>
                 ({formatNumber(rawValue)})
             </span>
         ) : null}
+        <span className={`mt-0.5 text-[13px] font-normal ${percentClassName}`}>
+            {formatPercent(taxedValue, revenue)}
+        </span>
     </div>
 );
 const MONTHLY_REPORT_DRILLDOWN_COLUMNS = new Set([
@@ -404,7 +432,7 @@ const MonthlyProfitReport = () => {
             case 'order_count':
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Đơn hàng</>);
             case 'revenue':
-                return renderTH('bg-yellow-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-gray-700', <>Doanh thu</>);
+                return renderTH('bg-yellow-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-gray-700', <>Doanh thu<br />thực</>);
             case 'cost_actual':
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Tiền hàng<br />thực tế</>);
             case 'shipping_fee':
@@ -445,45 +473,114 @@ const MonthlyProfitReport = () => {
             case 'order_count':
                 return <td key="order_count" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.order_count)}</td>;
             case 'revenue':
-                return <td key="revenue" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.revenue)}</td>;
+                return (
+                    <td key="revenue" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.revenue), totalRow.revenue, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'cost_actual':
-                return <td key="cost_actual" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.cost_actual)}</td>;
+                return (
+                    <td key="cost_actual" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.cost_actual), totalRow.cost_actual, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'shipping_fee':
-                return <td key="shipping_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.shipping_fee)}</td>;
+                return (
+                    <td key="shipping_fee" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.shipping_fee), totalRow.shipping_fee, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'damaged_goods':
                 return <td key="damaged_goods" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.damaged_goods)}</td>;
             case 'exchange_profit_loss':
-                return <td key="exchange_profit_loss" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.exchange_profit_loss)}</td>;
+                return (
+                    <td key="exchange_profit_loss" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(
+                            formatNumber(totalRow.exchange_profit_loss),
+                            totalRow.exchange_profit_loss,
+                            totalRow.revenue,
+                            'text-white/80'
+                        )}
+                    </td>
+                );
             case 'partial_delivery_profit_loss':
                 return <td key="partial_delivery_profit_loss" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.partial_delivery_profit_loss)}</td>;
             case 'salary':
-                return <td key="salary" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.salary)}</td>;
+                return (
+                    <td key="salary" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.salary), totalRow.salary, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'packaging_fee':
-                return <td key="packaging_fee" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.packaging_fee)}</td>;
+                return (
+                    <td key="packaging_fee" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.packaging_fee), totalRow.packaging_fee, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'fb_ads_spend':
                 return (
                     <td key="fb_ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
-                        {renderAdsSpendBreakdown(totalRow.fb_ads_spend, totalRow.fb_ads_spend_raw, 'text-white/70')}
+                        {renderAdsSpendBreakdown(
+                            totalRow.fb_ads_spend,
+                            totalRow.fb_ads_spend_raw,
+                            'text-white/70',
+                            totalRow.revenue,
+                            'text-white/80'
+                        )}
                     </td>
                 );
             case 'google_ads_spend':
                 return (
                     <td key="google_ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
-                        {renderAdsSpendBreakdown(totalRow.google_ads_spend, totalRow.google_ads_spend_raw, 'text-white/70')}
+                        {renderAdsSpendBreakdown(
+                            totalRow.google_ads_spend,
+                            totalRow.google_ads_spend_raw,
+                            'text-white/70',
+                            totalRow.revenue,
+                            'text-white/80'
+                        )}
                     </td>
                 );
             case 'ads_spend':
                 return (
                     <td key="ads_spend" className="px-3 py-3 text-center text-[13px] font-bold">
-                        {renderAdsSpendBreakdown(totalRow.ads_spend, totalRow.ads_spend_raw, 'text-white/70')}
+                        {renderAdsSpendBreakdown(
+                            totalRow.ads_spend,
+                            totalRow.ads_spend_raw,
+                            'text-white/70',
+                            totalRow.revenue,
+                            'text-white/80'
+                        )}
                     </td>
                 );
             case 'tax':
-                return <td key="tax" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.tax)}</td>;
+                return (
+                    <td key="tax" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.tax), totalRow.tax, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'fixed_cost':
-                return <td key="fixed_cost" className="px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.fixed_cost)}</td>;
+                return (
+                    <td key="fixed_cost" className="px-3 py-3 text-center text-[13px] font-bold">
+                        {renderValueWithPercent(formatNumber(totalRow.fixed_cost), totalRow.fixed_cost, totalRow.revenue, 'text-white/80')}
+                    </td>
+                );
             case 'total_profit':
-                return <td key="total_profit" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.total_profit)}</td>;
+                return (
+                    <td
+                        key="total_profit"
+                        className={`bg-white/10 px-3 py-3 text-center text-[13px] font-bold ${
+                            totalRow.total_profit < 0 ? 'text-red-200' : 'text-emerald-100'
+                        }`}
+                    >
+                        {renderValueWithPercent(
+                            formatNumber(totalRow.total_profit),
+                            totalRow.total_profit,
+                            totalRow.revenue,
+                            totalRow.total_profit < 0 ? 'text-red-200' : 'text-emerald-100'
+                        )}
+                    </td>
+                );
             case 'profit_per_house':
                 return <td key="profit_per_house" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.profit_per_house)}</td>;
             default:
@@ -504,19 +601,34 @@ const MonthlyProfitReport = () => {
             case 'revenue':
                 return (
                     <td key="revenue" className="bg-yellow-50/30 px-3 py-3 text-center text-[13px] font-bold text-gray-800">
-                        {row.revenue !== 0 ? renderMetricCellContent('revenue', row, formatNumber(row.revenue)) : '-'}
+                        {renderValueWithPercent(
+                            row.revenue !== 0 ? renderMetricCellContent('revenue', row, formatNumber(row.revenue)) : '-',
+                            row.revenue,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
                     </td>
                 );
             case 'cost_actual':
                 return (
                     <td key="cost_actual" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
-                        {row.cost_actual !== 0 ? renderMetricCellContent('cost_actual', row, formatNumber(row.cost_actual)) : '-'}
+                        {renderValueWithPercent(
+                            row.cost_actual !== 0 ? renderMetricCellContent('cost_actual', row, formatNumber(row.cost_actual)) : '-',
+                            row.cost_actual,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
                     </td>
                 );
             case 'shipping_fee':
                 return (
                     <td key="shipping_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
-                        {row.shipping_fee !== 0 ? renderMetricCellContent('shipping_fee', row, formatNumber(row.shipping_fee)) : '-'}
+                        {renderValueWithPercent(
+                            row.shipping_fee !== 0 ? renderMetricCellContent('shipping_fee', row, formatNumber(row.shipping_fee)) : '-',
+                            row.shipping_fee,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
                     </td>
                 );
             case 'damaged_goods':
@@ -527,7 +639,14 @@ const MonthlyProfitReport = () => {
                         key="exchange_profit_loss"
                         className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.exchange_profit_loss < 0 ? 'text-red-600' : 'text-emerald-600'}`}
                     >
-                        {row.exchange_profit_loss !== 0 ? renderMetricCellContent('exchange_profit_loss', row, formatNumber(row.exchange_profit_loss)) : '-'}
+                        {renderValueWithPercent(
+                            row.exchange_profit_loss !== 0
+                                ? renderMetricCellContent('exchange_profit_loss', row, formatNumber(row.exchange_profit_loss))
+                                : '-',
+                            row.exchange_profit_loss,
+                            row.revenue,
+                            row.exchange_profit_loss < 0 ? 'text-red-400' : 'text-emerald-500'
+                        )}
                     </td>
                 );
             case 'partial_delivery_profit_loss':
@@ -540,44 +659,100 @@ const MonthlyProfitReport = () => {
                     </td>
                 );
             case 'salary':
-                return <td key="salary" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.salary !== 0 ? formatNumber(row.salary) : '-'}</td>;
+                return (
+                    <td key="salary" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {renderValueWithPercent(
+                            row.salary !== 0 ? formatNumber(row.salary) : '-',
+                            row.salary,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
+                    </td>
+                );
             case 'packaging_fee':
-                return <td key="packaging_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.packaging_fee !== 0 ? formatNumber(row.packaging_fee) : '-'}</td>;
+                return (
+                    <td key="packaging_fee" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {renderValueWithPercent(
+                            row.packaging_fee !== 0 ? formatNumber(row.packaging_fee) : '-',
+                            row.packaging_fee,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
+                    </td>
+                );
             case 'fb_ads_spend':
                 return (
                     <td key="fb_ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
-                        {Number(row.fb_ads_spend || 0) !== 0
-                            ? renderAdsSpendBreakdown(row.fb_ads_spend, row.fb_ads_spend_raw, 'text-gray-400')
-                            : '-'}
+                        {renderAdsSpendBreakdown(
+                            row.fb_ads_spend,
+                            row.fb_ads_spend_raw,
+                            'text-gray-400',
+                            row.revenue,
+                            'text-gray-400',
+                            true
+                        )}
                     </td>
                 );
             case 'google_ads_spend':
                 return (
                     <td key="google_ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
-                        {Number(row.google_ads_spend || 0) !== 0
-                            ? renderAdsSpendBreakdown(row.google_ads_spend, row.google_ads_spend_raw, 'text-gray-400')
-                            : '-'}
+                        {renderAdsSpendBreakdown(
+                            row.google_ads_spend,
+                            row.google_ads_spend_raw,
+                            'text-gray-400',
+                            row.revenue,
+                            'text-gray-400',
+                            true
+                        )}
                     </td>
                 );
             case 'ads_spend':
                 return (
                     <td key="ads_spend" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
-                        {Number(row.ads_spend || 0) !== 0
-                            ? renderAdsSpendBreakdown(row.ads_spend, row.ads_spend_raw, 'text-gray-400')
-                            : '-'}
+                        {renderAdsSpendBreakdown(
+                            row.ads_spend,
+                            row.ads_spend_raw,
+                            'text-gray-400',
+                            row.revenue,
+                            'text-gray-400',
+                            true
+                        )}
                     </td>
                 );
             case 'tax':
-                return <td key="tax" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.tax !== 0 ? formatNumber(row.tax) : '-'}</td>;
+                return (
+                    <td key="tax" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {renderValueWithPercent(
+                            row.tax !== 0 ? formatNumber(row.tax) : '-',
+                            row.tax,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
+                    </td>
+                );
             case 'fixed_cost':
-                return <td key="fixed_cost" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">{row.fixed_cost !== 0 ? formatNumber(row.fixed_cost) : '-'}</td>;
+                return (
+                    <td key="fixed_cost" className="bg-pink-50/10 px-3 py-3 text-center text-[13px] text-gray-600">
+                        {renderValueWithPercent(
+                            row.fixed_cost !== 0 ? formatNumber(row.fixed_cost) : '-',
+                            row.fixed_cost,
+                            row.revenue,
+                            'text-gray-400'
+                        )}
+                    </td>
+                );
             case 'total_profit':
                 return (
                     <td
                         key="total_profit"
-                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.total_profit < 0 ? 'text-red-500' : 'text-red-600'}`}
+                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.total_profit < 0 ? 'text-red-600' : 'text-emerald-700'}`}
                     >
-                        {row.total_profit !== 0 ? formatNumber(row.total_profit) : '-'}
+                        {renderValueWithPercent(
+                            row.total_profit !== 0 ? formatNumber(row.total_profit) : '-',
+                            row.total_profit,
+                            row.revenue,
+                            row.total_profit < 0 ? 'text-red-400' : 'text-emerald-600'
+                        )}
                     </td>
                 );
             case 'profit_per_house':

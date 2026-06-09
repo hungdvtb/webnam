@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { categoryApi, productApi, productFaqApi, productGroupApi } from '../../services/api';
+import { blogApi, categoryApi, productApi, productFaqApi, productGroupApi } from '../../services/api';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
 
 const STATUS_OPTIONS = [
@@ -28,7 +28,14 @@ const blankForm = {
     status: 'visible',
     images: [],
     newImages: [],
+    related_articles: [],
 };
+
+const FORM_TABS = [
+    { value: 'content', label: 'Nội dung FAQ', icon: 'edit_note' },
+    { value: 'media', label: 'Hình ảnh / Video', icon: 'perm_media' },
+    { value: 'articles', label: 'Bài viết liên quan', icon: 'article' },
+];
 
 const normalizeCollection = (response) => {
     const payload = response?.data;
@@ -90,6 +97,50 @@ const getStatusLabel = (status) => (
 
 const imageThumbUrl = (image) => resolveImageObjectUrl(image, 'thumbnail') || resolveImageObjectUrl(image, 'large');
 
+const relatedArticleImageUrl = (article) => (
+    resolveImageObjectUrl(article?.image, 'thumbnail')
+    || resolveImageObjectUrl(article?.featured_image_media, 'thumbnail')
+    || resolveImageObjectUrl(article?.featured_image, 'thumbnail')
+    || ''
+);
+
+const relatedArticleKey = (article, index = 0) => {
+    const postId = normalizeId(article?.post_id);
+    if (postId) {
+        return `post:${postId}`;
+    }
+    return `url:${String(article?.url || article?.public_url || article?.public_path || index).toLowerCase()}`;
+};
+
+const normalizeRelatedArticle = (article, source = 'post') => {
+    const hasPostIdField = Object.prototype.hasOwnProperty.call(article || {}, 'post_id');
+
+    return {
+        id: article?.id || null,
+        source: article?.source || source,
+        post_id: normalizeId(hasPostIdField ? article?.post_id : (source === 'post' ? article?.id : null)),
+        title: article?.title || 'Bài viết liên quan',
+        excerpt: article?.excerpt || '',
+        image: article?.image || article?.featured_image_media || article?.featured_image || '',
+        url: article?.url
+            || article?.public_url
+            || article?.public_path
+            || (article?.slug ? `/blog/${article.slug}` : ''),
+        available: article?.available !== false,
+    };
+};
+
+const serializeRelatedArticles = (articles) => (
+    (articles || []).map((article) => ({
+        source: article.source === 'manual' ? 'manual' : 'post',
+        post_id: normalizeId(article.post_id),
+        title: article.title || '',
+        excerpt: article.excerpt || '',
+        image: relatedArticleImageUrl(article) || (typeof article.image === 'string' ? article.image : ''),
+        url: article.url || '',
+    }))
+);
+
 const sortFaqs = (items) => [...items].sort((first, second) => (
     Number(first.sort_order ?? 0) - Number(second.sort_order ?? 0)
     || Number(first.id ?? 0) - Number(second.id ?? 0)
@@ -138,6 +189,7 @@ export default function ProductFaqManager() {
     const [loadingTargetProducts, setLoadingTargetProducts] = useState(false);
     const [categories, setCategories] = useState([]);
     const [productGroups, setProductGroups] = useState([]);
+    const [blogCategories, setBlogCategories] = useState([]);
 
     const [selectedProductId, setSelectedProductId] = useState('');
     const [selectedProductInfo, setSelectedProductInfo] = useState(null);
@@ -152,6 +204,15 @@ export default function ProductFaqManager() {
     const [expandedTargetPanel, setExpandedTargetPanel] = useState(null);
     const [saving, setSaving] = useState(false);
     const [draggingId, setDraggingId] = useState(null);
+    const [activeFormTab, setActiveFormTab] = useState('content');
+    const [articleSearch, setArticleSearch] = useState('');
+    const [articleCategoryId, setArticleCategoryId] = useState('');
+    const [articleResults, setArticleResults] = useState([]);
+    const [loadingArticleResults, setLoadingArticleResults] = useState(false);
+    const [manualArticleUrl, setManualArticleUrl] = useState('');
+    const [previewingArticleUrl, setPreviewingArticleUrl] = useState(false);
+    const [articleError, setArticleError] = useState('');
+    const [draggingArticleKey, setDraggingArticleKey] = useState(null);
 
     const selectedProduct = useMemo(() => (
         (selectedProductInfo && String(selectedProductInfo.id) === String(selectedProductId) ? selectedProductInfo : null)
@@ -256,7 +317,35 @@ export default function ProductFaqManager() {
         productGroupApi.getAll()
             .then((response) => setProductGroups(normalizeCollection(response)))
             .catch(() => setProductGroups([]));
+
+        blogApi.getCategories()
+            .then((response) => setBlogCategories(normalizeCollection(response)))
+            .catch(() => setBlogCategories([]));
     }, []);
+
+    useEffect(() => {
+        if (!isFormOpen || activeFormTab !== 'articles') return undefined;
+
+        setLoadingArticleResults(true);
+        const timeoutId = window.setTimeout(() => {
+            const params = {
+                compact: 1,
+                view: 'picker',
+                is_published: 1,
+                is_system: 0,
+                per_page: 30,
+            };
+            if (articleSearch.trim()) params.search = articleSearch.trim();
+            if (articleCategoryId) params.category_id = articleCategoryId;
+
+            blogApi.getAll(params)
+                .then((response) => setArticleResults(normalizeCollection(response)))
+                .catch(() => setArticleResults([]))
+                .finally(() => setLoadingArticleResults(false));
+        }, 250);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [activeFormTab, articleCategoryId, articleSearch, isFormOpen]);
 
     useEffect(() => {
         if (!isFormOpen) return undefined;
@@ -332,6 +421,11 @@ export default function ProductFaqManager() {
         setTargetSearch('');
         setTargetCategoryId('');
         setTargetPreview({ total: 0, data: [] });
+        setActiveFormTab('content');
+        setArticleSearch('');
+        setArticleCategoryId('');
+        setManualArticleUrl('');
+        setArticleError('');
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -357,6 +451,9 @@ export default function ProductFaqManager() {
             status: faq.status || 'visible',
             images: Array.isArray(faq.images) ? faq.images : [],
             newImages: [],
+            related_articles: Array.isArray(faq.related_articles)
+                ? faq.related_articles.map((article) => normalizeRelatedArticle(article, article.source))
+                : [],
         });
         setTargetProducts((current) => {
             const merged = [...appliedProducts, ...(faq.product ? [faq.product] : []), ...current];
@@ -371,6 +468,11 @@ export default function ProductFaqManager() {
         setTargetSearch('');
         setTargetCategoryId('');
         setTargetPreview({ total: appliedProducts.length, data: appliedProducts });
+        setActiveFormTab('content');
+        setArticleSearch('');
+        setArticleCategoryId('');
+        setManualArticleUrl('');
+        setArticleError('');
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -381,6 +483,13 @@ export default function ProductFaqManager() {
         setForm(blankForm);
         setTargetPreview({ total: 0, data: [] });
         setExpandedTargetPanel(null);
+        setActiveFormTab('content');
+        setArticleSearch('');
+        setArticleCategoryId('');
+        setArticleResults([]);
+        setManualArticleUrl('');
+        setArticleError('');
+        setDraggingArticleKey(null);
     };
 
     const toggleTargetProduct = (product) => {
@@ -405,6 +514,74 @@ export default function ProductFaqManager() {
             ...current,
             images: current.images.filter((_, imageIndex) => imageIndex !== index),
         }));
+    };
+
+    const addRelatedArticle = (article, source = 'post') => {
+        const normalized = normalizeRelatedArticle(article, source);
+        const nextKey = relatedArticleKey(normalized);
+
+        setForm((current) => {
+            const exists = current.related_articles.some((item, index) => (
+                relatedArticleKey(item, index) === nextKey
+                || (normalized.post_id && Number(item.post_id) === Number(normalized.post_id))
+            ));
+            if (exists) return current;
+
+            return {
+                ...current,
+                related_articles: [...current.related_articles, normalized],
+            };
+        });
+        setArticleError('');
+    };
+
+    const removeRelatedArticle = (index) => {
+        setForm((current) => ({
+            ...current,
+            related_articles: current.related_articles.filter((_, itemIndex) => itemIndex !== index),
+        }));
+    };
+
+    const previewManualArticle = () => {
+        if (!manualArticleUrl.trim()) {
+            setArticleError('Nhập link bài viết cần gắn.');
+            return;
+        }
+
+        setPreviewingArticleUrl(true);
+        setArticleError('');
+        productFaqApi.previewArticleLink({ url: manualArticleUrl.trim() })
+            .then((response) => {
+                const article = response?.data?.article;
+                if (!article?.url) {
+                    throw new Error('API không trả về preview bài viết.');
+                }
+                addRelatedArticle(article, 'manual');
+                setManualArticleUrl('');
+            })
+            .catch((err) => {
+                const errors = err?.response?.data?.errors;
+                const firstError = errors ? Object.values(errors).flat()[0] : null;
+                setArticleError(firstError || err?.response?.data?.message || err?.message || 'Không thể kiểm tra link bài viết.');
+            })
+            .finally(() => setPreviewingArticleUrl(false));
+    };
+
+    const reorderRelatedArticles = (targetIndex) => {
+        if (!draggingArticleKey) return;
+
+        setForm((current) => {
+            const fromIndex = current.related_articles.findIndex((article, index) => (
+                relatedArticleKey(article, index) === draggingArticleKey
+            ));
+            if (fromIndex < 0 || fromIndex === targetIndex) return current;
+
+            const nextItems = [...current.related_articles];
+            const [moved] = nextItems.splice(fromIndex, 1);
+            nextItems.splice(targetIndex, 0, moved);
+            return { ...current, related_articles: nextItems };
+        });
+        setDraggingArticleKey(null);
     };
 
     const clearTargets = () => {
@@ -437,6 +614,7 @@ export default function ProductFaqManager() {
         formData.append('sort_order', form.sort_order || '0');
         formData.append('status', form.status || 'visible');
         formData.append('existing_images', JSON.stringify(form.images || []));
+        formData.append('related_articles', JSON.stringify(serializeRelatedArticles(form.related_articles)));
         (form.newImages || []).forEach((file) => {
             formData.append('images[]', file);
         });
@@ -446,6 +624,12 @@ export default function ProductFaqManager() {
 
     const saveFaq = (event) => {
         event.preventDefault();
+        if (form.question.trim().length < 2 || form.answer.trim().length < 2) {
+            setActiveFormTab('content');
+            setError('Nhập đầy đủ câu hỏi và câu trả lời trước khi lưu.');
+            return;
+        }
+
         const hasAnyTarget = targetPayload.apply_all_products
             || targetPayload.product_ids.length > 0
             || targetPayload.category_ids.length > 0
@@ -784,6 +968,12 @@ export default function ProductFaqManager() {
                                                         {faq.images.length} ảnh
                                                     </span>
                                                 ) : null}
+                                                {Array.isArray(faq.related_articles) && faq.related_articles.length > 0 ? (
+                                                    <span className="inline-flex items-center gap-1 rounded-full border border-gold/20 bg-gold/10 px-2.5 py-1 text-[11px] font-black text-gold">
+                                                        <span className="material-symbols-outlined text-[14px]">article</span>
+                                                        {faq.related_articles.length} bài viết
+                                                    </span>
+                                                ) : null}
                                             </div>
                                             <h3 className="mt-2 line-clamp-2 text-base font-black leading-6 text-primary">{faq.question}</h3>
                                             <p className="mt-1 line-clamp-2 text-sm leading-6 text-stone-600">{faq.answer}</p>
@@ -847,119 +1037,337 @@ export default function ProductFaqManager() {
                             />
                         ) : null}
 
+                        <div className="mt-4 flex gap-2 overflow-x-auto border-b border-primary/10 pb-3">
+                            {FORM_TABS.map((tab) => (
+                                <button
+                                    key={tab.value}
+                                    type="button"
+                                    onClick={() => setActiveFormTab(tab.value)}
+                                    className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-sm font-black transition ${
+                                        activeFormTab === tab.value
+                                            ? 'border-primary bg-primary text-white'
+                                            : 'border-primary/10 bg-white text-primary hover:bg-primary/5'
+                                    }`}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+                                    {tab.label}
+                                    {tab.value === 'articles' && form.related_articles.length > 0 ? (
+                                        <span className={`rounded-full px-2 py-0.5 text-xs ${activeFormTab === tab.value ? 'bg-white text-primary' : 'bg-gold/10 text-gold'}`}>
+                                            {form.related_articles.length}
+                                        </span>
+                                    ) : null}
+                                </button>
+                            ))}
+                        </div>
+
                         <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.82fr)]">
-                            <div className="grid gap-4">
-                                <label className="grid gap-1 text-sm font-bold text-primary">
-                                    Câu hỏi khách hàng
-                                    <textarea
-                                        required
-                                        value={form.question}
-                                        onChange={(event) => updateForm('question', event.target.value)}
-                                        rows={3}
-                                        maxLength={1000}
-                                        placeholder="VD: Sản phẩm này có dùng được trong lò vi sóng không?"
-                                        className="rounded-md border border-primary/10 px-3 py-3 font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"
-                                    />
-                                    <span className="text-right text-xs text-stone-400">{form.question.length}/1000</span>
-                                </label>
-
-                                <label className="grid gap-1 text-sm font-bold text-primary">
-                                    Câu trả lời của shop
-                                    <textarea
-                                        required
-                                        value={form.answer}
-                                        onChange={(event) => updateForm('answer', event.target.value)}
-                                        rows={8}
-                                        maxLength={12000}
-                                        placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
-                                        className="rounded-md border border-primary/10 px-3 py-3 font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"
-                                    />
-                                    <span className="text-right text-xs text-stone-400">{form.answer.length}/12000</span>
-                                </label>
-
-                                <div className="grid gap-3 md:grid-cols-2">
-                                    <label className="grid gap-1 text-sm font-bold text-primary">
-                                        Link Youtube
-                                        <input
-                                            value={form.youtube_url}
-                                            onChange={(event) => updateForm('youtube_url', event.target.value)}
-                                            placeholder="https://www.youtube.com/watch?v=..."
-                                            className="min-h-11 rounded-md border border-primary/10 px-3 font-normal text-stone-700 outline-none focus:border-primary/40"
-                                        />
-                                    </label>
-
-                                    <div className="grid gap-3 md:grid-cols-2">
+                            <div className="grid content-start gap-4">
+                                {activeFormTab === 'content' ? (
+                                    <>
                                         <label className="grid gap-1 text-sm font-bold text-primary">
-                                            Thứ tự
-                                            <input
-                                                type="number"
-                                                min="0"
-                                                value={form.sort_order}
-                                                onChange={(event) => updateForm('sort_order', event.target.value)}
-                                                className="min-h-11 rounded-md border border-primary/10 px-3 font-normal text-stone-700 outline-none focus:border-primary/40"
+                                            Câu hỏi khách hàng
+                                            <textarea
+                                                required
+                                                value={form.question}
+                                                onChange={(event) => updateForm('question', event.target.value)}
+                                                rows={3}
+                                                maxLength={1000}
+                                                placeholder="VD: Sản phẩm này có dùng được trong lò vi sóng không?"
+                                                className="rounded-md border border-primary/10 px-3 py-3 font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"
                                             />
+                                            <span className="text-right text-xs text-stone-400">{form.question.length}/1000</span>
                                         </label>
+
                                         <label className="grid gap-1 text-sm font-bold text-primary">
-                                            Trạng thái
-                                            <select
-                                                value={form.status}
-                                                onChange={(event) => updateForm('status', event.target.value)}
-                                                className="min-h-11 rounded-md border border-primary/10 px-3 font-normal text-stone-700 outline-none focus:border-primary/40"
-                                            >
-                                                {STATUS_OPTIONS.map((option) => (
-                                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                                ))}
-                                            </select>
+                                            Câu trả lời của shop
+                                            <textarea
+                                                required
+                                                value={form.answer}
+                                                onChange={(event) => updateForm('answer', event.target.value)}
+                                                rows={8}
+                                                maxLength={12000}
+                                                placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
+                                                className="rounded-md border border-primary/10 px-3 py-3 font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"
+                                            />
+                                            <span className="text-right text-xs text-stone-400">{form.answer.length}/12000</span>
                                         </label>
-                                    </div>
-                                </div>
 
-                                <div className="grid gap-3">
-                                    <label className="grid gap-1 text-sm font-bold text-primary">
-                                        Ảnh đính kèm
-                                        <input
-                                            type="file"
-                                            multiple
-                                            accept="image/jpeg,image/png,image/jpg,image/gif,image/webp,image/avif,image/svg+xml"
-                                            onChange={(event) => updateForm('newImages', Array.from(event.target.files || []))}
-                                            className="min-h-11 rounded-md border border-primary/10 px-3 py-2 font-normal text-stone-700 outline-none focus:border-primary/40"
-                                        />
-                                    </label>
+                                        <div className="grid gap-3 md:grid-cols-2">
+                                            <label className="grid gap-1 text-sm font-bold text-primary">
+                                                Thứ tự
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={form.sort_order}
+                                                    onChange={(event) => updateForm('sort_order', event.target.value)}
+                                                    className="min-h-11 rounded-md border border-primary/10 px-3 font-normal text-stone-700 outline-none focus:border-primary/40"
+                                                />
+                                            </label>
+                                            <label className="grid gap-1 text-sm font-bold text-primary">
+                                                Trạng thái
+                                                <select
+                                                    value={form.status}
+                                                    onChange={(event) => updateForm('status', event.target.value)}
+                                                    className="min-h-11 rounded-md border border-primary/10 px-3 font-normal text-stone-700 outline-none focus:border-primary/40"
+                                                >
+                                                    {STATUS_OPTIONS.map((option) => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                        </div>
+                                    </>
+                                ) : null}
 
-                                    {Array.isArray(form.images) && form.images.length > 0 ? (
-                                        <div className="grid gap-2">
-                                            <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-400">Ảnh đang dùng</p>
+                                {activeFormTab === 'media' ? (
+                                    <div className="grid content-start gap-4">
+                                        <label className="grid gap-1.5 text-sm font-bold text-primary">
+                                            Link Youtube
+                                            <div className="relative">
+                                                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[19px] text-red-500">play_circle</span>
+                                                <input
+                                                    value={form.youtube_url}
+                                                    onChange={(event) => updateForm('youtube_url', event.target.value)}
+                                                    placeholder="https://www.youtube.com/watch?v=..."
+                                                    className="h-11 w-full rounded-md border border-primary/10 pl-10 pr-3 font-normal text-stone-700 outline-none focus:border-primary/40"
+                                                />
+                                            </div>
+                                        </label>
+
+                                        <label className="grid gap-1.5 text-sm font-bold text-primary">
+                                            Ảnh đính kèm
+                                            <span className="flex min-h-12 cursor-pointer items-center gap-3 rounded-md border border-dashed border-primary/20 bg-slate-50 px-4 py-3 transition hover:border-primary/40 hover:bg-primary/5">
+                                                <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-primary shadow-sm">
+                                                    <span className="material-symbols-outlined text-[19px]">add_photo_alternate</span>
+                                                </span>
+                                                <span className="min-w-0">
+                                                    <strong className="block text-sm text-primary">
+                                                        {form.newImages.length > 0
+                                                            ? `Đã chọn ${form.newImages.length} ảnh mới`
+                                                            : 'Chọn ảnh từ máy'}
+                                                    </strong>
+                                                    <small className="mt-0.5 block text-xs font-normal text-stone-500">Có thể chọn nhiều ảnh, tối đa 10MB mỗi ảnh.</small>
+                                                </span>
+                                                <input
+                                                    type="file"
+                                                    multiple
+                                                    accept="image/jpeg,image/png,image/jpg,image/gif,image/webp,image/avif,image/svg+xml"
+                                                    onChange={(event) => updateForm('newImages', Array.from(event.target.files || []))}
+                                                    className="sr-only"
+                                                />
+                                            </span>
+                                        </label>
+
+                                        {Array.isArray(form.images) && form.images.length > 0 ? (
+                                            <div className="grid gap-2">
+                                                <p className="text-xs font-black uppercase tracking-[0.12em] text-stone-400">Ảnh đang dùng</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {form.images.map((image, index) => {
+                                                        const thumbUrl = imageThumbUrl(image);
+                                                        return (
+                                                            <div key={`${thumbUrl}-${index}`} className="relative size-16 overflow-hidden rounded-lg border border-primary/10 bg-slate-50">
+                                                                {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : null}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeExistingImage(index)}
+                                                                    className="absolute right-1 top-1 inline-flex size-5 items-center justify-center rounded-full bg-slate-950/70 text-white"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[13px]">close</span>
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        ) : null}
+
+                                        {form.newImages.length > 0 ? (
                                             <div className="flex flex-wrap gap-2">
-                                                {form.images.map((image, index) => {
-                                                    const thumbUrl = imageThumbUrl(image);
+                                                {form.newImages.map((file, index) => (
+                                                    <span key={`${file.name}-${file.size}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/10 bg-white px-3 py-1.5 text-xs text-stone-600">
+                                                        <span className="material-symbols-outlined text-[15px] text-primary">image</span>
+                                                        <span className="max-w-52 truncate">{file.name}</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updateForm('newImages', form.newImages.filter((_, itemIndex) => itemIndex !== index))}
+                                                            className="inline-flex size-5 items-center justify-center rounded-full text-stone-400 hover:bg-red-50 hover:text-red-600"
+                                                            title="Bỏ ảnh"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[13px]">close</span>
+                                                        </button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+
+                                {activeFormTab === 'articles' ? (
+                                    <div className="grid gap-5">
+                                        <section className="grid gap-3 rounded-lg border border-primary/10 bg-slate-50 p-4">
+                                            <div>
+                                                <h3 className="font-black text-primary">Chọn bài viết từ website</h3>
+                                                <p className="mt-1 text-xs text-stone-500">Tìm theo tiêu đề, slug hoặc danh mục bài viết.</p>
+                                            </div>
+                                            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.55fr)]">
+                                                <label className="grid gap-1 text-xs font-black uppercase tracking-[0.08em] text-stone-500">
+                                                    Tìm bài viết
+                                                    <input
+                                                        value={articleSearch}
+                                                        onChange={(event) => setArticleSearch(event.target.value)}
+                                                        placeholder="Nhập tiêu đề hoặc slug"
+                                                        className="min-h-11 rounded-md border border-primary/10 bg-white px-3 text-sm font-normal normal-case tracking-normal text-stone-700 outline-none focus:border-primary/40"
+                                                    />
+                                                </label>
+                                                <label className="grid gap-1 text-xs font-black uppercase tracking-[0.08em] text-stone-500">
+                                                    Danh mục
+                                                    <select
+                                                        value={articleCategoryId}
+                                                        onChange={(event) => setArticleCategoryId(event.target.value)}
+                                                        className="min-h-11 rounded-md border border-primary/10 bg-white px-3 text-sm font-normal normal-case tracking-normal text-stone-700 outline-none focus:border-primary/40"
+                                                    >
+                                                        <option value="">Tất cả danh mục</option>
+                                                        {blogCategories.map((category) => (
+                                                            <option key={category.id} value={category.id}>{category.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+                                            </div>
+
+                                            <div className="grid max-h-56 gap-2 overflow-y-auto">
+                                                {loadingArticleResults ? (
+                                                    <div className="flex min-h-24 items-center justify-center text-sm font-bold text-stone-500">Đang tìm bài viết...</div>
+                                                ) : articleResults.length === 0 ? (
+                                                    <div className="flex min-h-24 items-center justify-center text-sm font-bold text-stone-500">Không có bài viết phù hợp.</div>
+                                                ) : articleResults.map((post) => {
+                                                    const normalized = normalizeRelatedArticle(post, 'post');
+                                                    const selected = form.related_articles.some((item) => (
+                                                        Number(item.post_id) === Number(normalized.post_id)
+                                                    ));
+                                                    const thumbUrl = relatedArticleImageUrl(normalized);
+
                                                     return (
-                                                        <div key={`${thumbUrl}-${index}`} className="relative size-20 overflow-hidden rounded-lg border border-primary/10 bg-slate-50">
-                                                            {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : null}
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => removeExistingImage(index)}
-                                                                className="absolute right-1 top-1 inline-flex size-6 items-center justify-center rounded-full bg-slate-950/70 text-white"
-                                                            >
-                                                                <span className="material-symbols-outlined text-[14px]">close</span>
-                                                            </button>
-                                                        </div>
+                                                        <button
+                                                            key={post.id}
+                                                            type="button"
+                                                            disabled={selected}
+                                                            onClick={() => addRelatedArticle(post, 'post')}
+                                                            className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-primary/10 bg-white p-2 text-left transition hover:border-primary/30 disabled:cursor-default disabled:bg-primary/5"
+                                                        >
+                                                            <span className="flex size-13 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-primary/35">
+                                                                {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined">article</span>}
+                                                            </span>
+                                                            <span className="min-w-0">
+                                                                <strong className="line-clamp-2 text-sm text-primary">{post.title}</strong>
+                                                                <small className="mt-1 block truncate text-stone-400">/{post.slug}</small>
+                                                            </span>
+                                                            <span className="material-symbols-outlined text-[20px] text-primary">
+                                                                {selected ? 'check_circle' : 'add_circle'}
+                                                            </span>
+                                                        </button>
                                                     );
                                                 })}
                                             </div>
-                                        </div>
-                                    ) : null}
+                                        </section>
 
-                                    {form.newImages.length > 0 ? (
-                                        <div className="rounded-lg border border-primary/10 bg-slate-50 px-4 py-3 text-sm text-stone-600">
-                                            <p className="font-bold text-primary">Ảnh mới sẽ tải lên khi lưu:</p>
-                                            <ul className="mt-2 list-disc space-y-1 pl-5">
-                                                {form.newImages.map((file) => (
-                                                    <li key={`${file.name}-${file.size}`}>{file.name}</li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    ) : null}
-                                </div>
+                                        <section className="grid gap-3 rounded-lg border border-primary/10 p-4">
+                                            <div>
+                                                <h3 className="font-black text-primary">Gắn link thủ công</h3>
+                                                <p className="mt-1 text-xs text-stone-500">Link phải thuộc website hiện tại. Hệ thống sẽ kiểm tra và lấy preview trước khi thêm.</p>
+                                            </div>
+                                            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                                                <input
+                                                    type="url"
+                                                    value={manualArticleUrl}
+                                                    onChange={(event) => setManualArticleUrl(event.target.value)}
+                                                    onKeyDown={(event) => {
+                                                        if (event.key === 'Enter') {
+                                                            event.preventDefault();
+                                                            previewManualArticle();
+                                                        }
+                                                    }}
+                                                    placeholder="https://website.com/blog/slug-bai-viet"
+                                                    className="min-h-11 rounded-md border border-primary/10 px-3 text-sm text-stone-700 outline-none focus:border-primary/40"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={previewManualArticle}
+                                                    disabled={previewingArticleUrl}
+                                                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-black text-white disabled:opacity-60"
+                                                >
+                                                    <span className={`material-symbols-outlined text-[18px] ${previewingArticleUrl ? 'animate-spin' : ''}`}>
+                                                        {previewingArticleUrl ? 'progress_activity' : 'add_link'}
+                                                    </span>
+                                                    Kiểm tra và thêm
+                                                </button>
+                                            </div>
+                                            {articleError ? <p className="text-sm font-bold text-red-600">{articleError}</p> : null}
+                                        </section>
+
+                                        <section className="grid gap-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <h3 className="font-black text-primary">Bài viết đã gắn</h3>
+                                                    <p className="mt-1 text-xs text-stone-500">Kéo thả để đổi thứ tự hiển thị ngoài website.</p>
+                                                </div>
+                                                <span className="rounded-full bg-gold/10 px-3 py-1 text-xs font-black text-gold">{form.related_articles.length} bài</span>
+                                            </div>
+
+                                            {form.related_articles.length === 0 ? (
+                                                <div className="flex min-h-28 items-center justify-center rounded-lg border border-dashed border-primary/15 bg-slate-50 text-sm font-bold text-stone-500">
+                                                    Chưa gắn bài viết liên quan.
+                                                </div>
+                                            ) : (
+                                                <div className="grid gap-2">
+                                                    {form.related_articles.map((article, index) => {
+                                                        const articleKey = relatedArticleKey(article, index);
+                                                        const thumbUrl = relatedArticleImageUrl(article);
+
+                                                        return (
+                                                            <article
+                                                                key={`${articleKey}:${index}`}
+                                                                draggable
+                                                                onDragStart={() => setDraggingArticleKey(articleKey)}
+                                                                onDragEnd={() => setDraggingArticleKey(null)}
+                                                                onDragOver={(event) => event.preventDefault()}
+                                                                onDrop={() => reorderRelatedArticles(index)}
+                                                                className={`grid grid-cols-[auto_64px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border bg-white p-3 ${
+                                                                    draggingArticleKey === articleKey ? 'border-gold opacity-65' : 'border-primary/10'
+                                                                }`}
+                                                            >
+                                                                <span className="material-symbols-outlined cursor-grab text-primary/35">drag_indicator</span>
+                                                                <span className="flex size-16 items-center justify-center overflow-hidden rounded-md bg-slate-100 text-primary/30">
+                                                                    {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined">article</span>}
+                                                                </span>
+                                                                <span className="min-w-0">
+                                                                    <span className="flex flex-wrap items-center gap-2">
+                                                                        <strong className="line-clamp-2 text-sm text-primary">{article.title}</strong>
+                                                                        <small className="rounded-full bg-primary/5 px-2 py-0.5 text-[10px] font-black uppercase text-primary">
+                                                                            {article.source === 'manual' ? 'Link thủ công' : 'Bài viết web'}
+                                                                        </small>
+                                                                        {article.available === false ? (
+                                                                            <small className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-black uppercase text-red-600">Không còn hiển thị</small>
+                                                                        ) : null}
+                                                                    </span>
+                                                                    {article.excerpt ? <span className="mt-1 line-clamp-1 block text-xs text-stone-500">{article.excerpt}</span> : null}
+                                                                    <span className="mt-1 block truncate text-xs text-stone-400">{article.url}</span>
+                                                                </span>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeRelatedArticle(index)}
+                                                                    className="inline-flex size-9 items-center justify-center rounded-full text-stone-400 hover:bg-red-50 hover:text-red-600"
+                                                                    title="Xóa bài viết"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                                </button>
+                                                            </article>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </section>
+                                    </div>
+                                ) : null}
                             </div>
 
                             <aside className="grid content-start gap-4 rounded-lg border border-primary/10 bg-slate-50 p-4">

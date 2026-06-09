@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Post;
 use App\Models\Product;
 use App\Models\ProductFaq;
+use App\Models\SiteDomain;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -313,6 +315,131 @@ class ProductFaqApiTest extends TestCase
             ->assertJsonPath('items.0.question', 'Cau hoi cua thanh phan bundle?');
     }
 
+    public function test_related_articles_follow_post_changes_and_hide_deleted_posts_on_public_api(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'FAQ Related Article Account ' . Str::upper(Str::random(4)),
+            'domain' => 'faq-related.example',
+            'subdomain' => 'faq-related',
+            'status' => true,
+        ]);
+        SiteDomain::query()->create([
+            'account_id' => $account->id,
+            'domain' => 'https://faq-related.example',
+            'is_active' => true,
+            'is_default' => true,
+        ]);
+        $product = $this->createProduct(
+            $account,
+            'San pham co bai viet lien quan',
+            'FAQ-RELATED-' . Str::upper(Str::random(4))
+        );
+        $selectedPost = $this->createPost($account, 'Huong dan su dung', 'huong-dan-su-dung');
+        $manualPost = $this->createPost($account, 'Cach bao quan', 'cach-bao-quan');
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $createResponse = $this
+            ->withHeader('X-Account-Id', (string) $account->id)
+            ->postJson('/api/admin/product-faqs', [
+                'product_id' => $product->id,
+                'question' => 'Nen doc bai nao truoc khi su dung?',
+                'answer' => 'Vui long xem cac bai viet lien quan ben duoi.',
+                'related_articles' => [
+                    [
+                        'source' => 'post',
+                        'post_id' => $selectedPost->id,
+                    ],
+                    [
+                        'source' => 'manual',
+                        'url' => 'https://faq-related.example/blog/' . $manualPost->slug,
+                        'title' => 'Snapshot se duoc thay bang du lieu hien tai',
+                    ],
+                ],
+            ]);
+
+        $faqId = $createResponse->json('faq.id');
+
+        $createResponse
+            ->assertCreated()
+            ->assertJsonCount(2, 'faq.related_articles')
+            ->assertJsonPath('faq.related_articles.0.post_id', $selectedPost->id)
+            ->assertJsonPath('faq.related_articles.1.post_id', $manualPost->id);
+
+        $this->getJson("/api/products/{$product->id}/faqs")
+            ->assertOk()
+            ->assertJsonCount(2, 'items.0.related_articles')
+            ->assertJsonPath('items.0.related_articles.0.title', 'Huong dan su dung')
+            ->assertJsonPath(
+                'items.0.related_articles.0.url',
+                'https://faq-related.example/blog/huong-dan-su-dung'
+            )
+            ->assertJsonPath('items.0.related_articles.1.title', 'Cach bao quan');
+
+        $selectedPost->update([
+            'title' => 'Huong dan su dung moi',
+            'slug' => 'huong-dan-su-dung-moi',
+        ]);
+        $manualPost->delete();
+
+        $this->getJson("/api/products/{$product->id}/faqs")
+            ->assertOk()
+            ->assertJsonCount(1, 'items.0.related_articles')
+            ->assertJsonPath('items.0.related_articles.0.title', 'Huong dan su dung moi')
+            ->assertJsonPath(
+                'items.0.related_articles.0.url',
+                'https://faq-related.example/blog/huong-dan-su-dung-moi'
+            );
+
+        $this
+            ->withHeader('X-Account-Id', (string) $account->id)
+            ->getJson("/api/admin/product-faqs?product_id={$product->id}")
+            ->assertOk()
+            ->assertJsonCount(2, 'data.0.related_articles')
+            ->assertJsonPath('data.0.related_articles.1.available', false);
+
+        $this
+            ->withHeader('X-Account-Id', (string) $account->id)
+            ->postJson("/api/admin/product-faqs/{$faqId}", [
+                'question' => 'Nen doc bai nao truoc khi su dung?',
+                'answer' => 'Cap nhat noi dung nhung khong gui related_articles.',
+            ])
+            ->assertOk()
+            ->assertJsonCount(2, 'faq.related_articles');
+
+        $this->assertDatabaseCount('product_faq_related_articles', 2);
+    }
+
+    public function test_admin_can_preview_an_internal_blog_link(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'FAQ Preview Account ' . Str::upper(Str::random(4)),
+            'domain' => 'faq-preview.example',
+            'subdomain' => 'faq-preview',
+            'status' => true,
+        ]);
+        SiteDomain::query()->create([
+            'account_id' => $account->id,
+            'domain' => 'https://faq-preview.example',
+            'is_active' => true,
+            'is_default' => true,
+        ]);
+        $post = $this->createPost($account, 'Bai viet preview', 'bai-viet-preview');
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $this
+            ->withHeader('X-Account-Id', (string) $account->id)
+            ->postJson('/api/admin/product-faqs/preview-article-link', [
+                'url' => 'https://faq-preview.example/blog/bai-viet-preview',
+            ])
+            ->assertOk()
+            ->assertJsonPath('article.post_id', $post->id)
+            ->assertJsonPath('article.source', 'manual')
+            ->assertJsonPath('article.title', 'Bai viet preview')
+            ->assertJsonPath('article.url', 'https://faq-preview.example/blog/bai-viet-preview');
+    }
+
     private function createFaq(
         Account $account,
         Product $product,
@@ -348,6 +475,20 @@ class ProductFaqApiTest extends TestCase
             'cost_price' => 70000,
             'stock_quantity' => 0,
             'status' => true,
+        ]);
+    }
+
+    private function createPost(Account $account, string $title, string $slug): Post
+    {
+        return Post::query()->create([
+            'account_id' => $account->id,
+            'title' => $title,
+            'slug' => $slug,
+            'content' => '<p>Noi dung bai viet.</p>',
+            'excerpt' => 'Mo ta ngan cho ' . $title,
+            'featured_image' => '/storage/blog/' . $slug . '.jpg',
+            'is_published' => true,
+            'published_at' => now()->subMinute(),
         ]);
     }
 }

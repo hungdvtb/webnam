@@ -51,6 +51,32 @@ const normalizeFaqImages = (images) => {
   return imageUrl ? [imageUrl] : [];
 };
 
+const normalizeRelatedArticles = (articles) => {
+  const parsedArticles = parseJsonArray(articles);
+  const rawArticles = parsedArticles || articles;
+
+  if (!Array.isArray(rawArticles)) {
+    return [];
+  }
+
+  return rawArticles
+    .map((article, index) => ({
+      id: article?.id ?? article?.post_id ?? `${index}-${toText(article?.url)}`,
+      title: toText(article?.title) || 'Bài viết liên quan',
+      excerpt: toText(article?.excerpt),
+      image: article?.image
+        || article?.featured_image_media
+        || article?.featured_image
+        || article?.image_url
+        || '',
+      url: toText(article?.url || article?.public_url || article?.public_path),
+      available: article?.available !== false,
+      sort_order: toSortOrder(article?.sort_order, index + 1),
+    }))
+    .filter((article) => article.available && article.url)
+    .sort((first, second) => first.sort_order - second.sort_order);
+};
+
 const getFaqImageUrl = (image, preferred = 'large') => (
   resolveImageObjectUrl(image, preferred, '') || resolveImageObjectUrl(image, 'large', '')
 );
@@ -132,6 +158,7 @@ const normalizeFaqPayload = (payload) => {
         answer: toText(item?.answer),
         images: normalizeFaqImages(item?.images),
         youtube_url: getFaqVideoUrl(item),
+        related_articles: normalizeRelatedArticles(item?.related_articles ?? item?.relatedArticles),
         status: normalizeFaqStatus(item?.status),
         sort_order: sortOrder,
       };
@@ -598,6 +625,7 @@ export default function ProductFaqs({ product, compact = false }) {
                 const shouldToggleAnswer = answerNeedsToggle(answer);
                 const videoThumb = resolveVideoThumbnailUrl(faq.youtube_url);
                 const videoEmbed = resolveVideoEmbedUrl(faq.youtube_url);
+                const relatedArticles = normalizeRelatedArticles(faq.related_articles);
 
                 return (
                   <article
@@ -669,6 +697,44 @@ export default function ProductFaqs({ product, compact = false }) {
                                 </button>
                               ) : null}
                             </div>
+                          ) : null}
+
+                          {relatedArticles.length > 0 ? (
+                            <section className={styles.faqRelatedArticles} aria-label="Bài viết liên quan">
+                              <h4>
+                                <span className="material-symbols-outlined" aria-hidden="true">auto_stories</span>
+                                Bài viết liên quan
+                              </h4>
+                              <div className={styles.faqRelatedArticleList}>
+                                {relatedArticles.map((article) => {
+                                  const imageUrl = resolveImageObjectUrl(article.image, 'medium', '');
+
+                                  return (
+                                    <a
+                                      key={article.id}
+                                      href={article.url}
+                                      className={styles.faqRelatedArticleCard}
+                                    >
+                                      <span className={styles.faqRelatedArticleImage}>
+                                        {imageUrl ? (
+                                          <img src={imageUrl} alt="" loading="lazy" />
+                                        ) : (
+                                          <span className="material-symbols-outlined" aria-hidden="true">article</span>
+                                        )}
+                                      </span>
+                                      <span className={styles.faqRelatedArticleContent}>
+                                        <strong>{article.title}</strong>
+                                        {article.excerpt ? <small>{article.excerpt}</small> : null}
+                                        <span className={styles.faqRelatedArticleAction}>
+                                          Xem bài viết
+                                          <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
+                                        </span>
+                                      </span>
+                                    </a>
+                                  );
+                                })}
+                              </div>
+                            </section>
                           ) : null}
                         </div>
                       </div>

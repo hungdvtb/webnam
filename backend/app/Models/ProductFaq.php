@@ -42,6 +42,13 @@ class ProductFaq extends Model
             ->orderBy('products.id');
     }
 
+    public function relatedArticles()
+    {
+        return $this->hasMany(ProductFaqRelatedArticle::class, 'product_faq_id')
+            ->orderBy('sort_order')
+            ->orderBy('id');
+    }
+
     public function scopeVisible($query)
     {
         return $query->where('status', self::STATUS_VISIBLE);

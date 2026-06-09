@@ -7,6 +7,7 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\ProductFaq;
 use App\Services\MediaService;
+use App\Services\ProductFaqRelatedArticleService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -32,7 +33,8 @@ class ProductFaqController extends Controller
     ];
 
     public function __construct(
-        protected MediaService $mediaService
+        protected MediaService $mediaService,
+        protected ProductFaqRelatedArticleService $relatedArticleService
     ) {
     }
 
@@ -126,6 +128,27 @@ class ProductFaqController extends Controller
         ]);
     }
 
+    public function adminPreviewArticleLink(Request $request)
+    {
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'max:2048'],
+        ]);
+        $accountId = $this->resolveTargetAccountId();
+
+        if (!$accountId) {
+            throw ValidationException::withMessages([
+                'url' => ['Chưa xác định được website để kiểm tra link.'],
+            ]);
+        }
+
+        return response()->json([
+            'article' => $this->relatedArticleService->previewManualUrl(
+                $accountId,
+                $validated['url']
+            ),
+        ]);
+    }
+
     public function adminStore(Request $request)
     {
         $validated = $this->validatePayload($request);
@@ -150,6 +173,10 @@ class ProductFaqController extends Controller
             ]);
 
             $this->syncFaqProducts($faq, $targetProducts);
+            $this->relatedArticleService->sync(
+                $faq,
+                $validated['related_articles'] ?? []
+            );
 
             return $faq;
         });
@@ -193,6 +220,10 @@ class ProductFaqController extends Controller
             $faq->save();
 
             $this->syncFaqProducts($faq, $targetProducts);
+
+            if (array_key_exists('related_articles', $validated)) {
+                $this->relatedArticleService->sync($faq, $validated['related_articles']);
+            }
         });
 
         return response()->json([
@@ -251,6 +282,13 @@ class ProductFaqController extends Controller
 
     private function validatePayload(Request $request, ?ProductFaq $faq = null): array
     {
+        if (is_string($request->input('related_articles'))) {
+            $decoded = json_decode($request->input('related_articles'), true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $request->merge(['related_articles' => $decoded]);
+            }
+        }
+
         return $request->validate([
             'product_id' => ['nullable', 'integer', 'exists:products,id'],
             'product_ids' => ['nullable', 'array'],
@@ -271,6 +309,14 @@ class ProductFaqController extends Controller
             'image' => ['nullable', 'file', 'mimes:jpeg,png,jpg,gif,webp,avif,svg', 'max:10240'],
             'images' => ['nullable', 'array'],
             'images.*' => ['file', 'mimes:jpeg,png,jpg,gif,webp,avif,svg', 'max:10240'],
+            'related_articles' => ['nullable', 'array', 'max:50'],
+            'related_articles.*.source' => ['nullable', Rule::in(['post', 'manual'])],
+            'related_articles.*.post_id' => ['nullable', 'integer'],
+            'related_articles.*.url' => ['nullable', 'string', 'max:2048'],
+            'related_articles.*.title' => ['nullable', 'string', 'max:255'],
+            'related_articles.*.excerpt' => ['nullable', 'string', 'max:1000'],
+            'related_articles.*.image' => ['nullable', 'string', 'max:2048'],
+            'related_articles.*.image_url' => ['nullable', 'string', 'max:2048'],
         ]);
     }
 
@@ -350,6 +396,9 @@ class ProductFaqController extends Controller
             $query->with($this->adminFaqRelations());
         } else {
             $query->visible();
+            if ($this->relatedArticleService->tableExists()) {
+                $query->with('relatedArticles.post.featuredMediaAsset');
+            }
         }
 
         return $query->ordered()->get()->unique('id')->values();
@@ -901,6 +950,9 @@ class ProductFaqController extends Controller
         if ($this->faqAssignmentsTableExists()) {
             $relations[] = 'appliedProducts:id,account_id,name,sku,slug,type,status';
         }
+        if ($this->relatedArticleService->tableExists()) {
+            $relations[] = 'relatedArticles.post.featuredMediaAsset';
+        }
 
         return $relations;
     }
@@ -921,6 +973,7 @@ class ProductFaqController extends Controller
             'video_url' => $faq->youtube_url,
             'status' => $faq->status ?: ProductFaq::STATUS_VISIBLE,
             'sort_order' => (int) $faq->sort_order,
+            'related_articles' => $this->relatedArticleService->publicPayload($faq),
         ];
     }
 
@@ -943,6 +996,7 @@ class ProductFaqController extends Controller
             'applied_products' => $appliedProducts->map(fn (Product $product) => $this->productPayload($product))->values(),
             'applied_count' => $appliedProducts->count(),
             'is_shared' => $appliedProducts->count() > 1,
+            'related_articles' => $this->relatedArticleService->adminPayload($faq),
         ];
     }
 

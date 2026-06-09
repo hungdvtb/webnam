@@ -140,7 +140,11 @@ class DebtController extends Controller
 
             $cat = FinCategory::firstOrCreate(
                 ['name' => $catName],
-                ['type' => $typeStr, 'color' => $catColor]
+                [
+                    'type' => $typeStr,
+                    'color' => $catColor,
+                    'sort_order' => FinCategory::nextSortOrder(),
+                ]
             );
 
             $subject = DebtSubject::find($request->debt_subject_id);

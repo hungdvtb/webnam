@@ -563,6 +563,7 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::get('/admin/product-faqs', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminIndex']);
         Route::get('/admin/product-faqs/products', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminProducts']);
         Route::post('/admin/product-faqs/resolve-targets', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminResolveTargets']);
+        Route::post('/admin/product-faqs/preview-article-link', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminPreviewArticleLink']);
         Route::post('/admin/product-faqs', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminStore']);
         Route::post('/admin/product-faqs/reorder', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminReorder']);
         Route::post('/admin/product-faqs/{id}', [\App\Http\Controllers\Api\ProductFaqController::class , 'adminUpdate'])->whereNumber('id');
@@ -587,6 +588,7 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
             Route::put('accounts/{id}/initial-balance', [\App\Http\Controllers\FundController::class, 'updateAccountInitialBalance']);
             Route::get('categories', [\App\Http\Controllers\FundController::class, 'categories']);
             Route::post('categories', [\App\Http\Controllers\FundController::class, 'saveCategory']);
+            Route::post('categories/reorder', [\App\Http\Controllers\FundController::class, 'reorderCategories']);
             Route::delete('categories/{id}', [\App\Http\Controllers\FundController::class, 'deleteCategory']);
             Route::get('transactions', [\App\Http\Controllers\FundController::class, 'transactions']);
             Route::post('transactions', [\App\Http\Controllers\FundController::class, 'saveTransaction']);

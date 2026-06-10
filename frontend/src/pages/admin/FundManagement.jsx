@@ -34,6 +34,22 @@ const sortCategoriesByOrder = (categoryList = []) => (
     ))
 );
 
+const getDefaultTransactionType = () => (
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches
+        ? 'expense'
+        : 'income'
+);
+
+const getDefaultTransactionAccountId = (accountList = []) => {
+    if (accountList.length === 0) return '';
+
+    if (typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+        return accountList.find(account => account.type === 'bank')?.id || accountList[0].id;
+    }
+
+    return accountList[0].id;
+};
+
 // Utils cho ngày tháng (có giờ)
 const getCurrentDateTime = () => {
     const d = new Date();
@@ -89,17 +105,17 @@ export default function FundManagement() {
     const [activeTab, setActiveTab] = useState('all');
 
     // Quick Input Row State
-    const [newTx, setNewTx] = useState({
+    const [newTx, setNewTx] = useState(() => ({
         id: null,
         transaction_date: getCurrentDateTime(),
         description: '',
         fin_account_id: '',
         fin_category_id: '',
-        type: 'income',
+        type: getDefaultTransactionType(),
         amount: '',
         notes: '',
         new_category_name: ''
-    });
+    }));
 
     const [saving, setSaving] = useState(false);
     const amountInputRef = useRef(null);
@@ -234,7 +250,10 @@ export default function FundManagement() {
             if (accountsRes.data.status === 'success') {
                 setAccounts(accountsRes.data.data);
                 if (!newTx.fin_account_id && !newTx.id && accountsRes.data.data.length > 0) {
-                    setNewTx(prev => ({ ...prev, fin_account_id: accountsRes.data.data[0].id }));
+                    setNewTx(prev => ({
+                        ...prev,
+                        fin_account_id: getDefaultTransactionAccountId(accountsRes.data.data)
+                    }));
                 }
             }
             if (categoriesRes.data.status === 'success') {
@@ -422,17 +441,27 @@ export default function FundManagement() {
 
             const res = await financeApi.saveFundTransaction(payload);
             if (res.data.status === 'success') {
-                // Reset form
-                setNewTx({
-                    id: null,
-                    transaction_date: getCurrentDateTime(),
-                    description: '',
-                    fin_account_id: accounts.length > 0 ? accounts[0].id : '',
-                    fin_category_id: '',
-                    type: 'income',
-                    amount: '',
-                    notes: '',
-                    new_category_name: ''
+                setNewTx(() => {
+                    const preserveDesktopSelections = typeof window !== 'undefined'
+                        && window.matchMedia('(min-width: 1024px)').matches;
+
+                    return {
+                        id: null,
+                        transaction_date: getCurrentDateTime(),
+                        description: '',
+                        fin_account_id: preserveDesktopSelections
+                            ? payload.fin_account_id
+                            : getDefaultTransactionAccountId(accounts),
+                        fin_category_id: preserveDesktopSelections
+                            ? payload.fin_category_id
+                            : '',
+                        type: preserveDesktopSelections
+                            ? payload.type
+                            : getDefaultTransactionType(),
+                        amount: '',
+                        notes: '',
+                        new_category_name: ''
+                    };
                 });
                 // Reload
                 await loadData();
@@ -1108,9 +1137,9 @@ export default function FundManagement() {
                                         id: null,
                                         transaction_date: getCurrentDateTime(),
                                         description: '',
-                                        fin_account_id: accounts.length > 0 ? accounts[0].id : '',
+                                        fin_account_id: getDefaultTransactionAccountId(accounts),
                                         fin_category_id: '',
-                                        type: 'income',
+                                        type: getDefaultTransactionType(),
                                         amount: '',
                                         notes: '',
                                         new_category_name: ''
@@ -1292,9 +1321,9 @@ export default function FundManagement() {
                                                 id: null,
                                                 transaction_date: getCurrentDateTime(),
                                                 description: '',
-                                                fin_account_id: accounts.length > 0 ? accounts[0].id : '',
+                                                fin_account_id: getDefaultTransactionAccountId(accounts),
                                                 fin_category_id: '',
-                                                type: 'income',
+                                                type: getDefaultTransactionType(),
                                                 amount: '',
                                                 notes: '',
                                                 new_category_name: ''

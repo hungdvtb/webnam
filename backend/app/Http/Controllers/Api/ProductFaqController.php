@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductFaq;
 use App\Services\MediaService;
 use App\Services\ProductFaqRelatedArticleService;
+use App\Support\BlogContentHtmlNormalizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -289,7 +290,7 @@ class ProductFaqController extends Controller
             }
         }
 
-        return $request->validate([
+        $validated = $request->validate([
             'product_id' => ['nullable', 'integer', 'exists:products,id'],
             'product_ids' => ['nullable', 'array'],
             'product_ids.*' => ['integer', 'distinct', 'exists:products,id'],
@@ -301,7 +302,7 @@ class ProductFaqController extends Controller
             'bundle_product_ids.*' => ['integer', 'distinct', 'exists:products,id'],
             'apply_all_products' => ['nullable', 'boolean'],
             'question' => [$faq ? 'sometimes' : 'required', 'string', 'min:2', 'max:1000'],
-            'answer' => [$faq ? 'sometimes' : 'required', 'string', 'min:2', 'max:12000'],
+            'answer' => [$faq ? 'sometimes' : 'required', 'string', 'min:2', 'max:60000'],
             'youtube_url' => ['nullable', 'string', 'max:2048'],
             'sort_order' => ['nullable', 'integer', 'min:0', 'max:999999'],
             'status' => ['nullable', Rule::in(self::STATUS_VALUES)],
@@ -318,6 +319,44 @@ class ProductFaqController extends Controller
             'related_articles.*.image' => ['nullable', 'string', 'max:2048'],
             'related_articles.*.image_url' => ['nullable', 'string', 'max:2048'],
         ]);
+
+        if (array_key_exists('answer', $validated)) {
+            $validated['answer'] = $this->normalizeAnswerForStorage((string) $validated['answer']);
+            if (!$this->answerHasVisibleContent($validated['answer'])) {
+                throw ValidationException::withMessages([
+                    'answer' => ['Nhap cau tra loi cua shop truoc khi luu.'],
+                ]);
+            }
+        }
+
+        return $validated;
+    }
+
+    private function normalizeAnswerForStorage(string $answer): string
+    {
+        $answer = trim($answer);
+        if ($answer === '') {
+            return '';
+        }
+
+        if (preg_match('/<\/?[a-z][\s\S]*>/i', $answer) !== 1) {
+            return $answer;
+        }
+
+        return BlogContentHtmlNormalizer::normalize($answer);
+    }
+
+    private function answerHasVisibleContent(string $answer): bool
+    {
+        $text = Str::of(html_entity_decode(strip_tags($answer), ENT_QUOTES | ENT_HTML5, 'UTF-8'))
+            ->squish()
+            ->value();
+
+        if (mb_strlen($text) >= 2) {
+            return true;
+        }
+
+        return preg_match('/<(img|iframe|video|source)\b/i', $answer) === 1;
     }
 
     private function attachFaqCountSubqueries($query): string

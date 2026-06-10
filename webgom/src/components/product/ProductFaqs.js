@@ -13,6 +13,7 @@ const ANSWER_PREVIEW_CHARS = 220;
 const ANSWER_PREVIEW_LINES = 4;
 const SWIPE_THRESHOLD = 48;
 const HIDDEN_FAQ_STATUSES = new Set(['hidden', 'inactive', 'disabled', 'draft', 'false', '0']);
+const HTML_TAG_PATTERN = /<\/?[a-z][\s\S]*>/i;
 
 const toText = (value) => (
   value === null || value === undefined
@@ -20,6 +21,45 @@ const toText = (value) => (
     : (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
       ? String(value).trim()
       : '')
+);
+
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const textToAnswerHtml = (value) => (
+  escapeHtml(value)
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `<p>${line}</p>`)
+    .join('') || ''
+);
+
+const sanitizeFaqAnswerHtml = (value) => {
+  const answer = toText(value);
+  if (!answer) {
+    return '';
+  }
+
+  const html = HTML_TAG_PATTERN.test(answer) ? answer : textToAnswerHtml(answer);
+
+  return html
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s+(href|src)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, '')
+    .replace(/\s+(href|src)\s*=\s*javascript:[^\s>]+/gi, '');
+};
+
+const faqAnswerPlainText = (value) => (
+  toText(value)
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 );
 
 const parseJsonArray = (value) => {
@@ -134,12 +174,13 @@ const getFaqVideoUrl = (item = {}) => {
 };
 
 const answerNeedsToggle = (answer) => {
-  if (!answer) {
+  const plainAnswer = faqAnswerPlainText(answer);
+  if (!plainAnswer) {
     return false;
   }
 
-  const lineCount = answer.split(/\r\n|\r|\n/).length;
-  return answer.length > ANSWER_PREVIEW_CHARS || lineCount > ANSWER_PREVIEW_LINES;
+  const lineCount = plainAnswer.split(/\r\n|\r|\n/).length;
+  return plainAnswer.length > ANSWER_PREVIEW_CHARS || lineCount > ANSWER_PREVIEW_LINES;
 };
 
 const normalizeFaqPayload = (payload) => {
@@ -155,7 +196,7 @@ const normalizeFaqPayload = (payload) => {
       return {
         id,
         question: toText(item?.question),
-        answer: toText(item?.answer),
+        answer: sanitizeFaqAnswerHtml(item?.answer),
         images: normalizeFaqImages(item?.images),
         youtube_url: getFaqVideoUrl(item),
         related_articles: normalizeRelatedArticles(item?.related_articles ?? item?.relatedArticles),
@@ -661,9 +702,10 @@ export default function ProductFaqs({ product, compact = false }) {
                         </div>
                         <div className={styles.faqAnswerBody}>
                           {answer ? (
-                            <p className={`${styles.faqAnswerText} ${!isAnswerExpanded && shouldToggleAnswer ? styles.faqAnswerTextCollapsed : ''}`}>
-                              {answer}
-                            </p>
+                            <div
+                              className={`${styles.faqAnswerText} ${styles.faqAnswerRichText} ${!isAnswerExpanded && shouldToggleAnswer ? styles.faqAnswerTextCollapsed : ''}`}
+                              dangerouslySetInnerHTML={{ __html: answer }}
+                            />
                           ) : (
                             <p className={styles.faqAnswerText}>Shop đang cập nhật câu trả lời.</p>
                           )}

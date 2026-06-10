@@ -1,6 +1,21 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { blogApi, categoryApi, productApi, productFaqApi, productGroupApi } from '../../services/api';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactQuill from 'react-quill-new';
+import QuillResizeImage from 'quill-image-resize-module-react';
+import 'react-quill-new/dist/quill.snow.css';
+import { blogApi, categoryApi, mediaApi, productApi, productFaqApi, productGroupApi } from '../../services/api';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
+import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
+
+if (typeof window !== 'undefined' && ReactQuill?.Quill) {
+    window.Quill = ReactQuill.Quill;
+    const quillImports = ReactQuill.Quill.imports || {};
+    if (!window.__productFaqQuillResizeRegistered && !quillImports['modules/resize']) {
+        ReactQuill.Quill.register('modules/resize', QuillResizeImage);
+    }
+    window.__productFaqQuillResizeRegistered = true;
+}
+
+const ANSWER_HTML_MAX_LENGTH = 60000;
 
 const STATUS_OPTIONS = [
     { value: 'visible', label: 'Hiển thị' },
@@ -12,6 +27,12 @@ const PRODUCT_FILTERS = [
     { value: 'with', label: 'Đã có FAQ' },
     { value: 'without', label: 'Chưa có FAQ' },
 ];
+
+const PRODUCT_LINK_KIND_LABELS = {
+    product: 'Sản phẩm',
+    variant: 'Biến thể',
+    bundle_option: 'Tùy chọn bundle',
+};
 
 const blankForm = {
     id: null,
@@ -36,6 +57,125 @@ const FORM_TABS = [
     { value: 'media', label: 'Hình ảnh / Video', icon: 'perm_media' },
     { value: 'articles', label: 'Bài viết liên quan', icon: 'article' },
 ];
+
+const quillFormats = [
+    'header',
+    'bold',
+    'italic',
+    'underline',
+    'strike',
+    'blockquote',
+    'list',
+    'indent',
+    'link',
+    'image',
+    'video',
+    'color',
+    'background',
+    'align',
+];
+
+const createClientUploadError = (message) => {
+    const error = new Error(message);
+    error.userMessage = message;
+    return error;
+};
+
+const extractUploadedImageUrl = (response) => {
+    const primaryImage = response?.data?.image;
+
+    return String(
+        response?.data?.url
+        || primaryImage?.large_url
+        || primaryImage?.medium_url
+        || primaryImage?.image_url
+        || ''
+    ).trim();
+};
+
+const uploadFaqAnswerImage = async (file) => {
+    const validationMessage = validateImageFileForUpload(file);
+    if (validationMessage) {
+        throw createClientUploadError(validationMessage);
+    }
+
+    const uploadData = new FormData();
+    uploadData.append('image', file);
+    uploadData.append('collection', 'product-faq-answer');
+
+    const response = await mediaApi.upload(uploadData);
+    const imageUrl = extractUploadedImageUrl(response);
+
+    if (!imageUrl) {
+        throw createClientUploadError('API upload không trả về URL ảnh hợp lệ.');
+    }
+
+    return imageUrl;
+};
+
+const resolveFaqImageUploadErrorMessage = (error) => resolveImageUploadError(error).message;
+
+const looksLikeHtml = (value) => /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
+
+const stripHtmlToText = (value) => {
+    const html = String(value || '');
+    if (!looksLikeHtml(html)) {
+        return html.replace(/\s+/g, ' ').trim();
+    }
+
+    if (typeof document !== 'undefined') {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
+        return (wrapper.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+
+    return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+};
+
+const answerHasVisibleContent = (value) => {
+    const html = String(value || '').trim();
+    if (stripHtmlToText(html).length >= 2) {
+        return true;
+    }
+
+    return /<(img|iframe|video|source)\b/i.test(html);
+};
+
+const normalizeVideoEmbedUrl = (value) => {
+    const url = String(value || '').trim();
+    if (!url) {
+        return '';
+    }
+
+    const youtubeMatch = url.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]+)/);
+    if (youtubeMatch) {
+        return `https://www.youtube.com/embed/${youtubeMatch[1]}`;
+    }
+
+    if (/facebook\.com/i.test(url)) {
+        return `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(url)}&show_text=0`;
+    }
+
+    return url;
+};
+
+const buildProductHref = (product, params = {}, hash = '') => {
+    const slugOrId = String(product?.slug || product?.id || '').trim();
+    if (!slugOrId) {
+        return '';
+    }
+
+    const queryParams = new URLSearchParams();
+    Object.entries(params || {}).forEach(([key, value]) => {
+        const normalizedValue = String(value ?? '').trim();
+        if (normalizedValue) {
+            queryParams.set(key, normalizedValue);
+        }
+    });
+
+    const query = queryParams.toString();
+    return `/product/${encodeURIComponent(slugOrId)}${query ? `?${query}` : ''}${hash || ''}`;
+};
 
 const normalizeCollection = (response) => {
     const payload = response?.data;
@@ -178,6 +318,8 @@ const firstTargetId = (form, previewProducts = [], selectedProductId = '') => (
 );
 
 export default function ProductFaqManager() {
+    const answerQuillRef = useRef(null);
+    const answerSelectionRef = useRef(null);
     const [productPanelSearch, setProductPanelSearch] = useState('');
     const [productPanelFilter, setProductPanelFilter] = useState('with');
     const [faqProducts, setFaqProducts] = useState([]);
@@ -213,6 +355,10 @@ export default function ProductFaqManager() {
     const [previewingArticleUrl, setPreviewingArticleUrl] = useState(false);
     const [articleError, setArticleError] = useState('');
     const [draggingArticleKey, setDraggingArticleKey] = useState(null);
+    const [productLinkPickerOpen, setProductLinkPickerOpen] = useState(false);
+    const [productLinkSearch, setProductLinkSearch] = useState('');
+    const [productLinkProducts, setProductLinkProducts] = useState([]);
+    const [loadingProductLinks, setLoadingProductLinks] = useState(false);
 
     const selectedProduct = useMemo(() => (
         (selectedProductInfo && String(selectedProductInfo.id) === String(selectedProductId) ? selectedProductInfo : null)
@@ -243,6 +389,63 @@ export default function ProductFaqManager() {
         form.product_group_ids,
         form.bundle_product_ids,
     ]);
+
+    const productLinkOptions = useMemo(() => (
+        (productLinkProducts || []).flatMap((product) => {
+            const productName = product.display_name || product.name || `Sản phẩm #${product.id}`;
+            const productHref = buildProductHref(product);
+            const options = productHref ? [{
+                key: `product:${product.id}`,
+                kind: 'product',
+                label: productName,
+                subtitle: product.sku ? `SKU: ${product.sku}` : PRODUCT_LINK_KIND_LABELS.product,
+                href: productHref,
+                image: product.main_image || product.image || null,
+            }] : [];
+
+            (Array.isArray(product.variations) ? product.variations : []).forEach((variant) => {
+                const href = buildProductHref(product, { variant_id: variant.id }, '#variants-selection');
+                if (!href) return;
+                const optionLabel = variant.option_label || variant.attribute_summary || variant.display_name || variant.name || variant.sku || `Biến thể #${variant.id}`;
+                options.push({
+                    key: `variant:${product.id}:${variant.id}`,
+                    kind: 'variant',
+                    label: optionLabel,
+                    subtitle: `${productName}${variant.sku ? ` - SKU: ${variant.sku}` : ''}`,
+                    href,
+                    image: variant.main_image || product.main_image || null,
+                });
+            });
+
+            (Array.isArray(product.bundle_options) ? product.bundle_options : []).forEach((option) => {
+                const params = {};
+                if (option.bundle_option_uid || option.uid) {
+                    params.bundle_option_uid = option.bundle_option_uid || option.uid;
+                }
+                if (option.key) {
+                    params.bundle_option_key = option.key;
+                }
+                if (option.option_title) {
+                    params.bundle_option = option.option_title;
+                }
+
+                const href = buildProductHref(product, params, '#bundle-list');
+                if (!href) return;
+                const title = option.option_title || option.raw_option_title || 'Tùy chọn bundle';
+                const itemCount = Array.isArray(option.items) ? option.items.length : 0;
+                options.push({
+                    key: `bundle:${product.id}:${option.bundle_option_uid || option.uid || option.key || title}`,
+                    kind: 'bundle_option',
+                    label: `${productName} - ${title}`,
+                    subtitle: `${itemCount} sản phẩm trong tùy chọn`,
+                    href,
+                    image: product.main_image || null,
+                });
+            });
+
+            return options;
+        })
+    ), [productLinkProducts]);
 
     const loadFaqProductPanel = (search = productPanelSearch, filter = productPanelFilter) => {
         setLoadingFaqProducts(true);
@@ -348,6 +551,25 @@ export default function ProductFaqManager() {
     }, [activeFormTab, articleCategoryId, articleSearch, isFormOpen]);
 
     useEffect(() => {
+        if (!isFormOpen || !productLinkPickerOpen) return undefined;
+
+        setLoadingProductLinks(true);
+        const timeoutId = window.setTimeout(() => {
+            productApi.getAll({
+                picker: 1,
+                parent_only: 1,
+                per_page: 30,
+                search: productLinkSearch.trim(),
+            })
+                .then((response) => setProductLinkProducts(normalizeCollection(response)))
+                .catch(() => setProductLinkProducts([]))
+                .finally(() => setLoadingProductLinks(false));
+        }, 250);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [isFormOpen, productLinkPickerOpen, productLinkSearch]);
+
+    useEffect(() => {
         if (!isFormOpen) return undefined;
         const timeoutId = window.setTimeout(() => loadTargetProducts(targetSearch, targetCategoryId), 250);
         return () => window.clearTimeout(timeoutId);
@@ -392,6 +614,127 @@ export default function ProductFaqManager() {
         setForm((current) => ({ ...current, [key]: value }));
     };
 
+    const updateAnswerFromEditor = useCallback((html) => {
+        setForm((current) => ({ ...current, answer: html }));
+    }, []);
+
+    const getAnswerEditor = useCallback(() => {
+        try {
+            return answerQuillRef.current?.getEditor?.() || null;
+        } catch {
+            return null;
+        }
+    }, []);
+
+    const getAnswerInsertRange = useCallback((editor) => {
+        const currentRange = editor?.getSelection?.(true) || answerSelectionRef.current;
+        if (currentRange && Number.isFinite(currentRange.index)) {
+            return currentRange;
+        }
+
+        return {
+            index: Math.max((editor?.getLength?.() || 1) - 1, 0),
+            length: 0,
+        };
+    }, []);
+
+    const handleAnswerImageInsert = useCallback(() => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+
+        input.onchange = async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+
+            try {
+                const imageUrl = await uploadFaqAnswerImage(file);
+                const editor = getAnswerEditor();
+                if (!editor) return;
+                const range = getAnswerInsertRange(editor);
+                editor.insertEmbed(range.index, 'image', imageUrl, 'user');
+                editor.insertText(range.index + 1, '\n', 'user');
+                editor.setSelection(range.index + 2, 0, 'silent');
+                updateAnswerFromEditor(editor.root.innerHTML);
+            } catch (err) {
+                setError(resolveFaqImageUploadErrorMessage(err));
+            }
+        };
+
+        input.click();
+    }, [getAnswerEditor, getAnswerInsertRange, updateAnswerFromEditor]);
+
+    const handleAnswerVideoInsert = useCallback(() => {
+        const url = window.prompt('Nhập link video YouTube hoặc Facebook:');
+        const embedUrl = normalizeVideoEmbedUrl(url);
+        if (!embedUrl) return;
+
+        const editor = getAnswerEditor();
+        if (!editor) return;
+        const range = getAnswerInsertRange(editor);
+        editor.insertEmbed(range.index, 'video', embedUrl, 'user');
+        editor.insertText(range.index + 1, '\n', 'user');
+        editor.setSelection(range.index + 2, 0, 'silent');
+        updateAnswerFromEditor(editor.root.innerHTML);
+    }, [getAnswerEditor, getAnswerInsertRange, updateAnswerFromEditor]);
+
+    const openProductLinkPicker = useCallback(() => {
+        const editor = getAnswerEditor();
+        if (editor) {
+            answerSelectionRef.current = getAnswerInsertRange(editor);
+        }
+        setProductLinkPickerOpen(true);
+    }, [getAnswerEditor, getAnswerInsertRange]);
+
+    const insertProductLink = useCallback((option) => {
+        if (!option?.href) return;
+
+        const editor = getAnswerEditor();
+        if (!editor) return;
+
+        const range = answerSelectionRef.current || getAnswerInsertRange(editor);
+        const selectedLength = Math.max(Number(range.length || 0), 0);
+        const linkText = String(option.label || option.href).trim();
+
+        if (selectedLength > 0) {
+            editor.formatText(range.index, selectedLength, 'link', option.href, 'user');
+            editor.setSelection(range.index + selectedLength, 0, 'silent');
+        } else {
+            editor.insertText(range.index, linkText, 'link', option.href, 'user');
+            editor.insertText(range.index + linkText.length, ' ', 'user');
+            editor.setSelection(range.index + linkText.length + 1, 0, 'silent');
+        }
+
+        updateAnswerFromEditor(editor.root.innerHTML);
+        setProductLinkPickerOpen(false);
+    }, [getAnswerEditor, getAnswerInsertRange, updateAnswerFromEditor]);
+
+    const answerQuillModules = useMemo(() => ({
+        toolbar: {
+            container: [
+                [{ header: [2, 3, 4, false] }],
+                ['bold', 'italic', 'underline', 'strike'],
+                [{ list: 'ordered' }, { list: 'bullet' }],
+                [{ align: [] }],
+                ['link', 'image', 'video'],
+                ['clean'],
+            ],
+            handlers: {
+                image: handleAnswerImageInsert,
+                video: handleAnswerVideoInsert,
+            },
+        },
+        resize: {
+            locale: {
+                altTip: 'Bấm vào đây để sửa thuộc tính ảnh',
+                floatLeft: 'Căn trái',
+                floatRight: 'Căn phải',
+                center: 'Căn giữa',
+                restore: 'Mặc định',
+            },
+        },
+    }), [handleAnswerImageInsert, handleAnswerVideoInsert]);
+
     const selectProduct = (product) => {
         setSelectedProductId(String(product.id));
         setSelectedProductInfo(product);
@@ -426,6 +769,9 @@ export default function ProductFaqManager() {
         setArticleCategoryId('');
         setManualArticleUrl('');
         setArticleError('');
+        setProductLinkPickerOpen(false);
+        setProductLinkSearch('');
+        setProductLinkProducts([]);
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -473,6 +819,9 @@ export default function ProductFaqManager() {
         setArticleCategoryId('');
         setManualArticleUrl('');
         setArticleError('');
+        setProductLinkPickerOpen(false);
+        setProductLinkSearch('');
+        setProductLinkProducts([]);
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -490,6 +839,10 @@ export default function ProductFaqManager() {
         setManualArticleUrl('');
         setArticleError('');
         setDraggingArticleKey(null);
+        setProductLinkPickerOpen(false);
+        setProductLinkSearch('');
+        setProductLinkProducts([]);
+        answerSelectionRef.current = null;
     };
 
     const toggleTargetProduct = (product) => {
@@ -624,7 +977,7 @@ export default function ProductFaqManager() {
 
     const saveFaq = (event) => {
         event.preventDefault();
-        if (form.question.trim().length < 2 || form.answer.trim().length < 2) {
+        if (form.question.trim().length < 2 || !answerHasVisibleContent(form.answer)) {
             setActiveFormTab('content');
             setError('Nhập đầy đủ câu hỏi và câu trả lời trước khi lưu.');
             return;
@@ -639,6 +992,12 @@ export default function ProductFaqManager() {
 
         if (!hasAnyTarget) {
             setError('Chọn ít nhất một sản phẩm để áp dụng FAQ.');
+            return;
+        }
+
+        if (String(form.answer || '').length > ANSWER_HTML_MAX_LENGTH) {
+            setActiveFormTab('content');
+            setError('Nội dung câu trả lời đang quá dài. Hãy rút gọn bớt text hoặc media trước khi lưu.');
             return;
         }
 
@@ -976,7 +1335,7 @@ export default function ProductFaqManager() {
                                                 ) : null}
                                             </div>
                                             <h3 className="mt-2 line-clamp-2 text-base font-black leading-6 text-primary">{faq.question}</h3>
-                                            <p className="mt-1 line-clamp-2 text-sm leading-6 text-stone-600">{faq.answer}</p>
+                                            <p className="mt-1 line-clamp-2 text-sm leading-6 text-stone-600">{stripHtmlToText(faq.answer)}</p>
                                             <p className="mt-2 text-xs text-stone-400">Cập nhật: {formatDateTime(faq.updated_at || faq.created_at)}</p>
                                         </div>
                                         <div className="flex items-center gap-2 md:justify-end">
@@ -1078,19 +1437,85 @@ export default function ProductFaqManager() {
                                             <span className="text-right text-xs text-stone-400">{form.question.length}/1000</span>
                                         </label>
 
-                                        <label className="grid gap-1 text-sm font-bold text-primary">
+                                        <div className="grid gap-2 text-sm font-bold text-primary">
                                             Câu trả lời của shop
-                                            <textarea
-                                                required
-                                                value={form.answer}
-                                                onChange={(event) => updateForm('answer', event.target.value)}
-                                                rows={8}
-                                                maxLength={12000}
-                                                placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
-                                                className="rounded-md border border-primary/10 px-3 py-3 font-normal leading-6 text-stone-700 outline-none focus:border-primary/40"
-                                            />
-                                            <span className="text-right text-xs text-stone-400">{form.answer.length}/12000</span>
-                                        </label>
+                                            <div className="flex justify-end">
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(event) => event.preventDefault()}
+                                                    onClick={openProductLinkPicker}
+                                                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
+                                                >
+                                                    <span className="material-symbols-outlined text-[17px]">add_link</span>
+                                                    Gắn link sản phẩm
+                                                </button>
+                                            </div>
+                                            <div className="rounded-md border border-primary/10 bg-white text-stone-700 focus-within:border-primary/40">
+                                                <ReactQuill
+                                                    ref={answerQuillRef}
+                                                    theme="snow"
+                                                    value={form.answer}
+                                                    onChange={updateAnswerFromEditor}
+                                                    modules={answerQuillModules}
+                                                    formats={quillFormats}
+                                                    placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
+                                                    className="product-faq-answer-editor min-h-[260px]"
+                                                />
+                                            </div>
+                                            <span className="text-right text-xs text-stone-400">{stripHtmlToText(form.answer).length} ký tự text / {String(form.answer || '').length}/{ANSWER_HTML_MAX_LENGTH} HTML</span>
+                                            {productLinkPickerOpen ? (
+                                                <section className="grid gap-3 rounded-lg border border-primary/10 bg-slate-50 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div>
+                                                            <h3 className="text-sm font-black text-primary">Gắn link sản phẩm</h3>
+                                                            <p className="mt-0.5 text-xs font-normal text-stone-500">Chọn sản phẩm, biến thể hoặc tùy chọn bundle để chèn vào câu trả lời.</p>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setProductLinkPickerOpen(false)}
+                                                            className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[17px]">close</span>
+                                                        </button>
+                                                    </div>
+                                                    <input
+                                                        value={productLinkSearch}
+                                                        onChange={(event) => setProductLinkSearch(event.target.value)}
+                                                        placeholder="Tìm tên, SKU hoặc mã sản phẩm"
+                                                        className="min-h-10 rounded-md border border-primary/10 bg-white px-3 text-sm font-normal text-stone-700 outline-none focus:border-primary/40"
+                                                    />
+                                                    <div className="grid max-h-64 gap-2 overflow-y-auto">
+                                                        {loadingProductLinks ? (
+                                                            <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Đang tìm sản phẩm...</div>
+                                                        ) : productLinkOptions.length === 0 ? (
+                                                            <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Không có link phù hợp.</div>
+                                                        ) : productLinkOptions.map((option) => {
+                                                            const thumbUrl = resolveImageObjectUrl(option.image, 'thumbnail', '') || resolveImageObjectUrl(option.image, 'medium', '');
+                                                            return (
+                                                                <button
+                                                                    key={option.key}
+                                                                    type="button"
+                                                                    onMouseDown={(event) => event.preventDefault()}
+                                                                    onClick={() => insertProductLink(option)}
+                                                                    className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-primary/10 bg-white p-2 text-left transition hover:border-primary/30 hover:bg-primary/5"
+                                                                >
+                                                                    <span className="flex size-11 items-center justify-center overflow-hidden rounded bg-slate-100 text-primary/35">
+                                                                        {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined text-[20px]">inventory_2</span>}
+                                                                    </span>
+                                                                    <span className="min-w-0">
+                                                                        <span className="line-clamp-1 text-sm font-black text-primary">{option.label}</span>
+                                                                        <span className="mt-0.5 block truncate text-xs font-normal text-stone-500">{option.subtitle}</span>
+                                                                    </span>
+                                                                    <span className="rounded-full bg-gold/10 px-2 py-1 text-[10px] font-black uppercase text-gold">
+                                                                        {PRODUCT_LINK_KIND_LABELS[option.kind] || option.kind}
+                                                                    </span>
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </section>
+                                            ) : null}
+                                        </div>
 
                                         <div className="grid gap-3 md:grid-cols-2">
                                             <label className="grid gap-1 text-sm font-bold text-primary">

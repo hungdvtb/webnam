@@ -280,6 +280,22 @@
         aspect-ratio: 16 / 9;
     }
 
+    .product-faq-answer-editor .ql-container {
+        min-height: 260px;
+        border: 0;
+    }
+
+    .product-faq-answer-editor .ql-toolbar {
+        border: 0;
+        border-bottom: 1px solid rgba(27, 54, 93, 0.1);
+    }
+
+    .product-faq-answer-editor .ql-editor {
+        min-height: 260px;
+        font-size: 0.95rem !important;
+        line-height: 1.6;
+    }
+
     .ql-editor .ql-align-center {
         text-align: center;
     }

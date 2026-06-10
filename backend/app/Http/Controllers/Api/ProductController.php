@@ -6815,6 +6815,7 @@ class ProductController extends Controller
 
             return [
                 'id' => (int) $product->id,
+                'slug' => $product->slug,
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
                 'name' => $product->name,
@@ -6850,6 +6851,7 @@ class ProductController extends Controller
 
                         return [
                             'id' => (int) $variation->id,
+                            'slug' => $variation->slug,
                             'sku' => $variation->sku,
                             'display_sku' => $variation->sku,
                             'name' => $variation->name,

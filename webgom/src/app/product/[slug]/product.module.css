@@ -6773,6 +6773,65 @@
   overflow-wrap: anywhere;
 }
 
+.faqAnswerRichText {
+  display: block;
+  white-space: normal;
+}
+
+.faqAnswerRichText :global(p),
+.faqAnswerRichText :global(ul),
+.faqAnswerRichText :global(ol),
+.faqAnswerRichText :global(blockquote),
+.faqAnswerRichText :global(h2),
+.faqAnswerRichText :global(h3),
+.faqAnswerRichText :global(h4) {
+  margin: 0 0 0.65rem;
+}
+
+.faqAnswerRichText :global(p:last-child),
+.faqAnswerRichText :global(ul:last-child),
+.faqAnswerRichText :global(ol:last-child),
+.faqAnswerRichText :global(blockquote:last-child),
+.faqAnswerRichText :global(h2:last-child),
+.faqAnswerRichText :global(h3:last-child),
+.faqAnswerRichText :global(h4:last-child) {
+  margin-bottom: 0;
+}
+
+.faqAnswerRichText :global(a) {
+  color: #9b5429;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
+.faqAnswerRichText :global(img) {
+  display: block;
+  max-width: min(100%, 680px);
+  height: auto;
+  margin: 0.75rem 0;
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 20px rgba(27, 54, 93, 0.12);
+}
+
+.faqAnswerRichText :global(iframe),
+.faqAnswerRichText :global(video) {
+  display: block;
+  width: min(100%, 720px);
+  aspect-ratio: 16 / 9;
+  height: auto;
+  margin: 0.75rem 0;
+  border: 0;
+  border-radius: 0.75rem;
+  background: #0f172a;
+  box-shadow: 0 8px 20px rgba(27, 54, 93, 0.12);
+}
+
+.faqAnswerRichText :global(ul),
+.faqAnswerRichText :global(ol) {
+  padding-left: 1.25rem;
+}
+
 .faqAnswerTextCollapsed {
   display: -webkit-box;
   -webkit-line-clamp: 4;

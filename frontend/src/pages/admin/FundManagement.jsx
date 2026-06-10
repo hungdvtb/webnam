@@ -22,6 +22,18 @@ const getCompactAccountName = (name) => {
 const NEW_TRANSACTION_CATEGORY_VALUE = '__new_category__';
 const ENTRY_PANEL_VISIBILITY_STORAGE_KEY = 'fundManagement.entryPanelVisible';
 
+const getCategorySortOrder = (category) => {
+    const sortOrder = Number(category?.sort_order);
+    return Number.isFinite(sortOrder) && sortOrder > 0 ? sortOrder : Number.MAX_SAFE_INTEGER;
+};
+
+const sortCategoriesByOrder = (categoryList = []) => (
+    [...categoryList].sort((a, b) => (
+        getCategorySortOrder(a) - getCategorySortOrder(b)
+        || Number(a?.id || 0) - Number(b?.id || 0)
+    ))
+);
+
 // Utils cho ngày tháng (có giờ)
 const getCurrentDateTime = () => {
     const d = new Date();
@@ -226,7 +238,7 @@ export default function FundManagement() {
                 }
             }
             if (categoriesRes.data.status === 'success') {
-                setCategories(categoriesRes.data.data);
+                setCategories(sortCategoriesByOrder(categoriesRes.data.data));
             }
             if (txRes.data.status === 'success') {
                 setTransactions(txRes.data.data.data || txRes.data.data);
@@ -283,9 +295,15 @@ export default function FundManagement() {
         categories.find(category => String(category.id) === String(categoryId))
     ), [categories]);
 
+    const orderedCategories = useMemo(() => sortCategoriesByOrder(categories), [categories]);
+
+    const categoryOrderById = useMemo(() => new Map(
+        orderedCategories.map((category, index) => [String(category.id), index + 1])
+    ), [orderedCategories]);
+
     const filteredTransactionCategories = useMemo(() => (
-        categories.filter(category => category.type === newTx.type)
-    ), [categories, newTx.type]);
+        orderedCategories.filter(category => category.type === newTx.type)
+    ), [orderedCategories, newTx.type]);
 
     const selectedTransactionCategory = useMemo(() => {
         const category = findCategoryById(newTx.fin_category_id);
@@ -341,6 +359,22 @@ export default function FundManagement() {
             return { ...prev, fin_category_id: '', new_category_name: '' };
         });
     }, [categories]);
+
+    const handleDesktopTransactionCategorySelectChange = useCallback((value) => {
+        if (value === NEW_TRANSACTION_CATEGORY_VALUE) {
+            setNewTx(prev => ({ ...prev, fin_category_id: '', new_category_name: '' }));
+            setEditingCategory({
+                id: null,
+                name: '',
+                type: newTx.type,
+                color: newTx.type === 'income' ? '#4caf50' : '#f44336'
+            });
+            openFundModal(setCategoryModalOpen);
+            return;
+        }
+
+        handleTransactionCategorySelectChange(value);
+    }, [handleTransactionCategorySelectChange, newTx.type, openFundModal]);
 
     const handleNewTransactionCategoryNameChange = useCallback((value) => {
         setNewTx(prev => ({
@@ -475,7 +509,7 @@ export default function FundManagement() {
                 normalizedCategories.map(category => category.id)
             );
             if (response.data.status === 'success') {
-                setCategories(response.data.data);
+                setCategories(sortCategoriesByOrder(response.data.data));
             }
         } catch (error) {
             alert(error.response?.data?.message || 'Không thể lưu thứ tự hạng mục');
@@ -623,6 +657,93 @@ export default function FundManagement() {
                     </p>
                 </div>
             </article>
+        );
+    };
+
+    const renderTransactionTableRow = (tx) => {
+        const isIncome = tx.type === 'income';
+        const categoryColor = tx.category?.color || '#94a3b8';
+        const transactionDate = formatDateString(tx.transaction_date);
+        const accountName = tx.account?.name || 'Chưa có tài khoản';
+        const categoryName = tx.category?.name || 'Chưa phân loại';
+
+        return (
+            <tr
+                key={tx.id}
+                className={`h-12 text-[13px] transition-colors ${
+                    newTx.id === tx.id
+                        ? 'bg-orange-50/70 ring-1 ring-inset ring-orange-200'
+                        : 'bg-white hover:bg-slate-50'
+                }`}
+            >
+                <td className="border-r border-gray-100 px-3 py-2 align-middle">
+                    <span className="block truncate font-semibold text-gray-700" title={transactionDate}>
+                        {transactionDate}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 align-middle">
+                    <span className="block truncate font-semibold text-gray-800" title={accountName}>
+                        {accountName}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 align-middle text-center">
+                    <span className={`inline-flex h-6 items-center justify-center rounded-full px-2.5 text-[11px] font-bold uppercase ${
+                        isIncome ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                        {isIncome ? 'Thu' : 'Chi'}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 align-middle">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="size-2 shrink-0 rounded-full" style={{backgroundColor: categoryColor}}></span>
+                        <span className="block min-w-0 truncate font-medium text-gray-700" title={categoryName}>
+                            {categoryName}
+                        </span>
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 align-middle">
+                    <span className="block truncate font-medium text-gray-800" title={tx.description}>
+                        {tx.description}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 text-right align-middle font-bold text-green-700">
+                    <span className="block truncate" title={isIncome ? formatCurrency(tx.amount) : ''}>
+                        {isIncome ? formatCurrency(tx.amount) : ''}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 text-right align-middle font-bold text-red-700">
+                    <span className="block truncate" title={!isIncome ? formatCurrency(tx.amount) : ''}>
+                        {!isIncome ? formatCurrency(tx.amount) : ''}
+                    </span>
+                </td>
+                <td className="border-r border-gray-100 px-3 py-2 text-right align-middle font-bold text-blue-800">
+                    <span className="block truncate" title={formatCurrency(tx.balance_after)}>
+                        {formatCurrency(tx.balance_after)}
+                    </span>
+                </td>
+                <td className="px-2 py-2 align-middle">
+                    <div className="flex items-center justify-center gap-1.5">
+                        <button
+                            type="button"
+                            onClick={() => handleEditTransaction(tx)}
+                            className="flex size-8 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-blue-600 transition-colors hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                            title="Sửa"
+                            aria-label="Sửa giao dịch"
+                        >
+                            <span className="material-symbols-outlined text-[17px]">edit</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleDeleteTransaction(tx.id)}
+                            className="flex size-8 items-center justify-center rounded-md border border-red-100 bg-red-50 text-red-600 transition-colors hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-200"
+                            title="Xóa"
+                            aria-label="Xóa giao dịch"
+                        >
+                            <span className="material-symbols-outlined text-[17px]">delete</span>
+                        </button>
+                    </div>
+                </td>
+            </tr>
         );
     };
 
@@ -1026,23 +1147,24 @@ export default function FundManagement() {
                 </div>
 
                 <div className="relative hidden max-h-[650px] overflow-y-auto custom-scrollbar lg:block">
-                    {entryPanelVisible && (
-                    <div className="overflow-x-auto border-b border-gray-200">
-                    <table className="w-full text-left border-collapse min-w-[1120px]">
+                    <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1400px] table-fixed border-collapse text-left">
                         <thead className="bg-[#f8f9fa] sticky top-0 z-20 shadow-sm border-b border-gray-200">
                             <tr>
-                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[160px]">Thời gian (Giờ/Ngày)</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[130px]">Tài khoản</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[120px]">Loại giao dịch</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[150px]">Hạng mục</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[155px]">Thời gian (Giờ/Ngày)</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[190px]">Tài khoản</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[110px]">Loại giao dịch</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200 w-[170px]">Hạng mục</th>
                                 <th className="py-3 px-3 text-[13px] font-bold text-gray-700 border-r border-gray-200">Diễn giải</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-green-700 border-r border-gray-200 w-[130px] text-right bg-green-50/30">Thu</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-red-700 border-r border-gray-200 w-[130px] text-right bg-red-50/30">Chi</th>
-                                <th className="py-3 px-3 text-[13px] font-bold text-blue-800 border-r border-gray-200 w-[130px] text-right bg-blue-50/30">Tồn</th>
-                                <th className="py-3 px-2 text-[13px] font-bold text-gray-700 w-16 text-center">Thao tác</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-green-700 border-r border-gray-200 w-[135px] text-right bg-green-50/30">Thu</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-red-700 border-r border-gray-200 w-[135px] text-right bg-red-50/30">Chi</th>
+                                <th className="py-3 px-3 text-[13px] font-bold text-blue-800 border-r border-gray-200 w-[140px] text-right bg-blue-50/30">Tồn</th>
+                                <th className="py-3 px-2 text-[13px] font-bold text-gray-700 w-[86px] text-center">Thao tác</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
+                            {entryPanelVisible && (
+                            <>
                             {/* Dòng thêm mới nhanh (Quick Input) */}
                             <tr className={`${newTx.id ? 'bg-orange-50/40 border-2 border-orange-300' : 'bg-yellow-50/40'} border-b border-gray-300 relative`}>
                                 <td className="p-1 border-r border-gray-200">
@@ -1096,21 +1218,16 @@ export default function FundManagement() {
                                         <select
                                             className="w-full text-[13px] px-2 py-2 focus:outline-none focus:bg-white bg-transparent"
                                             value={transactionCategorySelectValue}
-                                            onChange={(e) => handleTransactionCategorySelectChange(e.target.value)}
+                                            onChange={(e) => handleDesktopTransactionCategorySelectChange(e.target.value)}
                                         >
                                             <option value="">-- Chọn mục --</option>
-                                            {filteredTransactionCategories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                                            {filteredTransactionCategories.map(cat => (
+                                                <option key={cat.id} value={cat.id}>
+                                                    {categoryOrderById.get(String(cat.id))}. {cat.name}
+                                                </option>
+                                            ))}
                                             <option value={NEW_TRANSACTION_CATEGORY_VALUE}>+ Mục mới</option>
                                         </select>
-                                        {newTx.fin_category_id === NEW_TRANSACTION_CATEGORY_VALUE && (
-                                            <input
-                                                type="text"
-                                                className="mt-1 w-full rounded border border-gray-200 bg-white px-2 py-1.5 text-[12px] focus:border-blue-500 focus:outline-none"
-                                                placeholder="Tên hạng mục mới"
-                                                value={newTx.new_category_name}
-                                                onChange={(e) => handleNewTransactionCategoryNameChange(e.target.value)}
-                                            />
-                                        )}
                                     </div>
                                 </td>
                                 <td className="p-1 border-r border-gray-200">
@@ -1131,8 +1248,9 @@ export default function FundManagement() {
                                         <input
                                             ref={incomeInputRef}
                                             type="text"
-                                            className={`w-full text-[13px] px-1 py-2 focus:outline-none focus:bg-white bg-transparent text-right font-bold ${newTx.type === 'income' ? 'text-green-700' : 'text-gray-300'}`}
-                                            placeholder={newTx.type === 'income' ? "Số tiền THU..." : ""}
+                                            disabled={newTx.type !== 'income'}
+                                            className={`w-full text-[13px] px-1 py-2 focus:outline-none focus:bg-white text-right font-bold disabled:cursor-not-allowed disabled:bg-gray-50 ${newTx.type === 'income' ? 'bg-transparent text-green-700' : 'text-gray-300'}`}
+                                            placeholder={newTx.type === 'income' ? "Số tiền THU..." : "Đã khóa"}
                                             value={newTx.type === 'income' && newTx.amount ? newTx.amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") : ''}
                                             onChange={(e) => handleTransactionAmountChange('income', e.target.value)}
                                             onKeyDown={(e) => { if(e.key === 'Enter') handleSaveTransaction(e); }}
@@ -1147,8 +1265,9 @@ export default function FundManagement() {
                                         <input
                                             ref={expenseInputRef}
                                             type="text"
-                                            className={`w-full text-[13px] px-1 py-2 focus:outline-none focus:bg-white bg-transparent text-right font-bold ${newTx.type === 'expense' ? 'text-red-700' : 'text-gray-300'}`}
-                                            placeholder={newTx.type === 'expense' ? "Số tiền CHI..." : ""}
+                                            disabled={newTx.type !== 'expense'}
+                                            className={`w-full text-[13px] px-1 py-2 focus:outline-none focus:bg-white text-right font-bold disabled:cursor-not-allowed disabled:bg-gray-50 ${newTx.type === 'expense' ? 'bg-transparent text-red-700' : 'text-gray-300'}`}
+                                            placeholder={newTx.type === 'expense' ? "Số tiền CHI..." : "Đã khóa"}
                                             value={newTx.type === 'expense' && newTx.amount ? newTx.amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") : ''}
                                             onChange={(e) => handleTransactionAmountChange('expense', e.target.value)}
                                             onKeyDown={(e) => { if(e.key === 'Enter') handleSaveTransaction(e); }}
@@ -1187,22 +1306,20 @@ export default function FundManagement() {
                                     )}
                                 </td>
                             </tr>
+                            </>
+                            )}
 
+                            {transactions.length === 0 ? (
+                                <tr>
+                                    <td colSpan={9} className="bg-white px-4 py-12 text-center text-[13px] font-medium tracking-wide text-gray-400">
+                                        Chưa có giao dịch nào!
+                                    </td>
+                                </tr>
+                            ) : (
+                                transactions.map(renderTransactionTableRow)
+                            )}
                         </tbody>
                     </table>
-                    </div>
-                    )}
-
-                    <div className="bg-[#f8f9fa] p-4">
-                        {transactions.length === 0 ? (
-                            <div className="rounded-lg border border-gray-200 bg-white px-4 py-12 text-center text-[13px] font-medium tracking-wide text-gray-400">
-                                Chưa có giao dịch nào!
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                                {transactions.map(renderTransactionCard)}
-                            </div>
-                        )}
                     </div>
                 </div>
             </div>

@@ -50,9 +50,11 @@ const sanitizeFaqAnswerHtml = (value) => {
   return html
     .replace(/<script\b[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+    .replace(/\s+(?:class|style|id|color|bgcolor|face|size)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s+(?:data|aria)-[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/\s+(href|src)\s*=\s*(["'])\s*javascript:[\s\S]*?\2/gi, '')
-    .replace(/\s+(href|src)\s*=\s*javascript:[^\s>]+/gi, '');
+    .replace(/\s+(href|src|poster)\s*=\s*(["'])\s*(?:javascript|vbscript|data):[\s\S]*?\2/gi, '')
+    .replace(/\s+(href|src|poster)\s*=\s*(?:javascript|vbscript|data):[^\s>]+/gi, '');
 };
 
 const faqAnswerPlainText = (value) => (

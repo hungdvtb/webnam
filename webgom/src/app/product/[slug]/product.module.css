@@ -6768,8 +6768,11 @@
 .faqAnswerText {
   margin: 0;
   color: #263342;
-  font-size: 0.92rem;
-  line-height: 1.55;
+  background: transparent;
+  font-family: Roboto, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.6;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
@@ -6785,6 +6788,11 @@
 
 .faqAnswerRichText :global(*) {
   max-width: 100%;
+  background: transparent !important;
+  color: inherit !important;
+  font-family: Roboto, Arial, sans-serif !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
 }
 
 .faqAnswerRichText :global(p),
@@ -6795,7 +6803,7 @@
 .faqAnswerRichText :global(h3),
 .faqAnswerRichText :global(h4) {
   margin: 0 0 0.65rem;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 .faqAnswerRichText :global(p:last-child),
@@ -6809,7 +6817,7 @@
 }
 
 .faqAnswerRichText :global(a) {
-  color: #9b5429;
+  color: #9b5429 !important;
   font-weight: 900;
   text-decoration: underline;
   text-underline-offset: 0.16em;
@@ -6824,18 +6832,18 @@
 .faqAnswerRichText :global(h2),
 .faqAnswerRichText :global(h3),
 .faqAnswerRichText :global(h4) {
-  color: #1B365D;
+  color: #1B365D !important;
   font-weight: 900;
-  line-height: 1.28;
+  line-height: 1.6;
 }
 
 .faqAnswerRichText :global(h2) {
-  font-size: 1.08rem;
+  font-size: 14px;
 }
 
 .faqAnswerRichText :global(h3),
 .faqAnswerRichText :global(h4) {
-  font-size: 1rem;
+  font-size: 14px;
 }
 
 .faqAnswerRichText :global(blockquote) {
@@ -6888,7 +6896,7 @@
   margin: 0.75rem 0;
   border: 0;
   border-radius: 0.75rem;
-  background: #0f172a;
+  background: #0f172a !important;
   box-shadow: 0 8px 20px rgba(27, 54, 93, 0.12);
 }
 
@@ -6924,7 +6932,7 @@
   -webkit-line-clamp: 4;
   line-clamp: 4;
   -webkit-box-orient: vertical;
-  max-height: calc(1.55em * 4);
+  max-height: calc(1.6em * 4);
   overflow: hidden;
 }
 
@@ -7403,8 +7411,8 @@
   }
 
   .faqAnswerText {
-    font-size: 0.88rem;
-    line-height: 1.48;
+    font-size: 14px;
+    line-height: 1.6;
   }
 
   .faqImageThumb,

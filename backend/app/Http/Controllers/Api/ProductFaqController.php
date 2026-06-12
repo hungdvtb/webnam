@@ -9,6 +9,10 @@ use App\Models\ProductFaq;
 use App\Services\MediaService;
 use App\Services\ProductFaqRelatedArticleService;
 use App\Support\BlogContentHtmlNormalizer;
+use DOMDocument;
+use DOMElement;
+use DOMNode;
+use DOMXPath;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +20,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class ProductFaqController extends Controller
 {
@@ -32,6 +37,25 @@ class ProductFaqController extends Controller
         'bundle_product_ids',
         'apply_all_products',
     ];
+
+    private const FAQ_ALLOWED_TAGS = [
+        'a', 'b', 'blockquote', 'br', 'code', 'div', 'em', 'figcaption', 'figure',
+        'h2', 'h3', 'h4', 'hr', 'i', 'iframe', 'img', 'li', 'ol', 'p',
+        'source', 'span', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr',
+        'u', 'ul', 'video',
+    ];
+
+    private const FAQ_ALLOWED_ATTRIBUTES_BY_TAG = [
+        'a' => ['href', 'title', 'target', 'rel'],
+        'img' => ['src', 'alt', 'title', 'width', 'height', 'loading'],
+        'iframe' => ['src', 'title', 'allow', 'allowfullscreen', 'frameborder', 'loading', 'width', 'height'],
+        'video' => ['src', 'poster', 'controls', 'width', 'height'],
+        'source' => ['src', 'type'],
+        'td' => ['colspan', 'rowspan'],
+        'th' => ['colspan', 'rowspan'],
+    ];
+
+    private const FAQ_URL_ATTRIBUTES = ['href', 'src', 'poster'];
 
     public function __construct(
         protected MediaService $mediaService,
@@ -343,7 +367,178 @@ class ProductFaqController extends Controller
             return $answer;
         }
 
-        return BlogContentHtmlNormalizer::normalize($answer);
+        return $this->sanitizeFaqAnswerHtml(BlogContentHtmlNormalizer::normalize($answer));
+    }
+
+    private function sanitizeFaqAnswerHtml(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $wrapped = '<div id="__faq_answer_root__">' . $html . '</div>';
+        $dom = new DOMDocument('1.0', 'UTF-8');
+        $options = (defined('LIBXML_HTML_NOIMPLIED') ? LIBXML_HTML_NOIMPLIED : 0)
+            | (defined('LIBXML_HTML_NODEFDTD') ? LIBXML_HTML_NODEFDTD : 0)
+            | LIBXML_NOERROR
+            | LIBXML_NOWARNING;
+
+        $previousState = libxml_use_internal_errors(true);
+
+        try {
+            $encoded = mb_encode_numericentity($wrapped, [0x80, 0x10FFFF, 0, ~0], 'UTF-8');
+            $dom->loadHTML('<?xml encoding="utf-8" ?>' . $encoded, $options);
+            $xpath = new DOMXPath($dom);
+
+            $nodes = [];
+            foreach ($xpath->query('//*') ?: [] as $node) {
+                if ($node instanceof DOMElement && $node->getAttribute('id') !== '__faq_answer_root__') {
+                    $nodes[] = $node;
+                }
+            }
+
+            foreach (array_reverse($nodes) as $node) {
+                $tag = strtolower($node->tagName);
+
+                if (in_array($tag, ['script', 'style', 'noscript'], true)) {
+                    $node->parentNode?->removeChild($node);
+                    continue;
+                }
+
+                if ($tag === 'h1') {
+                    $node = $this->renameFaqNode($dom, $node, 'h2');
+                    $tag = 'h2';
+                } elseif (in_array($tag, ['h5', 'h6'], true)) {
+                    $node = $this->renameFaqNode($dom, $node, 'h4');
+                    $tag = 'h4';
+                }
+
+                if (!in_array($tag, self::FAQ_ALLOWED_TAGS, true)) {
+                    $this->unwrapFaqNode($node);
+                    continue;
+                }
+
+                $this->sanitizeFaqAttributes($node);
+            }
+
+            $root = $xpath->query('//*[@id="__faq_answer_root__"]')->item(0);
+            $result = $root instanceof DOMNode ? $this->innerFaqHtml($root) : $html;
+        } catch (Throwable) {
+            $result = preg_replace([
+                '/<script\b[\s\S]*?<\/script>/i',
+                '/<style\b[\s\S]*?<\/style>/i',
+                '/\s+(?:class|style|id|color|bgcolor|face|size)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i',
+                '/\s+(?:data|aria)-[a-z0-9_-]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i',
+                '/\s+on[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i',
+            ], '', $html) ?? $html;
+        }
+
+        libxml_clear_errors();
+        libxml_use_internal_errors($previousState);
+
+        return trim($result);
+    }
+
+    private function sanitizeFaqAttributes(DOMElement $node): void
+    {
+        $tag = strtolower($node->tagName);
+        $allowedAttributes = self::FAQ_ALLOWED_ATTRIBUTES_BY_TAG[$tag] ?? [];
+
+        foreach (iterator_to_array($node->attributes ?? []) as $attribute) {
+            $name = strtolower($attribute->name);
+            $value = trim((string) $attribute->value);
+
+            if (
+                $name === 'class'
+                || $name === 'style'
+                || $name === 'id'
+                || $name === 'color'
+                || $name === 'bgcolor'
+                || $name === 'face'
+                || $name === 'size'
+                || str_starts_with($name, 'on')
+                || str_starts_with($name, 'data-')
+                || str_starts_with($name, 'aria-')
+                || !in_array($name, $allowedAttributes, true)
+            ) {
+                $node->removeAttribute($attribute->name);
+                continue;
+            }
+
+            if (in_array($name, self::FAQ_URL_ATTRIBUTES, true)) {
+                $normalized = $this->normalizeFaqUrlAttribute($value);
+                if ($normalized === '') {
+                    $node->removeAttribute($attribute->name);
+                    continue;
+                }
+                $node->setAttribute($attribute->name, $normalized);
+            }
+        }
+
+        if ($tag === 'a') {
+            $href = $this->normalizeFaqUrlAttribute($node->getAttribute('href'));
+            if ($href === '') {
+                $this->unwrapFaqNode($node);
+                return;
+            }
+            $node->setAttribute('href', $href);
+            if ($node->getAttribute('target') === '_blank') {
+                $node->setAttribute('rel', 'noopener noreferrer');
+            }
+        }
+
+        if (in_array($tag, ['img', 'iframe', 'source'], true)
+            && $this->normalizeFaqUrlAttribute($node->getAttribute('src')) === '') {
+            $node->parentNode?->removeChild($node);
+        }
+    }
+
+    private function normalizeFaqUrlAttribute(string $value): string
+    {
+        $value = trim(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($value === '' || preg_match('/^(javascript|vbscript|data):/i', $value) === 1) {
+            return '';
+        }
+
+        return $value;
+    }
+
+    private function unwrapFaqNode(DOMElement $node): void
+    {
+        $parent = $node->parentNode;
+        if (!$parent) {
+            return;
+        }
+
+        while ($node->firstChild) {
+            $parent->insertBefore($node->firstChild, $node);
+        }
+
+        $parent->removeChild($node);
+    }
+
+    private function renameFaqNode(DOMDocument $dom, DOMElement $node, string $tagName): DOMElement
+    {
+        $replacement = $dom->createElement($tagName);
+
+        while ($node->firstChild) {
+            $replacement->appendChild($node->firstChild);
+        }
+
+        $node->parentNode?->replaceChild($replacement, $node);
+
+        return $replacement;
+    }
+
+    private function innerFaqHtml(DOMNode $node): string
+    {
+        $html = '';
+        foreach ($node->childNodes as $child) {
+            $html .= $node->ownerDocument?->saveHTML($child) ?? '';
+        }
+
+        return $html;
     }
 
     private function answerHasVisibleContent(string $answer): bool

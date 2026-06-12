@@ -65,14 +65,13 @@ const quillFormats = [
     'underline',
     'strike',
     'blockquote',
+    'code',
     'list',
     'indent',
     'link',
     'image',
     'video',
-    'color',
-    'background',
-    'align',
+    'table',
 ];
 
 const createClientUploadError = (message) => {
@@ -130,6 +129,221 @@ const stripHtmlToText = (value) => {
     }
 
     return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+};
+
+const escapeHtml = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const textToAnswerHtml = (value) => {
+    const lines = String(value || '').replace(/\r\n|\r/g, '\n').split('\n');
+    const parts = [];
+    let listItems = [];
+
+    const flushList = () => {
+        if (!listItems.length) return;
+        parts.push(`<ul>${listItems.map((item) => `<li>${item}</li>`).join('')}</ul>`);
+        listItems = [];
+    };
+
+    lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            flushList();
+            return;
+        }
+
+        const bulletMatch = trimmed.match(/^(?:[-*+]|[0-9]+[.)])\s+(.+)$/);
+        if (bulletMatch) {
+            listItems.push(escapeHtml(bulletMatch[1]));
+            return;
+        }
+
+        flushList();
+        parts.push(`<p>${escapeHtml(trimmed)}</p>`);
+    });
+
+    flushList();
+
+    return parts.join('') || '';
+};
+
+const FAQ_ALLOWED_PASTE_TAGS = new Set([
+    'a',
+    'b',
+    'blockquote',
+    'br',
+    'code',
+    'div',
+    'em',
+    'figcaption',
+    'figure',
+    'h2',
+    'h3',
+    'h4',
+    'hr',
+    'i',
+    'iframe',
+    'img',
+    'li',
+    'ol',
+    'p',
+    'source',
+    'span',
+    'strong',
+    'table',
+    'tbody',
+    'td',
+    'th',
+    'thead',
+    'tr',
+    'u',
+    'ul',
+    'video',
+]);
+
+const FAQ_ALLOWED_PASTE_ATTRIBUTES = {
+    a: new Set(['href', 'title', 'target', 'rel']),
+    img: new Set(['src', 'alt', 'title', 'width', 'height', 'loading']),
+    iframe: new Set(['src', 'title', 'allow', 'allowfullscreen', 'frameborder', 'loading', 'width', 'height']),
+    video: new Set(['src', 'poster', 'controls', 'width', 'height']),
+    source: new Set(['src', 'type']),
+    td: new Set(['colspan', 'rowspan']),
+    th: new Set(['colspan', 'rowspan']),
+};
+
+const FAQ_URL_ATTRIBUTES = new Set(['href', 'src', 'poster']);
+
+const normalizeFaqUrlAttribute = (value) => {
+    const normalized = String(value || '').trim();
+    if (!normalized || /^(javascript|vbscript|data):/i.test(normalized)) {
+        return '';
+    }
+    return normalized;
+};
+
+const unwrapFaqNode = (node) => {
+    const parent = node.parentNode;
+    if (!parent) return;
+    while (node.firstChild) {
+        parent.insertBefore(node.firstChild, node);
+    }
+    parent.removeChild(node);
+};
+
+const renameFaqNode = (documentRef, node, tagName) => {
+    const replacement = documentRef.createElement(tagName);
+    while (node.firstChild) {
+        replacement.appendChild(node.firstChild);
+    }
+    node.parentNode?.replaceChild(replacement, node);
+    return replacement;
+};
+
+const sanitizeFaqAnswerHtml = (value, options = {}) => {
+    const raw = String(value || '').trim();
+    if (!raw) {
+        return '';
+    }
+
+    const html = options.plainText || !looksLikeHtml(raw) ? textToAnswerHtml(raw) : raw;
+
+    if (typeof document === 'undefined') {
+        return html
+            .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+            .replace(/<style\b[\s\S]*?<\/style>/gi, '')
+            .replace(/\s+(?:class|style|id|color|bgcolor|face|size)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+            .replace(/\s+(?:data|aria)-[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+            .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    }
+
+    const template = document.createElement('template');
+    template.innerHTML = html;
+
+    template.content.querySelectorAll('script, style, meta, link, noscript, object, embed, canvas, svg').forEach((node) => {
+        node.remove();
+    });
+
+    Array.from(template.content.querySelectorAll('*')).forEach((originalNode) => {
+        let node = originalNode;
+        let tag = node.tagName.toLowerCase();
+
+        if (tag === 'h1') {
+            node = renameFaqNode(document, node, 'h2');
+            tag = 'h2';
+        } else if (['h5', 'h6'].includes(tag)) {
+            node = renameFaqNode(document, node, 'h4');
+            tag = 'h4';
+        }
+
+        if (!FAQ_ALLOWED_PASTE_TAGS.has(tag)) {
+            unwrapFaqNode(node);
+            return;
+        }
+
+        const allowedAttributes = FAQ_ALLOWED_PASTE_ATTRIBUTES[tag] || new Set();
+        Array.from(node.attributes || []).forEach((attribute) => {
+            const name = attribute.name.toLowerCase();
+            const attributeName = attribute.name;
+
+            if (
+                name === 'class'
+                || name === 'style'
+                || name === 'id'
+                || name === 'color'
+                || name === 'bgcolor'
+                || name === 'face'
+                || name === 'size'
+                || name.startsWith('on')
+                || name.startsWith('data-')
+                || name.startsWith('aria-')
+                || !allowedAttributes.has(name)
+            ) {
+                node.removeAttribute(attributeName);
+                return;
+            }
+
+            if (FAQ_URL_ATTRIBUTES.has(name)) {
+                const safeUrl = normalizeFaqUrlAttribute(attribute.value);
+                if (!safeUrl) {
+                    node.removeAttribute(attributeName);
+                    return;
+                }
+                node.setAttribute(attributeName, safeUrl);
+            }
+        });
+
+        if (tag === 'a') {
+            const href = normalizeFaqUrlAttribute(node.getAttribute('href'));
+            if (!href) {
+                unwrapFaqNode(node);
+                return;
+            }
+            node.setAttribute('href', href);
+            if (node.getAttribute('target') === '_blank') {
+                node.setAttribute('rel', 'noopener noreferrer');
+            }
+        }
+
+        if (tag === 'img' && !normalizeFaqUrlAttribute(node.getAttribute('src'))) {
+            node.remove();
+            return;
+        }
+
+        if (tag === 'iframe' && !normalizeFaqUrlAttribute(node.getAttribute('src'))) {
+            node.remove();
+            return;
+        }
+
+        if (tag === 'source' && !normalizeFaqUrlAttribute(node.getAttribute('src'))) {
+            node.remove();
+        }
+    });
+
+    return template.innerHTML.trim();
 };
 
 const answerHasVisibleContent = (value) => {
@@ -728,6 +942,70 @@ export default function ProductFaqManager() {
         }
     }, [getAnswerEditor, updateAnswerFromEditor]);
 
+    const handleAnswerPaste = useCallback((event) => {
+        if (event.target?.closest && !event.target.closest('.ql-editor')) {
+            return;
+        }
+
+        const clipboard = event.clipboardData;
+        if (!clipboard) return;
+
+        const pastedHtml = clipboard.getData('text/html');
+        const pastedText = clipboard.getData('text/plain');
+        const pastedImageFile = Array.from(clipboard.files || []).find((file) => (
+            String(file?.type || '').startsWith('image/')
+        ));
+        if (!pastedHtml && !pastedText && pastedImageFile) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const editor = getAnswerEditor();
+            if (!editor) return;
+            const range = getAnswerInsertRange(editor);
+
+            uploadFaqAnswerImage(pastedImageFile)
+                .then((imageUrl) => {
+                    editor.insertEmbed(range.index, 'image', imageUrl, 'user');
+                    editor.insertText(range.index + 1, '\n', 'user');
+                    editor.setSelection(range.index + 2, 0, 'silent');
+                    updateAnswerFromEditor(editor.root?.innerHTML || '');
+                })
+                .catch((err) => setError(resolveFaqImageUploadErrorMessage(err)));
+            return;
+        }
+
+        if (!pastedHtml && !pastedText) return;
+
+        const cleanHtml = sanitizeFaqAnswerHtml(pastedHtml || pastedText, { plainText: !pastedHtml });
+        if (!cleanHtml) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const editor = getAnswerEditor();
+        if (!editor) return;
+
+        try {
+            const range = getAnswerInsertRange(editor);
+            const selectedLength = Math.max(Number(range.length || 0), 0);
+            if (selectedLength > 0) {
+                editor.deleteText(range.index, selectedLength, 'user');
+            }
+
+            editor.clipboard.dangerouslyPasteHTML(range.index, cleanHtml, 'user');
+
+            window.setTimeout(() => {
+                try {
+                    updateAnswerFromEditor(editor.root?.innerHTML || '');
+                } catch (err) {
+                    setAnswerEditorError(err?.message || 'Khong the lam sach noi dung vua dan vao editor FAQ.');
+                }
+            }, 0);
+        } catch (err) {
+            setAnswerEditorError(err?.message || 'Khong the dan noi dung vao editor FAQ.');
+        }
+    }, [getAnswerEditor, getAnswerInsertRange, updateAnswerFromEditor]);
+
     const openAnswerEditorExpanded = useCallback(() => {
         syncAnswerFromActiveEditor();
         setProductLinkPickerOpen(false);
@@ -820,7 +1098,6 @@ export default function ProductFaqManager() {
                 [{ header: [2, 3, 4, false] }],
                 ['bold', 'italic', 'underline', 'strike'],
                 [{ list: 'ordered' }, { list: 'bullet' }],
-                [{ align: [] }],
                 ['link', 'image', 'video'],
                 ['clean'],
             ],
@@ -828,6 +1105,9 @@ export default function ProductFaqManager() {
                 image: handleAnswerImageInsert,
                 video: handleAnswerVideoInsert,
             },
+        },
+        clipboard: {
+            matchVisual: false,
         },
         resize: {
             locale: {
@@ -899,7 +1179,7 @@ export default function ProductFaqManager() {
             product_id: String(faq.product_id || appliedIds[0] || selectedProductId || ''),
             product_ids: appliedIds,
             question: faq.question || '',
-            answer: faq.answer || '',
+            answer: sanitizeFaqAnswerHtml(faq.answer || ''),
             youtube_url: faq.youtube_url || '',
             sort_order: String(faq.sort_order ?? ''),
             status: faq.status || 'visible',
@@ -1066,7 +1346,7 @@ export default function ProductFaqManager() {
     const buildFormData = (answerOverride = null) => {
         const formData = new FormData();
         const primaryId = firstTargetId(form, targetPreview.data, selectedProductId);
-        const answerHtml = answerOverride === null ? form.answer : answerOverride;
+        const answerHtml = sanitizeFaqAnswerHtml(answerOverride === null ? form.answer : answerOverride);
 
         if (primaryId) {
             formData.append('product_id', String(primaryId));
@@ -1092,11 +1372,11 @@ export default function ProductFaqManager() {
 
     const saveFaq = (event) => {
         event?.preventDefault?.();
-        let activeAnswer = form.answer;
+        let activeAnswer = sanitizeFaqAnswerHtml(form.answer);
         const editor = getAnswerEditor();
         try {
             if (editor?.root?.innerHTML) {
-                activeAnswer = editor.root.innerHTML;
+                activeAnswer = sanitizeFaqAnswerHtml(editor.root.innerHTML);
                 updateAnswerFromEditor(activeAnswer);
             }
         } catch (err) {
@@ -1638,7 +1918,10 @@ export default function ProductFaqManager() {
                                                     Gắn link sản phẩm
                                                 </button>
                                             </div>
-                                            <div className="rounded-md border border-primary/10 bg-white text-stone-700 focus-within:border-primary/40">
+                                            <div
+                                                className="rounded-md border border-primary/10 bg-white text-stone-700 focus-within:border-primary/40"
+                                                onPasteCapture={handleAnswerPaste}
+                                            >
                                                 {!isAnswerEditorExpanded ? (
                                                     <ProductFaqAnswerEditorBoundary
                                                         resetKey={`inline-${form.id || 'new'}-${isAnswerEditorExpanded}`}
@@ -2165,7 +2448,10 @@ export default function ProductFaqManager() {
                                     {answerEditorError ? (
                                         <div className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{answerEditorError}</div>
                                     ) : null}
-                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-primary/10 bg-white text-stone-700">
+                                    <div
+                                        className="min-h-0 flex-1 overflow-hidden rounded-lg border border-primary/10 bg-white text-stone-700"
+                                        onPasteCapture={handleAnswerPaste}
+                                    >
                                         <ProductFaqAnswerEditorBoundary
                                             resetKey={`expanded-${form.id || 'new'}-${isAnswerEditorExpanded}`}
                                             onError={(err) => setAnswerEditorError(err?.message || 'Editor phóng to FAQ đang gặp lỗi.')}

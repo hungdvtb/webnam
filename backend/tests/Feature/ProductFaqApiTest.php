@@ -154,9 +154,9 @@ class ProductFaqApiTest extends TestCase
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
 
         $answerHtml = implode('', [
-            '<p>Dong mo dau <strong>duoc in dam</strong>.</p>',
-            '<p><a href="https://example.com/huong-dan" target="_blank">Xem huong dan</a></p>',
-            '<p><img src="/storage/faqs/answer.jpg" alt="Anh minh hoa" style="width: 50%; height: auto;" onerror="alert(1)"></p>',
+            '<p class="chatgpt-copy" style="background:#0084ff;color:#fff;font-family:Arial;font-size:22px">Dong mo dau <span style="color:white;background:blue">bi dinh mau</span> <strong>duoc in dam</strong>.</p>',
+            '<p data-testid="source-web"><a href="https://example.com/huong-dan" target="_blank" style="color:red">Xem huong dan</a></p>',
+            '<p><img src="/storage/faqs/answer.jpg" alt="Anh minh hoa" style="width: 50%; height: auto;" class="fb-image" onerror="alert(1)"></p>',
             '<video controls poster="/storage/faqs/poster.jpg"><source src="/storage/faqs/clip.mp4" type="video/mp4"></video>',
             '<iframe src="https://www.youtube.com/embed/abc12345678" allowfullscreen="true"></iframe>',
             '<script>alert("bad")</script>',
@@ -184,6 +184,13 @@ class ProductFaqApiTest extends TestCase
         $this->assertStringContainsString('<iframe', $storedAnswer);
         $this->assertStringNotContainsString('<script', $storedAnswer);
         $this->assertStringNotContainsString('onerror', $storedAnswer);
+        $this->assertStringNotContainsString('style=', $storedAnswer);
+        $this->assertStringNotContainsString('class=', $storedAnswer);
+        $this->assertStringNotContainsString('data-testid', $storedAnswer);
+        $this->assertStringNotContainsString('background:', $storedAnswer);
+        $this->assertStringNotContainsString('color:', $storedAnswer);
+        $this->assertStringNotContainsString('font-family', $storedAnswer);
+        $this->assertStringNotContainsString('font-size', $storedAnswer);
 
         $this->getJson("/api/products/{$product->id}/faqs")
             ->assertOk()

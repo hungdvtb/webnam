@@ -317,9 +317,43 @@ const firstTargetId = (form, previewProducts = [], selectedProductId = '') => (
     || ''
 );
 
+class ProductFaqAnswerEditorBoundary extends React.Component {
+    constructor(props) {
+        super(props);
+        this.state = { hasError: false };
+    }
+
+    static getDerivedStateFromError() {
+        return { hasError: true };
+    }
+
+    componentDidCatch(error) {
+        this.props.onError?.(error);
+    }
+
+    componentDidUpdate(previousProps) {
+        if (previousProps.resetKey !== this.props.resetKey && this.state.hasError) {
+            this.setState({ hasError: false });
+        }
+    }
+
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="flex min-h-[220px] items-center justify-center rounded-md bg-red-50 px-4 text-center text-sm font-bold text-red-700">
+                    Editor trả lời FAQ đang gặp lỗi. Hãy thu nhỏ/mở lại editor hoặc tải lại trang.
+                </div>
+            );
+        }
+
+        return this.props.children;
+    }
+}
+
 export default function ProductFaqManager() {
     const answerInlineQuillRef = useRef(null);
     const answerExpandedQuillRef = useRef(null);
+    const answerEditorModeRef = useRef('inline');
     const answerSelectionRef = useRef(null);
     const [productPanelSearch, setProductPanelSearch] = useState('');
     const [productPanelFilter, setProductPanelFilter] = useState('with');
@@ -340,6 +374,7 @@ export default function ProductFaqManager() {
     const [loadingFaqs, setLoadingFaqs] = useState(false);
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
+    const [answerEditorError, setAnswerEditorError] = useState('');
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [isAnswerEditorExpanded, setIsAnswerEditorExpanded] = useState(false);
     const [form, setForm] = useState(blankForm);
@@ -576,6 +611,17 @@ export default function ProductFaqManager() {
 
         const handleKeyDown = (event) => {
             if (event.key === 'Escape') {
+                try {
+                    const editor = answerExpandedQuillRef.current?.getEditor?.();
+                    const nextHtml = editor?.root?.innerHTML;
+                    if (typeof nextHtml === 'string') {
+                        updateAnswerFromEditor(nextHtml);
+                    }
+                } catch (err) {
+                    setAnswerEditorError(err?.message || 'Không thể đồng bộ nội dung editor FAQ.');
+                }
+                answerEditorModeRef.current = 'inline';
+                setProductLinkPickerOpen(false);
                 setIsAnswerEditorExpanded(false);
             }
         };
@@ -630,20 +676,29 @@ export default function ProductFaqManager() {
     };
 
     const updateAnswerFromEditor = useCallback((html) => {
-        setForm((current) => ({ ...current, answer: html }));
+        setAnswerEditorError('');
+        setForm((current) => (
+            current.answer === html ? current : { ...current, answer: html }
+        ));
     }, []);
 
     const getAnswerEditor = useCallback(() => {
         try {
-            const activeRef = isAnswerEditorExpanded ? answerExpandedQuillRef : answerInlineQuillRef;
+            const activeRef = answerEditorModeRef.current === 'expanded' ? answerExpandedQuillRef : answerInlineQuillRef;
             return activeRef.current?.getEditor?.() || null;
-        } catch {
+        } catch (err) {
+            setAnswerEditorError(err?.message || 'Không thể khởi tạo editor trả lời FAQ.');
             return null;
         }
-    }, [isAnswerEditorExpanded]);
+    }, []);
 
     const getAnswerInsertRange = useCallback((editor) => {
-        const currentRange = editor?.getSelection?.(true) || answerSelectionRef.current;
+        let currentRange = null;
+        try {
+            currentRange = editor?.getSelection?.() || answerSelectionRef.current;
+        } catch {
+            currentRange = answerSelectionRef.current;
+        }
         if (currentRange && Number.isFinite(currentRange.index)) {
             return currentRange;
         }
@@ -653,6 +708,40 @@ export default function ProductFaqManager() {
             length: 0,
         };
     }, []);
+
+    const syncAnswerFromActiveEditor = useCallback(() => {
+        const editor = getAnswerEditor();
+        if (!editor) return;
+
+        try {
+            const nextHtml = editor.root?.innerHTML;
+            if (typeof nextHtml === 'string') {
+                updateAnswerFromEditor(nextHtml);
+            }
+
+            const selection = editor.getSelection?.();
+            if (selection && Number.isFinite(selection.index)) {
+                answerSelectionRef.current = selection;
+            }
+        } catch (err) {
+            setAnswerEditorError(err?.message || 'Không thể đồng bộ nội dung editor FAQ.');
+        }
+    }, [getAnswerEditor, updateAnswerFromEditor]);
+
+    const openAnswerEditorExpanded = useCallback(() => {
+        syncAnswerFromActiveEditor();
+        setProductLinkPickerOpen(false);
+        answerEditorModeRef.current = 'expanded';
+        setIsAnswerEditorExpanded(true);
+    }, [syncAnswerFromActiveEditor]);
+
+    const closeAnswerEditorExpanded = useCallback(() => {
+        syncAnswerFromActiveEditor();
+        setProductLinkPickerOpen(false);
+        answerEditorModeRef.current = 'inline';
+        setAnswerEditorError('');
+        setIsAnswerEditorExpanded(false);
+    }, [syncAnswerFromActiveEditor]);
 
     const handleAnswerImageInsert = useCallback(() => {
         const input = document.createElement('input');
@@ -788,6 +877,8 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        answerEditorModeRef.current = 'inline';
+        setAnswerEditorError('');
         setIsAnswerEditorExpanded(false);
         setMessage('');
         setError('');
@@ -839,6 +930,8 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        answerEditorModeRef.current = 'inline';
+        setAnswerEditorError('');
         setIsAnswerEditorExpanded(false);
         setMessage('');
         setError('');
@@ -860,6 +953,8 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        answerEditorModeRef.current = 'inline';
+        setAnswerEditorError('');
         setIsAnswerEditorExpanded(false);
         answerSelectionRef.current = null;
     };
@@ -968,9 +1063,10 @@ export default function ProductFaqManager() {
         }));
     };
 
-    const buildFormData = () => {
+    const buildFormData = (answerOverride = null) => {
         const formData = new FormData();
         const primaryId = firstTargetId(form, targetPreview.data, selectedProductId);
+        const answerHtml = answerOverride === null ? form.answer : answerOverride;
 
         if (primaryId) {
             formData.append('product_id', String(primaryId));
@@ -981,7 +1077,7 @@ export default function ProductFaqManager() {
         appendIds(formData, 'bundle_product_ids', form.bundle_product_ids);
         formData.append('apply_all_products', form.apply_all_products ? '1' : '0');
         formData.append('question', form.question);
-        formData.append('answer', form.answer);
+        formData.append('answer', answerHtml);
         formData.append('youtube_url', form.youtube_url || '');
         formData.append('sort_order', form.sort_order || '0');
         formData.append('status', form.status || 'visible');
@@ -996,7 +1092,18 @@ export default function ProductFaqManager() {
 
     const saveFaq = (event) => {
         event?.preventDefault?.();
-        if (form.question.trim().length < 2 || !answerHasVisibleContent(form.answer)) {
+        let activeAnswer = form.answer;
+        const editor = getAnswerEditor();
+        try {
+            if (editor?.root?.innerHTML) {
+                activeAnswer = editor.root.innerHTML;
+                updateAnswerFromEditor(activeAnswer);
+            }
+        } catch (err) {
+            setAnswerEditorError(err?.message || 'Không thể đọc nội dung editor FAQ trước khi lưu.');
+        }
+
+        if (form.question.trim().length < 2 || !answerHasVisibleContent(activeAnswer)) {
             setActiveFormTab('content');
             setError('Nhập đầy đủ câu hỏi và câu trả lời trước khi lưu.');
             return;
@@ -1014,7 +1121,7 @@ export default function ProductFaqManager() {
             return;
         }
 
-        if (String(form.answer || '').length > ANSWER_HTML_MAX_LENGTH) {
+        if (String(activeAnswer || '').length > ANSWER_HTML_MAX_LENGTH) {
             setActiveFormTab('content');
             setError('Nội dung câu trả lời đang quá dài. Hãy rút gọn bớt text hoặc media trước khi lưu.');
             return;
@@ -1025,8 +1132,8 @@ export default function ProductFaqManager() {
         setError('');
 
         const request = form.id
-            ? productFaqApi.adminUpdate(form.id, buildFormData())
-            : productFaqApi.adminCreate(buildFormData());
+            ? productFaqApi.adminUpdate(form.id, buildFormData(activeAnswer))
+            : productFaqApi.adminCreate(buildFormData(activeAnswer));
 
         request
             .then(async (response) => {
@@ -1515,13 +1622,7 @@ export default function ProductFaqManager() {
                                                 <button
                                                     type="button"
                                                     onMouseDown={(event) => event.preventDefault()}
-                                                    onClick={() => {
-                                                        const editor = getAnswerEditor();
-                                                        if (editor) {
-                                                            answerSelectionRef.current = getAnswerInsertRange(editor);
-                                                        }
-                                                        setIsAnswerEditorExpanded(true);
-                                                    }}
+                                                    onClick={openAnswerEditorExpanded}
                                                     className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
                                                 >
                                                     <span className="material-symbols-outlined text-[17px]">open_in_full</span>
@@ -1538,17 +1639,32 @@ export default function ProductFaqManager() {
                                                 </button>
                                             </div>
                                             <div className="rounded-md border border-primary/10 bg-white text-stone-700 focus-within:border-primary/40">
-                                                <ReactQuill
-                                                    ref={answerInlineQuillRef}
-                                                    theme="snow"
-                                                    value={form.answer}
-                                                    onChange={updateAnswerFromEditor}
-                                                    modules={answerQuillModules}
-                                                    formats={quillFormats}
-                                                    placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
-                                                    className="product-faq-answer-editor min-h-[260px]"
-                                                />
+                                                {!isAnswerEditorExpanded ? (
+                                                    <ProductFaqAnswerEditorBoundary
+                                                        resetKey={`inline-${form.id || 'new'}-${isAnswerEditorExpanded}`}
+                                                        onError={(err) => setAnswerEditorError(err?.message || 'Editor trả lời FAQ đang gặp lỗi.')}
+                                                    >
+                                                        <ReactQuill
+                                                            key="faq-answer-inline-editor"
+                                                            ref={answerInlineQuillRef}
+                                                            theme="snow"
+                                                            value={form.answer}
+                                                            onChange={updateAnswerFromEditor}
+                                                            modules={answerQuillModules}
+                                                            formats={quillFormats}
+                                                            placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
+                                                            className="product-faq-answer-editor min-h-[260px]"
+                                                        />
+                                                    </ProductFaqAnswerEditorBoundary>
+                                                ) : (
+                                                    <div className="flex min-h-[260px] items-center justify-center rounded-md bg-slate-50 px-4 text-center text-sm font-bold text-stone-500">
+                                                        Editor đang mở ở chế độ phóng to.
+                                                    </div>
+                                                )}
                                             </div>
+                                            {answerEditorError ? (
+                                                <p className="rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{answerEditorError}</p>
+                                            ) : null}
                                             <span className="text-right text-xs text-stone-400">{stripHtmlToText(form.answer).length} ký tự text / {String(form.answer || '').length}/{ANSWER_HTML_MAX_LENGTH} HTML</span>
                                             {productLinkPickerOpen && !isAnswerEditorExpanded ? renderProductLinkPicker() : null}
                                         </div>
@@ -2006,7 +2122,7 @@ export default function ProductFaqManager() {
                                 type="button"
                                 className="absolute inset-0 cursor-default"
                                 aria-label="Thu nhỏ editor"
-                                onClick={() => setIsAnswerEditorExpanded(false)}
+                                onClick={closeAnswerEditorExpanded}
                             />
                             <section className="relative z-10 mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
                                 <div className="flex flex-col gap-3 border-b border-primary/10 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
@@ -2028,7 +2144,7 @@ export default function ProductFaqManager() {
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => setIsAnswerEditorExpanded(false)}
+                                            onClick={closeAnswerEditorExpanded}
                                             className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
                                         >
                                             <span className="material-symbols-outlined text-[17px]">close_fullscreen</span>
@@ -2045,18 +2161,27 @@ export default function ProductFaqManager() {
                                         </button>
                                     </div>
                                 </div>
-                                <div className="min-h-0 flex-1 overflow-hidden bg-slate-50 p-2 md:p-3">
-                                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-primary/10 bg-white text-stone-700">
-                                        <ReactQuill
-                                            ref={answerExpandedQuillRef}
-                                            theme="snow"
-                                            value={form.answer}
-                                            onChange={updateAnswerFromEditor}
-                                            modules={answerQuillModules}
-                                            formats={quillFormats}
-                                            placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
-                                            className="product-faq-answer-editor product-faq-answer-editor-expanded h-full min-h-0"
-                                        />
+                                <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-slate-50 p-2 md:p-3">
+                                    {answerEditorError ? (
+                                        <div className="mb-2 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-sm font-bold text-red-700">{answerEditorError}</div>
+                                    ) : null}
+                                    <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-primary/10 bg-white text-stone-700">
+                                        <ProductFaqAnswerEditorBoundary
+                                            resetKey={`expanded-${form.id || 'new'}-${isAnswerEditorExpanded}`}
+                                            onError={(err) => setAnswerEditorError(err?.message || 'Editor phóng to FAQ đang gặp lỗi.')}
+                                        >
+                                            <ReactQuill
+                                                key="faq-answer-expanded-editor"
+                                                ref={answerExpandedQuillRef}
+                                                theme="snow"
+                                                value={form.answer}
+                                                onChange={updateAnswerFromEditor}
+                                                modules={answerQuillModules}
+                                                formats={quillFormats}
+                                                placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
+                                                className="product-faq-answer-editor product-faq-answer-editor-expanded h-full min-h-0"
+                                            />
+                                        </ProductFaqAnswerEditorBoundary>
                                     </div>
                                 </div>
                                 {productLinkPickerOpen ? (

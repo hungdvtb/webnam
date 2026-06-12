@@ -296,6 +296,41 @@
         line-height: 1.6;
     }
 
+    .product-faq-answer-editor.product-faq-answer-editor-expanded,
+    .product-faq-answer-editor.product-faq-answer-editor-expanded .quill {
+        display: flex;
+        min-height: 0;
+        height: 100%;
+        flex-direction: column;
+    }
+
+    .product-faq-answer-editor.product-faq-answer-editor-expanded .ql-toolbar {
+        flex: 0 0 auto;
+        background: #fff;
+    }
+
+    .product-faq-answer-editor.product-faq-answer-editor-expanded .ql-container {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+    }
+
+    .product-faq-answer-editor.product-faq-answer-editor-expanded .ql-editor {
+        min-height: 100%;
+        padding: clamp(1rem, 2vw, 1.5rem) !important;
+    }
+
+    .product-faq-answer-editor .ql-editor img {
+        max-width: 100%;
+        height: auto;
+    }
+
+    .product-faq-answer-editor .ql-editor iframe,
+    .product-faq-answer-editor .ql-editor video {
+        max-width: 100%;
+        aspect-ratio: 16 / 9;
+    }
+
     .ql-editor .ql-align-center {
         text-align: center;
     }

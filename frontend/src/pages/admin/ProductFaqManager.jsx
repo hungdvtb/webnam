@@ -318,7 +318,8 @@ const firstTargetId = (form, previewProducts = [], selectedProductId = '') => (
 );
 
 export default function ProductFaqManager() {
-    const answerQuillRef = useRef(null);
+    const answerInlineQuillRef = useRef(null);
+    const answerExpandedQuillRef = useRef(null);
     const answerSelectionRef = useRef(null);
     const [productPanelSearch, setProductPanelSearch] = useState('');
     const [productPanelFilter, setProductPanelFilter] = useState('with');
@@ -340,6 +341,7 @@ export default function ProductFaqManager() {
     const [message, setMessage] = useState('');
     const [error, setError] = useState('');
     const [isFormOpen, setIsFormOpen] = useState(false);
+    const [isAnswerEditorExpanded, setIsAnswerEditorExpanded] = useState(false);
     const [form, setForm] = useState(blankForm);
     const [targetPreview, setTargetPreview] = useState({ total: 0, data: [] });
     const [loadingTargetPreview, setLoadingTargetPreview] = useState(false);
@@ -570,6 +572,19 @@ export default function ProductFaqManager() {
     }, [isFormOpen, productLinkPickerOpen, productLinkSearch]);
 
     useEffect(() => {
+        if (!isAnswerEditorExpanded) return undefined;
+
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setIsAnswerEditorExpanded(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isAnswerEditorExpanded]);
+
+    useEffect(() => {
         if (!isFormOpen) return undefined;
         const timeoutId = window.setTimeout(() => loadTargetProducts(targetSearch, targetCategoryId), 250);
         return () => window.clearTimeout(timeoutId);
@@ -620,11 +635,12 @@ export default function ProductFaqManager() {
 
     const getAnswerEditor = useCallback(() => {
         try {
-            return answerQuillRef.current?.getEditor?.() || null;
+            const activeRef = isAnswerEditorExpanded ? answerExpandedQuillRef : answerInlineQuillRef;
+            return activeRef.current?.getEditor?.() || null;
         } catch {
             return null;
         }
-    }, []);
+    }, [isAnswerEditorExpanded]);
 
     const getAnswerInsertRange = useCallback((editor) => {
         const currentRange = editor?.getSelection?.(true) || answerSelectionRef.current;
@@ -772,6 +788,7 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        setIsAnswerEditorExpanded(false);
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -822,6 +839,7 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        setIsAnswerEditorExpanded(false);
         setMessage('');
         setError('');
         setIsFormOpen(true);
@@ -842,6 +860,7 @@ export default function ProductFaqManager() {
         setProductLinkPickerOpen(false);
         setProductLinkSearch('');
         setProductLinkProducts([]);
+        setIsAnswerEditorExpanded(false);
         answerSelectionRef.current = null;
     };
 
@@ -976,7 +995,7 @@ export default function ProductFaqManager() {
     };
 
     const saveFaq = (event) => {
-        event.preventDefault();
+        event?.preventDefault?.();
         if (form.question.trim().length < 2 || !answerHasVisibleContent(form.answer)) {
             setActiveFormTab('content');
             setError('Nhập đầy đủ câu hỏi và câu trả lời trước khi lưu.');
@@ -1091,6 +1110,59 @@ export default function ProductFaqManager() {
                 void loadFaqs(selectedProductId).catch(() => {});
             });
     };
+
+    const renderProductLinkPicker = (className = '') => (
+        <section className={`grid gap-3 rounded-lg border border-primary/10 bg-slate-50 p-3 ${className}`.trim()}>
+            <div className="flex items-center justify-between gap-3">
+                <div>
+                    <h3 className="text-sm font-black text-primary">Gắn link sản phẩm</h3>
+                    <p className="mt-0.5 text-xs font-normal text-stone-500">Chọn sản phẩm, biến thể hoặc tùy chọn bundle để chèn vào câu trả lời.</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => setProductLinkPickerOpen(false)}
+                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary"
+                >
+                    <span className="material-symbols-outlined text-[17px]">close</span>
+                </button>
+            </div>
+            <input
+                value={productLinkSearch}
+                onChange={(event) => setProductLinkSearch(event.target.value)}
+                placeholder="Tìm tên, SKU hoặc mã sản phẩm"
+                className="min-h-10 rounded-md border border-primary/10 bg-white px-3 text-sm font-normal text-stone-700 outline-none focus:border-primary/40"
+            />
+            <div className="grid max-h-64 gap-2 overflow-y-auto">
+                {loadingProductLinks ? (
+                    <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Đang tìm sản phẩm...</div>
+                ) : productLinkOptions.length === 0 ? (
+                    <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Không có link phù hợp.</div>
+                ) : productLinkOptions.map((option) => {
+                    const thumbUrl = resolveImageObjectUrl(option.image, 'thumbnail', '') || resolveImageObjectUrl(option.image, 'medium', '');
+                    return (
+                        <button
+                            key={option.key}
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => insertProductLink(option)}
+                            className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-primary/10 bg-white p-2 text-left transition hover:border-primary/30 hover:bg-primary/5"
+                        >
+                            <span className="flex size-11 items-center justify-center overflow-hidden rounded bg-slate-100 text-primary/35">
+                                {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined text-[20px]">inventory_2</span>}
+                            </span>
+                            <span className="min-w-0">
+                                <span className="line-clamp-1 text-sm font-black text-primary">{option.label}</span>
+                                <span className="mt-0.5 block truncate text-xs font-normal text-stone-500">{option.subtitle}</span>
+                            </span>
+                            <span className="rounded-full bg-gold/10 px-2 py-1 text-[10px] font-black uppercase text-gold">
+                                {PRODUCT_LINK_KIND_LABELS[option.kind] || option.kind}
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+        </section>
+    );
 
     const renderSourceChip = (label, onRemove) => (
         <span className="inline-flex items-center gap-1 rounded-full border border-primary/10 bg-white px-3 py-1 text-xs font-bold text-primary">
@@ -1439,7 +1511,22 @@ export default function ProductFaqManager() {
 
                                         <div className="grid gap-2 text-sm font-bold text-primary">
                                             Câu trả lời của shop
-                                            <div className="flex justify-end">
+                                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(event) => event.preventDefault()}
+                                                    onClick={() => {
+                                                        const editor = getAnswerEditor();
+                                                        if (editor) {
+                                                            answerSelectionRef.current = getAnswerInsertRange(editor);
+                                                        }
+                                                        setIsAnswerEditorExpanded(true);
+                                                    }}
+                                                    className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
+                                                >
+                                                    <span className="material-symbols-outlined text-[17px]">open_in_full</span>
+                                                    Phóng to
+                                                </button>
                                                 <button
                                                     type="button"
                                                     onMouseDown={(event) => event.preventDefault()}
@@ -1452,7 +1539,7 @@ export default function ProductFaqManager() {
                                             </div>
                                             <div className="rounded-md border border-primary/10 bg-white text-stone-700 focus-within:border-primary/40">
                                                 <ReactQuill
-                                                    ref={answerQuillRef}
+                                                    ref={answerInlineQuillRef}
                                                     theme="snow"
                                                     value={form.answer}
                                                     onChange={updateAnswerFromEditor}
@@ -1463,58 +1550,7 @@ export default function ProductFaqManager() {
                                                 />
                                             </div>
                                             <span className="text-right text-xs text-stone-400">{stripHtmlToText(form.answer).length} ký tự text / {String(form.answer || '').length}/{ANSWER_HTML_MAX_LENGTH} HTML</span>
-                                            {productLinkPickerOpen ? (
-                                                <section className="grid gap-3 rounded-lg border border-primary/10 bg-slate-50 p-3">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div>
-                                                            <h3 className="text-sm font-black text-primary">Gắn link sản phẩm</h3>
-                                                            <p className="mt-0.5 text-xs font-normal text-stone-500">Chọn sản phẩm, biến thể hoặc tùy chọn bundle để chèn vào câu trả lời.</p>
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => setProductLinkPickerOpen(false)}
-                                                            className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-primary/10 bg-white text-primary"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[17px]">close</span>
-                                                        </button>
-                                                    </div>
-                                                    <input
-                                                        value={productLinkSearch}
-                                                        onChange={(event) => setProductLinkSearch(event.target.value)}
-                                                        placeholder="Tìm tên, SKU hoặc mã sản phẩm"
-                                                        className="min-h-10 rounded-md border border-primary/10 bg-white px-3 text-sm font-normal text-stone-700 outline-none focus:border-primary/40"
-                                                    />
-                                                    <div className="grid max-h-64 gap-2 overflow-y-auto">
-                                                        {loadingProductLinks ? (
-                                                            <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Đang tìm sản phẩm...</div>
-                                                        ) : productLinkOptions.length === 0 ? (
-                                                            <div className="flex min-h-20 items-center justify-center text-sm font-bold text-stone-500">Không có link phù hợp.</div>
-                                                        ) : productLinkOptions.map((option) => {
-                                                            const thumbUrl = resolveImageObjectUrl(option.image, 'thumbnail', '') || resolveImageObjectUrl(option.image, 'medium', '');
-                                                            return (
-                                                                <button
-                                                                    key={option.key}
-                                                                    type="button"
-                                                                    onMouseDown={(event) => event.preventDefault()}
-                                                                    onClick={() => insertProductLink(option)}
-                                                                    className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-primary/10 bg-white p-2 text-left transition hover:border-primary/30 hover:bg-primary/5"
-                                                                >
-                                                                    <span className="flex size-11 items-center justify-center overflow-hidden rounded bg-slate-100 text-primary/35">
-                                                                        {thumbUrl ? <img src={thumbUrl} alt="" className="h-full w-full object-cover" /> : <span className="material-symbols-outlined text-[20px]">inventory_2</span>}
-                                                                    </span>
-                                                                    <span className="min-w-0">
-                                                                        <span className="line-clamp-1 text-sm font-black text-primary">{option.label}</span>
-                                                                        <span className="mt-0.5 block truncate text-xs font-normal text-stone-500">{option.subtitle}</span>
-                                                                    </span>
-                                                                    <span className="rounded-full bg-gold/10 px-2 py-1 text-[10px] font-black uppercase text-gold">
-                                                                        {PRODUCT_LINK_KIND_LABELS[option.kind] || option.kind}
-                                                                    </span>
-                                                                </button>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </section>
-                                            ) : null}
+                                            {productLinkPickerOpen && !isAnswerEditorExpanded ? renderProductLinkPicker() : null}
                                         </div>
 
                                         <div className="grid gap-3 md:grid-cols-2">
@@ -1964,6 +2000,73 @@ export default function ProductFaqManager() {
                             </button>
                         </div>
                     </form>
+                    {isAnswerEditorExpanded ? (
+                        <div className="fixed inset-0 z-[190] flex flex-col bg-slate-950/55 p-2 backdrop-blur-sm md:p-4" role="dialog" aria-modal="true" aria-label="Phóng to khu vực trả lời FAQ">
+                            <button
+                                type="button"
+                                className="absolute inset-0 cursor-default"
+                                aria-label="Thu nhỏ editor"
+                                onClick={() => setIsAnswerEditorExpanded(false)}
+                            />
+                            <section className="relative z-10 mx-auto flex h-full min-h-0 w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+                                <div className="flex flex-col gap-3 border-b border-primary/10 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
+                                    <div className="min-w-0">
+                                        <h3 className="text-base font-black text-primary">Soạn câu trả lời FAQ</h3>
+                                        <p className="mt-0.5 text-xs font-bold text-stone-500">
+                                            {stripHtmlToText(form.answer).length} ký tự text / {String(form.answer || '').length}/{ANSWER_HTML_MAX_LENGTH} HTML
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onMouseDown={(event) => event.preventDefault()}
+                                            onClick={openProductLinkPicker}
+                                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
+                                        >
+                                            <span className="material-symbols-outlined text-[17px]">add_link</span>
+                                            Gắn link sản phẩm
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsAnswerEditorExpanded(false)}
+                                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full border border-primary/10 bg-white px-3 text-xs font-black uppercase tracking-[0.08em] text-primary transition hover:bg-primary hover:text-white"
+                                        >
+                                            <span className="material-symbols-outlined text-[17px]">close_fullscreen</span>
+                                            Thu nhỏ
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={saveFaq}
+                                            disabled={saving || loadingTargetPreview}
+                                            className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full bg-primary px-4 text-xs font-black uppercase tracking-[0.08em] text-white transition hover:bg-brick disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <span className={`material-symbols-outlined text-[17px] ${saving ? 'animate-spin' : ''}`}>{saving ? 'progress_activity' : 'save'}</span>
+                                            {saving ? 'Đang lưu' : 'Lưu FAQ'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="min-h-0 flex-1 overflow-hidden bg-slate-50 p-2 md:p-3">
+                                    <div className="h-full min-h-0 overflow-hidden rounded-lg border border-primary/10 bg-white text-stone-700">
+                                        <ReactQuill
+                                            ref={answerExpandedQuillRef}
+                                            theme="snow"
+                                            value={form.answer}
+                                            onChange={updateAnswerFromEditor}
+                                            modules={answerQuillModules}
+                                            formats={quillFormats}
+                                            placeholder="Nhập câu trả lời chi tiết cho khách hàng..."
+                                            className="product-faq-answer-editor product-faq-answer-editor-expanded h-full min-h-0"
+                                        />
+                                    </div>
+                                </div>
+                                {productLinkPickerOpen ? (
+                                    <div className="border-t border-primary/10 bg-white p-3">
+                                        {renderProductLinkPicker('max-h-[36vh] overflow-y-auto')}
+                                    </div>
+                                ) : null}
+                            </section>
+                        </div>
+                    ) : null}
                 </div>
             ) : null}
         </div>

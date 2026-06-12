@@ -140,6 +140,56 @@ class ProductFaqApiTest extends TestCase
             ->assertJsonPath('items.0.question', 'Cau hoi moi tu admin?');
     }
 
+    public function test_faq_answer_html_preserves_required_media_and_link_tags(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'FAQ Html Account ' . Str::upper(Str::random(4)),
+            'domain' => 'faq-html-' . Str::lower(Str::random(6)) . '.local',
+            'subdomain' => 'faq-html-' . Str::lower(Str::random(6)),
+            'status' => true,
+        ]);
+
+        $product = $this->createProduct($account, 'San pham co HTML FAQ', 'FAQ-HTML-' . Str::upper(Str::random(4)));
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $answerHtml = implode('', [
+            '<p>Dong mo dau <strong>duoc in dam</strong>.</p>',
+            '<p><a href="https://example.com/huong-dan" target="_blank">Xem huong dan</a></p>',
+            '<p><img src="/storage/faqs/answer.jpg" alt="Anh minh hoa" style="width: 50%; height: auto;" onerror="alert(1)"></p>',
+            '<video controls poster="/storage/faqs/poster.jpg"><source src="/storage/faqs/clip.mp4" type="video/mp4"></video>',
+            '<iframe src="https://www.youtube.com/embed/abc12345678" allowfullscreen="true"></iframe>',
+            '<script>alert("bad")</script>',
+        ]);
+
+        $createResponse = $this->postJson('/api/admin/product-faqs', [
+            'product_id' => $product->id,
+            'product_ids' => [$product->id],
+            'question' => 'FAQ co HTML media va link?',
+            'answer' => $answerHtml,
+            'status' => ProductFaq::STATUS_VISIBLE,
+        ]);
+
+        $createResponse->assertCreated();
+        $storedAnswer = (string) $createResponse->json('faq.answer');
+
+        $this->assertStringContainsString('<a href="https://example.com/huong-dan"', $storedAnswer);
+        $this->assertStringContainsString('rel="noopener noreferrer"', $storedAnswer);
+        $this->assertStringContainsString('<img', $storedAnswer);
+        $this->assertStringContainsString('/storage/faqs/answer.jpg', $storedAnswer);
+        $this->assertStringContainsString('<video', $storedAnswer);
+        $this->assertStringContainsString('controls', $storedAnswer);
+        $this->assertStringContainsString('<source', $storedAnswer);
+        $this->assertStringContainsString('/storage/faqs/clip.mp4', $storedAnswer);
+        $this->assertStringContainsString('<iframe', $storedAnswer);
+        $this->assertStringNotContainsString('<script', $storedAnswer);
+        $this->assertStringNotContainsString('onerror', $storedAnswer);
+
+        $this->getJson("/api/products/{$product->id}/faqs")
+            ->assertOk()
+            ->assertJsonPath('items.0.answer', $storedAnswer);
+    }
+
     public function test_admin_can_apply_one_faq_to_multiple_products_and_update_shared_content(): void
     {
         $account = Account::query()->create([

@@ -6762,6 +6762,7 @@
   display: grid;
   align-content: start;
   gap: 0.45rem;
+  max-width: 100%;
 }
 
 .faqAnswerText {
@@ -6775,7 +6776,15 @@
 
 .faqAnswerRichText {
   display: block;
+  min-width: 0;
+  max-width: 100%;
   white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.faqAnswerRichText :global(*) {
+  max-width: 100%;
 }
 
 .faqAnswerRichText :global(p),
@@ -6786,6 +6795,7 @@
 .faqAnswerRichText :global(h3),
 .faqAnswerRichText :global(h4) {
   margin: 0 0 0.65rem;
+  line-height: 1.55;
 }
 
 .faqAnswerRichText :global(p:last-child),
@@ -6803,21 +6813,76 @@
   font-weight: 900;
   text-decoration: underline;
   text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+}
+
+.faqAnswerRichText :global(strong),
+.faqAnswerRichText :global(b) {
+  font-weight: 900;
+}
+
+.faqAnswerRichText :global(h2),
+.faqAnswerRichText :global(h3),
+.faqAnswerRichText :global(h4) {
+  color: #1B365D;
+  font-weight: 900;
+  line-height: 1.28;
+}
+
+.faqAnswerRichText :global(h2) {
+  font-size: 1.08rem;
+}
+
+.faqAnswerRichText :global(h3),
+.faqAnswerRichText :global(h4) {
+  font-size: 1rem;
+}
+
+.faqAnswerRichText :global(blockquote) {
+  border-left: 3px solid rgba(197, 160, 101, 0.65);
+  padding: 0.2rem 0 0.2rem 0.85rem;
+  color: rgba(38, 51, 66, 0.82);
+}
+
+.faqAnswerRichText :global(hr) {
+  height: 1px;
+  border: 0;
+  background: rgba(27, 54, 93, 0.12);
+  margin: 0.85rem 0;
+}
+
+.faqAnswerRichText :global(table) {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.85rem 0;
+}
+
+.faqAnswerRichText :global(td),
+.faqAnswerRichText :global(th) {
+  border: 1px solid rgba(27, 54, 93, 0.12);
+  padding: 0.45rem 0.55rem;
+  vertical-align: top;
 }
 
 .faqAnswerRichText :global(img) {
   display: block;
-  max-width: min(100%, 680px);
+  width: auto;
+  max-width: 100%;
   height: auto;
   margin: 0.75rem 0;
   border-radius: 0.75rem;
+  object-fit: contain;
   box-shadow: 0 8px 20px rgba(27, 54, 93, 0.12);
+  cursor: zoom-in;
 }
 
 .faqAnswerRichText :global(iframe),
 .faqAnswerRichText :global(video) {
   display: block;
-  width: min(100%, 720px);
+  width: 100%;
+  max-width: 720px;
   aspect-ratio: 16 / 9;
   height: auto;
   margin: 0.75rem 0;
@@ -6830,6 +6895,28 @@
 .faqAnswerRichText :global(ul),
 .faqAnswerRichText :global(ol) {
   padding-left: 1.25rem;
+}
+
+.faqAnswerRichText :global(.ql-align-center),
+.faqAnswerRichText :global([style*="text-align: center"]) {
+  text-align: center;
+}
+
+.faqAnswerRichText :global(.ql-align-right),
+.faqAnswerRichText :global([style*="text-align: right"]) {
+  text-align: right;
+}
+
+.faqAnswerRichText :global(.ql-align-center img),
+.faqAnswerRichText :global([style*="text-align: center"] img) {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.faqAnswerRichText :global(.ql-align-right img),
+.faqAnswerRichText :global([style*="text-align: right"] img) {
+  margin-left: auto;
+  margin-right: 0;
 }
 
 .faqAnswerTextCollapsed {
@@ -7038,19 +7125,22 @@
   position: relative;
   z-index: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   width: 100%;
   height: 100%;
-  overflow: hidden;
-  touch-action: pan-y;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  padding: 4.5rem 1rem 1.5rem;
 }
 
 .faqLightboxStage img {
+  margin: auto;
   max-width: 92vw;
   max-height: 84vh;
   object-fit: contain;
-  transition: transform 0.18s ease;
+  transition: width 0.18s ease, max-width 0.18s ease, max-height 0.18s ease;
   user-select: none;
   -webkit-user-drag: none;
 }

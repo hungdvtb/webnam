@@ -183,6 +183,8 @@ const answerNeedsToggle = (answer) => {
   return plainAnswer.length > ANSWER_PREVIEW_CHARS || lineCount > ANSWER_PREVIEW_LINES;
 };
 
+const answerHasEmbeddedMedia = (answer) => /<(img|iframe|video|source)\b/i.test(String(answer || ''));
+
 const normalizeFaqPayload = (payload) => {
   const rawItems = Array.isArray(payload?.items)
     ? payload.items
@@ -547,6 +549,35 @@ export default function ProductFaqs({ product, compact = false }) {
     });
   };
 
+  const openAnswerImageLightbox = (event) => {
+    const image = event.target?.closest?.('img');
+    if (!image) {
+      return;
+    }
+
+    const imageUrl = image.currentSrc || image.getAttribute('src') || '';
+    if (!imageUrl) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const answerImages = Array.from(event.currentTarget.querySelectorAll('img'))
+      .map((node) => ({
+        src: node.currentSrc || node.getAttribute('src') || '',
+        alt: node.getAttribute('alt') || '',
+      }))
+      .filter((item) => item.src);
+    const imageIndex = Math.max(0, answerImages.findIndex((item) => item.src === imageUrl));
+
+    setLightbox({
+      images: answerImages.length > 0 ? answerImages : [{ src: imageUrl, alt: image.getAttribute('alt') || '' }],
+      index: imageIndex,
+      zoom: 1,
+    });
+  };
+
   const moveLightbox = (direction) => {
     setLightbox((current) => {
       if (!current) return current;
@@ -672,7 +703,7 @@ export default function ProductFaqs({ product, compact = false }) {
                 const answer = String(faq.answer || '').trim();
                 const isFaqOpen = openFaqIds[faq.id] === true;
                 const isAnswerExpanded = Boolean(expandedAnswers[faq.id]);
-                const shouldToggleAnswer = answerNeedsToggle(answer);
+                const shouldToggleAnswer = !answerHasEmbeddedMedia(answer) && answerNeedsToggle(answer);
                 const videoThumb = resolveVideoThumbnailUrl(faq.youtube_url);
                 const videoEmbed = resolveVideoEmbedUrl(faq.youtube_url);
                 const relatedArticles = normalizeRelatedArticles(faq.related_articles);
@@ -704,6 +735,7 @@ export default function ProductFaqs({ product, compact = false }) {
                           {answer ? (
                             <div
                               className={`${styles.faqAnswerText} ${styles.faqAnswerRichText} ${!isAnswerExpanded && shouldToggleAnswer ? styles.faqAnswerTextCollapsed : ''}`}
+                              onDoubleClick={openAnswerImageLightbox}
                               dangerouslySetInnerHTML={{ __html: answer }}
                             />
                           ) : (
@@ -850,7 +882,11 @@ export default function ProductFaqs({ product, compact = false }) {
               <img
                 src={currentLightboxUrl}
                 alt=""
-                style={{ transform: `scale(${lightbox.zoom})` }}
+                style={lightbox.zoom > 1 ? {
+                  width: `${Math.round(lightbox.zoom * 92)}vw`,
+                  maxWidth: 'none',
+                  maxHeight: 'none',
+                } : undefined}
                 onDoubleClick={() => setLightboxZoom(lightbox.zoom > 1 ? 1 : 2)}
               />
             ) : null}

@@ -83,6 +83,10 @@ return new class extends Migration
 
     private function pgIndexExists(string $table, string $indexName): bool
     {
+        if (DB::connection()->getDriverName() !== 'pgsql') {
+            return Schema::hasIndex($table, $indexName);
+        }
+
         return DB::table('pg_indexes')
             ->where('schemaname', 'public')
             ->where('tablename', $table)

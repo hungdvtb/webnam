@@ -15,7 +15,7 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id',
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id', 'profit_center_id',
         'sort_order',
         'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
         'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_product_input_name',
@@ -25,6 +25,11 @@ class Product extends Model
     public function siteDomain()
     {
         return $this->belongsTo(SiteDomain::class);
+    }
+
+    public function profitCenter()
+    {
+        return $this->belongsTo(ProfitCenter::class);
     }
 
     protected $attributes = [

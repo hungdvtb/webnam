@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { financeApi } from '../../services/api';
 import { saveOrderReportDrilldownScope } from '../../utils/orderReportDrilldown';
@@ -151,6 +151,17 @@ const MonthlyProfitReport = () => {
     const [reloadKey, setReloadKey] = useState(0);
     const [drilldownCellKey, setDrilldownCellKey] = useState('');
     const [adChannel, setAdChannel] = useState('all');
+    const [managerUserId, setManagerUserId] = useState('');
+    const [profitCenters, setProfitCenters] = useState([]);
+
+    const profitManagers = useMemo(() => Array.from(new Map(
+        profitCenters
+            .filter((center) => center.manager_user_id)
+            .map((center) => [
+                Number(center.manager_user_id),
+                center.manager_name || `QL #${center.manager_user_id}`,
+            ])
+    )).map(([id, name]) => ({ id, name })), [profitCenters]);
 
     const yearOptions = Array.from({ length: 6 }, (_, index) => currentYear - index);
 
@@ -228,18 +239,26 @@ const MonthlyProfitReport = () => {
 
             try {
                 const range = getQueryRange();
+                const profitScopeParams = {
+                    ...(managerUserId ? { manager_user_id: managerUserId } : {}),
+                };
                 const reportParams = {
                     ...range,
                     ad_channel: adChannel,
+                    ...profitScopeParams,
                 };
 
                 await financeApi.syncFbAdSpend(range).catch(() => null);
 
-                const response = await financeApi.getMonthlyPnlReport(reportParams);
+                const [response, centersResponse] = await Promise.all([
+                    financeApi.getMonthlyPnlReport(reportParams),
+                    financeApi.getProfitCenters().catch(() => ({ data: { profit_centers: [] } })),
+                ]);
                 if (ignore) return;
 
                 setReportData(response?.data?.data || []);
                 setReportSummary(response?.data?.summary || null);
+                setProfitCenters(centersResponse?.data?.profit_centers || []);
             } catch (requestError) {
                 if (!ignore) {
                     setReportData([]);
@@ -258,7 +277,7 @@ const MonthlyProfitReport = () => {
         return () => {
             ignore = true;
         };
-    }, [reloadKey, selectedYear, quickFilter, customRange, adChannel]);
+    }, [reloadKey, selectedYear, quickFilter, customRange, adChannel, managerUserId]);
 
     const normalizedReportData = reportData.map((row) => normalizeMonthlyProfitRow(row));
     const normalizedReportSummary = reportSummary ? normalizeMonthlyProfitRow(reportSummary) : null;
@@ -361,6 +380,7 @@ const MonthlyProfitReport = () => {
                 month: row.key,
                 ...range,
                 ad_channel: adChannel,
+                ...(managerUserId ? { manager_user_id: managerUserId } : {}),
             });
             const scope = response?.data?.data || null;
             const scopeKey = saveOrderReportDrilldownScope(scope);
@@ -375,7 +395,7 @@ const MonthlyProfitReport = () => {
         } finally {
             setDrilldownCellKey((current) => (current === cellKey ? '' : current));
         }
-    }, [adChannel, customRange, navigate, quickFilter, selectedYear]);
+    }, [adChannel, customRange, managerUserId, navigate, quickFilter, selectedYear]);
 
     const renderMetricCellContent = (metric, row, content) => {
         const value = Number(row?.[metric] || 0);
@@ -835,6 +855,20 @@ const MonthlyProfitReport = () => {
                         >
                             {AD_CHANNEL_OPTIONS.map((option) => (
                                 <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                        <span className="text-[12px] font-bold uppercase tracking-wide text-gray-400">Người quản lý</span>
+                        <select
+                            value={managerUserId}
+                            onChange={(e) => setManagerUserId(e.target.value)}
+                            className="h-8 rounded-md border border-gray-200 bg-white px-2 text-[13px] font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        >
+                            <option value="">Tất cả quản lý</option>
+                            {profitManagers.map((manager) => (
+                                <option key={manager.id} value={manager.id}>{manager.name}</option>
                             ))}
                         </select>
                     </div>

@@ -273,6 +273,81 @@ class ProductFaqApiTest extends TestCase
             ->assertJsonPath('data.0.applied_count', 2);
     }
 
+    public function test_admin_can_save_preuploaded_faq_media_metadata_without_duplicate_uploads(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'FAQ Media Account ' . Str::upper(Str::random(4)),
+            'domain' => 'faq-media-' . Str::lower(Str::random(6)) . '.local',
+            'subdomain' => 'faq-media-' . Str::lower(Str::random(6)),
+            'status' => true,
+        ]);
+        $firstProduct = $this->createProduct($account, 'San pham FAQ media A', 'FAQ-MEDIA-A-' . Str::upper(Str::random(4)));
+        $secondProduct = $this->createProduct($account, 'San pham FAQ media B', 'FAQ-MEDIA-B-' . Str::upper(Str::random(4)));
+        $images = [
+            [
+                'public_id' => '01faqpreuploadedimage000001',
+                'url' => 'https://api.example.test/api/media/assets/01faqpreuploadedimage000001/large',
+                'thumbnail_url' => 'https://api.example.test/api/media/assets/01faqpreuploadedimage000001/thumbnail',
+                'large_url' => 'https://api.example.test/api/media/assets/01faqpreuploadedimage000001/large',
+            ],
+            [
+                'url' => '/storage/faqs/manual-existing.jpg',
+                'thumbnail_url' => '/storage/faqs/manual-existing-thumb.jpg',
+            ],
+        ];
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $createResponse = $this->postJson('/api/admin/product-faqs', [
+            'product_id' => $firstProduct->id,
+            'product_ids' => [$firstProduct->id, $secondProduct->id],
+            'question' => 'FAQ luu media da upload?',
+            'answer' => 'Cau tra loi co anh va link Youtube.',
+            'existing_images' => $images,
+            'youtube_url' => 'https://www.youtube.com/watch?v=abc12345678',
+            'status' => ProductFaq::STATUS_VISIBLE,
+        ]);
+
+        $faqId = $createResponse->json('faq.id');
+
+        $createResponse
+            ->assertCreated()
+            ->assertJsonCount(2, 'faq.images')
+            ->assertJsonPath('faq.youtube_url', 'https://www.youtube.com/watch?v=abc12345678')
+            ->assertJsonPath('faq.applied_count', 2);
+
+        $this->postJson("/api/admin/product-faqs/{$faqId}", [
+            'product_id' => $firstProduct->id,
+            'product_ids' => [$firstProduct->id, $secondProduct->id],
+            'question' => 'FAQ luu media da upload?',
+            'answer' => 'Cap nhat text, giu nguyen media da upload.',
+            'existing_images' => $createResponse->json('faq.images'),
+            'youtube_url' => 'https://www.youtube.com/watch?v=abc12345678',
+            'status' => ProductFaq::STATUS_VISIBLE,
+        ])
+            ->assertOk()
+            ->assertJsonCount(2, 'faq.images')
+            ->assertJsonPath('faq.applied_count', 2)
+            ->assertJsonPath('faq.answer', 'Cap nhat text, giu nguyen media da upload.');
+
+        $this->assertDatabaseHas('product_faqs', [
+            'id' => $faqId,
+            'youtube_url' => 'https://www.youtube.com/watch?v=abc12345678',
+        ]);
+        $this->assertDatabaseCount('product_faqs', 1);
+        $this->assertDatabaseHas('product_faq_product', [
+            'product_faq_id' => $faqId,
+            'product_id' => $firstProduct->id,
+        ]);
+        $this->assertDatabaseHas('product_faq_product', [
+            'product_faq_id' => $faqId,
+            'product_id' => $secondProduct->id,
+        ]);
+
+        $storedImages = ProductFaq::query()->findOrFail($faqId)->images;
+        $this->assertCount(2, $storedImages);
+    }
+
     public function test_admin_product_faq_products_endpoint_filters_with_and_without_faqs(): void
     {
         $account = Account::query()->create([

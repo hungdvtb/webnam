@@ -369,6 +369,10 @@ class RepeatCustomerPhoneService
     {
         $digitsOnlySql = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(TRIM(COALESCE({$column}, '')), ' ', ''), '-', ''), '.', ''), '(', ''), ')', ''), '+', '')";
 
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return "CASE WHEN substr({$digitsOnlySql}, 1, 2) = '84' AND substr({$digitsOnlySql}, 1, 3) <> '840' AND length({$digitsOnlySql}) BETWEEN 10 AND 11 THEN '0' || substr({$digitsOnlySql}, 3) ELSE {$digitsOnlySql} END";
+        }
+
         return "CASE WHEN LEFT({$digitsOnlySql}, 2) = '84' AND LEFT({$digitsOnlySql}, 3) <> '840' AND CHAR_LENGTH({$digitsOnlySql}) BETWEEN 10 AND 11 THEN CONCAT('0', SUBSTRING({$digitsOnlySql}, 3)) ELSE {$digitsOnlySql} END";
     }
 }

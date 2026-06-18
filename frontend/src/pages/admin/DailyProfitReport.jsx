@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { financeApi } from '../../services/api';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -597,6 +597,7 @@ const DailyProfitReport = () => {
     };
     const [reportData, setReportData] = useState([]);
     const [summary, setSummary] = useState({ total_profit: 0, total_revenue: 0, total_orders: 0 });
+    const [profitCenters, setProfitCenters] = useState([]);
     const [config, setConfig] = useState({
         return_rate: 2,
         packaging_fee: 2000,
@@ -619,6 +620,7 @@ const DailyProfitReport = () => {
         start_date: getMonthStartInputDate(),
         end_date: formatInputDate(new Date()),
         ad_channel: 'all',
+        manager_user_id: '',
     });
 
     const [showConfig, setShowConfig] = useState(false);
@@ -634,6 +636,15 @@ const DailyProfitReport = () => {
     const [googleSplitData, setGoogleSplitData] = useState(null);
     const [fetchingGoogleSplit, setFetchingGoogleSplit] = useState(false);
     const [hideZeroGoogleSpend, setHideZeroGoogleSpend] = useState(false);
+
+    const profitManagers = useMemo(() => Array.from(new Map(
+        profitCenters
+            .filter((center) => center.manager_user_id)
+            .map((center) => [
+                Number(center.manager_user_id),
+                center.manager_name || `QL #${center.manager_user_id}`,
+            ])
+    )).map(([id, name]) => ({ id, name })), [profitCenters]);
 
     const addTokenGroup = () => {
         setTokenGroups([...tokenGroups, { token: '', account_ids: '', accounts: [], fetching: false, showList: false }]);
@@ -942,13 +953,18 @@ const DailyProfitReport = () => {
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [reportRes, configRes] = await Promise.all([
+            const profitScopeParams = {
+                ...(filters.manager_user_id ? { manager_user_id: filters.manager_user_id } : {}),
+            };
+            const [reportRes, configRes, centersRes] = await Promise.all([
                 financeApi.getDailyPnlReport({
                     start_date: filters.start_date,
                     end_date: filters.end_date,
                     ad_channel: filters.ad_channel,
+                    ...profitScopeParams,
                 }),
-                financeApi.getDailyPnlConfig()
+                financeApi.getDailyPnlConfig(),
+                financeApi.getProfitCenters().catch(() => ({ data: { profit_centers: [] } })),
             ]);
 
             if (reportRes.data.status === 'success') {
@@ -971,6 +987,7 @@ const DailyProfitReport = () => {
                 }
                 setTokenGroups(tokens);
             }
+            setProfitCenters(centersRes?.data?.profit_centers || []);
         } catch (error) {
             console.error("Lỗi tải báo cáo lãi lỗ:", error);
         } finally {
@@ -1110,6 +1127,20 @@ const DailyProfitReport = () => {
                           >
                               {AD_CHANNEL_OPTIONS.map((option) => (
                                   <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                          </select>
+                      </div>
+
+                      <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+                          <span className="text-[12px] font-bold uppercase tracking-wide text-gray-400">Người quản lý</span>
+                          <select
+                              value={filters.manager_user_id}
+                              onChange={(e) => setFilters({ ...filters, manager_user_id: e.target.value })}
+                              className="h-8 rounded-md border border-gray-200 bg-white px-2 text-[13px] font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          >
+                              <option value="">Tất cả quản lý</option>
+                              {profitManagers.map((manager) => (
+                                  <option key={manager.id} value={manager.id}>{manager.name}</option>
                               ))}
                           </select>
                       </div>

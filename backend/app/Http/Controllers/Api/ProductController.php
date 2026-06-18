@@ -16,6 +16,7 @@ use App\Models\Product;
 use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
 use App\Models\MediaAsset;
+use App\Models\ProfitCenter;
 use App\Models\SiteDomain;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
@@ -179,6 +180,32 @@ class ProductController extends Controller
         protected ProductParentRetailPriceSyncService $productParentRetailPriceSyncService
     )
     {
+    }
+
+    private function resolveProductProfitCenterIdForRequest(Request $request, mixed $value, string $field = 'profit_center_id'): ?int
+    {
+        $profitCenterId = (int) $value;
+        if ($profitCenterId <= 0) {
+            return null;
+        }
+
+        $query = ProfitCenter::query()
+            ->where('id', $profitCenterId)
+            ->where('is_active', true);
+
+        $accountId = $request->header('X-Account-Id');
+        if (is_numeric($accountId)) {
+            $query->where('account_id', (int) $accountId);
+        }
+
+        $resolvedId = $query->value('id');
+        if (!$resolvedId) {
+            throw ValidationException::withMessages([
+                $field => ['Nguoi quan ly lai lo khong hop le.'],
+            ]);
+        }
+
+        return (int) $resolvedId;
     }
 
     private function queueGoogleMerchantProductSync(Product $product, bool $includeVariants = true): void
@@ -3136,6 +3163,8 @@ class ProductController extends Controller
             'categories:id,name',
             'supplier:id,name,code',
             'suppliers:id,name,code',
+            'profitCenter:id,name,code,manager_user_id',
+            'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
@@ -3145,7 +3174,7 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:' . $attributeResourceColumns,
             'linkedProducts' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.status'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id', 'products.status'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'is_default'])
                     ->with([
                         'unit:id,name',
@@ -3155,7 +3184,7 @@ class ProductController extends Controller
                     ]);
             },
             'groupedItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -3165,7 +3194,7 @@ class ProductController extends Controller
                     ]);
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -6333,6 +6362,8 @@ class ProductController extends Controller
             'category:id,name,code,slug',
             'supplier:id,name,code',
             'suppliers:id,name,code',
+            'profitCenter:id,name,code,manager_user_id',
+            'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain',
@@ -6352,15 +6383,21 @@ class ProductController extends Controller
                 'variations.attributeValues:id,product_id,attribute_id,value',
                 'variations.attributeValues.attribute:id,name,code,frontend_type',
                 'variations.unit:id,name',
+                'variations.profitCenter:id,name,code,manager_user_id',
+                'variations.profitCenter.manager:id,name',
                 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,profit_center_id',
+                'groupedItems.profitCenter:id,name,code,manager_user_id',
+                'groupedItems.profitCenter.manager:id,name',
                 'groupedItems.category:id,name,code,slug',
                 'groupedItems.categories:id,name,code,slug',
                 'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id',
+                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,profit_center_id',
+                'bundleItems.profitCenter:id,name,code,manager_user_id',
+                'bundleItems.profitCenter.manager:id,name',
                 'bundleItems.category:id,name,code,slug',
                 'bundleItems.categories:id,name,code,slug',
                 'bundleItems.supplier:id,name,code',
@@ -6373,7 +6410,7 @@ class ProductController extends Controller
         $query = Product::query()
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-                'supplier_id', 'inventory_unit_id', 'sort_order',
+                'supplier_id', 'inventory_unit_id', 'profit_center_id', 'sort_order',
                 'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description',
                 'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
                 'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
@@ -6653,6 +6690,9 @@ class ProductController extends Controller
                         'display_name' => $resolvedProduct->name,
                         'display_sku' => $resolvedProduct->sku,
                         'category_id' => $resolvedProduct->category_id !== null ? (int) $resolvedProduct->category_id : null,
+                        'profit_center_id' => $resolvedProduct->profit_center_id !== null
+                            ? (int) $resolvedProduct->profit_center_id
+                            : ($bundleItem->profit_center_id !== null ? (int) $bundleItem->profit_center_id : null),
                         'inventory_unit_id' => $resolvedProduct->inventory_unit_id !== null
                             ? (int) $resolvedProduct->inventory_unit_id
                             : ($bundleItem->inventory_unit_id !== null ? (int) $bundleItem->inventory_unit_id : null),
@@ -6713,6 +6753,7 @@ class ProductController extends Controller
             'products.bundle_title',
             'products.category_id',
             'products.inventory_unit_id',
+            'products.profit_center_id',
         ]);
 
         $searchRankingSql = null;
@@ -6768,7 +6809,7 @@ class ProductController extends Controller
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
-                ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id')
+                ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id')
                 ->with(['unit:id,name']),
             'variations' => function ($variationQuery) use ($pickerAttributeFilters) {
                 $variationQuery->where('products.status', true);
@@ -6777,7 +6818,7 @@ class ProductController extends Controller
             'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id',
+            'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id,profit_center_id',
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
@@ -6836,6 +6877,9 @@ class ProductController extends Controller
                 'type' => $product->type,
                 'bundle_title' => $product->bundle_title,
                 'category_id' => $product->category_id !== null ? (int) $product->category_id : null,
+                'profit_center_id' => $product->profit_center_id !== null
+                    ? (int) $product->profit_center_id
+                    : ($parentProduct?->profit_center_id !== null ? (int) $parentProduct->profit_center_id : null),
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),
                 'attribute_summary' => $attributeSummary,
@@ -6871,6 +6915,9 @@ class ProductController extends Controller
                             'stock_quantity' => (float) ($variation->stock_quantity ?? 0),
                             'type' => $variation->type,
                             'category_id' => $variation->category_id !== null ? (int) $variation->category_id : null,
+                            'profit_center_id' => $variation->profit_center_id !== null
+                                ? (int) $variation->profit_center_id
+                                : ($product->profit_center_id !== null ? (int) $product->profit_center_id : null),
                             'main_image' => $this->pickerPrimaryImage($variation),
                             'attribute_values' => $this->pickerAttributePayload($variation),
                             'attribute_summary' => $variationAttributeSummary,
@@ -10125,6 +10172,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'profit_center_id' => 'nullable|integer',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'supplier_ids' => 'nullable|array',
             'supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
@@ -10178,6 +10226,9 @@ class ProductController extends Controller
         $this->applyCompositeAutoPrice($request, $validated);
         $this->prepareAdditionalInfoForPersistence($request, $validated);
         $this->prepareOptionalStockQuantityForPersistence($request, $validated);
+        if (array_key_exists('profit_center_id', $validated)) {
+            $validated['profit_center_id'] = $this->resolveProductProfitCenterIdForRequest($request, $validated['profit_center_id'], 'profit_center_id');
+        }
 
         $validated['slug'] = $this->productSkuService->generateUniqueSlug(
             !empty($validated['slug']) ? $validated['slug'] : $validated['name']
@@ -10825,6 +10876,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'profit_center_id' => 'nullable|integer',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'supplier_ids' => 'nullable|array',
             'supplier_ids.*' => ['nullable', $this->supplierExistsRule($request)],
@@ -10883,6 +10935,9 @@ class ProductController extends Controller
         $this->applyCompositeAutoPrice($request, $validated, $product);
         $this->prepareAdditionalInfoForPersistence($request, $validated);
         $this->prepareOptionalStockQuantityForPersistence($request, $validated);
+        if (array_key_exists('profit_center_id', $validated)) {
+            $validated['profit_center_id'] = $this->resolveProductProfitCenterIdForRequest($request, $validated['profit_center_id'], 'profit_center_id');
+        }
 
         $incomingCategoryIds = $request->has('category_ids') || $request->has('category_id') || $request->boolean('clear_category_ids');
         $categoryIds = $incomingCategoryIds
@@ -11743,7 +11798,8 @@ class ProductController extends Controller
      */
     public function bulkUpdateAttributes(Request $request)
     {
-        $basicUpdateFields = ['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'inventory_unit_id', 'is_featured', 'is_new', 'status', 'type', 'specifications', 'additional_info'];
+        $basicUpdateFields = ['category_id', 'price', 'expected_cost', 'stock_quantity', 'supplier_id', 'inventory_unit_id', 'profit_center_id', 'is_featured', 'is_new', 'status', 'type', 'specifications', 'additional_info'];
+        $nullableBasicUpdateFields = ['profit_center_id'];
 
         $request->validate([
             'ids' => 'required|array',
@@ -11753,6 +11809,7 @@ class ProductController extends Controller
             'basic_info.expected_cost' => 'nullable|numeric|min:0',
             'basic_info.stock_quantity' => 'sometimes|nullable|numeric|min:0',
             'basic_info.inventory_unit_id' => 'nullable|exists:inventory_units,id',
+            'basic_info.profit_center_id' => 'nullable|integer',
             'basic_info.specifications' => 'nullable|string',
             'basic_info.additional_info' => 'nullable',
             'basic_info.category_id' => 'nullable|exists:categories,id',
@@ -11805,6 +11862,13 @@ class ProductController extends Controller
         }
 
         $this->prepareOptionalStockQuantityForPersistence($request, $basicInfo, 'basic_info.stock_quantity', 'stock_quantity');
+        if (array_key_exists('profit_center_id', $basicInfo) || $request->has('basic_info.profit_center_id')) {
+            $basicInfo['profit_center_id'] = $this->resolveProductProfitCenterIdForRequest(
+                $request,
+                $basicInfo['profit_center_id'] ?? null,
+                'basic_info.profit_center_id'
+            );
+        }
 
         if (!array_key_exists('expected_cost', $basicInfo) && array_key_exists('cost_price', $basicInfo)) {
             $basicInfo['expected_cost'] = $basicInfo['cost_price'];
@@ -11854,7 +11918,8 @@ class ProductController extends Controller
 
             // Store original basic fields that ARE being updated
             foreach ($basicUpdateFields as $field) {
-                if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                $allowsNullUpdate = in_array($field, $nullableBasicUpdateFields, true);
+                if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && ($basicInfo[$field] !== null || $allowsNullUpdate)) {
                     $pData['basic'][$field] = $product->{ $field};
                 }
             }
@@ -11890,7 +11955,8 @@ class ProductController extends Controller
             if (!empty($basicInfo)) {
                 $toUpdate = [];
                 foreach ($basicUpdateFields as $field) {
-                    if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && $basicInfo[$field] !== null) {
+                    $allowsNullUpdate = in_array($field, $nullableBasicUpdateFields, true);
+                    if (array_key_exists($field, $basicInfo) && $basicInfo[$field] !== '' && ($basicInfo[$field] !== null || $allowsNullUpdate)) {
                         if (isset($mergeFieldLookup[$field]) && isset($structuredMergePayloads[$field])) {
                             $toUpdate[$field] = $field === 'specifications'
                                 ? $this->mergeSpecificationsPayload($product->specifications, $structuredMergePayloads[$field])

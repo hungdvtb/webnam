@@ -15,6 +15,8 @@ class Order extends Model
     public const TYPE_STANDARD = 'standard';
     public const TYPE_EXCHANGE_RETURN = 'exchange_return';
     public const TYPE_PARTIAL_DELIVERY = 'partial_delivery';
+    public const SALES_CHANNEL_ONLINE = 'online';
+    public const SALES_CHANNEL_OFFLINE = 'offline';
 
     public const KINDS = [
         self::KIND_OFFICIAL,
@@ -28,8 +30,15 @@ class Order extends Model
         self::TYPE_PARTIAL_DELIVERY,
     ];
 
+    public const SALES_CHANNELS = [
+        self::SALES_CHANNEL_ONLINE,
+        self::SALES_CHANNEL_OFFLINE,
+    ];
+
     protected $fillable = [
-        'user_id', 'lead_id', 'order_number', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind', 'total_price', 'status',
+        'user_id', 'lead_id', 'order_number', 'order_kind', 'order_type', 'sales_channel', 'profit_center_id',
+        'offline_store_name', 'offline_seller_name', 'offline_payment_method',
+        'converted_from_order_id', 'converted_from_kind', 'total_price', 'status',
         'customer_name', 'customer_email', 'customer_phone',
         'shipping_address', 'province', 'district', 'ward', 'notes', 'account_id',
         'source', 'type', 'shipment_status', 'shipping_fee', 'internal_shipping_fee', 'discount', 'settlement_delta', 'return_tracking_code', 'return_status', 'cost_total', 'profit_total',
@@ -86,6 +95,11 @@ class Order extends Model
     public function customer()
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function profitCenter()
+    {
+        return $this->belongsTo(ProfitCenter::class);
     }
 
     public function shipments()

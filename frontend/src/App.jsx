@@ -54,6 +54,7 @@ import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
 import DailyProfitReport from './pages/admin/DailyProfitReport';
 import MonthlyProfitReport from './pages/admin/MonthlyProfitReport';
+import ProfitCenterManager from './pages/admin/ProfitCenterManager';
 import RevenueReconciliationReport from './pages/admin/RevenueReconciliationReport';
 import PayrollManagement from './pages/admin/PayrollManagement';
 import FloatingContactButtons from './components/FloatingContactButtons';
@@ -195,6 +196,7 @@ function App() {
                 <Route path="finance/debts" element={<DebtManagement />} />
                 <Route path="finance/daily-profit" element={<DailyProfitReport />} />
                 <Route path="finance/monthly-profit" element={<MonthlyProfitReport />} />
+                <Route path="finance/profit-centers" element={<ProfitCenterManager />} />
                 <Route path="finance/revenue-reconciliation" element={<RevenueReconciliationReport />} />
                 <Route path="payroll" element={<PayrollManagement />} />
                 <Route path="finance/*" element={<Navigate to="/admin" replace />} />

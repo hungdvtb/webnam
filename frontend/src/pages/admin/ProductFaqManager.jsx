@@ -16,6 +16,14 @@ if (typeof window !== 'undefined' && ReactQuill?.Quill) {
 }
 
 const ANSWER_HTML_MAX_LENGTH = 60000;
+const FAQ_MEDIA_UPLOAD_CONCURRENCY = 3;
+const DEFAULT_SAVE_PROGRESS = {
+    phase: 'idle',
+    label: '',
+    total: 0,
+    completed: 0,
+    percent: 0,
+};
 
 const STATUS_OPTIONS = [
     { value: 'visible', label: 'Hiển thị' },
@@ -80,14 +88,99 @@ const createClientUploadError = (message) => {
     return error;
 };
 
-const extractUploadedImageUrl = (response) => {
+const isBrowserFile = (value) => (
+    typeof File !== 'undefined' && value instanceof File
+);
+
+const fileUploadCacheKey = (file) => [
+    String(file?.name || ''),
+    String(file?.size || 0),
+    String(file?.lastModified || 0),
+    String(file?.type || ''),
+].join('::');
+
+const createFaqMediaUploadEntry = (file) => {
+    const error = validateImageFileForUpload(file);
+
+    return {
+        id: `faq-media-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        cacheKey: fileUploadCacheKey(file),
+        status: error ? 'error' : 'pending',
+        progress: 0,
+        uploadedImage: null,
+        error,
+    };
+};
+
+const normalizeFaqMediaUploadEntry = (entry) => {
+    if (isBrowserFile(entry)) {
+        return createFaqMediaUploadEntry(entry);
+    }
+
+    if (!entry || !isBrowserFile(entry.file)) {
+        return null;
+    }
+
+    return {
+        id: entry.id || `faq-media-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file: entry.file,
+        cacheKey: entry.cacheKey || fileUploadCacheKey(entry.file),
+        status: entry.status || 'pending',
+        progress: Number.isFinite(Number(entry.progress)) ? Number(entry.progress) : 0,
+        uploadedImage: entry.uploadedImage || null,
+        error: entry.error || '',
+    };
+};
+
+const normalizeUploadedImagePayload = (image) => {
+    if (!image || typeof image !== 'object') {
+        return null;
+    }
+
+    const url = String(
+        image.url
+        || image.large_url
+        || image.image_url
+        || image.medium_url
+        || image.original_url
+        || ''
+    ).trim();
+
+    if (!url) {
+        return null;
+    }
+
+    return {
+        ...image,
+        url,
+        image_url: image.image_url || url,
+        large_url: image.large_url || url,
+    };
+};
+
+const extractUploadedImagePayload = (response) => {
     const primaryImage = response?.data?.image;
+    const payload = normalizeUploadedImagePayload(primaryImage)
+        || normalizeUploadedImagePayload(response?.data?.images?.[0])
+        || normalizeUploadedImagePayload(response?.data);
+
+    if (payload) {
+        return payload;
+    }
+
+    const fallbackUrl = String(response?.data?.url || '').trim();
+    return fallbackUrl ? { url: fallbackUrl, image_url: fallbackUrl, large_url: fallbackUrl } : null;
+};
+
+const extractUploadedImageUrl = (response) => {
+    const payload = extractUploadedImagePayload(response);
 
     return String(
-        response?.data?.url
-        || primaryImage?.large_url
-        || primaryImage?.medium_url
-        || primaryImage?.image_url
+        payload?.large_url
+        || payload?.medium_url
+        || payload?.image_url
+        || payload?.url
         || ''
     ).trim();
 };
@@ -112,7 +205,80 @@ const uploadFaqAnswerImage = async (file) => {
     return imageUrl;
 };
 
+const uploadFaqAttachmentImage = async (file, options = {}) => {
+    const validationMessage = validateImageFileForUpload(file);
+    if (validationMessage) {
+        throw createClientUploadError(validationMessage);
+    }
+
+    const uploadData = new FormData();
+    uploadData.append('image', file);
+    uploadData.append('collection', 'product-faqs');
+
+    const response = await mediaApi.upload(uploadData, {
+        retryPolicy: 'never',
+        onUploadProgress: (progressEvent) => {
+            if (typeof options.onProgress !== 'function') {
+                return;
+            }
+
+            const loaded = Number(progressEvent?.loaded || 0);
+            const total = Number(progressEvent?.total || 0);
+            if (total > 0) {
+                options.onProgress(Math.min(95, Math.round((loaded / total) * 95)));
+            }
+        },
+    });
+    const imagePayload = extractUploadedImagePayload(response);
+
+    if (!imagePayload) {
+        throw createClientUploadError('API upload không trả về metadata ảnh hợp lệ.');
+    }
+
+    return imagePayload;
+};
+
 const resolveFaqImageUploadErrorMessage = (error) => resolveImageUploadError(error).message;
+
+const createUploadBatchError = (failures) => {
+    const details = failures
+        .map(({ item, error }) => {
+            const fileName = item?.file?.name || 'file';
+            const message = error?.userMessage || error?.message || resolveFaqImageUploadErrorMessage(error);
+            return `${fileName}: ${message}`;
+        })
+        .join('\n');
+
+    const error = createClientUploadError(details || 'Upload media thất bại.');
+    error.failures = failures;
+    return error;
+};
+
+const runWithConcurrency = async (items, limit, worker) => {
+    const results = new Array(items.length);
+    const failures = [];
+    let cursor = 0;
+    const workerCount = Math.min(Math.max(Number(limit) || 1, 1), items.length);
+
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (cursor < items.length) {
+            const index = cursor;
+            cursor += 1;
+
+            try {
+                results[index] = await worker(items[index], index);
+            } catch (error) {
+                failures.push({ item: items[index], error });
+            }
+        }
+    }));
+
+    if (failures.length > 0) {
+        throw createUploadBatchError(failures);
+    }
+
+    return results;
+};
 
 const looksLikeHtml = (value) => /<\/?[a-z][\s\S]*>/i.test(String(value || ''));
 
@@ -519,10 +685,6 @@ const productLabel = (product) => {
     return `${product.name || `Sản phẩm #${product.id}`}${product.sku ? ` - ${product.sku}` : ''}`;
 };
 
-const appendIds = (formData, key, values) => {
-    uniqueIds(values).forEach((id) => formData.append(`${key}[]`, String(id)));
-};
-
 const firstTargetId = (form, previewProducts = [], selectedProductId = '') => (
     normalizeId(form.product_id)
     || normalizeId(previewProducts[0]?.id)
@@ -569,6 +731,8 @@ export default function ProductFaqManager() {
     const answerExpandedQuillRef = useRef(null);
     const answerEditorModeRef = useRef('inline');
     const answerSelectionRef = useRef(null);
+    const uploadedFaqMediaCacheRef = useRef(new Map());
+    const uploadingFaqMediaRef = useRef(new Map());
     const [productPanelSearch, setProductPanelSearch] = useState('');
     const [productPanelFilter, setProductPanelFilter] = useState('with');
     const [faqProducts, setFaqProducts] = useState([]);
@@ -596,6 +760,7 @@ export default function ProductFaqManager() {
     const [loadingTargetPreview, setLoadingTargetPreview] = useState(false);
     const [expandedTargetPanel, setExpandedTargetPanel] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [saveProgress, setSaveProgress] = useState(DEFAULT_SAVE_PROGRESS);
     const [draggingId, setDraggingId] = useState(null);
     const [activeFormTab, setActiveFormTab] = useState('content');
     const [articleSearch, setArticleSearch] = useState('');
@@ -895,6 +1060,200 @@ export default function ProductFaqManager() {
             current.answer === html ? current : { ...current, answer: html }
         ));
     }, []);
+
+    const patchNewImageUploadEntry = useCallback((entryId, patch) => {
+        setForm((current) => {
+            let changed = false;
+            const nextImages = (current.newImages || []).map((item) => {
+                const entry = normalizeFaqMediaUploadEntry(item);
+                if (!entry || entry.id !== entryId) {
+                    return entry || item;
+                }
+
+                changed = true;
+                return { ...entry, ...patch };
+            });
+
+            return changed ? { ...current, newImages: nextImages } : current;
+        });
+    }, []);
+
+    const ensureFaqMediaUploaded = useCallback(async (entryLike) => {
+        const entry = normalizeFaqMediaUploadEntry(entryLike);
+        if (!entry) {
+            return null;
+        }
+
+        const validationMessage = validateImageFileForUpload(entry.file);
+        if (validationMessage) {
+            patchNewImageUploadEntry(entry.id, {
+                status: 'error',
+                progress: 0,
+                error: validationMessage,
+            });
+            throw createClientUploadError(validationMessage);
+        }
+
+        if (entry.uploadedImage) {
+            uploadedFaqMediaCacheRef.current.set(entry.cacheKey, entry.uploadedImage);
+            patchNewImageUploadEntry(entry.id, {
+                status: 'uploaded',
+                progress: 100,
+                uploadedImage: entry.uploadedImage,
+                error: '',
+            });
+            return entry.uploadedImage;
+        }
+
+        const cachedImage = uploadedFaqMediaCacheRef.current.get(entry.cacheKey);
+        if (cachedImage) {
+            patchNewImageUploadEntry(entry.id, {
+                status: 'uploaded',
+                progress: 100,
+                uploadedImage: cachedImage,
+                error: '',
+            });
+            return cachedImage;
+        }
+
+        const existingUpload = uploadingFaqMediaRef.current.get(entry.cacheKey);
+        if (existingUpload) {
+            patchNewImageUploadEntry(entry.id, {
+                status: 'uploading',
+                progress: Math.max(Number(entry.progress || 0), 1),
+                error: '',
+            });
+            const uploadedImage = await existingUpload;
+            patchNewImageUploadEntry(entry.id, {
+                status: 'uploaded',
+                progress: 100,
+                uploadedImage,
+                error: '',
+            });
+            return uploadedImage;
+        }
+
+        patchNewImageUploadEntry(entry.id, {
+            status: 'uploading',
+            progress: 1,
+            error: '',
+        });
+
+        const uploadPromise = uploadFaqAttachmentImage(entry.file, {
+            onProgress: (progress) => patchNewImageUploadEntry(entry.id, {
+                status: 'uploading',
+                progress,
+                error: '',
+            }),
+        });
+        uploadingFaqMediaRef.current.set(entry.cacheKey, uploadPromise);
+
+        try {
+            const uploadedImage = await uploadPromise;
+            uploadedFaqMediaCacheRef.current.set(entry.cacheKey, uploadedImage);
+            patchNewImageUploadEntry(entry.id, {
+                status: 'uploaded',
+                progress: 100,
+                uploadedImage,
+                error: '',
+            });
+            return uploadedImage;
+        } catch (error) {
+            const message = resolveFaqImageUploadErrorMessage(error);
+            patchNewImageUploadEntry(entry.id, {
+                status: 'error',
+                progress: 0,
+                error: message,
+            });
+            throw createClientUploadError(message);
+        } finally {
+            if (uploadingFaqMediaRef.current.get(entry.cacheKey) === uploadPromise) {
+                uploadingFaqMediaRef.current.delete(entry.cacheKey);
+            }
+        }
+    }, [patchNewImageUploadEntry]);
+
+    const uploadFaqNewImageEntries = useCallback(async (entriesLike, options = {}) => {
+        const entries = (entriesLike || [])
+            .map((entry) => normalizeFaqMediaUploadEntry(entry))
+            .filter(Boolean);
+
+        if (entries.length === 0) {
+            return [];
+        }
+
+        const background = Boolean(options.background);
+        let completed = 0;
+
+        if (!background) {
+            setSaveProgress({
+                phase: 'uploading',
+                label: `Đang upload media 0/${entries.length}`,
+                total: entries.length,
+                completed: 0,
+                percent: 0,
+            });
+        }
+
+        const uploadedImages = await runWithConcurrency(
+            entries,
+            FAQ_MEDIA_UPLOAD_CONCURRENCY,
+            async (entry) => {
+                try {
+                    return await ensureFaqMediaUploaded(entry);
+                } finally {
+                    completed += 1;
+                    if (!background) {
+                        setSaveProgress({
+                            phase: 'uploading',
+                            label: `Đang upload media ${completed}/${entries.length}`,
+                            total: entries.length,
+                            completed,
+                            percent: Math.round((completed / entries.length) * 100),
+                        });
+                    }
+                }
+            }
+        );
+
+        return uploadedImages.filter(Boolean);
+    }, [ensureFaqMediaUploaded]);
+
+    const handleNewImageSelection = useCallback((event) => {
+        const entries = Array.from(event.target.files || []).map(createFaqMediaUploadEntry);
+        event.target.value = '';
+
+        setForm((current) => ({
+            ...current,
+            newImages: entries,
+        }));
+        setError('');
+
+        if (entries.length > 0) {
+            window.setTimeout(() => {
+                void uploadFaqNewImageEntries(entries, { background: true }).catch((error) => {
+                    setActiveFormTab('media');
+                setError(error?.userMessage || error?.message || 'Không thể upload media FAQ.');
+                });
+            }, 0);
+        }
+    }, [uploadFaqNewImageEntries]);
+
+    const retryNewImageUpload = useCallback((entryId) => {
+        const entry = (form.newImages || [])
+            .map((item) => normalizeFaqMediaUploadEntry(item))
+            .find((item) => item?.id === entryId);
+
+        if (!entry) {
+            return;
+        }
+
+        setError('');
+        void uploadFaqNewImageEntries([entry], { background: true }).catch((error) => {
+            setActiveFormTab('media');
+            setError(error?.userMessage || error?.message || 'Không thể upload lại media FAQ.');
+        });
+    }, [form.newImages, uploadFaqNewImageEntries]);
 
     const getAnswerEditor = useCallback(() => {
         try {
@@ -1343,34 +1702,32 @@ export default function ProductFaqManager() {
         }));
     };
 
-    const buildFormData = (answerOverride = null) => {
-        const formData = new FormData();
+    const buildPayload = (answerOverride = null, imagesOverride = null) => {
         const primaryId = firstTargetId(form, targetPreview.data, selectedProductId);
         const answerHtml = sanitizeFaqAnswerHtml(answerOverride === null ? form.answer : answerOverride);
+        const payload = {
+            product_ids: uniqueIds(form.product_ids),
+            category_ids: uniqueIds(form.category_ids),
+            product_group_ids: uniqueIds(form.product_group_ids),
+            bundle_product_ids: uniqueIds(form.bundle_product_ids),
+            apply_all_products: Boolean(form.apply_all_products),
+            question: form.question,
+            answer: answerHtml,
+            youtube_url: form.youtube_url || '',
+            sort_order: form.sort_order || '0',
+            status: form.status || 'visible',
+            existing_images: imagesOverride || form.images || [],
+            related_articles: serializeRelatedArticles(form.related_articles),
+        };
 
         if (primaryId) {
-            formData.append('product_id', String(primaryId));
+            payload.product_id = Number(primaryId);
         }
-        appendIds(formData, 'product_ids', form.product_ids);
-        appendIds(formData, 'category_ids', form.category_ids);
-        appendIds(formData, 'product_group_ids', form.product_group_ids);
-        appendIds(formData, 'bundle_product_ids', form.bundle_product_ids);
-        formData.append('apply_all_products', form.apply_all_products ? '1' : '0');
-        formData.append('question', form.question);
-        formData.append('answer', answerHtml);
-        formData.append('youtube_url', form.youtube_url || '');
-        formData.append('sort_order', form.sort_order || '0');
-        formData.append('status', form.status || 'visible');
-        formData.append('existing_images', JSON.stringify(form.images || []));
-        formData.append('related_articles', JSON.stringify(serializeRelatedArticles(form.related_articles)));
-        (form.newImages || []).forEach((file) => {
-            formData.append('images[]', file);
-        });
 
-        return formData;
+        return payload;
     };
 
-    const saveFaq = (event) => {
+    const saveFaq = async (event) => {
         event?.preventDefault?.();
         let activeAnswer = sanitizeFaqAnswerHtml(form.answer);
         const editor = getAnswerEditor();
@@ -1408,49 +1765,79 @@ export default function ProductFaqManager() {
         }
 
         setSaving(true);
+        setSaveProgress(DEFAULT_SAVE_PROGRESS);
         setMessage('');
         setError('');
 
-        const request = form.id
-            ? productFaqApi.adminUpdate(form.id, buildFormData(activeAnswer))
-            : productFaqApi.adminCreate(buildFormData(activeAnswer));
+        try {
+            const uploadEntries = (form.newImages || [])
+                .map((entry) => normalizeFaqMediaUploadEntry(entry))
+                .filter(Boolean);
+            const uploadedImages = uploadEntries.length > 0
+                ? await uploadFaqNewImageEntries(uploadEntries)
+                : [];
+            const nextImages = [
+                ...(Array.isArray(form.images) ? form.images : []),
+                ...uploadedImages,
+            ];
 
-        request
-            .then(async (response) => {
-                const savedFaq = response?.data?.faq || null;
-                if (!savedFaq?.id) {
-                    throw new Error('API không trả về FAQ vừa lưu.');
+            setSaveProgress({
+                phase: 'saving',
+                label: 'Đang lưu FAQ...',
+                total: 1,
+                completed: 0,
+                percent: 96,
+            });
+
+            const response = form.id
+                ? await productFaqApi.adminUpdate(form.id, buildPayload(activeAnswer, nextImages))
+                : await productFaqApi.adminCreate(buildPayload(activeAnswer, nextImages));
+
+            const savedFaq = response?.data?.faq || null;
+            if (!savedFaq?.id) {
+                throw new Error('API không trả về FAQ vừa lưu.');
+            }
+
+            const appliedIds = uniqueIds(savedFaq.applied_product_ids || [savedFaq.product_id]);
+            const nextProductId = appliedIds.includes(Number(selectedProductId))
+                ? String(selectedProductId)
+                : String(appliedIds[0] || savedFaq.product_id || selectedProductId);
+
+            setSaveProgress({
+                phase: 'done',
+                label: 'Đã lưu FAQ.',
+                total: 1,
+                completed: 1,
+                percent: 100,
+            });
+            setMessage(response?.data?.message || 'Đã lưu hỏi đáp khách hàng.');
+            closeForm();
+
+            if (nextProductId !== String(selectedProductId)) {
+                setSelectedProductId(nextProductId);
+                setSelectedProductInfo(savedFaq.applied_products?.find((product) => Number(product.id) === Number(nextProductId)) || savedFaq.product || null);
+            } else {
+                setFaqs((current) => upsertFaq(current, savedFaq));
+                if (savedFaq.product) {
+                    setSelectedProductInfo(savedFaq.product);
                 }
+            }
 
-                const appliedIds = uniqueIds(savedFaq.applied_product_ids || [savedFaq.product_id]);
-                const nextProductId = appliedIds.includes(Number(selectedProductId))
-                    ? String(selectedProductId)
-                    : String(appliedIds[0] || savedFaq.product_id || selectedProductId);
-
-                setMessage(response?.data?.message || 'Đã lưu hỏi đáp khách hàng.');
-                closeForm();
-
-                if (nextProductId !== String(selectedProductId)) {
-                    setSelectedProductId(nextProductId);
-                    setSelectedProductInfo(savedFaq.applied_products?.find((product) => Number(product.id) === Number(nextProductId)) || savedFaq.product || null);
-                } else {
-                    setFaqs((current) => upsertFaq(current, savedFaq));
-                    if (savedFaq.product) {
-                        setSelectedProductInfo(savedFaq.product);
-                    }
-                }
-
-                await Promise.all([
-                    loadFaqs(nextProductId),
-                    loadFaqProductPanel(productPanelSearch, productPanelFilter),
-                ]);
-            })
-            .catch((err) => {
-                const errors = err?.response?.data?.errors;
-                const firstError = errors ? Object.values(errors).flat()[0] : null;
-                setError(firstError || err?.response?.data?.message || err?.message || 'Không thể lưu hỏi đáp.');
-            })
-            .finally(() => setSaving(false));
+            void Promise.all([
+                loadFaqs(nextProductId),
+                loadFaqProductPanel(productPanelSearch, productPanelFilter),
+            ]).catch(() => {});
+        } catch (err) {
+            const errors = err?.response?.data?.errors;
+            const firstError = errors ? Object.values(errors).flat()[0] : null;
+            if (err?.failures?.length) {
+                setActiveFormTab('media');
+            }
+            setError(firstError || err?.response?.data?.message || err?.userMessage || err?.message || 'Không thể lưu hỏi đáp.');
+        } finally {
+            setSaving(false);
+            setSaveProgress(DEFAULT_SAVE_PROGRESS);
+        }
     };
 
     const deleteFaq = (faq) => {
@@ -1585,6 +1972,9 @@ export default function ProductFaqManager() {
             </button>
         </div>
     );
+    const saveButtonText = saving
+        ? (saveProgress.phase === 'uploading' ? 'Đang tải media...' : 'Đang lưu...')
+        : 'Lưu hỏi đáp';
 
     return (
         <div className="space-y-6">
@@ -2012,7 +2402,7 @@ export default function ProductFaqManager() {
                                                     type="file"
                                                     multiple
                                                     accept="image/jpeg,image/png,image/jpg,image/gif,image/webp,image/avif,image/svg+xml"
-                                                    onChange={(event) => updateForm('newImages', Array.from(event.target.files || []))}
+                                                    onChange={handleNewImageSelection}
                                                     className="sr-only"
                                                 />
                                             </span>
@@ -2042,21 +2432,69 @@ export default function ProductFaqManager() {
                                         ) : null}
 
                                         {form.newImages.length > 0 ? (
-                                            <div className="flex flex-wrap gap-2">
-                                                {form.newImages.map((file, index) => (
-                                                    <span key={`${file.name}-${file.size}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/10 bg-white px-3 py-1.5 text-xs text-stone-600">
-                                                        <span className="material-symbols-outlined text-[15px] text-primary">image</span>
-                                                        <span className="max-w-52 truncate">{file.name}</span>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => updateForm('newImages', form.newImages.filter((_, itemIndex) => itemIndex !== index))}
-                                                            className="inline-flex size-5 items-center justify-center rounded-full text-stone-400 hover:bg-red-50 hover:text-red-600"
-                                                            title="Bỏ ảnh"
-                                                        >
-                                                            <span className="material-symbols-outlined text-[13px]">close</span>
-                                                        </button>
-                                                    </span>
-                                                ))}
+                                            <div className="grid gap-2">
+                                                <div className="flex flex-wrap gap-2">
+                                                    {form.newImages.map((entryLike, index) => {
+                                                        const entry = normalizeFaqMediaUploadEntry(entryLike);
+                                                        const file = entry?.file || {};
+                                                        const status = entry?.status || 'pending';
+                                                        const progress = Math.max(0, Math.min(100, Math.round(Number(entry?.progress || 0))));
+                                                        const statusIcon = status === 'uploaded'
+                                                            ? 'check_circle'
+                                                            : (status === 'error' ? 'error' : (status === 'uploading' ? 'progress_activity' : 'image'));
+
+                                                        return (
+                                                            <span key={entry?.id || `${file.name}-${file.size}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/10 bg-white px-3 py-1.5 text-xs text-stone-600">
+                                                                <span className={`material-symbols-outlined text-[15px] ${status === 'error' ? 'text-red-600' : 'text-primary'} ${status === 'uploading' ? 'animate-spin' : ''}`}>{statusIcon}</span>
+                                                                <span className="max-w-52 truncate">{file.name || 'media'}</span>
+                                                                {status === 'uploading' ? <span className="font-black text-primary">{progress}%</span> : null}
+                                                                {status === 'uploaded' ? <span className="font-black text-emerald-600">xong</span> : null}
+                                                                {status === 'error' ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => retryNewImageUpload(entry.id)}
+                                                                        className="rounded-full bg-red-50 px-2 py-0.5 font-black text-red-600"
+                                                                    >
+                                                                        thử lại
+                                                                    </button>
+                                                                ) : null}
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateForm('newImages', form.newImages.filter((item) => normalizeFaqMediaUploadEntry(item)?.id !== entry?.id))}
+                                                                    className="inline-flex size-5 items-center justify-center rounded-full text-stone-400 hover:bg-red-50 hover:text-red-600"
+                                                                    title="Bỏ media"
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[13px]">close</span>
+                                                                </button>
+                                                            </span>
+                                                        );
+                                                    })}
+                                                </div>
+                                                {form.newImages.some((item) => normalizeFaqMediaUploadEntry(item)?.status === 'error') ? (
+                                                    <div className="grid gap-1 rounded-md border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+                                                        {form.newImages
+                                                            .map((item) => normalizeFaqMediaUploadEntry(item))
+                                                            .filter((item) => item?.status === 'error')
+                                                            .map((item) => (
+                                                                <p key={`${item.id}-error`} className="break-words">{item.file.name}: {item.error || 'Upload thất bại'}</p>
+                                                            ))}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                        ) : null}
+
+                                        {saving && saveProgress.phase !== 'idle' ? (
+                                            <div className="grid gap-1.5 rounded-md border border-primary/10 bg-slate-50 px-3 py-2">
+                                                <div className="flex items-center justify-between gap-3 text-xs font-black text-primary">
+                                                    <span>{saveProgress.label || saveButtonText}</span>
+                                                    <span>{Math.max(0, Math.min(100, Math.round(Number(saveProgress.percent || 0))))}%</span>
+                                                </div>
+                                                <div className="h-1.5 overflow-hidden rounded-full bg-white">
+                                                    <div
+                                                        className="h-full rounded-full bg-primary transition-all"
+                                                        style={{ width: `${Math.max(4, Math.min(100, Math.round(Number(saveProgress.percent || 0))))}%` }}
+                                                    />
+                                                </div>
                                             </div>
                                         ) : null}
                                     </div>
@@ -2395,7 +2833,7 @@ export default function ProductFaqManager() {
                                 disabled={saving || loadingTargetPreview}
                                 className="min-h-11 rounded-full bg-primary px-5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                {saving ? 'Đang lưu...' : 'Lưu hỏi đáp'}
+                                {saveButtonText}
                             </button>
                         </div>
                     </form>
@@ -2440,7 +2878,7 @@ export default function ProductFaqManager() {
                                             className="inline-flex min-h-9 items-center justify-center gap-2 rounded-full bg-primary px-4 text-xs font-black uppercase tracking-[0.08em] text-white transition hover:bg-brick disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <span className={`material-symbols-outlined text-[17px] ${saving ? 'animate-spin' : ''}`}>{saving ? 'progress_activity' : 'save'}</span>
-                                            {saving ? 'Đang lưu' : 'Lưu FAQ'}
+                                            {saveButtonText}
                                         </button>
                                     </div>
                                 </div>

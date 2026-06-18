@@ -45,7 +45,6 @@ import {
     buildShippingAddress,
     extractCustomerInfoFromText,
     extractAddressDetail,
-    parseAdministrativeAddress,
     sortRegionObjects,
     sortRegionStrings,
     validateVietnamesePhone
@@ -1571,38 +1570,16 @@ const formatDetectionFieldList = (fields = []) => {
     if (uniqueFields.length === 2) return `${uniqueFields[0]} và ${uniqueFields[1]}`;
     return `${uniqueFields.slice(0, -1).join(', ')} và ${uniqueFields[uniqueFields.length - 1]}`;
 };
-const buildAddressDetectionFeedback = (confidence, autoFilledFields = []) => {
-    const normalizedConfidence = String(confidence || 'none');
+const buildAddressDetectionFeedback = (autoFilledFields = []) => {
     const fieldSummary = formatDetectionFieldList(autoFilledFields);
 
     if (!fieldSummary) {
-        if (normalizedConfidence === 'exact') {
-            return {
-                type: 'success',
-                message: 'Đã nhận diện nhưng không tự điền vì các trường liên quan đã có dữ liệu.',
-            };
-        }
-
-        return {
-            type: 'warning',
-            message: normalizedConfidence === 'none'
-                ? 'Không tự nhận diện chắc chắn và không tự điền vì các trường liên quan đã có dữ liệu. Vui lòng kiểm tra lại đơn vị hành chính.'
-                : 'Đã nhận diện gần đúng nhưng không tự điền vì các trường liên quan đã có dữ liệu. Vui lòng kiểm tra lại trước khi lưu.',
-        };
-    }
-
-    if (normalizedConfidence === 'exact') {
-        return {
-            type: 'success',
-            message: `Đã tự điền ${fieldSummary}.`,
-        };
+        return null;
     }
 
     return {
-        type: 'warning',
-        message: normalizedConfidence === 'none'
-            ? `Chưa tự nhận diện chắc chắn đơn vị hành chính. Đã tự điền ${fieldSummary}. Vui lòng kiểm tra lại.`
-            : `Đã tự điền ${fieldSummary} từ nội dung nhận diện gần đúng. Vui lòng kiểm tra lại trước khi lưu.`,
+        type: 'success',
+        message: `Đã tự điền ${fieldSummary}.`,
     };
 };
 const parseMoneyNumber = (value, fallback = null) => {
@@ -2030,6 +2007,7 @@ const normalizeProductPickerEntry = (product) => {
         price: resolveMoneyValue(product?.price, 0),
         expected_cost: parseMoneyNumber(product?.expected_cost),
         cost_price: resolveProductCostPrice(product),
+        profit_center_id: Number(product?.profit_center_id) || null,
         unit_name: resolveOrderUnitLabel(product),
         variations: Array.isArray(product?.variations)
             ? product.variations.map((variation) => ({
@@ -2038,6 +2016,7 @@ const normalizeProductPickerEntry = (product) => {
                 price: resolveMoneyValue(variation?.price, 0),
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
+                profit_center_id: Number(variation?.profit_center_id || product?.profit_center_id) || null,
                 unit_name: resolveOrderUnitLabel(variation, product),
             }))
             : product?.variations,
@@ -2051,6 +2030,7 @@ const normalizeProductPickerEntry = (product) => {
                         price: resolveMoneyValue(bundleItem?.price, 0),
                         expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                         cost_price: resolveProductCostPrice(bundleItem),
+                        profit_center_id: Number(bundleItem?.profit_center_id) || null,
                         unit_name: resolveOrderUnitLabel(bundleItem, product),
                     }))
                     : bundleOption?.items,
@@ -2093,6 +2073,15 @@ const calculateItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
     0
 );
+const resolveSingleOrderItemsProfitCenterId = (items = []) => {
+    const profitCenterIds = Array.from(new Set(
+        (Array.isArray(items) ? items : [])
+            .map((item) => Number(item?.profit_center_id) || 0)
+            .filter((id) => id > 0)
+    ));
+
+    return profitCenterIds.length === 1 ? String(profitCenterIds[0]) : '';
+};
 const calculateSupplementItemsTotal = (items = []) => items.reduce(
     (sum, item) => sum + ((parseMoneyNumber(item?.price, 0) || 0) * (parseMoneyNumber(item?.quantity, 0) || 0)),
     0
@@ -2407,6 +2396,7 @@ const createOrderLineItem = (payload = {}) => {
         options = undefined,
         ai_meta = undefined,
         category_id = undefined,
+        profit_center_id = undefined,
         product_attributes = undefined,
         main_image = '',
         notes = '',
@@ -2466,6 +2456,7 @@ const createOrderLineItem = (payload = {}) => {
         options: normalizedOptions && Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
         ai_meta: normalizedAiMeta,
         category_id: Number(category_id) || undefined,
+        profit_center_id: Number(profit_center_id) || null,
         parent_product_id: Number(payload.parent_product_id ?? normalizedOptions?.variant_parent_id) || undefined,
         product_attributes: product_attributes ? { ...product_attributes } : undefined,
         main_image: String(main_image || payload.primary_image?.url || payload.image_url || '').trim(),
@@ -2625,6 +2616,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                 pending_export_quantity: bundleItem?.pending_export_quantity,
                 available_to_sell: bundleItem?.available_to_sell,
                 category_id: bundleItem?.category_id,
+                profit_center_id: bundleItem?.profit_center_id,
                 product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
                 main_image: bundleItem?.main_image || bundleItem?.primary_image?.url || bundleItem?.image_url || '',
                 options: {
@@ -2671,6 +2663,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         pending_export_quantity: entry?.pending_export_quantity,
         available_to_sell: entry?.available_to_sell,
         category_id: entry?.category_id,
+        profit_center_id: entry?.profit_center_id,
         product_attributes: entry?.attributes_map || entry?.product_attributes,
         main_image: entry?.main_image || entry?.primary_image?.url || entry?.image_url || '',
         options: baseOptions,
@@ -3794,6 +3787,7 @@ const OrderForm = () => {
     const [products, setProducts] = useState([]);
     const [attributes, setAttributes] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
+    const [profitCenters, setProfitCenters] = useState([]);
 
     const [searchTerm, setSearchTerm] = useState(() => initialProductQuickFilterState.searchTerm);
     const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
@@ -3899,6 +3893,7 @@ const OrderForm = () => {
     const actualProductPickerAnchorRef = useRef(null);
     const actualProductSectionRef = useRef(null);
     const orderItemNameRefs = useRef(new Map());
+    const profitCenterManualOverrideRef = useRef(false);
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -4461,6 +4456,11 @@ const OrderForm = () => {
         district: '',
         ward: '',
         source: DEFAULT_MANUAL_ORDER_SOURCE,
+        sales_channel: 'online',
+        profit_center_id: '',
+        offline_store_name: '',
+        offline_seller_name: '',
+        offline_payment_method: '',
         order_type: ORDER_TYPE_STANDARD,
         settlement_delta: 0,
         return_tracking_code: '',
@@ -4483,6 +4483,21 @@ const OrderForm = () => {
     });
     const [discountInputValue, setDiscountInputValue] = useState(() => formatSignedMoneyInputValue(0));
     const discountInputRef = useRef(null);
+    useEffect(() => {
+        if (profitCenterManualOverrideRef.current) {
+            return;
+        }
+
+        const nextProfitCenterId = resolveSingleOrderItemsProfitCenterId(formData.items);
+        if (String(formData.profit_center_id || '') === nextProfitCenterId) {
+            return;
+        }
+
+        setFormData((current) => ({
+            ...current,
+            profit_center_id: resolveSingleOrderItemsProfitCenterId(current.items),
+        }));
+    }, [formData.items, formData.profit_center_id]);
     const activeOrderAiReplaceLine = useMemo(
         () => formData.items.find((item) => normalizeCanvasText(item?.line_id) === normalizeCanvasText(orderAiReplaceLineId)) || null,
         [formData.items, orderAiReplaceLineId]
@@ -4898,24 +4913,11 @@ const OrderForm = () => {
             return;
         }
 
-        const parsed = parseAdministrativeAddress(trimmedAddress, VN_REGIONS);
         const extracted = extractCustomerInfoFromText(trimmedAddress);
-        const normalizedConfidence = parsed?.confidence || 'none';
-        const detectedCustomerName = String(parsed?.customerName || extracted.customerName || '').trim();
-        const detectedCustomerPhone = String(parsed?.customerPhone || extracted.customerPhone || '').trim();
-        const detectedAddressText = String(parsed?.addressText || extracted.addressText || trimmedAddress).trim();
-        const detectedAddressDetail = String(parsed?.addressDetail || extracted.addressText || trimmedAddress).trim();
+        const detectedCustomerName = String(extracted.customerName || '').trim();
+        const detectedCustomerPhone = String(extracted.customerPhone || '').trim();
+        const detectedAddressText = String(extracted.addressText || trimmedAddress).trim();
         const hasExistingShippingAddress = hasNonEmptyText(formData.shipping_address) || hasNonEmptyText(formData.address_detail);
-        const hasExistingAdministrativeInfo = Boolean(
-            hasNonEmptyText(formData.province)
-            || hasNonEmptyText(formData.district)
-            || hasNonEmptyText(formData.ward)
-        );
-        const hasDetectedAdministrativeInfo = Boolean(
-            hasNonEmptyText(parsed?.province)
-            || hasNonEmptyText(parsed?.district)
-            || hasNonEmptyText(parsed?.ward)
-        );
         const autoFilledFields = [];
 
         if (!hasNonEmptyText(formData.customer_name) && detectedCustomerName) {
@@ -4930,26 +4932,15 @@ const OrderForm = () => {
             autoFilledFields.push('địa chỉ giao hàng');
         }
 
-        if (parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo) {
-            autoFilledFields.push('đơn vị hành chính');
-        }
-
         setFormData(prev => ({
             ...prev,
             customer_name: !hasNonEmptyText(formData.customer_name) && detectedCustomerName ? detectedCustomerName : prev.customer_name,
             customer_phone: !hasNonEmptyText(formData.customer_phone) && detectedCustomerPhone ? detectedCustomerPhone : prev.customer_phone,
             shipping_address: !hasExistingShippingAddress && detectedAddressText ? detectedAddressText : prev.shipping_address,
-            address_detail: !hasExistingShippingAddress && detectedAddressText ? (detectedAddressDetail || detectedAddressText) : prev.address_detail,
-            province: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.province || '') : prev.province,
-            district: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.district || '') : prev.district,
-            ward: parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo ? (parsed.ward || '') : prev.ward,
+            address_detail: !hasExistingShippingAddress && detectedAddressText ? detectedAddressText : prev.address_detail,
         }));
 
-        if (parsed?.regionType && parsed && normalizedConfidence !== 'none' && hasDetectedAdministrativeInfo && !hasExistingAdministrativeInfo) {
-            setRegionType(parsed.regionType);
-        }
-
-        setAddressDetection(buildAddressDetectionFeedback(normalizedConfidence, autoFilledFields));
+        setAddressDetection(buildAddressDetectionFeedback(autoFilledFields));
     }, [formData]);
 
     const handleCancel = useCallback(() => {
@@ -6826,12 +6817,14 @@ const OrderForm = () => {
 
             setOrderStatuses(bootstrap.order_statuses || []);
             setAttributes(bootstrap.order_attributes || []);
+            setProfitCenters(bootstrap.profit_centers || []);
             setProductQuickFilterAttributes(buildProductQuickFilterAttributes(bootstrap.product_attributes || []));
             setQuoteSettings((prev) => ({ ...prev, ...(bootstrap.quote_settings || {}) }));
             setQuoteTemplates(sortQuoteTemplates(bootstrap.quote_templates || []));
             setOrderAiRules(normalizeOrderAiRules(aiRulesResponse?.data?.rules || []));
         } catch (error) {
             setProductQuickFilterAttributes([]);
+            setProfitCenters([]);
             setOrderAiRules([]);
             console.error("Error fetching order form bootstrap", error);
         }
@@ -6855,6 +6848,7 @@ const OrderForm = () => {
             const order = response.data;
             const nextOrderKind = getNormalizedOrderKind(order.order_kind);
             const nextOrderType = normalizeOrderType(order.order_type);
+            profitCenterManualOverrideRef.current = !isDuplicating && Boolean(order.profit_center_id);
 
             const customAttrValues = {};
             order.attribute_values?.forEach(av => {
@@ -6918,6 +6912,7 @@ const OrderForm = () => {
                 ),
                 options: item.options || {},
                 category_id: item.product?.category_id,
+                profit_center_id: item.product?.profit_center_id || item.product?.parent_configurable?.profit_center_id,
                 parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
                 product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
             })) || [];
@@ -6967,6 +6962,7 @@ const OrderForm = () => {
                     ),
                     options: item.options || {},
                     category_id: item.product?.category_id,
+                    profit_center_id: item.product?.profit_center_id || item.product?.parent_configurable?.profit_center_id,
                     parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
                     product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
                     main_image: item.product?.main_image || item.main_image || '',
@@ -7044,6 +7040,11 @@ const OrderForm = () => {
                     order.source,
                     isDuplicating ? DEFAULT_MANUAL_ORDER_SOURCE : UNKNOWN_ORDER_SOURCE
                 ),
+                sales_channel: isDuplicating ? 'online' : (order.sales_channel || 'online'),
+                profit_center_id: isDuplicating ? '' : (order.profit_center_id || ''),
+                offline_store_name: isDuplicating ? '' : (order.offline_store_name || ''),
+                offline_seller_name: isDuplicating ? '' : (order.offline_seller_name || ''),
+                offline_payment_method: isDuplicating ? '' : (order.offline_payment_method || ''),
                 type: order.type || 'Lẻ',
                 shipment_status: isDuplicating ? 'Chưa giao' : (order.shipment_status || 'Chưa giao'),
                 province: order.province || '',
@@ -7202,6 +7203,7 @@ const OrderForm = () => {
     function buildOrderMutationPayload(submitOrderKind = null) {
         const normalizedOrderKind = getNormalizedOrderKind(submitOrderKind || orderKind);
         const isMainOrder = !isDraftOrderKind(normalizedOrderKind);
+        const isOfflineOrder = false;
 
         const normalizedAddressDetail = extractAddressDetail({
             shippingAddress: formData.shipping_address.trim(),
@@ -7214,7 +7216,7 @@ const OrderForm = () => {
         const trimmedCustomerName = String(formData.customer_name || '').trim();
         const trimmedCustomerPhone = String(formData.customer_phone || '').trim();
 
-        if (isMainOrder && !effectiveAddressDetail) {
+        if (isMainOrder && !isOfflineOrder && !effectiveAddressDetail) {
             alert('Vui lòng nhập địa chỉ giao hàng.');
             return null;
         }
@@ -7282,6 +7284,11 @@ const OrderForm = () => {
                 ),
                 discount: submittedDiscount,
                 source: normalizeOrderSource(formData.source, DEFAULT_MANUAL_ORDER_SOURCE),
+                sales_channel: 'online',
+                profit_center_id: Number(formData.profit_center_id) || null,
+                offline_store_name: '',
+                offline_seller_name: '',
+                offline_payment_method: '',
                 items: normalizedItems,
                 order_kind: normalizedOrderKind,
                 order_type: normalizedOrderType,
@@ -7294,7 +7301,7 @@ const OrderForm = () => {
                 region_type: regionType,
                 lead_id: leadId ? Number(leadId) : undefined,
                 address_detail: effectiveAddressDetail,
-                shipping_address: isMainOrder
+                shipping_address: isMainOrder && !isOfflineOrder
                     ? buildShippingAddress({
                         addressDetail: effectiveAddressDetail,
                         ward: formData.ward,
@@ -7345,6 +7352,9 @@ const OrderForm = () => {
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
+        if (name === 'profit_center_id') {
+            profitCenterManualOverrideRef.current = true;
+        }
         if (name === 'address_detail') {
             setAddressDetection(null);
             setFormData(prev => syncShippingAddress({ ...prev, address_detail: value }));
@@ -7616,6 +7626,7 @@ const OrderForm = () => {
     const normalizedOrderType = normalizeOrderType(formData.order_type);
     const orderTypeMeta = getOrderTypeMeta(normalizedOrderType);
     const specialOrderType = isSpecialOrderType(normalizedOrderType);
+    const selectableProfitCenters = profitCenters;
     const outgoingTrackingCode = resolveOutgoingTrackingCode(formData);
     const defaultReturnTrackingCode = buildDefaultReturnTrackingCode(normalizedOrderType, outgoingTrackingCode);
     const quotePricingSummary = buildOrderPricingSummary(formData);
@@ -8445,7 +8456,7 @@ const OrderForm = () => {
                 onBlur={handleShippingAddressBlur}
                 rows="3"
                 className={adminTextareaClassName}
-                placeholder="Dán hoặc nhập địa chỉ để tự nhận diện"
+                placeholder="Dán hoặc nhập địa chỉ giao hàng"
             />
         </Field>
     );
@@ -10791,48 +10802,70 @@ const OrderForm = () => {
                         </div>
 
                         <div className="space-y-[10px]">
-                            <Field label="Trạng thái">
-                                <select
-                                    name="status"
-                                    value={formData.status}
-                                    onChange={handleInputChange}
-                                    className={adminInputClassName}
-                                >
-                                    {orderStatuses.filter(s => s.is_active || (formData.status && s.code.toLowerCase() === formData.status.toLowerCase())).map(s => (
-                                        <option key={s.id} value={s.code}>{s.name || s.code}</option>
-                                    ))}
-                                    {formData.status && !orderStatuses.some(s => s.code.toLowerCase() === formData.status.toLowerCase()) && (
-                                        <option value={formData.status}>{formData.status}</option>
-                                    )}
-                                </select>
-                            </Field>
-                            <Field label="Loại đơn">
-                                <select
-                                    name="order_type"
-                                    value={normalizedOrderType}
-                                    onChange={handleOrderTypeChange}
-                                    className={adminInputClassName}
-                                >
-                                    {ORDER_TYPE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                </select>
-                            </Field>
-                            <Field label={'Ngu\u1ed3n \u0111\u01a1n'}>
-                                <select
-                                    name="source"
-                                    value={orderSourceMeta.value}
-                                    onChange={handleInputChange}
-                                    className={adminInputClassName}
-                                >
-                                    {!ORDER_SOURCE_OPTIONS.some((option) => option.value === orderSourceMeta.value) && (
-                                        <option value={orderSourceMeta.value}>{orderSourceMeta.label}</option>
-                                    )}
-                                    {ORDER_SOURCE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                </select>
-                            </Field>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                                <Field label="Trạng thái">
+                                    <select
+                                        name="status"
+                                        value={formData.status}
+                                        onChange={handleInputChange}
+                                        className={adminInputClassName}
+                                    >
+                                        {orderStatuses.filter(s => s.is_active || (formData.status && s.code.toLowerCase() === formData.status.toLowerCase())).map(s => (
+                                            <option key={s.id} value={s.code}>{s.name || s.code}</option>
+                                        ))}
+                                        {formData.status && !orderStatuses.some(s => s.code.toLowerCase() === formData.status.toLowerCase()) && (
+                                            <option value={formData.status}>{formData.status}</option>
+                                        )}
+                                    </select>
+                                </Field>
+                                <Field label="Loại đơn">
+                                    <select
+                                        name="order_type"
+                                        value={normalizedOrderType}
+                                        onChange={handleOrderTypeChange}
+                                        className={adminInputClassName}
+                                    >
+                                        {ORDER_TYPE_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                                <Field label={'Ngu\u1ed3n \u0111\u01a1n'}>
+                                    <select
+                                        name="source"
+                                        value={orderSourceMeta.value}
+                                        onChange={handleInputChange}
+                                        className={adminInputClassName}
+                                    >
+                                        {!ORDER_SOURCE_OPTIONS.some((option) => option.value === orderSourceMeta.value) && (
+                                            <option value={orderSourceMeta.value}>{orderSourceMeta.label}</option>
+                                        )}
+                                        {ORDER_SOURCE_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                            </div>
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                                <Field label="Người quản lý lãi lỗ">
+                                    <select
+                                        name="profit_center_id"
+                                        value={formData.profit_center_id || ''}
+                                        onChange={handleInputChange}
+                                        className={adminInputClassName}
+                                    >
+                                        <option value="">Chưa gắn quản lý</option>
+                                        {selectableProfitCenters.map((center) => (
+                                            <option key={center.id} value={center.id}>
+                                                {center.manager_name ? `${center.manager_name} - ${center.name}` : center.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+                                <Field label="NV chốt">
+                                    <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
+                                </Field>
+                            </div>
                             {specialOrderType && (
                                 <div className="rounded-sm border border-amber-200 bg-amber-50 px-3 py-3 space-y-3">
                                     <p className="text-[12px] font-semibold text-amber-800">
@@ -10940,10 +10973,6 @@ const OrderForm = () => {
                                     className={`${adminTextareaClassName} bg-slate-50`}
                                     placeholder="Tự động ghép từ thông tin địa chỉ bên dưới"
                                 />
-                            </Field>
-
-                            <Field label="Nhân viên xử lý">
-                                <div className={`${adminInputClassName} flex items-center text-primary/60 bg-slate-50`}>{user?.name || "Super Admin"}</div>
                             </Field>
 
                             <Field label="Tên khách hàng" labelStyle={adminCustomerLabelStyle}>

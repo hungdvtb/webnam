@@ -5,7 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
 use App\Models\InventoryDocument;
+use App\Models\AdAccountProfitCenter;
 use App\Models\Order;
+use App\Models\ProfitCenter;
+use App\Models\User;
+use App\Services\AccessControlService;
 use App\Services\FacebookAdsSyncService;
 use App\Services\GoogleAdsSyncService;
 use App\Support\OrderShippingFeeCalculator;
@@ -155,15 +159,220 @@ class FinDailyProfitReportController extends Controller
         ]);
     }
 
-    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds): array
+    private function normalizeSalesChannel(mixed $value): ?string
     {
+        $normalized = strtolower(trim((string) $value));
+
+        return match ($normalized) {
+            'online', 'web', 'website', 'facebook', 'google' => Order::SALES_CHANNEL_ONLINE,
+            'offline', 'store', 'shop', 'cua_hang', 'cua-hang', 'tai_cua_hang', 'tai-cua-hang' => Order::SALES_CHANNEL_OFFLINE,
+            default => null,
+        };
+    }
+
+    private function resolveProfitScope(Request $request): array
+    {
+        $access = app(AccessControlService::class);
+        $accountId = $access->resolveAccountIdFromRequest($request);
+        $user = $request->user();
+        $scope = $user
+            ? $access->profitScopeForUser($user, $accountId)
+            : [
+                'can_view' => false,
+                'all' => false,
+                'manager_user_ids' => [],
+                'profit_center_ids' => [],
+                'account_id' => $accountId,
+            ];
+
+        $requestedManagerIds = collect($this->extractRequestedValues($request->input('manager_user_id', $request->input('manager_user_ids', []))))
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+        $requestedCenterIds = collect($this->extractRequestedValues($request->input('profit_center_id', $request->input('profit_center_ids', []))))
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($requestedManagerIds !== []) {
+            $managerCenterIds = ProfitCenter::query()
+                ->whereIn('manager_user_id', $requestedManagerIds)
+                ->where('is_active', true)
+                ->when($accountId !== null, fn ($query) => $query->where('account_id', (int) $accountId))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->values()
+                ->all();
+
+            $requestedCenterIds = array_values(array_unique(array_merge($requestedCenterIds, $managerCenterIds)));
+        }
+
+        $scope['requested_manager_user_ids'] = $requestedManagerIds;
+        $scope['requested_profit_center_ids'] = $requestedCenterIds;
+        $scope['label'] = $this->profitScopeLabel($scope);
+
+        return $scope;
+    }
+
+    private function profitScopeLabel(array $scope): string
+    {
+        if (!($scope['can_view'] ?? false)) {
+            return 'Khong co quyen xem lai lo';
+        }
+
+        $requestedManagerIds = $scope['requested_manager_user_ids'] ?? [];
+        if ($requestedManagerIds !== []) {
+            $names = User::query()
+                ->whereIn('id', $requestedManagerIds)
+                ->pluck('name')
+                ->filter()
+                ->values()
+                ->all();
+
+            return $names !== [] ? implode(', ', $names) : 'Nguoi quan ly da chon';
+        }
+
+        $requestedCenterIds = $scope['requested_profit_center_ids'] ?? [];
+        if ($requestedCenterIds !== []) {
+            $names = ProfitCenter::query()
+                ->whereIn('id', $requestedCenterIds)
+                ->pluck('name')
+                ->filter()
+                ->values()
+                ->all();
+
+            return $names !== [] ? implode(', ', $names) : 'Nhom quan ly da chon';
+        }
+
+        if ($scope['all'] ?? false) {
+            return 'Tong tat ca nguoi quan ly';
+        }
+
+        $managerIds = $scope['manager_user_ids'] ?? [];
+        if ($managerIds !== []) {
+            $names = User::query()
+                ->whereIn('id', $managerIds)
+                ->pluck('name')
+                ->filter()
+                ->values()
+                ->all();
+
+            if ($names !== []) {
+                return implode(', ', $names);
+            }
+        }
+
+        $centerIds = $scope['profit_center_ids'] ?? [];
+        if ($centerIds !== []) {
+            $names = ProfitCenter::query()
+                ->whereIn('id', $centerIds)
+                ->pluck('name')
+                ->filter()
+                ->values()
+                ->all();
+
+            if ($names !== []) {
+                return implode(', ', $names);
+            }
+        }
+
+        return 'Nguoi quan ly duoc phan quyen';
+    }
+
+    private function applyProfitScopeToOrderQuery($query, ?array $scope): void
+    {
+        if ($scope === null) {
+            return;
+        }
+
+        if (!($scope['can_view'] ?? false)) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $requestedCenterIds = array_values(array_filter(array_map('intval', $scope['requested_profit_center_ids'] ?? [])));
+
+        if (!($scope['all'] ?? false)) {
+            $centerIds = array_values(array_filter(array_map('intval', $scope['profit_center_ids'] ?? [])));
+
+            if ($centerIds !== []) {
+                $query->whereIn('profit_center_id', $centerIds);
+            } else {
+                $query->whereRaw('1 = 0');
+            }
+        }
+
+        if ($requestedCenterIds !== []) {
+            $query->whereIn('profit_center_id', $requestedCenterIds);
+        }
+    }
+
+    private function adAccountIdsForProfitScope(string $platform, ?array $scope): ?array
+    {
+        if ($scope === null || !($scope['can_view'] ?? false)) {
+            return null;
+        }
+
+        $requestedCenterIds = array_values(array_filter(array_map('intval', $scope['requested_profit_center_ids'] ?? [])));
+        $restrictedCenterIds = ($scope['all'] ?? false) ? [] : array_values(array_filter(array_map('intval', $scope['profit_center_ids'] ?? [])));
+
+        if (
+            ($scope['all'] ?? false)
+            && $requestedCenterIds === []
+        ) {
+            return null;
+        }
+
+        $query = AdAccountProfitCenter::query()
+            ->where('platform', $platform)
+            ->where('is_active', true);
+
+        if (($scope['account_id'] ?? null) !== null) {
+            $query->where('account_id', (int) $scope['account_id']);
+        }
+
+        $centerIds = $requestedCenterIds !== [] ? $requestedCenterIds : $restrictedCenterIds;
+
+        if ($centerIds !== []) {
+            $query->whereIn('profit_center_id', $centerIds);
+        }
+
+        return $query
+            ->pluck('external_account_id')
+            ->map(fn ($id) => (int) AdAccountProfitCenter::normalizeExternalAccountId($id))
+            ->filter(fn (int $id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null): array
+    {
+        $scopedAccountIds = $this->adAccountIdsForProfitScope($platform, $profitScope);
+        if (is_array($scopedAccountIds)) {
+            $configuredAccountIds = $configuredAccountIds !== []
+                ? array_values(array_intersect(array_map('intval', $configuredAccountIds), $scopedAccountIds))
+                : $scopedAccountIds;
+
+            if ($configuredAccountIds === []) {
+                return [];
+            }
+        }
+
         $query = DailyAdsSpend::query()
             ->where('platform', $platform)
             ->whereBetween('date', [$startDate, $endDate])
             ->select('date', DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
             ->groupBy('date');
 
-        if ($configuredAccountIds !== []) {
+        if (is_array($scopedAccountIds)) {
+            $query->whereIn('account_id', $configuredAccountIds);
+        } elseif ($configuredAccountIds !== []) {
             $hasConfiguredAccountRows = DailyAdsSpend::query()
                 ->where('platform', $platform)
                 ->whereBetween('date', [$startDate, $endDate])
@@ -350,6 +559,8 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
     }
 
     private function dailyReportBaseOrdersQuery(string $startDate, string $endDate, array $filters = [])
@@ -429,9 +640,15 @@ class FinDailyProfitReportController extends Controller
         $packFee = $config ? (float) $config->packaging_fee : 2000.0;
         $taxRate = $config ? (float) $config->tax_rate : 1.5;
         $adChannel = $this->normalizeReportAdChannel($filters['ad_channel'] ?? null);
+        $profitScope = $filters['profit_scope'] ?? null;
+        $hasProfitScopeFilter = $profitScope !== null && (
+            !($profitScope['all'] ?? false)
+            || !empty($profitScope['requested_manager_user_ids'] ?? [])
+            || !empty($profitScope['requested_profit_center_ids'] ?? [])
+        );
         $includeFacebookAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_FACEBOOK], true);
         $includeGoogleAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_GOOGLE], true);
-        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL;
+        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL && !$hasProfitScopeFilter;
 
         $baseOrdersQuery = $this->dailyReportBaseOrdersQuery($startDate, $endDate, $filters);
 
@@ -471,7 +688,8 @@ class FinDailyProfitReportController extends Controller
                 $startDate,
                 $endDate,
                 DailyAdsSpend::PLATFORM_FACEBOOK,
-                app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config)
+                app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config),
+                $profitScope
             )
             : [];
         $googleAdsSpends = $includeGoogleAds
@@ -479,7 +697,8 @@ class FinDailyProfitReportController extends Controller
                 $startDate,
                 $endDate,
                 DailyAdsSpend::PLATFORM_GOOGLE,
-                app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config)
+                app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config),
+                $profitScope
             )
             : [];
         $fbTaxRate = $config ? (float) $config->fb_tax_rate : 0;
@@ -592,6 +811,8 @@ class FinDailyProfitReportController extends Controller
                 'ad_channel' => $adChannel,
                 'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
                 'shared_costs_included' => $includeSharedCosts,
+                'profit_scope' => $profitScope,
+                'profit_scope_label' => $profitScope['label'] ?? 'Tong tat ca nguoi quan ly',
             ],
         ];
     }
@@ -682,6 +903,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query
             ->get([
@@ -812,6 +1034,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query;
     }
@@ -831,6 +1054,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query;
     }
@@ -1007,6 +1231,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query;
     }
@@ -1036,6 +1261,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query;
     }
@@ -1165,6 +1391,8 @@ class FinDailyProfitReportController extends Controller
             'start_date' => ['nullable', 'date_format:Y-m-d'],
             'end_date' => ['nullable', 'date_format:Y-m-d'],
             'ad_channel' => ['nullable', 'string'],
+            'manager_user_id' => ['nullable'],
+            'profit_center_id' => ['nullable'],
         ]);
 
         $metric = $this->normalizeMonthlyReportDrilldownMetric($request->input('metric'));
@@ -1188,8 +1416,13 @@ class FinDailyProfitReportController extends Controller
 
         $metricConfig = self::MONTHLY_REPORT_DRILLDOWN_METRICS[$metric];
         $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $profitScope = $this->resolveProfitScope($request);
+        if (!($profitScope['can_view'] ?? false)) {
+            return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
+        }
         $orders = $this->monthlyReportDrilldownOrders($metric, $range['start_date'], $range['end_date'], [
             'ad_channel' => $adChannel,
+            'profit_scope' => $profitScope,
         ]);
         $orderIds = $orders
             ->pluck('id')
@@ -1212,6 +1445,8 @@ class FinDailyProfitReportController extends Controller
                 'scope_label' => sprintf('Báo cáo tháng · %s · %s', $metricConfig['label'], $range['month_label']),
                 'ad_channel' => $adChannel,
                 'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
+                'profit_scope' => $profitScope,
+                'profit_scope_label' => $profitScope['label'] ?? '',
                 'value' => $this->calculateMonthlyReportDrilldownMetricValue($metric, $orders),
                 'order_ids' => $orderIds,
                 'filters' => $this->buildMonthlyReportDrilldownFilters($metric, $range, $orderIds),
@@ -1234,6 +1469,7 @@ class FinDailyProfitReportController extends Controller
             $query,
             $this->normalizeReportAdChannel($filters['ad_channel'] ?? null)
         );
+        $this->applyProfitScopeToOrderQuery($query, $filters['profit_scope'] ?? null);
 
         return $query
             ->get([
@@ -1338,6 +1574,8 @@ class FinDailyProfitReportController extends Controller
         $request->validate([
             'month' => ['required', 'regex:/^\d{4}-\d{2}$/'],
             'ad_channel' => ['nullable', 'string'],
+            'manager_user_id' => ['nullable'],
+            'profit_center_id' => ['nullable'],
         ]);
 
         try {
@@ -1354,8 +1592,13 @@ class FinDailyProfitReportController extends Controller
         $startDate = $monthStart->format('Y-m-d');
         $endDate = $monthEnd->format('Y-m-d');
         $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $profitScope = $this->resolveProfitScope($request);
+        if (!($profitScope['can_view'] ?? false)) {
+            return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
+        }
         $orders = $this->revenueReconciliationOrders($startDate, $endDate, [
             'ad_channel' => $adChannel,
+            'profit_scope' => $profitScope,
         ]);
 
         $dailyRevenueTotal = 0.0;
@@ -1447,6 +1690,8 @@ class FinDailyProfitReportController extends Controller
                 'end_date' => $endDate,
                 'ad_channel' => $adChannel,
                 'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
+                'profit_scope' => $profitScope,
+                'profit_scope_label' => $profitScope['label'] ?? '',
                 'summary' => [
                     'daily_revenue' => round($dailyRevenueTotal, 2),
                     'monthly_revenue' => round($monthlyRevenueTotal, 2),
@@ -1463,6 +1708,10 @@ class FinDailyProfitReportController extends Controller
     {
         $startDate = $request->start_date ?: date('Y-m-01');
         $endDate = $request->end_date ?: date('Y-m-d');
+        $profitScope = $this->resolveProfitScope($request);
+        if (!($profitScope['can_view'] ?? false)) {
+            return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
+        }
 
         app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
         app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
@@ -1471,6 +1720,7 @@ class FinDailyProfitReportController extends Controller
             'status' => $request->input('status'),
             'order_type' => $request->input('order_type'),
             'ad_channel' => $request->input('ad_channel'),
+            'profit_scope' => $profitScope,
         ]);
 
         return response()->json([
@@ -1486,10 +1736,18 @@ class FinDailyProfitReportController extends Controller
         $startDate = $request->start_date ?: date('Y-01-01');
         $endDate = $request->end_date ?: date('Y-m-d');
         $adChannel = $this->normalizeReportAdChannel($request->input('ad_channel'));
+        $profitScope = $this->resolveProfitScope($request);
+        if (!($profitScope['can_view'] ?? false)) {
+            return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
+        }
         $filters = [
             'ad_channel' => $adChannel,
+            'profit_scope' => $profitScope,
         ];
-        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL;
+        $hasProfitScopeFilter = !($profitScope['all'] ?? false)
+            || !empty($profitScope['requested_manager_user_ids'] ?? [])
+            || !empty($profitScope['requested_profit_center_ids'] ?? []);
+        $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL && !$hasProfitScopeFilter;
 
         app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
         app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
@@ -1624,6 +1882,8 @@ class FinDailyProfitReportController extends Controller
                 'ad_channel' => $adChannel,
                 'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
                 'shared_costs_included' => $includeSharedCosts,
+                'profit_scope' => $profitScope,
+                'profit_scope_label' => $profitScope['label'] ?? 'Tong tat ca nguoi quan ly',
             ],
         ]);
     }

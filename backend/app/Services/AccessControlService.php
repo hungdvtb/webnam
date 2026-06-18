@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Account;
+use App\Models\ProfitCenter;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -43,6 +44,11 @@ class AccessControlService
         'profit.view',
         'finance.view',
     ];
+
+    public const PROFIT_SCOPE_ALL = 'profit.scope.all';
+    private const LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX = 'profit.scope.channel.';
+    public const PROFIT_SCOPE_MANAGER_PREFIX = 'profit.scope.manager.';
+    public const PROFIT_SCOPE_CENTER_PREFIX = 'profit.scope.center.';
 
     private const ROLE_ALIASES = [
         'owner' => 'owner',
@@ -104,7 +110,10 @@ class AccessControlService
     public static function dataPermissionsForRole(string $role): array
     {
         return match (self::normalizeRole($role)) {
-            'owner', 'manager' => self::DATA_PERMISSIONS,
+            'owner', 'manager' => array_values(array_unique(array_merge(
+                self::DATA_PERMISSIONS,
+                [self::PROFIT_SCOPE_ALL]
+            ))),
             default => [],
         };
     }
@@ -179,7 +188,38 @@ class AccessControlService
     {
         $normalized = self::normalizePermissions($permissions);
 
-        return array_values(array_intersect($normalized, self::DATA_PERMISSIONS));
+        return array_values(array_filter($normalized, function (string $permission) {
+            if (in_array($permission, self::DATA_PERMISSIONS, true)) {
+                return true;
+            }
+
+            return self::isProfitScopePermission($permission);
+        }));
+    }
+
+    public static function isProfitScopePermission(string $permission): bool
+    {
+        if ($permission === self::PROFIT_SCOPE_ALL) {
+            return true;
+        }
+
+        if (str_starts_with($permission, self::LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX)) {
+            return true;
+        }
+
+        if (str_starts_with($permission, self::PROFIT_SCOPE_MANAGER_PREFIX)) {
+            $managerId = substr($permission, strlen(self::PROFIT_SCOPE_MANAGER_PREFIX));
+
+            return ctype_digit($managerId) && (int) $managerId > 0;
+        }
+
+        if (str_starts_with($permission, self::PROFIT_SCOPE_CENTER_PREFIX)) {
+            $centerId = substr($permission, strlen(self::PROFIT_SCOPE_CENTER_PREFIX));
+
+            return ctype_digit($centerId) && (int) $centerId > 0;
+        }
+
+        return false;
     }
 
     public static function moduleIdsFromPermissions(array $permissions): array
@@ -246,6 +286,67 @@ class AccessControlService
 
             return in_array($permission, $permissions, true);
         });
+    }
+
+    public function profitScopeForUser(User $user, int|string|null $accountId = null): array
+    {
+        if ((int) ($user->status ?? 1) !== 1) {
+            return $this->emptyProfitScope();
+        }
+
+        $managedCenterIds = $this->managedProfitCenterIds($user, $accountId);
+
+        if ($user->is_admin) {
+            return $this->profitScopePayload(true, true, [], [], [], $accountId, $managedCenterIds);
+        }
+
+        $managerIds = [];
+        $centerIds = $managedCenterIds;
+        $hasExplicitScope = false;
+        $hasAllScope = false;
+
+        foreach ($this->accountPivots($user, $accountId) as $pivot) {
+            if ((int) ($pivot->status ?? 1) !== 1) {
+                continue;
+            }
+
+            $permissions = self::normalizeDataPermissions($pivot->data_permissions ?? []);
+
+            foreach ($permissions as $permission) {
+                if (!self::isProfitScopePermission($permission)) {
+                    continue;
+                }
+
+                $hasExplicitScope = true;
+                if ($permission === self::PROFIT_SCOPE_ALL) {
+                    $hasAllScope = true;
+                    continue;
+                }
+
+                if (str_starts_with($permission, self::PROFIT_SCOPE_MANAGER_PREFIX)) {
+                    $managerIds[] = (int) substr($permission, strlen(self::PROFIT_SCOPE_MANAGER_PREFIX));
+                    continue;
+                }
+
+                if (str_starts_with($permission, self::PROFIT_SCOPE_CENTER_PREFIX)) {
+                    $centerIds[] = (int) substr($permission, strlen(self::PROFIT_SCOPE_CENTER_PREFIX));
+                }
+            }
+        }
+
+        if ($hasAllScope) {
+            return $this->profitScopePayload(true, true, [], [], [], $accountId, $managedCenterIds);
+        }
+
+        $managerIds = array_values(array_unique(array_filter(array_map('intval', $managerIds))));
+        if ($managerIds !== []) {
+            $centerIds = array_merge($centerIds, $this->profitCenterIdsForManagers($managerIds, $accountId));
+        }
+
+        $centerIds = array_values(array_unique(array_filter(array_map('intval', $centerIds))));
+        $canView = $managerIds !== [] || $centerIds !== [];
+
+        return $this->profitScopePayload($canView, false, $managerIds, $centerIds, $managerIds, $accountId, $managedCenterIds);
     }
 
     public function resolveAccountIdFromRequest(Request $request): ?int
@@ -343,6 +444,74 @@ class AccessControlService
         }
 
         return $accounts->map(fn ($account) => $account->pivot)->filter();
+    }
+
+    private function managedProfitCenterIds(User $user, int|string|null $accountId = null): array
+    {
+        $query = ProfitCenter::query()
+            ->where('manager_user_id', (int) $user->id)
+            ->where('is_active', true);
+
+        if ($accountId !== null && $accountId !== '') {
+            $query->where('account_id', (int) $accountId);
+        }
+
+        return $query
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function profitCenterIdsForManagers(array $managerIds, int|string|null $accountId = null): array
+    {
+        $managerIds = array_values(array_unique(array_filter(array_map('intval', $managerIds))));
+        if ($managerIds === []) {
+            return [];
+        }
+
+        $query = ProfitCenter::query()
+            ->whereIn('manager_user_id', $managerIds)
+            ->where('is_active', true);
+
+        if ($accountId !== null && $accountId !== '') {
+            $query->where('account_id', (int) $accountId);
+        }
+
+        return $query
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function emptyProfitScope(): array
+    {
+        return $this->profitScopePayload(false, false, [], [], [], null, []);
+    }
+
+    private function profitScopePayload(
+        bool $canView,
+        bool $all,
+        array $managerIds,
+        array $centerIds,
+        array $explicitManagerIds,
+        int|string|null $accountId,
+        array $managedCenterIds
+    ): array {
+        return [
+            'can_view' => $canView,
+            'all' => $all,
+            'manager_user_ids' => array_values(array_unique(array_map('intval', $managerIds))),
+            'profit_center_ids' => array_values(array_unique(array_map('intval', $centerIds))),
+            'explicit_manager_user_ids' => array_values(array_unique(array_map('intval', $explicitManagerIds))),
+            'account_id' => $accountId !== null && $accountId !== '' ? (int) $accountId : null,
+            'managed_profit_center_ids' => array_values(array_unique(array_map('intval', $managedCenterIds))),
+        ];
     }
 
     private function legacyUserPermissions(User $user): ?array

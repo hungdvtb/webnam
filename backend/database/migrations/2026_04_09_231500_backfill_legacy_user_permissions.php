@@ -41,14 +41,22 @@ return new class extends Migration
         // on the frontend because normalizeAdminPermissions() only falls back to legacy-all when
         // the value is strictly null, not an empty array).
         //
-        // PostgreSQL's json type does not support direct string comparison so we use whereRaw
-        // with an explicit cast to text for cross-database compat.
-        DB::table('users')
-            ->where('is_admin', false)
-            ->whereRaw("permissions::text = ?", ['[]'])
-            ->update([
-                'permissions' => $legacyPermissions,
-            ]);
+        // PostgreSQL's json type does not support direct string comparison, MySQL can use
+        // JSON_LENGTH(), while SQLite stores the test value as plain JSON text.
+        $emptyPermissionsQuery = DB::table('users')->where('is_admin', false);
+        $driver = DB::connection()->getDriverName();
+
+        if ($driver === 'pgsql') {
+            $emptyPermissionsQuery->whereRaw('permissions::text = ?', ['[]']);
+        } elseif ($driver === 'mysql') {
+            $emptyPermissionsQuery->whereRaw('JSON_LENGTH(permissions) = 0');
+        } else {
+            $emptyPermissionsQuery->whereRaw('permissions = ?', ['[]']);
+        }
+
+        $emptyPermissionsQuery->update([
+            'permissions' => $legacyPermissions,
+        ]);
     }
 
     /**

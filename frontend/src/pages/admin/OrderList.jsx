@@ -88,12 +88,15 @@ DEFAULT_COLUMNS.splice(8, 0, { id: 'inventory_slips', label: 'Phiếu kho', minW
 
 DEFAULT_COLUMNS.splice(7, 0, { id: 'cost_total', label: 'Giá vốn nhập', minWidth: '140px', align: 'right' });
 
+DEFAULT_COLUMNS.splice(3, 0, { id: 'profit_center', label: 'Người quản lý', minWidth: '150px' });
+
 const ORDER_TABLE_COLUMNS = [...DEFAULT_COLUMNS];
 const ORDER_LIST_STORAGE_KEY = 'order_list';
 const ORDER_LIST_VIEW_STATE_STORAGE_KEY = 'order_list_view_state_v1';
 const ORDER_COST_TOTAL_COLUMN_ID = 'cost_total';
 const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
 const ORDER_SOURCE_COLUMN_ID = 'source';
+const ORDER_PROFIT_CENTER_COLUMN_ID = 'profit_center';
 const ORDER_COLUMN_STORAGE_SCOPE_PAGE = 'order_list';
 const ORDER_SOURCE_BADGE_CLASSNAMES = {
     FB: 'border-sky-200 bg-sky-50 text-sky-700',
@@ -167,6 +170,12 @@ const getOrderSourceBadgeClassName = (source) => (
     ORDER_SOURCE_BADGE_CLASSNAMES[normalizeOrderSource(source, UNKNOWN_ORDER_SOURCE)]
     || 'border-primary/10 bg-primary/[0.03] text-primary'
 );
+
+const formatProfitCenterLabel = (center) => {
+    if (!center) return '';
+    const managerName = center.manager_name || center.manager?.name || '';
+    return managerName ? `${managerName} - ${center.name}` : (center.name || '');
+};
 
 const EXPORT_SLIP_FILTER_OPTIONS = [
     { value: 'created', label: 'Đã tạo phiếu xuất' },
@@ -838,6 +847,7 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     created_at_to: '',
     customer_phone: '',
     order_type: [],
+    profit_manager_id: '',
     shipping_address: '',
     shipping_carrier_code: '',
     export_slip_state: '',
@@ -904,6 +914,7 @@ const normalizeStoredOrderFilters = (value, fallbackSearch = '', orderIds = []) 
         created_at_to: String(value.created_at_to || ''),
         customer_phone: String(value.customer_phone || ''),
         order_type: normalizeOrderTypeFilterValues(value.order_type),
+        profit_manager_id: String(value.profit_manager_id || ''),
         shipping_address: String(value.shipping_address || ''),
         shipping_carrier_code: String(value.shipping_carrier_code || ''),
         export_slip_state: String(value.export_slip_state || ''),
@@ -1165,6 +1176,7 @@ const ensureOrderListFinancialColumnPreference = (storageKey = ORDER_LIST_STORAG
         insertMissingColumn(ORDER_COST_TOTAL_COLUMN_ID, ['total_price']);
         insertMissingColumn(SHIPPING_FEE_COLUMN_ID, [ORDER_COST_TOTAL_COLUMN_ID, 'total_price']);
         insertMissingColumn(ORDER_SOURCE_COLUMN_ID, ['customer']);
+        insertMissingColumn(ORDER_PROFIT_CENTER_COLUMN_ID, [ORDER_SOURCE_COLUMN_ID, 'customer']);
 
         if (hasChanges) {
             window.localStorage.setItem(columnOrderStorageKey, JSON.stringify(nextOrder));
@@ -1333,6 +1345,7 @@ const buildOrderListRequestParams = ({
     if (filters.order_number?.trim()) params.order_number = filters.order_number.trim();
     if (filters.customer_phone?.trim()) params.customer_phone = filters.customer_phone.trim();
     if (filters.order_type?.length) params.order_type = normalizeOrderTypeFilterValues(filters.order_type).join(',');
+    if (filters.profit_manager_id) params.profit_manager_id = filters.profit_manager_id;
     if (filters.shipping_address?.trim()) params.shipping_address = filters.shipping_address.trim();
     if (filters.created_at_from) params.created_at_from = filters.created_at_from;
     if (filters.created_at_to) params.created_at_to = filters.created_at_to;
@@ -2491,6 +2504,155 @@ const QuickShipmentModal = ({
     );
 };
 
+const BulkOrderAttributesModal = ({ open, attributes, selectedCount, submitting, onClose, onSubmit }) => {
+    const [drafts, setDrafts] = useState({});
+
+    if (!open || typeof document === 'undefined') return null;
+
+    const setDraft = (attributeId, patch) => {
+        setDrafts((current) => ({
+            ...current,
+            [attributeId]: {
+                enabled: false,
+                clear: false,
+                value: '',
+                ...(current[attributeId] || {}),
+                ...patch,
+            },
+        }));
+    };
+
+    const toggleOption = (attributeId, optionValue) => {
+        const currentValues = Array.isArray(drafts[attributeId]?.value) ? drafts[attributeId].value : [];
+        const nextValues = currentValues.includes(optionValue)
+            ? currentValues.filter((value) => value !== optionValue)
+            : [...currentValues, optionValue];
+        setDraft(attributeId, { enabled: true, clear: false, value: nextValues });
+    };
+
+    const payload = Object.entries(drafts).reduce((result, [attributeId, draft]) => {
+        if (!draft?.enabled) return result;
+        result[attributeId] = draft.clear ? null : draft.value;
+        return result;
+    }, {});
+    const updateCount = Object.keys(payload).length;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-sm" onMouseDown={onClose}>
+            <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-primary/15 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+                <div className="flex items-center justify-between gap-3 border-b border-primary/10 px-5 py-4">
+                    <div>
+                        <h3 className="text-[16px] font-black text-primary">Cập nhật thuộc tính hàng loạt</h3>
+                        <p className="mt-1 text-[12px] font-semibold text-primary/50">Áp dụng cùng giá trị cho {selectedCount} đơn đang chọn.</p>
+                    </div>
+                    <button type="button" onClick={onClose} className="inline-flex size-9 items-center justify-center rounded-full text-primary/45 hover:bg-primary/5 hover:text-primary" aria-label="Đóng">
+                        <span className="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+
+                <div className="flex-1 space-y-3 overflow-y-auto p-5">
+                    {attributes.map((attribute) => {
+                        const draft = drafts[attribute.id] || { enabled: false, clear: false, value: '' };
+                        const isMultiValue = attribute.frontend_type === 'checkbox';
+                        const options = Array.isArray(attribute.options) ? attribute.options : [];
+
+                        return (
+                            <div key={attribute.id} className={`rounded-lg border p-3 transition ${draft.enabled ? 'border-primary/30 bg-primary/[0.025]' : 'border-primary/10 bg-white'}`}>
+                                <label className="flex cursor-pointer items-center gap-3">
+                                    <input
+                                        type="checkbox"
+                                        checked={Boolean(draft.enabled)}
+                                        onChange={(event) => setDraft(attribute.id, { enabled: event.target.checked })}
+                                        className="size-4 accent-primary"
+                                    />
+                                    <span className="text-[13px] font-black text-primary">{attribute.name}</span>
+                                </label>
+
+                                {draft.enabled && (
+                                    <div className="mt-3 pl-7">
+                                        <label className="mb-2 flex items-center gap-2 text-[11px] font-bold text-primary/55">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(draft.clear)}
+                                                onChange={(event) => setDraft(attribute.id, { clear: event.target.checked })}
+                                                className="size-4 accent-brick"
+                                            />
+                                            Xóa giá trị hiện tại
+                                        </label>
+
+                                        {!draft.clear && isMultiValue && options.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                                {options.map((option) => {
+                                                    const checked = Array.isArray(draft.value) && draft.value.includes(option.value);
+                                                    return (
+                                                        <label key={option.id || option.value} className={`cursor-pointer rounded-full border px-3 py-1.5 text-[12px] font-bold ${checked ? 'border-primary bg-primary text-white' : 'border-primary/15 bg-white text-primary'}`}>
+                                                            <input type="checkbox" checked={checked} onChange={() => toggleOption(attribute.id, option.value)} className="sr-only" />
+                                                            {option.value}
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+
+                                        {!draft.clear && !isMultiValue && options.length > 0 && (
+                                            <select
+                                                value={draft.value ?? ''}
+                                                onChange={(event) => setDraft(attribute.id, { value: event.target.value })}
+                                                className="h-10 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-bold text-primary outline-none focus:border-primary"
+                                            >
+                                                <option value="">Chọn giá trị</option>
+                                                {options.map((option) => <option key={option.id || option.value} value={option.value}>{option.value}</option>)}
+                                            </select>
+                                        )}
+
+                                        {!draft.clear && options.length === 0 && (
+                                            attribute.frontend_type === 'textarea' ? (
+                                                <textarea
+                                                    rows={3}
+                                                    value={draft.value ?? ''}
+                                                    onChange={(event) => setDraft(attribute.id, { value: event.target.value })}
+                                                    className="w-full rounded-sm border border-primary/20 bg-white px-3 py-2 text-[13px] font-semibold text-primary outline-none focus:border-primary"
+                                                />
+                                            ) : (
+                                                <input
+                                                    type={attribute.frontend_type === 'date' ? 'date' : 'text'}
+                                                    value={draft.value ?? ''}
+                                                    onChange={(event) => setDraft(attribute.id, { value: event.target.value })}
+                                                    className="h-10 w-full rounded-sm border border-primary/20 bg-white px-3 text-[13px] font-semibold text-primary outline-none focus:border-primary"
+                                                />
+                                            )
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+
+                    {attributes.length === 0 && (
+                        <div className="rounded-lg border border-dashed border-primary/15 px-5 py-10 text-center text-[13px] font-semibold text-primary/45">Chưa có thuộc tính đơn hàng để cập nhật.</div>
+                    )}
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-t border-primary/10 bg-slate-50 px-5 py-4">
+                    <span className="text-[12px] font-bold text-primary/50">{updateCount} thuộc tính sẽ được cập nhật</span>
+                    <div className="flex items-center gap-2">
+                        <button type="button" onClick={onClose} className="h-10 rounded-sm border border-primary/15 bg-white px-4 text-[12px] font-black text-primary hover:bg-primary/5">Hủy</button>
+                        <button
+                            type="button"
+                            onClick={() => onSubmit(payload)}
+                            disabled={submitting || updateCount === 0}
+                            className="h-10 rounded-sm bg-primary px-5 text-[12px] font-black text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                            {submitting ? 'Đang cập nhật...' : 'Cập nhật đơn đã chọn'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
 const OrderList = () => {
     const { user } = useAuth();
     const navigate = useNavigate();
@@ -2514,6 +2676,7 @@ const OrderList = () => {
     const filterRef = useRef(null);
     const columnSettingsRef = useRef(null);
     const [orderStatuses, setOrderStatuses] = useState([]);
+    const [profitCenters, setProfitCenters] = useState([]);
     const [orders, setOrders] = useState([]);
     const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
     const [allAttributes, setAllAttributes] = useState([]);
@@ -2552,6 +2715,8 @@ const OrderList = () => {
     const [quickSelectResult, setQuickSelectResult] = useState(null);
     const [showFilters, setShowFilters] = useState(false);
     const [showColumnSettings, setShowColumnSettings] = useState(false);
+    const [bulkAttributeOpen, setBulkAttributeOpen] = useState(false);
+    const [bulkAttributeSubmitting, setBulkAttributeSubmitting] = useState(false);
     const initialListParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
     const routeOrderScope = useMemo(() => parseOrderListRouteScope(location.search), [location.search]);
     const routeReportScope = useMemo(
@@ -2745,6 +2910,27 @@ const OrderList = () => {
         () => new Map(orderStatuses.map((status) => [String(status.code), status])),
         [orderStatuses]
     );
+    const profitCenterById = useMemo(
+        () => new Map(profitCenters.map((center) => [String(center.id), center])),
+        [profitCenters]
+    );
+    const profitManagerOptions = useMemo(() => {
+        const managers = new Map();
+        profitCenters.forEach((center) => {
+            const managerId = Number(center.manager_user_id || center.manager?.id || 0);
+            const managerName = String(center.manager_name || center.manager?.name || '').trim();
+            if (managerId > 0 && managerName && !managers.has(managerId)) {
+                managers.set(managerId, { id: managerId, name: managerName });
+            }
+        });
+
+        return Array.from(managers.values()).sort((left, right) => left.name.localeCompare(right.name, 'vi'));
+    }, [profitCenters]);
+    const activeProfitManagerLabel = useMemo(() => {
+        if (filters.profit_manager_id === 'unassigned') return 'Chưa gắn người quản lý';
+        return profitManagerOptions.find((manager) => String(manager.id) === String(filters.profit_manager_id))?.name
+            || filters.profit_manager_id;
+    }, [filters.profit_manager_id, profitManagerOptions]);
     const activeStatusFilters = useMemo(
         () => buildOrderStatusFilterSelections(filters.status, statusMap),
         [filters.status, statusMap]
@@ -3023,10 +3209,12 @@ const OrderList = () => {
             const nextStatuses = bootstrap.order_statuses || [];
             const nextAttributes = bootstrap.order_attributes || [];
             const nextCarriers = bootstrap.connected_carriers || [];
+            const nextProfitCenters = bootstrap.profit_centers || [];
 
             setOrderStatuses(nextStatuses);
             setAllAttributes(nextAttributes);
             setConnectedCarriers(nextCarriers);
+            setProfitCenters(nextProfitCenters);
 
             const attrColumns = nextAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
@@ -3388,6 +3576,7 @@ const OrderList = () => {
                 && !prev.status_exclude?.length
                 && !prev.customer_name && !prev.order_number && !prev.created_at_from && !prev.created_at_to
                 && !prev.customer_phone && !prev.order_type?.length && !prev.shipping_address
+                && !prev.profit_manager_id
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
                 && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
                 && Object.keys(prev.attributes || {}).length === 0
@@ -4509,6 +4698,70 @@ const OrderList = () => {
         }
     }, []);
 
+    const handleBulkProfitCenterUpdate = useCallback(async (nextProfitCenterValue) => {
+        const ids = [...selectedIdsRef.current];
+        if (!ids.length || !nextProfitCenterValue) {
+            return;
+        }
+
+        const profitCenterId = nextProfitCenterValue === '__clear__'
+            ? null
+            : Number(nextProfitCenterValue);
+        if (nextProfitCenterValue !== '__clear__' && (!Number.isInteger(profitCenterId) || profitCenterId <= 0)) {
+            return;
+        }
+
+        try {
+            setLoading(true);
+            await orderApi.bulkUpdate({ ids, profit_center_id: profitCenterId });
+            const nextProfitCenter = profitCenterId
+                ? profitCenterById.get(String(profitCenterId)) || null
+                : null;
+            setOrders((currentOrders) => currentOrders.map((item) => (
+                ids.includes(item.id)
+                    ? {
+                        ...item,
+                        profit_center_id: profitCenterId,
+                        profit_center: nextProfitCenter,
+                        profitCenter: nextProfitCenter,
+                    }
+                    : item
+            )));
+            setNotification({ type: 'success', message: `Đã đổi người quản lý ${ids.length} đơn.` });
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể đổi người quản lý đơn hàng loạt.',
+            });
+        } finally {
+            setLoading(false);
+        }
+    }, [profitCenterById]);
+
+    const handleBulkAttributeUpdate = useCallback(async (customAttributes) => {
+        const ids = [...selectedIdsRef.current];
+        if (!ids.length || !customAttributes || Object.keys(customAttributes).length === 0) return;
+
+        try {
+            setBulkAttributeSubmitting(true);
+            const response = await orderApi.bulkUpdate({ ids, custom_attributes: customAttributes });
+            const updatedCount = Number(response?.data?.updated_count || ids.length);
+            setNotification({
+                type: 'success',
+                message: `Đã cập nhật thuộc tính cho ${updatedCount} đơn.`,
+            });
+            setBulkAttributeOpen(false);
+            await fetchOrders(pagination.current_page);
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể cập nhật thuộc tính hàng loạt.',
+            });
+        } finally {
+            setBulkAttributeSubmitting(false);
+        }
+    }, [fetchOrders, pagination.current_page]);
+
     const handleCopy = (t, e) => {
         if (e) e.stopPropagation();
         navigator.clipboard.writeText(t);
@@ -4607,6 +4860,7 @@ const OrderList = () => {
         if (filters.order_number) c++;
         if (filters.customer_phone) c++;
         if (filters.order_type?.length) c++;
+        if (filters.profit_manager_id) c++;
         if (filters.shipping_carrier_code) c++;
         INVENTORY_SLIP_FILTERS.forEach(({ key }) => {
             if (filters[key]) c++;
@@ -5031,6 +5285,16 @@ const OrderList = () => {
 
                         {selectedIds.length > 0 && (
                             <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
+                                <button
+                                    type="button"
+                                    onClick={() => setBulkAttributeOpen(true)}
+                                    disabled={loading || allAttributes.length === 0}
+                                    className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary transition-all hover:border-primary/30 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Cập nhật thuộc tính cho đơn đã chọn"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">edit_attributes</span>
+                                    Thuộc tính
+                                </button>
                                 <select
                                     defaultValue=""
                                     onClick={(event) => event.stopPropagation()}
@@ -5046,6 +5310,24 @@ const OrderList = () => {
                                     <option value="">Đổi nguồn</option>
                                     {ORDER_SOURCE_OPTIONS.map((option) => (
                                         <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    defaultValue=""
+                                    onClick={(event) => event.stopPropagation()}
+                                    onChange={(event) => {
+                                        const nextProfitCenter = event.target.value;
+                                        event.target.value = '';
+                                        handleBulkProfitCenterUpdate(nextProfitCenter);
+                                    }}
+                                    disabled={loading}
+                                    className="h-9 max-w-[168px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Đổi người quản lý cho đơn đã chọn"
+                                >
+                                    <option value="">Đổi quản lý</option>
+                                    <option value="__clear__">Chưa gắn quản lý</option>
+                                    {profitCenters.map((center) => (
+                                        <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
                                     ))}
                                 </select>
                                 <button
@@ -5340,6 +5622,24 @@ const OrderList = () => {
                             </div>
                         </div>
                         <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
+                            <label className="text-[13px] font-medium text-stone-600">Người quản lý lãi lỗ</label>
+                            <div className="relative">
+                                <select
+                                    name="profit_manager_id"
+                                    value={tempFilters.profit_manager_id || ''}
+                                    onChange={handleTempFilterChange}
+                                    className="h-10 w-full cursor-pointer appearance-none rounded-sm border border-primary/20 bg-white px-3 pr-8 text-[13px] font-bold text-[#0F172A] outline-none focus:border-primary"
+                                >
+                                    <option value="">Tất cả người quản lý</option>
+                                    <option value="unassigned">Chưa gắn người quản lý</option>
+                                    {profitManagerOptions.map((manager) => (
+                                        <option key={manager.id} value={manager.id}>{manager.name}</option>
+                                    ))}
+                                </select>
+                                <span className="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">expand_more</span>
+                            </div>
+                        </div>
+                        <div className="p-4 border-r border-b border-primary/10 space-y-1.5">
                             <label className="text-[13px] font-medium text-stone-600">Ngày đặt</label>
                             <div className="flex gap-2 items-center h-10">
                                 <input name="created_at_from" type="date" className="flex-1 h-full bg-white border border-primary/10 rounded-sm px-2 text-[13px] font-bold text-[#0F172A] focus:outline-none focus:border-primary cursor-pointer" value={tempFilters.created_at_from} onChange={handleTempFilterChange} />
@@ -5578,6 +5878,13 @@ const OrderList = () => {
                                         {normalizeOrderTypeFilterValues(filters.order_type).map((type) => getOrderTypeMeta(type).label).join(', ')}
                                     </span>
                                     <button onClick={() => removeFilter('order_type')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                                </div>
+                            )}
+                            {filters.profit_manager_id && (
+                                <div className="flex items-center gap-2 rounded-sm border border-primary/30 bg-white px-2 py-1 shadow-sm">
+                                    <span className="text-[11px] text-primary/40">Người quản lý:</span>
+                                    <span className="text-[13px] font-bold text-[#0F172A]">{activeProfitManagerLabel}</span>
+                                    <button onClick={() => removeFilter('profit_manager_id')} className="text-primary/40 hover:text-brick"><span className="material-symbols-outlined text-[14px]">close</span></button>
                                 </div>
                             )}
                             {(filters.created_at_from || filters.created_at_to) && (
@@ -5952,6 +6259,19 @@ const OrderList = () => {
                                                             <option key={option.value} value={option.value}>{option.label}</option>
                                                         ))}
                                                     </select>
+                                                </td>
+                                            );
+                                        }
+                                        if (c.id === 'profit_center') {
+                                            const center = o.profit_center
+                                                || o.profitCenter
+                                                || profitCenterById.get(String(o.profit_center_id || ''));
+                                            const label = formatProfitCenterLabel(center);
+                                            return (
+                                                <td key={c.id} style={cs} className="px-3 py-2 border border-primary/20 text-primary">
+                                                    <span className={`block truncate text-[12px] font-bold ${label ? '' : 'text-primary/35'}`} title={label || undefined}>
+                                                        {label || 'Chưa gắn'}
+                                                    </span>
                                                 </td>
                                             );
                                         }
@@ -6359,6 +6679,35 @@ const OrderList = () => {
                         </button>
                     </div>
 
+                    {!isTrashView && (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setBulkAttributeOpen(true)}
+                                disabled={allAttributes.length === 0}
+                                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-primary disabled:opacity-45"
+                            >
+                                <span className="material-symbols-outlined text-[17px]">edit_attributes</span>
+                                Thuộc tính
+                            </button>
+                            <select
+                                defaultValue=""
+                                onChange={(event) => {
+                                    const nextProfitCenter = event.target.value;
+                                    event.target.value = '';
+                                    handleBulkProfitCenterUpdate(nextProfitCenter);
+                                }}
+                                className="h-11 min-w-0 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.05em] text-primary outline-none"
+                            >
+                                <option value="">Đổi người quản lý</option>
+                                <option value="__clear__">Chưa gắn quản lý</option>
+                                {profitCenters.map((center) => (
+                                    <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+
                     <div className="mt-3 grid grid-cols-3 gap-2">
                         {isTrashView ? (
                             <>
@@ -6403,6 +6752,19 @@ const OrderList = () => {
             )}
                 </>
             )}
+
+            {bulkAttributeOpen ? (
+                <BulkOrderAttributesModal
+                    open={bulkAttributeOpen}
+                    attributes={allAttributes}
+                    selectedCount={selectedIds.length}
+                    submitting={bulkAttributeSubmitting}
+                    onClose={() => {
+                        if (!bulkAttributeSubmitting) setBulkAttributeOpen(false);
+                    }}
+                    onSubmit={handleBulkAttributeUpdate}
+                />
+            ) : null}
 
             <PrintCompletionConfirmModal
                 open={printConfirmState.open}

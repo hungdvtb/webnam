@@ -14,10 +14,16 @@ class DailyAdsSpend extends Model
         'date',
         'amount',
         'account_id',
+        'profit_center_id',
     ];
 
     protected $casts = [
         'date' => 'date',
         'amount' => 'decimal:2',
     ];
+
+    public function profitCenter()
+    {
+        return $this->belongsTo(ProfitCenter::class);
+    }
 }

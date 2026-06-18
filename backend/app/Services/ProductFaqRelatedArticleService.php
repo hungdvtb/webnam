@@ -36,17 +36,45 @@ class ProductFaqRelatedArticleService
             ->unique(fn (array $entry) => $entry['post_id']
                 ? 'post:' . $entry['post_id']
                 : 'url:' . Str::lower($entry['url']))
-            ->values();
+            ->values()
+            ->map(function (array $row, int $index) use ($faq) {
+                return [
+                    ...$row,
+                    'account_id' => $faq->account_id,
+                    'product_faq_id' => $faq->id,
+                    'sort_order' => $index + 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            });
+
+        $currentRows = $faq->relatedArticles()
+            ->get(['post_id', 'source', 'url', 'title', 'excerpt', 'image_url', 'sort_order'])
+            ->map(fn (ProductFaqRelatedArticle $article) => $this->comparableRow([
+                'post_id' => $article->post_id,
+                'source' => $article->source,
+                'url' => $article->url,
+                'title' => $article->title,
+                'excerpt' => $article->excerpt,
+                'image_url' => $article->image_url,
+                'sort_order' => (int) $article->sort_order,
+            ]))
+            ->values()
+            ->all();
+        $nextRows = $rows
+            ->map(fn (array $row) => $this->comparableRow($row))
+            ->values()
+            ->all();
+
+        if ($currentRows === $nextRows) {
+            return;
+        }
 
         $faq->relatedArticles()->delete();
 
-        $rows->each(function (array $row, int $index) use ($faq) {
-            $faq->relatedArticles()->create([
-                ...$row,
-                'account_id' => $faq->account_id,
-                'sort_order' => $index + 1,
-            ]);
-        });
+        if ($rows->isNotEmpty()) {
+            ProductFaqRelatedArticle::query()->insert($rows->all());
+        }
     }
 
     public function publicPayload(ProductFaq $faq): array
@@ -219,6 +247,19 @@ class ProductFaqRelatedArticleService
                 ?: $this->fallbackTitleFromUrl($url),
             'excerpt' => $this->cleanText($entry['excerpt'] ?? null, 1000),
             'image_url' => $this->normalizeOptionalImageUrl($entry['image'] ?? $entry['image_url'] ?? null, $url),
+        ];
+    }
+
+    private function comparableRow(array $row): array
+    {
+        return [
+            'post_id' => isset($row['post_id']) ? (int) $row['post_id'] : null,
+            'source' => (string) ($row['source'] ?? ProductFaqRelatedArticle::SOURCE_POST),
+            'url' => (string) ($row['url'] ?? ''),
+            'title' => (string) ($row['title'] ?? ''),
+            'excerpt' => (string) ($row['excerpt'] ?? ''),
+            'image_url' => (string) ($row['image_url'] ?? ''),
+            'sort_order' => (int) ($row['sort_order'] ?? 0),
         ];
     }
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { accountApi, userApi } from '../../services/api';
+import { accountApi, financeApi, userApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import {
     ADMIN_ACTION_OPTIONS,
@@ -31,6 +31,17 @@ const labelForRole = (role) => (
 );
 
 const permissionId = (moduleId, actionId) => `${moduleId}.${actionId}`;
+const PROFIT_SCOPE_ALL = 'profit.scope.all';
+const LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX = 'profit.scope.channel.';
+const PROFIT_SCOPE_MANAGER_PREFIX = 'profit.scope.manager.';
+const PROFIT_SCOPE_CENTER_PREFIX = 'profit.scope.center.';
+const isProfitScopePermission = (permission) => (
+    permission === PROFIT_SCOPE_ALL
+    || String(permission || '').startsWith(LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX)
+    || String(permission || '').startsWith(PROFIT_SCOPE_MANAGER_PREFIX)
+    || String(permission || '').startsWith(PROFIT_SCOPE_CENTER_PREFIX)
+);
+const profitScopeManagerToken = (managerId) => `${PROFIT_SCOPE_MANAGER_PREFIX}${managerId}`;
 
 const moduleIdsFromDetailedPermissions = (permissions = []) => Array.from(new Set(
     permissions
@@ -58,6 +69,7 @@ const UserList = () => {
     const { user: currentUser } = useAuth();
     const [users, setUsers] = useState([]);
     const [accounts, setAccounts] = useState([]);
+    const [profitCentersByAccount, setProfitCentersByAccount] = useState({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [isFormOpen, setIsFormOpen] = useState(false);
@@ -96,10 +108,23 @@ const UserList = () => {
                 userApi.getAll(),
                 accountApi.getAll(),
             ]);
-            setUsers(Array.isArray(usersResponse.data) ? usersResponse.data : []);
-            setAccounts(Array.isArray(accountsResponse.data) ? accountsResponse.data : []);
+            const nextUsers = Array.isArray(usersResponse.data) ? usersResponse.data : [];
+            const nextAccounts = Array.isArray(accountsResponse.data) ? accountsResponse.data : [];
+            setUsers(nextUsers);
+            setAccounts(nextAccounts);
+
+            const centerResults = await Promise.all(nextAccounts.map(async (account) => {
+                try {
+                    const response = await financeApi.getProfitCenters({ account_id: account.id });
+                    return [Number(account.id), response?.data?.profit_centers || []];
+                } catch (error) {
+                    return [Number(account.id), []];
+                }
+            }));
+            setProfitCentersByAccount(Object.fromEntries(centerResults));
         } catch (error) {
             console.error('Error fetching users/accounts:', error);
+            setProfitCentersByAccount({});
         } finally {
             setLoading(false);
         }
@@ -190,6 +215,36 @@ const UserList = () => {
                 ? access.data_permissions.filter((item) => item !== permission)
                 : [...access.data_permissions, permission],
         }));
+    };
+
+    const toggleProfitScope = (accountId, scopeToken) => {
+        updateAccess(accountId, (access) => {
+            const basePermissions = (access.data_permissions || []).filter((permission) => !isProfitScopePermission(permission));
+            let scopePermissions = (access.data_permissions || []).filter(isProfitScopePermission);
+
+            if (scopeToken === PROFIT_SCOPE_ALL) {
+                scopePermissions = scopePermissions.includes(PROFIT_SCOPE_ALL) ? [] : [PROFIT_SCOPE_ALL];
+            } else {
+                scopePermissions = scopePermissions
+                    .filter((permission) => permission !== PROFIT_SCOPE_ALL);
+                scopePermissions = scopePermissions.includes(scopeToken)
+                    ? scopePermissions.filter((permission) => permission !== scopeToken)
+                    : [...scopePermissions, scopeToken];
+            }
+
+            const nextBasePermissions = scopePermissions.length > 0
+                ? (basePermissions.includes('profit.view') ? basePermissions : [...basePermissions, 'profit.view'])
+                : basePermissions.filter((permission) => permission !== 'profit.view');
+
+            return {
+                ...access,
+                role: 'custom',
+                permissions: scopePermissions.length > 0 && !access.permissions.includes('reports.view')
+                    ? [...access.permissions, 'reports.view']
+                    : access.permissions,
+                data_permissions: Array.from(new Set([...nextBasePermissions, ...scopePermissions])),
+            };
+        });
     };
 
     const submitForm = async (event) => {
@@ -436,6 +491,15 @@ const UserList = () => {
                                     {accounts.map((account) => {
                                         const access = selectedAccessMap.get(Number(account.id));
                                         const isSelected = Boolean(access);
+                                        const accountProfitCenters = profitCentersByAccount[Number(account.id)] || [];
+                                        const accountProfitManagers = Array.from(new Map(
+                                            accountProfitCenters
+                                                .filter((center) => center.manager_user_id)
+                                                .map((center) => [
+                                                    Number(center.manager_user_id),
+                                                    center.manager_name || `QL #${center.manager_user_id}`,
+                                                ])
+                                        )).map(([id, name]) => ({ id, name }));
 
                                         return (
                                             <section key={account.id} className={`rounded-sm border ${isSelected ? 'border-primary/25 bg-white' : 'border-gold/10 bg-white/70'}`}>
@@ -514,6 +578,41 @@ const UserList = () => {
                                                                     </button>
                                                                 );
                                                             })}
+                                                        </div>
+
+                                                        <div className="space-y-3 border-t border-gold/10 pt-4">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div>
+                                                                    <div className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/45">Phạm vi lãi lỗ</div>
+                                                                    <div className="mt-0.5 text-[11px] font-medium text-stone/45">Áp dụng theo người quản lý cho báo cáo ngày, tháng và drilldown đơn hàng.</div>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {[
+                                                                    { id: PROFIT_SCOPE_ALL, label: 'Tổng' },
+                                                                ].map((scope) => {
+                                                                    const checked = access.data_permissions.includes(scope.id);
+                                                                    return (
+                                                                        <button key={scope.id} type="button" onClick={() => toggleProfitScope(account.id, scope.id)} className={`rounded-sm border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-all ${checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-gold/20 bg-white text-primary/55 hover:border-gold'}`}>
+                                                                            {scope.label}
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                                {accountProfitManagers.map((manager) => {
+                                                                    const token = profitScopeManagerToken(manager.id);
+                                                                    const checked = access.data_permissions.includes(token);
+                                                                    return (
+                                                                        <button key={token} type="button" onClick={() => toggleProfitScope(account.id, token)} className={`rounded-sm border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-all ${checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-gold/20 bg-white text-primary/55 hover:border-gold'}`}>
+                                                                            {manager.name}
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                                {accountProfitManagers.length === 0 && (
+                                                                    <span className="self-center text-[10px] font-bold uppercase tracking-wider text-stone/35">
+                                                                        Chưa có người quản lý
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}

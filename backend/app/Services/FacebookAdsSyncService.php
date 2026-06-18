@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
+use App\Models\AdAccountProfitCenter;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -201,13 +202,21 @@ class FacebookAdsSyncService
                     }
 
                     foreach ($dailyAmounts as $date => $amount) {
+                        $profitCenterId = AdAccountProfitCenter::resolveProfitCenterId(
+                            DailyAdsSpend::PLATFORM_FACEBOOK,
+                            $storageAccountId
+                        );
+
                         DailyAdsSpend::updateOrCreate(
                             [
                                 'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
                                 'date' => $date,
                                 'account_id' => $storageAccountId,
                             ],
-                            ['amount' => $amount]
+                            [
+                                'amount' => $amount,
+                                'profit_center_id' => $profitCenterId,
+                            ]
                         );
                     }
                 } else {

@@ -909,6 +909,11 @@ export const financeApi = {
     getRevenueReconciliation: (params) => api.get('/finance/daily-pnl/revenue-reconciliation', { params }),
     getDailyPnlConfig: () => api.get('/finance/daily-pnl/config'),
     updateDailyPnlConfig: (data) => api.post('/finance/daily-pnl/config', data),
+    getProfitCenters: (params) => api.get('/finance/profit-centers', { params }),
+    createProfitCenter: (data) => api.post('/finance/profit-centers', data),
+    updateProfitCenter: (id, data) => api.put(`/finance/profit-centers/${id}`, data),
+    deleteProfitCenter: (id) => api.delete(`/finance/profit-centers/${id}`),
+    saveAdAccountProfitCenterMappings: (mappings) => api.put('/finance/profit-centers/ad-account-mappings', { mappings }),
     getFbAdAccounts: (token) => api.get('/finance/daily-pnl/fb-accounts', { params: { token } }),
     syncFbAdSpend: (params) => api.post('/finance/daily-pnl/sync-fb', params),
     getFbAdSpendSplit: (params) => api.get('/finance/daily-pnl/fb-split', { params }),
@@ -1151,7 +1156,10 @@ export const payrollApi = {
 };
 
 export const mediaApi = {
-    upload: (formData) => api.post('/media/upload', formData, multipartConfig(formData)),
+    upload: (formData, config = {}) => api.post('/media/upload', formData, {
+        ...multipartConfig(formData),
+        ...config,
+    }),
 };
 
 export const quoteTemplateApi = {

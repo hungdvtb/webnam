@@ -915,22 +915,57 @@ class ProductFaqController extends Controller
             return;
         }
 
-        $rows = $products
+        $targetProductIds = $products
             ->filter(fn (Product $product) => (int) $product->account_id === (int) $faq->account_id)
             ->unique('id')
-            ->map(fn (Product $product) => [
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter(fn (int $id) => $id > 0)
+            ->values();
+
+        $currentRows = DB::table('product_faq_product')
+            ->where('product_faq_id', $faq->id)
+            ->get(['product_id', 'account_id']);
+        $targetLookup = $targetProductIds->flip();
+        $deleteProductIds = $currentRows
+            ->filter(fn ($row) => !$targetLookup->has((int) $row->product_id)
+                || (int) $row->account_id !== (int) $faq->account_id)
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+        $currentProductIds = $currentRows
+            ->reject(fn ($row) => in_array((int) $row->product_id, $deleteProductIds, true))
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $insertProductIds = $targetProductIds
+            ->diff($currentProductIds)
+            ->values();
+
+        if ($deleteProductIds !== []) {
+            DB::table('product_faq_product')
+                ->where('product_faq_id', $faq->id)
+                ->whereIn('product_id', $deleteProductIds)
+                ->delete();
+        }
+
+        if ($insertProductIds->isEmpty()) {
+            return;
+        }
+
+        $now = now();
+        $rows = $insertProductIds
+            ->map(fn (int $productId) => [
                 'account_id' => $faq->account_id,
                 'product_faq_id' => $faq->id,
-                'product_id' => $product->id,
-                'created_at' => now(),
-                'updated_at' => now(),
+                'product_id' => $productId,
+                'created_at' => $now,
+                'updated_at' => $now,
             ])
             ->values()
             ->all();
-
-        DB::table('product_faq_product')
-            ->where('product_faq_id', $faq->id)
-            ->delete();
 
         if ($rows !== []) {
             DB::table('product_faq_product')->insertOrIgnore($rows);
@@ -1196,7 +1231,7 @@ class ProductFaqController extends Controller
         return Schema::hasTable('product_faq_product');
     }
 
-    private function publicPayload(ProductFaq $faq): array
+    private function basePayload(ProductFaq $faq): array
     {
         return [
             'id' => (int) $faq->id,
@@ -1207,6 +1242,13 @@ class ProductFaqController extends Controller
             'video_url' => $faq->youtube_url,
             'status' => $faq->status ?: ProductFaq::STATUS_VISIBLE,
             'sort_order' => (int) $faq->sort_order,
+        ];
+    }
+
+    private function publicPayload(ProductFaq $faq): array
+    {
+        return [
+            ...$this->basePayload($faq),
             'related_articles' => $this->relatedArticleService->publicPayload($faq),
         ];
     }
@@ -1219,7 +1261,7 @@ class ProductFaqController extends Controller
             : $this->currentFaqProducts($faq);
 
         return [
-            ...$this->publicPayload($faq),
+            ...$this->basePayload($faq),
             'product_id' => (int) $faq->product_id,
             'created_at' => optional($faq->created_at)->toIso8601String(),
             'updated_at' => optional($faq->updated_at)->toIso8601String(),

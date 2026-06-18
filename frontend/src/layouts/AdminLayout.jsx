@@ -308,6 +308,7 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/reports')) return 'reports';
         if (path.startsWith('/admin/finance/daily-profit')) return 'reports';
         if (path.startsWith('/admin/finance/monthly-profit')) return 'reports';
+        if (path.startsWith('/admin/finance/profit-centers')) return 'reports';
         if (path.startsWith('/admin/finance/revenue-reconciliation')) return 'reports';
         if (path.startsWith('/admin/payroll')) return 'payroll';
         if (path.startsWith('/admin/warehouses')) return 'warehouses';
@@ -767,6 +768,18 @@ const AdminLayout = () => {
                         <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/monthly-profit' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>calendar_month</span>
                         <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
                             Báo cáo lãi lỗ tháng
+                        </SidebarText>
+                    </Link>
+
+                    <Link
+                        to="/admin/finance/profit-centers"
+                        aria-label="Quản lý lãi lỗ"
+                        title={collapsedTitle('Quản lý lãi lỗ')}
+                        className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname === '/admin/finance/profit-centers' ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
+                    >
+                        <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname === '/admin/finance/profit-centers' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>account_tree</span>
+                        <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
+                            Quản lý lãi lỗ
                         </SidebarText>
                     </Link>
 

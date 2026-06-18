@@ -249,7 +249,10 @@ class OrderListSummaryTest extends TestCase
         ]);
 
         $user = User::factory()->create();
-        $user->accounts()->attach($account->id, ['role' => 'owner']);
+        $user->accounts()->attach($account->id, [
+            'role' => 'owner',
+            'data_permissions' => json_encode(['cost.view', 'profit.view']),
+        ]);
 
         Sanctum::actingAs($user, ['*']);
 

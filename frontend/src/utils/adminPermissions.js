@@ -32,6 +32,8 @@ export const ADMIN_DATA_PERMISSION_OPTIONS = [
     { id: 'finance.view', label: 'Xem dữ liệu tài chính' },
 ];
 
+export const ADMIN_PROFIT_SCOPE_ALL_PERMISSION = 'profit.scope.all';
+
 export const ADMIN_ROLE_OPTIONS = [
     { id: 'owner', label: 'Chủ / Toàn quyền' },
     { id: 'manager', label: 'Quản lý' },
@@ -117,7 +119,7 @@ export function permissionsForRole(role) {
 
 export function dataPermissionsForRole(role) {
     return ['owner', 'manager'].includes(normalizeRole(role))
-        ? ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => permission.id)
+        ? [...ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => permission.id), ADMIN_PROFIT_SCOPE_ALL_PERMISSION]
         : [];
 }
 

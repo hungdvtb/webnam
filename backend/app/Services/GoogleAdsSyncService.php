@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
+use App\Models\AdAccountProfitCenter;
 use Carbon\CarbonPeriod;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
@@ -352,13 +353,21 @@ class GoogleAdsSyncService
                     }
 
                     foreach ($dailyAmounts as $date => $amount) {
+                        $profitCenterId = AdAccountProfitCenter::resolveProfitCenterId(
+                            DailyAdsSpend::PLATFORM_GOOGLE,
+                            $storageAccountId
+                        );
+
                         DailyAdsSpend::updateOrCreate(
                             [
                                 'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
                                 'date' => $date,
                                 'account_id' => $storageAccountId,
                             ],
-                            ['amount' => $amount]
+                            [
+                                'amount' => $amount,
+                                'profit_center_id' => $profitCenterId,
+                            ]
                         );
                     }
                 } else {

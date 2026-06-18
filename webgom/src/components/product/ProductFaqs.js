@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getWebProductFaqs } from '@/lib/api';
 import {
+  resolveMediaUrl,
   resolveImageObjectUrl,
   resolveVideoEmbedUrl,
   resolveVideoThumbnailUrl,
@@ -175,6 +176,139 @@ const getFaqVideoUrl = (item = {}) => {
   return '';
 };
 
+const DIRECT_VIDEO_PATTERN = /\.(mp4|webm|ogg|mov)(?:[?#].*)?$/i;
+
+const getVideoValueFromCandidate = (candidate) => {
+  if (!candidate) {
+    return '';
+  }
+
+  if (typeof candidate === 'string' || typeof candidate === 'number') {
+    return toText(candidate);
+  }
+
+  if (typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return '';
+  }
+
+  return toText(
+    candidate.url
+    || candidate.video_url
+    || candidate.videoUrl
+    || candidate.youtube_url
+    || candidate.youtubeUrl
+    || candidate.src
+    || candidate.embed_url
+    || candidate.embedUrl
+  );
+};
+
+const getVideoThumbnailFromCandidate = (candidate, videoUrl = '') => {
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const thumbnail = candidate.thumbnail
+      || candidate.thumbnail_url
+      || candidate.thumbnailUrl
+      || candidate.image
+      || candidate.poster
+      || candidate.poster_url
+      || candidate.posterUrl;
+
+    const resolvedThumbnail = resolveImageObjectUrl(thumbnail, 'thumbnail', '');
+    if (resolvedThumbnail) {
+      return resolvedThumbnail;
+    }
+  }
+
+  return resolveVideoThumbnailUrl(videoUrl);
+};
+
+const collectFaqVideoItems = (value, items = []) => {
+  const parsedValue = typeof value === 'string' ? parseJsonArray(value) : null;
+  const rawValue = parsedValue || value;
+
+  if (Array.isArray(rawValue)) {
+    rawValue.forEach((candidate) => collectFaqVideoItems(candidate, items));
+    return items;
+  }
+
+  const videoUrl = getVideoValueFromCandidate(rawValue);
+  if (!videoUrl) {
+    return items;
+  }
+
+  const embedUrl = resolveVideoEmbedUrl(videoUrl);
+  const directUrl = DIRECT_VIDEO_PATTERN.test(videoUrl) ? resolveMediaUrl(videoUrl) : '';
+
+  if (!embedUrl && !directUrl) {
+    return items;
+  }
+
+  items.push({
+    type: 'video',
+    url: videoUrl,
+    embedUrl,
+    src: directUrl,
+    thumbUrl: getVideoThumbnailFromCandidate(rawValue, videoUrl),
+    title: typeof rawValue === 'object' && rawValue !== null ? toText(rawValue.title || rawValue.name) : '',
+  });
+
+  return items;
+};
+
+const normalizeFaqVideos = (item = {}) => {
+  const candidates = [
+    item.videos,
+    item.video_urls,
+    item.videoUrls,
+    item.youtube_urls,
+    item.youtubeUrls,
+    item.youtube_videos,
+    item.youtubeVideos,
+    item.youtube_url,
+    item.youtubeUrl,
+    item.youtube,
+    item.video_url,
+    item.videoUrl,
+    item.video,
+  ];
+  const seen = new Set();
+
+  return candidates
+    .flatMap((candidate) => collectFaqVideoItems(candidate, []))
+    .filter((video) => {
+      const key = String(video.embedUrl || video.src || video.url).toLowerCase();
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+};
+
+const buildFaqMediaItems = (faq = {}) => {
+  const imageItems = normalizeFaqImages(faq.images).map((image, index) => ({
+    type: 'image',
+    image,
+    src: getFaqImageUrl(image, 'large'),
+    thumbUrl: getFaqImageUrl(image, 'thumbnail'),
+    alt: toText(image?.alt || image?.title || faq.question),
+    title: toText(image?.title || faq.question),
+    key: `image-${index}-${getFaqImageUrl(image, 'thumbnail') || getFaqImageUrl(image, 'large')}`,
+  })).filter((item) => item.src || item.thumbUrl);
+
+  const videos = Array.isArray(faq.videos) && faq.videos.length > 0
+    ? faq.videos
+    : normalizeFaqVideos(faq);
+  const videoItems = videos.map((video, index) => ({
+    ...video,
+    type: 'video',
+    title: video.title || faq.question || 'Video hỏi đáp',
+    key: `video-${index}-${video.embedUrl || video.src || video.url}`,
+  })).filter((item) => item.embedUrl || item.src);
+
+  return [...imageItems, ...videoItems];
+};
+
 const answerNeedsToggle = (answer) => {
   const plainAnswer = faqAnswerPlainText(answer);
   if (!plainAnswer) {
@@ -203,6 +337,7 @@ const normalizeFaqPayload = (payload) => {
         answer: sanitizeFaqAnswerHtml(item?.answer),
         images: normalizeFaqImages(item?.images),
         youtube_url: getFaqVideoUrl(item),
+        videos: normalizeFaqVideos(item),
         related_articles: normalizeRelatedArticles(item?.related_articles ?? item?.relatedArticles),
         status: normalizeFaqStatus(item?.status),
         sort_order: sortOrder,
@@ -320,8 +455,7 @@ export default function ProductFaqs({ product, compact = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [openFaqIds, setOpenFaqIds] = useState({});
   const [expandedAnswers, setExpandedAnswers] = useState({});
-  const [lightbox, setLightbox] = useState(null);
-  const [videoModal, setVideoModal] = useState(null);
+  const [mediaViewer, setMediaViewer] = useState(null);
   const touchStartXRef = useRef(null);
   const faqHistoryActiveRef = useRef(false);
 
@@ -369,8 +503,7 @@ export default function ProductFaqs({ product, compact = false }) {
   const openFaqModal = useCallback(() => {
     setOpenFaqIds(getDefaultOpenFaqIds(faqs));
     setExpandedAnswers({});
-    setLightbox(null);
-    setVideoModal(null);
+    setMediaViewer(null);
     setIsOpen(true);
     void refreshFaqs({ resetOpen: true, clearBeforeLoad: true });
 
@@ -385,8 +518,7 @@ export default function ProductFaqs({ product, compact = false }) {
   }, [faqs, refreshFaqs]);
 
   const closeFaqModal = useCallback(({ fromHistory = false } = {}) => {
-    setLightbox(null);
-    setVideoModal(null);
+    setMediaViewer(null);
     setIsOpen(false);
 
     if (faqHistoryActiveRef.current) {
@@ -438,7 +570,7 @@ export default function ProductFaqs({ product, compact = false }) {
   }, [faqProductIds]);
 
   useEffect(() => {
-    const overlayOpen = isOpen || Boolean(lightbox) || Boolean(videoModal);
+    const overlayOpen = isOpen || Boolean(mediaViewer);
     if (!overlayOpen || typeof document === 'undefined' || typeof window === 'undefined') {
       return undefined;
     }
@@ -464,7 +596,7 @@ export default function ProductFaqs({ product, compact = false }) {
       document.body.style.width = previousWidth;
       window.scrollTo(0, scrollY);
     };
-  }, [isOpen, lightbox, videoModal]);
+  }, [isOpen, mediaViewer]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -476,13 +608,8 @@ export default function ProductFaqs({ product, compact = false }) {
         return;
       }
 
-      if (lightbox) {
-        setLightbox(null);
-        return;
-      }
-
-      if (videoModal) {
-        setVideoModal(null);
+      if (mediaViewer) {
+        setMediaViewer(null);
         return;
       }
 
@@ -493,7 +620,7 @@ export default function ProductFaqs({ product, compact = false }) {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [closeFaqModal, isOpen, lightbox, videoModal]);
+  }, [closeFaqModal, isOpen, mediaViewer]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -538,15 +665,18 @@ export default function ProductFaqs({ product, compact = false }) {
     }));
   };
 
-  const openImageLightbox = (images, index) => {
-    const normalizedImages = normalizeFaqImages(images);
-    if (normalizedImages.length === 0) {
+  const openMediaViewer = (items, index = 0) => {
+    const normalizedItems = (items || []).filter((item) => (
+      item?.type === 'image' ? (item.src || item.image || item.thumbUrl) : (item?.embedUrl || item?.src)
+    ));
+
+    if (normalizedItems.length === 0) {
       return;
     }
 
-    setLightbox({
-      images: normalizedImages,
-      index: Math.max(0, Math.min(index, normalizedImages.length - 1)),
+    setMediaViewer({
+      items: normalizedItems,
+      index: Math.max(0, Math.min(index, normalizedItems.length - 1)),
       zoom: 1,
     });
   };
@@ -567,23 +697,26 @@ export default function ProductFaqs({ product, compact = false }) {
 
     const answerImages = Array.from(event.currentTarget.querySelectorAll('img'))
       .map((node) => ({
+        type: 'image',
         src: node.currentSrc || node.getAttribute('src') || '',
+        thumbUrl: node.currentSrc || node.getAttribute('src') || '',
         alt: node.getAttribute('alt') || '',
       }))
       .filter((item) => item.src);
     const imageIndex = Math.max(0, answerImages.findIndex((item) => item.src === imageUrl));
 
-    setLightbox({
-      images: answerImages.length > 0 ? answerImages : [{ src: imageUrl, alt: image.getAttribute('alt') || '' }],
-      index: imageIndex,
-      zoom: 1,
-    });
+    openMediaViewer(
+      answerImages.length > 0
+        ? answerImages
+        : [{ type: 'image', src: imageUrl, thumbUrl: imageUrl, alt: image.getAttribute('alt') || '' }],
+      imageIndex
+    );
   };
 
-  const moveLightbox = (direction) => {
-    setLightbox((current) => {
+  const moveMediaViewer = (direction) => {
+    setMediaViewer((current) => {
       if (!current) return current;
-      const length = current.images.length;
+      const length = current.items.length;
       if (length <= 1) return current;
 
       return {
@@ -594,8 +727,8 @@ export default function ProductFaqs({ product, compact = false }) {
     });
   };
 
-  const setLightboxZoom = (nextZoom) => {
-    setLightbox((current) => (
+  const setMediaViewerZoom = (nextZoom) => {
+    setMediaViewer((current) => (
       current ? { ...current, zoom: Math.max(1, Math.min(2.5, nextZoom)) } : current
     ));
   };
@@ -618,7 +751,7 @@ export default function ProductFaqs({ product, compact = false }) {
       return;
     }
 
-    moveLightbox(deltaX < 0 ? 1 : -1);
+    moveMediaViewer(deltaX < 0 ? 1 : -1);
   };
 
   if (!isOpen && (faqProductIds.length === 0 || loading || errorMessage || faqs.length === 0)) {
@@ -634,8 +767,10 @@ export default function ProductFaqs({ product, compact = false }) {
     return null;
   }
 
-  const currentLightboxImage = lightbox?.images?.[lightbox.index] || null;
-  const currentLightboxUrl = getFaqImageUrl(currentLightboxImage, 'large');
+  const currentViewerItem = mediaViewer?.items?.[mediaViewer.index] || null;
+  const currentViewerImageUrl = currentViewerItem?.type === 'image'
+    ? (currentViewerItem.src || getFaqImageUrl(currentViewerItem.image, 'large'))
+    : '';
 
   return (
     <>
@@ -701,13 +836,11 @@ export default function ProductFaqs({ product, compact = false }) {
               ) : faqs.length === 0 ? (
                 <div className={styles.faqModalState}>Sản phẩm này chưa có hỏi đáp.</div>
               ) : faqs.map((faq, faqIndex) => {
-                const faqImages = normalizeFaqImages(faq.images);
                 const answer = String(faq.answer || '').trim();
                 const isFaqOpen = openFaqIds[faq.id] === true;
                 const isAnswerExpanded = Boolean(expandedAnswers[faq.id]);
                 const shouldToggleAnswer = !answerHasEmbeddedMedia(answer) && answerNeedsToggle(answer);
-                const videoThumb = resolveVideoThumbnailUrl(faq.youtube_url);
-                const videoEmbed = resolveVideoEmbedUrl(faq.youtube_url);
+                const faqMedia = buildFaqMediaItems(faq);
                 const relatedArticles = normalizeRelatedArticles(faq.related_articles);
 
                 return (
@@ -753,34 +886,28 @@ export default function ProductFaqs({ product, compact = false }) {
                             </button>
                           ) : null}
 
-                          {(faqImages.length > 0 || videoEmbed) ? (
+                          {faqMedia.length > 0 ? (
                             <div className={styles.faqMediaRow}>
-                              {faqImages.map((image, imageIndex) => {
-                                const thumbUrl = getFaqImageUrl(image, 'thumbnail');
+                              {faqMedia.map((media, mediaIndex) => {
+                                const isVideo = media.type === 'video';
+                                const thumbUrl = media.thumbUrl;
                                 return (
                                   <button
-                                    key={`${thumbUrl}-${imageIndex}`}
+                                    key={media.key || `${media.type}-${mediaIndex}-${thumbUrl}`}
                                     type="button"
-                                    className={styles.faqImageThumb}
-                                    onClick={() => openImageLightbox(faqImages, imageIndex)}
+                                    className={isVideo ? styles.faqVideoThumb : styles.faqImageThumb}
+                                    onClick={() => openMediaViewer(faqMedia, mediaIndex)}
+                                    aria-label={isVideo ? `Xem video ${mediaIndex + 1}/${faqMedia.length}` : `Xem ảnh ${mediaIndex + 1}/${faqMedia.length}`}
                                   >
                                     {thumbUrl ? <img src={thumbUrl} alt="" loading="lazy" /> : null}
+                                    {isVideo ? (
+                                      <span className={styles.faqVideoPlay}>
+                                        <span className="material-symbols-outlined">play_arrow</span>
+                                      </span>
+                                    ) : null}
                                   </button>
                                 );
                               })}
-
-                              {videoEmbed ? (
-                                <button
-                                  type="button"
-                                  className={styles.faqVideoThumb}
-                                  onClick={() => setVideoModal({ embedUrl: videoEmbed, title: faq.question })}
-                                >
-                                  {videoThumb ? <img src={videoThumb} alt="" loading="lazy" /> : null}
-                                  <span className={styles.faqVideoPlay}>
-                                    <span className="material-symbols-outlined">play_arrow</span>
-                                  </span>
-                                </button>
-                              ) : null}
                             </div>
                           ) : null}
 
@@ -832,7 +959,7 @@ export default function ProductFaqs({ product, compact = false }) {
         </div>
       ) : null}
 
-      {lightbox ? (
+      {mediaViewer ? (
         <div
           className={styles.faqLightboxOverlay}
           role="dialog"
@@ -845,26 +972,30 @@ export default function ProductFaqs({ product, compact = false }) {
             type="button"
             className={styles.faqLightboxBackdrop}
             aria-label="Đóng ảnh"
-            onClick={() => setLightbox(null)}
+            onClick={() => setMediaViewer(null)}
           />
           <div className={styles.faqLightboxToolbar}>
-            <span>{lightbox.index + 1}/{lightbox.images.length}</span>
-            <button type="button" onClick={() => setLightboxZoom(lightbox.zoom - 0.25)} aria-label="Thu nhỏ ảnh">
-              <span className="material-symbols-outlined">remove</span>
-            </button>
-            <button type="button" onClick={() => setLightboxZoom(lightbox.zoom + 0.25)} aria-label="Phóng to ảnh">
-              <span className="material-symbols-outlined">add</span>
-            </button>
-            <button type="button" onClick={() => setLightbox(null)} aria-label="Đóng ảnh">
+            <span>{mediaViewer.index + 1}/{mediaViewer.items.length}</span>
+            {currentViewerItem?.type === 'image' ? (
+              <>
+                <button type="button" onClick={() => setMediaViewerZoom(mediaViewer.zoom - 0.25)} aria-label="Thu nhỏ ảnh">
+                  <span className="material-symbols-outlined">remove</span>
+                </button>
+                <button type="button" onClick={() => setMediaViewerZoom(mediaViewer.zoom + 0.25)} aria-label="Phóng to ảnh">
+                  <span className="material-symbols-outlined">add</span>
+                </button>
+              </>
+            ) : null}
+            <button type="button" onClick={() => setMediaViewer(null)} aria-label="Đóng media">
               <span className="material-symbols-outlined">close</span>
             </button>
           </div>
-          {lightbox.images.length > 1 ? (
+          {mediaViewer.items.length > 1 ? (
             <>
               <button
                 type="button"
                 className={`${styles.faqLightboxNav} ${styles.faqLightboxPrev}`}
-                onClick={() => moveLightbox(-1)}
+                onClick={() => moveMediaViewer(-1)}
                 aria-label="Ảnh trước"
               >
                 <span className="material-symbols-outlined">chevron_left</span>
@@ -872,54 +1003,52 @@ export default function ProductFaqs({ product, compact = false }) {
               <button
                 type="button"
                 className={`${styles.faqLightboxNav} ${styles.faqLightboxNext}`}
-                onClick={() => moveLightbox(1)}
+                onClick={() => moveMediaViewer(1)}
                 aria-label="Ảnh sau"
               >
                 <span className="material-symbols-outlined">chevron_right</span>
               </button>
             </>
           ) : null}
-          <div className={styles.faqLightboxStage}>
-            {currentLightboxUrl ? (
+          <div className={`${styles.faqLightboxStage} ${mediaViewer.zoom > 1 && currentViewerItem?.type === 'image' ? styles.faqLightboxStageZoomed : ''}`}>
+            {currentViewerItem?.type === 'image' && currentViewerImageUrl ? (
               <img
-                src={currentLightboxUrl}
-                alt=""
-                style={lightbox.zoom > 1 ? {
-                  width: `${Math.round(lightbox.zoom * 92)}vw`,
+                src={currentViewerImageUrl}
+                alt={currentViewerItem.alt || ''}
+                className={styles.faqLightboxImage}
+                style={mediaViewer.zoom > 1 ? {
+                  width: `${Math.round(mediaViewer.zoom * 92)}vw`,
                   maxWidth: 'none',
                   maxHeight: 'none',
                 } : undefined}
-                onDoubleClick={() => setLightboxZoom(lightbox.zoom > 1 ? 1 : 2)}
+                onDoubleClick={() => setMediaViewerZoom(mediaViewer.zoom > 1 ? 1 : 2)}
               />
+            ) : null}
+            {currentViewerItem?.type === 'video' ? (
+              <div className={styles.faqLightboxVideoFrame}>
+                {currentViewerItem.embedUrl ? (
+                  <iframe
+                    key={`${mediaViewer.index}-${currentViewerItem.embedUrl}`}
+                    src={withAutoplay(currentViewerItem.embedUrl)}
+                    title={currentViewerItem.title || 'Video hỏi đáp'}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                  />
+                ) : (
+                  <video
+                    key={`${mediaViewer.index}-${currentViewerItem.src}`}
+                    src={currentViewerItem.src}
+                    controls
+                    playsInline
+                    preload="metadata"
+                  />
+                )}
+              </div>
             ) : null}
           </div>
         </div>
       ) : null}
 
-      {videoModal ? (
-        <div className={styles.faqVideoOverlay} role="dialog" aria-modal="true" aria-label="Video hỏi đáp">
-          <button
-            type="button"
-            className={styles.faqModalBackdrop}
-            aria-label="Đóng video"
-            onClick={() => setVideoModal(null)}
-          />
-          <div className={styles.faqVideoPanel}>
-            <div className={styles.faqVideoHeader}>
-              <strong>{videoModal.title}</strong>
-              <button type="button" onClick={() => setVideoModal(null)} aria-label="Đóng video">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <iframe
-              src={withAutoplay(videoModal.embedUrl)}
-              title={videoModal.title || 'Video hỏi đáp'}
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          </div>
-        </div>
-      ) : null}
     </>
   );
 }

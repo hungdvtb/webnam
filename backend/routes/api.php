@@ -414,6 +414,11 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/finance/fixed-costs/apply', [\App\Http\Controllers\FixedCostController::class, 'apply']);
     Route::get('/finance/daily-profit', [FinanceController::class, 'dailyProfitTable']);
     Route::post('/finance/daily-profit/config', [FinanceController::class, 'storeDailyProfitConfig']);
+    Route::get('/finance/profit-centers', [\App\Http\Controllers\Api\ProfitCenterController::class, 'index']);
+    Route::post('/finance/profit-centers', [\App\Http\Controllers\Api\ProfitCenterController::class, 'store']);
+    Route::put('/finance/profit-centers/{id}', [\App\Http\Controllers\Api\ProfitCenterController::class, 'update'])->whereNumber('id');
+    Route::delete('/finance/profit-centers/{id}', [\App\Http\Controllers\Api\ProfitCenterController::class, 'destroy'])->whereNumber('id');
+    Route::put('/finance/profit-centers/ad-account-mappings', [\App\Http\Controllers\Api\ProfitCenterController::class, 'saveAdMappings']);
 
     // New Daily Profit/Loss Report (P&L) routes
     Route::prefix('finance/daily-pnl')->group(function () {

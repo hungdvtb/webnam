@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { useLocation, useNavigate } from 'react-router-dom';
-import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, aiApi, googleMerchantApi } from '../../services/api';
+import { productApi, categoryApi, attributeApi, inventoryApi, cmsApi, aiApi, googleMerchantApi, financeApi } from '../../services/api';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
@@ -229,6 +229,7 @@ const DEFAULT_COLUMNS = [
     { id: 'images', label: 'Ảnh', minWidth: '80px' },
     { id: 'type', label: 'Loại hình', minWidth: '110px' },
     { id: 'category', label: 'Danh mục', minWidth: '120px' },
+    { id: 'profit_center', label: 'Người quản lý', minWidth: '150px' },
     { id: 'is_featured', label: 'Nổi bật', minWidth: '80px', align: 'center' },
     { id: 'is_new', label: 'Mới', minWidth: '80px', align: 'center' },
     { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
@@ -1225,6 +1226,12 @@ function buildQuickEditSearchIndex(product, draft = null, original = null) {
     return normalizeQuickEditSearchText(values.join(' '));
 }
 
+const formatProfitCenterLabel = (center) => {
+    if (!center) return '';
+    const managerName = center.manager_name || center.manager?.name || '';
+    return managerName ? `${managerName} - ${center.name}` : (center.name || '');
+};
+
 const ProductList = () => {
     const { user } = useAuth();
     const canViewProductCost = hasAdminDataPermission(user, 'cost.view');
@@ -1260,7 +1267,12 @@ const ProductList = () => {
     const [suppliers, setSuppliers] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
     const [domains, setDomains] = useState([]);
+    const [profitCenters, setProfitCenters] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
+    const profitCenterById = useMemo(
+        () => new Map(profitCenters.map((center) => [String(center.id), center])),
+        [profitCenters]
+    );
     const [loading, setLoading] = useState(true);
     const [selectedIds, setSelectedIdsState] = useState(() => sanitizeStoredIdList(savedWorkingState?.selectedIds));
     const selectedIdsRef = useRef(selectedIds);
@@ -2769,12 +2781,13 @@ const ProductList = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [catRes, attrRes, supplierRes, unitRes, domainRes] = await Promise.all([
+            const [catRes, attrRes, supplierRes, unitRes, domainRes, profitCenterRes] = await Promise.all([
                 categoryApi.getAll(),
                 attributeApi.getAll({ entity_type: 'product', active_only: true }),
                 inventoryApi.getSuppliers({ per_page: 500 }),
                 inventoryApi.getUnits(),
                 cmsApi.domains.getAll().catch(() => ({ data: [] })),
+                financeApi.getProfitCenters().catch(() => ({ data: { profit_centers: [] } })),
             ]);
             const productAttributes = Array.isArray(attrRes.data) ? attrRes.data : [];
             setCategories(catRes.data || []);
@@ -2784,6 +2797,7 @@ const ProductList = () => {
             setSuppliers(supplierRes.data?.data || []);
             setInventoryUnits(Array.isArray(unitRes.data) ? unitRes.data : []);
             setDomains((domainRes.data || []).filter((item) => item?.is_active));
+            setProfitCenters((profitCenterRes.data?.profit_centers || []).filter((center) => center?.is_active !== false));
 
             const attrColumns = productAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
@@ -2826,6 +2840,7 @@ const ProductList = () => {
                 sortedColumns.some((column) => column.id === 'product_link') ? 'product_link' : 'name',
                 (column) => column.id,
             );
+            sortedColumns = moveItemAfter(sortedColumns, 'profit_center', 'category', (column) => column.id);
             setAvailableColumns(sortedColumns);
 
             const savedVisible = localStorage.getItem('product_list_columns');
@@ -2835,11 +2850,12 @@ const ProductList = () => {
                     ...combinedColumns.map((column) => column.id).filter((id) => savedIds.includes(id)),
                     ...combinedColumns.map((column) => column.id).filter((id) => !savedIds.includes(id)),
                 ];
-                const orderedVisible = moveItemAfter(
+                let orderedVisible = moveItemAfter(
                     moveItemAfter(mergedVisible, 'product_link', 'name'),
                     'unit',
                     mergedVisible.includes('product_link') ? 'product_link' : 'name',
                 );
+                orderedVisible = moveItemAfter(orderedVisible, 'profit_center', 'category');
                 setVisibleColumns(orderedVisible);
                 localStorage.setItem('product_list_columns', JSON.stringify(orderedVisible));
             } else {
@@ -4084,13 +4100,17 @@ const ProductList = () => {
 
     const handleBulkUpdateAttributesSubmit = async () => {
         // Separate basic info from attributes
-        const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'inventory_unit_id', 'is_featured', 'is_new', 'status', 'type'];
+        const basicInfoFields = ['category_id', 'category_ids', 'price', 'expected_cost', 'stock_quantity', 'supplier_ids', 'inventory_unit_id', 'profit_center_id', 'is_featured', 'is_new', 'status', 'type'];
         const basic_info = {};
         const attributes = {};
         
         for (const key in bulkUpdateData) {
             const val = bulkUpdateData[key];
-            if (val !== '' && val !== null && (!Array.isArray(val) || val.length > 0)) {
+            const shouldIncludeValue = val !== undefined
+                && val !== ''
+                && (val !== null || key === 'profit_center_id')
+                && (!Array.isArray(val) || val.length > 0);
+            if (shouldIncludeValue) {
                 if (basicInfoFields.includes(key)) {
                     basic_info[key] = val;
                 } else {
@@ -6643,6 +6663,31 @@ const ProductList = () => {
                                                         </td>
                                                     );
                                                 }
+                                                if (col.id === 'profit_center') {
+                                                    const center = p.profit_center
+                                                        || p.profitCenter
+                                                        || profitCenterById.get(String(p.profit_center_id || ''))
+                                                        || (pUsesChildRowStyle
+                                                            ? (
+                                                                product.profit_center
+                                                                || product.profitCenter
+                                                                || profitCenterById.get(String(product.profit_center_id || ''))
+                                                            )
+                                                            : null);
+                                                    const label = formatProfitCenterLabel(center);
+                                                    return (
+                                                        <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20 text-[#1e293b] font-medium group/cell">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <span className={`truncate ${label ? '' : 'text-stone-400'}`}>{label || 'Chưa gắn'}</span>
+                                                                {label && (
+                                                                    <button onClick={(e) => handleCopy(label, 'người quản lý', e, `${p.id}-profit-center`)} className={`${copiedText === `${p.id}-profit-center` ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`} title="Sao chép người quản lý">
+                                                                        <span className="material-symbols-outlined text-[14px]">{copiedText === `${p.id}-profit-center` ? 'check' : 'content_copy'}</span>
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    );
+                                                }
                                                 if (col.id === 'unit') {
                                                     const unitLabel = resolveProductUnitLabel(p, isSubRow ? product : null);
                                                     const copyId = `${p.id}-unit`;
@@ -7503,6 +7548,29 @@ const ProductList = () => {
                                         <option value="">-- Bỏ qua --</option>
                                         {inventoryUnits.map((unit) => (
                                             <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="mt-4 max-w-sm space-y-1">
+                                    <label className="text-[13px] font-bold text-primary/80">Người quản lý</label>
+                                    <select
+                                        className="w-full bg-primary/5 border border-primary/20 px-3 py-2 rounded-sm text-[13px] focus:outline-none focus:border-primary"
+                                        value={bulkUpdateData.profit_center_id === undefined ? '' : (bulkUpdateData.profit_center_id === null ? '__clear__' : String(bulkUpdateData.profit_center_id))}
+                                        onChange={(event) => {
+                                            const nextValue = event.target.value;
+                                            setBulkUpdateData({
+                                                ...bulkUpdateData,
+                                                profit_center_id: nextValue === ''
+                                                    ? undefined
+                                                    : (nextValue === '__clear__' ? null : nextValue),
+                                            });
+                                        }}
+                                    >
+                                        <option value="">-- Bỏ qua --</option>
+                                        <option value="__clear__">Chưa gắn quản lý</option>
+                                        {profitCenters.map((center) => (
+                                            <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
                                         ))}
                                     </select>
                                 </div>

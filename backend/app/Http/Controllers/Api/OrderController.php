@@ -15,6 +15,7 @@ use App\Models\Invoice;
 use App\Models\Lead;
 use App\Models\OrderStatus;
 use App\Models\Product;
+use App\Models\ProfitCenter;
 use App\Models\QuoteTemplate;
 use App\Models\Shipment;
 use App\Models\ShipmentItem;
@@ -218,6 +219,37 @@ class OrderController extends Controller
         }
 
         return self::DEFAULT_MANUAL_ORDER_SOURCE;
+    }
+
+    private function normalizeSalesChannel(mixed $value): string
+    {
+        $normalized = strtolower(trim((string) $value));
+
+        return in_array($normalized, Order::SALES_CHANNELS, true)
+            ? $normalized
+            : Order::SALES_CHANNEL_ONLINE;
+    }
+
+    private function resolveProfitCenterIdForRequest(Request $request, int $accountId): ?int
+    {
+        $profitCenterId = (int) $request->input('profit_center_id', 0);
+        if ($profitCenterId <= 0) {
+            return null;
+        }
+
+        $resolvedId = ProfitCenter::query()
+            ->where('account_id', $accountId)
+            ->where('is_active', true)
+            ->where('id', $profitCenterId)
+            ->value('id');
+
+        if (!$resolvedId) {
+            throw ValidationException::withMessages([
+                'profit_center_id' => 'Người quản lý lãi lỗ không hợp lệ hoặc không thuộc tài khoản hiện tại.',
+            ]);
+        }
+
+        return (int) $resolvedId;
     }
 
     private function usesPostgresSearchDriver(): bool
@@ -858,12 +890,12 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
-                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id', 'profit_center_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
-                                ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
+                                ->select(['products.id', 'products.name', 'products.inventory_unit_id', 'products.profit_center_id'])
                                 ->with(['unit:id,name']),
                         ]),
                     'actualProduct' => fn ($productQuery) => $productQuery
@@ -1126,6 +1158,11 @@ class OrderController extends Controller
             'order_number' => $order->order_number,
             'order_kind' => $this->normalizeOrderKind((string) $order->order_kind),
             'order_type' => $this->normalizeOrderType((string) $order->order_type),
+            'sales_channel' => $this->normalizeSalesChannel($order->sales_channel),
+            'profit_center_id' => $order->profit_center_id ? (int) $order->profit_center_id : null,
+            'offline_store_name' => $order->offline_store_name,
+            'offline_seller_name' => $order->offline_seller_name,
+            'offline_payment_method' => $order->offline_payment_method,
             'status' => $order->status,
             'customer_name' => $order->customer_name,
             'customer_phone' => $order->customer_phone,
@@ -1951,6 +1988,10 @@ class OrderController extends Controller
 
     private function validateOfficialOrderPayload(array $payload, string $regionType = 'new'): void
     {
+        if ($this->normalizeSalesChannel($payload['sales_channel'] ?? null) === Order::SALES_CHANNEL_OFFLINE) {
+            return;
+        }
+
         $shippingAddress = trim((string) ($payload['shipping_address'] ?? ''));
 
         if ($shippingAddress === '') {
@@ -2737,6 +2778,7 @@ class OrderController extends Controller
                 'district' => $original->district,
                 'ward' => $original->ward,
                 'shipping_address' => $original->shipping_address,
+                'sales_channel' => $original->sales_channel,
             ], filled($original->district) ? 'old' : 'new');
             $this->validateOfficialOrderItems($original->items);
         }
@@ -2863,6 +2905,7 @@ class OrderController extends Controller
                 'district' => $payload['district'] ?? $order->district,
                 'ward' => $payload['ward'] ?? $order->ward,
                 'shipping_address' => $payload['shipping_address'] ?? $order->shipping_address,
+                'sales_channel' => $payload['sales_channel'] ?? $order->sales_channel,
             ], (string) ($payload['region_type'] ?? 'new'));
             $this->validateOfficialOrderItems($order->items);
         }
@@ -3558,6 +3601,33 @@ class OrderController extends Controller
 
                 $q->whereNotIn('status', $excludedStatuses->all());
             })
+            ->when($request->filled('profit_manager_id'), function ($q) use ($request, $accountId) {
+                $managerFilter = trim((string) $request->input('profit_manager_id'));
+
+                if ($managerFilter === 'unassigned') {
+                    $q->where(function ($unassignedQuery) {
+                        $unassignedQuery
+                            ->whereNull('profit_center_id')
+                            ->orWhereDoesntHave('profitCenter')
+                            ->orWhereHas('profitCenter', function ($profitCenterQuery) {
+                                $profitCenterQuery->whereNull('manager_user_id');
+                            });
+                    });
+                    return;
+                }
+
+                $managerUserId = (int) $managerFilter;
+                if ($managerUserId <= 0) {
+                    $q->whereRaw('1 = 0');
+                    return;
+                }
+
+                $q->whereHas('profitCenter', function ($profitCenterQuery) use ($accountId, $managerUserId) {
+                    $profitCenterQuery
+                        ->where('account_id', $accountId)
+                        ->where('manager_user_id', $managerUserId);
+                });
+            })
             ->when($request->filled('created_at_from'), function ($q) use ($request) {
                 $this->applyOrderDisplayDateFilter($q, '>=', (string) $request->input('created_at_from'));
             })
@@ -3725,6 +3795,7 @@ class OrderController extends Controller
             $this->attachResolvedInternalShippingFee($order);
             $this->trimOrderListProductPayload($order);
             $payload = $order->toArray();
+            $payload['order_type'] = $this->normalizeOrderType((string) ($order->order_type ?? ''));
             $payload['source'] = $this->normalizeOrderSourceValue($order->source);
             $payload['customer_name'] = $this->resolveOrderDisplayCustomerName($order, $nameAttributeIds);
             $payload['customer_phone'] = $this->resolveOrderDisplayCustomerPhone($order, $phoneAttributeIds);
@@ -3966,6 +4037,27 @@ class OrderController extends Controller
             ->orderBy('name')
             ->get()
             ->toArray();
+    }
+
+    private function loadOrderProfitCenters(int $accountId): array
+    {
+        return ProfitCenter::query()
+            ->where('account_id', $accountId)
+            ->where('is_active', true)
+            ->with('manager:id,name')
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get(['id', 'name', 'code', 'channel', 'manager_user_id'])
+            ->map(fn (ProfitCenter $center) => [
+                'id' => (int) $center->id,
+                'name' => (string) $center->name,
+                'code' => (string) $center->code,
+                'channel' => (string) $center->channel,
+                'manager_user_id' => $center->manager_user_id ? (int) $center->manager_user_id : null,
+                'manager_name' => $center->manager?->name,
+            ])
+            ->values()
+            ->all();
     }
 
     private function buildPrintableAddress(Order $order): string
@@ -4226,6 +4318,7 @@ class OrderController extends Controller
                         'order_statuses' => $this->loadOrderStatuses($accountId),
                         'order_attributes' => $this->loadOrderAttributes('order'),
                         'product_attributes' => $this->loadOrderProductQuickFilterAttributes($accountId),
+                        'profit_centers' => $this->loadOrderProfitCenters($accountId),
                         'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
                         'quote_settings' => $this->loadQuoteSettings($accountId),
                         'quote_templates' => QuoteTemplate::query()
@@ -4242,6 +4335,7 @@ class OrderController extends Controller
                     'order_attributes' => $this->loadOrderAttributes('order'),
                     'connected_carriers' => $this->loadConnectedCarriers($accountId),
                     'order_kind_counts' => $this->loadOrderKindCounts($accountId),
+                    'profit_centers' => $this->loadOrderProfitCenters($accountId),
                 ];
             }
         );
@@ -4262,6 +4356,7 @@ class OrderController extends Controller
                 'draft_created_at', 'officialized_at',
                 'print_count', 'last_printed_at',
                 'type', 'order_kind', 'order_type', 'converted_from_order_id', 'converted_from_kind',
+                'sales_channel', 'profit_center_id', 'offline_store_name', 'offline_seller_name', 'offline_payment_method',
                 'return_tracking_code', 'return_status',
                 'shipping_status', 'shipping_carrier_code', 'shipping_carrier_name',
                 'shipping_tracking_code', 'shipping_dispatched_at',
@@ -4297,6 +4392,8 @@ class OrderController extends Controller
                         ->select(['id', 'name', 'sku']),
                 ]),
             'attributeValues:id,order_id,attribute_id,value',
+            'profitCenter:id,name,code,manager_user_id',
+            'profitCenter.manager:id,name',
             'activeShipment:id,order_id,shipment_number,carrier_name,carrier_tracking_code,shipment_status,problem_code,problem_message,problem_detected_at,customer_name,customer_phone,shipping_cost'
         ]);
 
@@ -4752,6 +4849,11 @@ class OrderController extends Controller
             'supplement_items.*.notes' => 'nullable|string|max:2000',
             'manual_discount' => 'nullable|numeric',
             'source' => 'nullable|string|max:80',
+            'sales_channel' => 'nullable|string|in:online,offline',
+            'profit_center_id' => 'nullable|integer|exists:profit_centers,id',
+            'offline_store_name' => 'nullable|string|max:160',
+            'offline_seller_name' => 'nullable|string|max:160',
+            'offline_payment_method' => 'nullable|string|max:80',
         ]);
 
         $orderKind = $this->resolveRequestedOrderKindForMutation($request);
@@ -4800,6 +4902,11 @@ class OrderController extends Controller
                 'order_number' => $this->generateOrderNumber($orderKind),
                 'order_kind' => $orderKind,
                 'order_type' => $orderType,
+                'sales_channel' => $this->normalizeSalesChannel($request->input('sales_channel')),
+                'profit_center_id' => $this->resolveProfitCenterIdForRequest($request, $accountId),
+                'offline_store_name' => trim((string) $request->input('offline_store_name', '')) ?: null,
+                'offline_seller_name' => trim((string) $request->input('offline_seller_name', '')) ?: null,
+                'offline_payment_method' => trim((string) $request->input('offline_payment_method', '')) ?: null,
                 'total_price' => 0,
                 'status' => $request->status ?? $this->defaultStatusForKind($accountId, $orderKind),
                 'customer_name' => $persistedTextFields['customer_name'],
@@ -4913,6 +5020,11 @@ class OrderController extends Controller
                 'order_number',
                 'order_kind',
                 'order_type',
+                'sales_channel',
+                'profit_center_id',
+                'offline_store_name',
+                'offline_seller_name',
+                'offline_payment_method',
                 'converted_from_order_id',
                 'converted_from_kind',
                 'total_price',
@@ -5046,6 +5158,7 @@ class OrderController extends Controller
                 'district' => $request->input('district', $order->district),
                 'ward' => $request->input('ward', $order->ward),
                 'shipping_address' => $request->input('shipping_address', $order->shipping_address),
+                'sales_channel' => $request->input('sales_channel', $order->sales_channel),
             ], (string) $request->input('region_type', 'new'));
         } elseif ($this->allowsEmptyItems($requestedKind)) {
             $this->validateDraftOrderPayload([
@@ -5061,6 +5174,18 @@ class OrderController extends Controller
         ]));
         if (array_key_exists('source', $data)) {
             $data['source'] = $this->normalizeOrderSourceValue($data['source']);
+        }
+        if ($request->has('sales_channel')) {
+            $data['sales_channel'] = $this->normalizeSalesChannel($request->input('sales_channel'));
+        }
+        if ($request->has('profit_center_id')) {
+            $data['profit_center_id'] = $this->resolveProfitCenterIdForRequest($request, (int) $order->account_id);
+        }
+        foreach (['offline_store_name', 'offline_seller_name', 'offline_payment_method'] as $field) {
+            if ($request->has($field)) {
+                $value = trim((string) $request->input($field, ''));
+                $data[$field] = $value !== '' ? $value : null;
+            }
         }
         $data['order_type'] = $requestedOrderType;
         $data['settlement_delta'] = $requestedOrderType === self::ORDER_TYPE_STANDARD
@@ -5192,6 +5317,11 @@ class OrderController extends Controller
             'supplement_items.*.cost_price' => 'nullable|numeric',
             'supplement_items.*.notes' => 'nullable|string|max:2000',
             'manual_discount' => 'nullable|numeric',
+            'sales_channel' => 'nullable|string|in:online,offline',
+            'profit_center_id' => 'nullable|integer|exists:profit_centers,id',
+            'offline_store_name' => 'nullable|string|max:160',
+            'offline_seller_name' => 'nullable|string|max:160',
+            'offline_payment_method' => 'nullable|string|max:80',
         ]);
 
         if ($validator->fails()) {
@@ -5737,15 +5867,34 @@ class OrderController extends Controller
 
     public function bulkUpdate(Request $request)
     {
-        $ids = collect($request->input('ids', []))
+        $request->validate([
+            'ids' => 'required|array|min:1|max:500',
+            'ids.*' => 'required|integer|distinct',
+            'profit_center_id' => 'nullable|integer',
+            'custom_attributes' => 'nullable|array',
+        ]);
+
+        $requestedIds = collect($request->input('ids', []))
             ->map(fn ($id) => (int) $id)
             ->filter()
             ->unique()
             ->values()
             ->all();
 
-        if (empty($ids)) {
+        if (empty($requestedIds)) {
             return response()->json(['message' => 'Chưa chọn đơn hàng nào.'], 400);
+        }
+
+        $accountId = (int) $this->resolveAccountId($request);
+        $ids = $this->scopedOrderQuery($request)
+            ->whereIn('id', $requestedIds)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->values()
+            ->all();
+
+        if (empty($ids)) {
+            return response()->json(['message' => 'Không tìm thấy đơn hàng hợp lệ trong tài khoản hiện tại.'], 404);
         }
 
         $data = $request->only([
@@ -5754,27 +5903,61 @@ class OrderController extends Controller
         if (array_key_exists('source', $data)) {
             $data['source'] = $this->normalizeOrderSourceValue($data['source']);
         }
+        if ($request->has('profit_center_id')) {
+            $data['profit_center_id'] = $this->resolveProfitCenterIdForRequest($request, $accountId);
+        }
 
-        $customAttributes = $request->input('custom_attributes', []);
+        $customAttributes = collect((array) $request->input('custom_attributes', []))
+            ->mapWithKeys(fn ($value, $attributeId) => [(int) $attributeId => $value])
+            ->filter(fn ($value, $attributeId) => $attributeId > 0)
+            ->all();
 
-        DB::transaction(function () use ($request, $ids, $data, $customAttributes) {
+        if (!empty($customAttributes)) {
+            $validAttributeIds = Attribute::query()
+                ->where('account_id', $accountId)
+                ->where('entity_type', 'order')
+                ->whereIn('id', array_keys($customAttributes))
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+            $invalidAttributeIds = array_values(array_diff(array_keys($customAttributes), $validAttributeIds));
+
+            if (!empty($invalidAttributeIds)) {
+                throw ValidationException::withMessages([
+                    'custom_attributes' => 'Có thuộc tính không hợp lệ hoặc không thuộc tài khoản hiện tại.',
+                ]);
+            }
+        }
+
+        DB::transaction(function () use ($ids, $data, $customAttributes) {
             if (!empty($data)) {
-                $this->scopedOrderQuery($request)->whereIn('id', $ids)->update($data);
+                Order::query()->whereIn('id', $ids)->update($data);
             }
 
             if (!empty($customAttributes)) {
                 foreach ($ids as $orderId) {
                     foreach ($customAttributes as $attrId => $val) {
+                        if ($val === null) {
+                            \App\Models\OrderAttributeValue::query()
+                                ->where('order_id', $orderId)
+                                ->where('attribute_id', $attrId)
+                                ->delete();
+                            continue;
+                        }
+
                         \App\Models\OrderAttributeValue::updateOrCreate(
                             ['order_id' => $orderId, 'attribute_id' => $attrId],
-                            ['value' => is_array($val) ? json_encode($val) : $val]
+                            ['value' => is_array($val) ? json_encode($val, JSON_UNESCAPED_UNICODE) : (string) $val]
                         );
                     }
                 }
             }
         });
 
-        return response()->json(['message' => 'Cập nhật hàng loạt thành công.']);
+        return response()->json([
+            'message' => 'Cập nhật hàng loạt thành công.',
+            'updated_count' => count($ids),
+        ]);
     }
 
     public function refreshImportCosts(Request $request)

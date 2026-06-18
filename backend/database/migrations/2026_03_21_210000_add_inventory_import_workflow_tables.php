@@ -191,7 +191,7 @@ return new class extends Migration
                     'entry_mode' => 'manual',
                     'subtotal_amount' => DB::raw('COALESCE(total_amount, 0)'),
                     'extra_charge_percent' => 0,
-                    'inventory_applied_at' => DB::raw('COALESCE(updated_at, created_at, NOW())'),
+                    'inventory_applied_at' => DB::raw('COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)'),
                 ]);
         }
 

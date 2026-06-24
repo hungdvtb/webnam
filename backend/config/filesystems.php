@@ -10,6 +10,9 @@ $mediaHttpCaBundle = trim((string) env('MEDIA_HTTP_CA_BUNDLE', ''));
 $mediaHttpVerifyOption = $mediaHttpVerify
     ? ($mediaHttpCaBundle !== '' ? $mediaHttpCaBundle : true)
     : false;
+$mediaHttpConnectTimeout = (float) env('MEDIA_HTTP_CONNECT_TIMEOUT', 5);
+$mediaHttpTimeout = (float) env('MEDIA_HTTP_TIMEOUT', 15);
+$r2Retries = (int) env('R2_RETRIES', 1);
 
 return [
 
@@ -86,8 +89,11 @@ return [
             'url' => env('MEDIA_PUBLIC_BASE_URL'),
             'endpoint' => env('R2_ENDPOINT'),
             'use_path_style_endpoint' => env('R2_USE_PATH_STYLE_ENDPOINT', false),
+            'retries' => $r2Retries,
             'http' => [
                 'verify' => $mediaHttpVerifyOption,
+                'connect_timeout' => $mediaHttpConnectTimeout,
+                'timeout' => $mediaHttpTimeout,
             ],
             'throw' => false,
             'report' => false,

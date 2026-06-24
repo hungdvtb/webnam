@@ -31,5 +31,7 @@ return [
         'verify' => $mediaHttpVerify
             ? ($mediaHttpCaBundle !== '' ? $mediaHttpCaBundle : true)
             : false,
+        'connect_timeout' => (float) env('MEDIA_HTTP_CONNECT_TIMEOUT', 5),
+        'timeout' => (float) env('MEDIA_HTTP_TIMEOUT', 15),
     ],
 ];

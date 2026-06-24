@@ -57,6 +57,7 @@ Route::get('/menus/active', [\App\Http\Controllers\Api\MenuController::class , '
 Route::get('/thumbnail', [ProductImageController::class , 'thumbnail']);
 Route::get('/media/proxy', [MediaController::class, 'proxy']);
 Route::get('/media/assets/{publicId}/{variant?}', [MediaAssetController::class, 'show'])
+    ->where('publicId', '[0-9a-z]{26}')
     ->where('variant', 'thumbnail|medium|large|original');
 Route::post('/analytics/events', [SiteAnalyticsController::class, 'store']);
 Route::post('/shipments/carriers/viettel-post/webhook', [\App\Http\Controllers\Api\ShipmentController::class, 'processViettelPostWebhook']);

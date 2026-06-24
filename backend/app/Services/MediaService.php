@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Throwable;
 
 class MediaService
 {
@@ -242,11 +243,17 @@ class MediaService
 
         $disk = Storage::disk($asset->disk ?: $this->diskName());
 
-        if (!$disk->exists($path)) {
-            abort(404);
+        try {
+            $stream = $disk->readStream($path);
+        } catch (Throwable $exception) {
+            if ($this->storageExceptionStatusCode($exception) === 404) {
+                abort(404);
+            }
+
+            report($exception);
+            abort(503, 'Media storage is temporarily unavailable.');
         }
 
-        $stream = $disk->readStream($path);
         if (!is_resource($stream)) {
             abort(404);
         }
@@ -388,7 +395,8 @@ class MediaService
 
     private function importFromRemoteUrl(string $url, array $options = []): MediaAsset
     {
-        $response = Http::timeout(45)
+        $response = Http::connectTimeout((float) config('media.http.connect_timeout', 5))
+            ->timeout((float) config('media.http.timeout', 15))
             ->withOptions([
                 'verify' => config('media.http.verify', true),
             ])
@@ -691,5 +699,24 @@ class MediaService
     private function diskName(): string
     {
         return (string) config('media.disk', 'r2');
+    }
+
+    private function storageExceptionStatusCode(Throwable $exception): ?int
+    {
+        $current = $exception;
+
+        while ($current) {
+            if (method_exists($current, 'getStatusCode')) {
+                $statusCode = $current->getStatusCode();
+
+                if (is_numeric($statusCode)) {
+                    return (int) $statusCode;
+                }
+            }
+
+            $current = $current->getPrevious();
+        }
+
+        return null;
     }
 }

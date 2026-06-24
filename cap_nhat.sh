@@ -10,6 +10,7 @@ DEPLOY_BRANCH="${DEPLOY_BRANCH:-master}"
 WEBSITE_PM2_NAME="${WEBSITE_PM2_NAME:-webnam-website}"
 WEBSITE_PORT="${WEBSITE_PORT:-3003}"
 AUTO_START_WEBSITE_PM2="${AUTO_START_WEBSITE_PM2:-0}"
+RUN_MEDIA_BACKFILL="${RUN_MEDIA_BACKFILL:-0}"
 
 BLUE='\033[0;34m'
 GREEN='\033[0;32m'
@@ -39,7 +40,7 @@ usage() {
 Usage: ./cap_nhat.sh [command]
 
 Commands:
-  backend      Pull code + deploy backend + migrate DB + backfill media R2 (default)
+  backend      Pull code + deploy backend + migrate DB (default)
   backfill-r2  Only run R2 media backfill on backend
   admin        Pull code + build admin frontend
   website      Pull code + build website frontend
@@ -58,6 +59,7 @@ Optional environment variables:
   WEBSITE_PM2_NAME=webnam-website
   WEBSITE_PORT=3003
   AUTO_START_WEBSITE_PM2=1
+  RUN_MEDIA_BACKFILL=1
 EOF
 }
 
@@ -155,8 +157,12 @@ deploy_backend() {
 
     assert_backend_r2_config
 
-    log "Chay backfill anh cu len R2"
-    php artisan media:migrate-r2
+    if [ "$RUN_MEDIA_BACKFILL" = "1" ]; then
+        log "Chay backfill anh cu len R2"
+        php artisan media:migrate-r2
+    else
+        warn "Bo qua backfill R2 trong deploy backend. Chay RUN_MEDIA_BACKFILL=1 ./cap_nhat.sh backend hoac ./cap_nhat.sh backfill-r2 khi can."
+    fi
 
     php artisan config:cache
     php artisan route:cache || warn "route:cache loi, bo qua cache route"

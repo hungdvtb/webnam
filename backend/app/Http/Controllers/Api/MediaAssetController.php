@@ -7,6 +7,7 @@ use App\Models\MediaAsset;
 use App\Services\MediaService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Throwable;
 
 class MediaAssetController extends Controller
 {
@@ -17,6 +18,10 @@ class MediaAssetController extends Controller
 
     public function show(Request $request, string $publicId, string $variant = 'large')
     {
+        if (!preg_match('/^[0-9a-z]{26}$/', $publicId)) {
+            abort(404);
+        }
+
         $asset = MediaAsset::query()->where('public_id', $publicId)->first();
 
         if ($asset) {
@@ -40,8 +45,29 @@ class MediaAssetController extends Controller
             foreach ($extensions as $ext) {
                 $path = $basePath . '.' . $ext;
 
-                if ($disk->exists($path)) {
-                    $stream = $disk->readStream($path);
+                try {
+                    $exists = $disk->exists($path);
+                } catch (Throwable $exception) {
+                    if ($this->storageExceptionStatusCode($exception) === 404) {
+                        continue;
+                    }
+
+                    report($exception);
+                    abort(503, 'Media storage is temporarily unavailable.');
+                }
+
+                if ($exists) {
+                    try {
+                        $stream = $disk->readStream($path);
+                    } catch (Throwable $exception) {
+                        if ($this->storageExceptionStatusCode($exception) === 404) {
+                            continue;
+                        }
+
+                        report($exception);
+                        abort(503, 'Media storage is temporarily unavailable.');
+                    }
+
                     if (is_resource($stream)) {
                         $mime = match ($ext) {
                             'png' => 'image/png',
@@ -63,5 +89,24 @@ class MediaAssetController extends Controller
         }
 
         abort(404);
+    }
+
+    private function storageExceptionStatusCode(Throwable $exception): ?int
+    {
+        $current = $exception;
+
+        while ($current) {
+            if (method_exists($current, 'getStatusCode')) {
+                $statusCode = $current->getStatusCode();
+
+                if (is_numeric($statusCode)) {
+                    return (int) $statusCode;
+                }
+            }
+
+            $current = $current->getPrevious();
+        }
+
+        return null;
     }
 }

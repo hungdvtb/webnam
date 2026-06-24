@@ -6368,6 +6368,7 @@ class ProductController extends Controller
             'unit:id,name',
             'siteDomain:id,domain',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'images.mediaAsset:id,public_id,disk,variants',
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
         ];
@@ -6571,7 +6572,7 @@ class ProductController extends Controller
         $primaryImage = $product->images->firstWhere('is_primary', true)
             ?: $product->images->sortBy('sort_order')->first();
 
-        return $primaryImage?->image_url;
+        return $primaryImage?->thumbnail_url ?: $primaryImage?->image_url;
     }
 
     protected function pickerAttributePayload(Product $product): array
@@ -6706,7 +6707,8 @@ class ProductController extends Controller
                             ?? $resolvedProduct->cost_price
                             ?? $resolvedProduct->expected_cost
                             ?? 0),
-                        'main_image' => $this->pickerPrimaryImage($selectedVariant ?: $bundleItem),
+                        'main_image' => $this->pickerPrimaryImage($selectedVariant)
+                            ?: $this->pickerPrimaryImage($bundleItem),
                         'attribute_values' => $this->pickerAttributePayload($resolvedProduct),
                         'option_label' => $this->pickerAttributeSummary($resolvedProduct),
                         'variant_name' => $selectedVariant?->name,
@@ -6818,10 +6820,12 @@ class ProductController extends Controller
             'variations.unit:id,name',
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'variations.images.mediaAsset:id,public_id,disk,variants',
             'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id,profit_center_id',
             'bundleItems.unit:id,name',
             'bundleItems.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'bundleItems.images.mediaAsset:id,public_id,disk,variants',
             'bundleItems.variations' => function ($variationQuery) use ($pickerAttributeFilters) {
                 $variationQuery->where('products.status', true);
                 $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
@@ -6829,6 +6833,7 @@ class ProductController extends Controller
             'bundleItems.variations.unit:id,name',
             'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
             'bundleItems.variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'bundleItems.variations.images.mediaAsset:id,public_id,disk,variants',
         ]);
 
         if ($quickFilterRankingSql !== null) {
@@ -6918,7 +6923,8 @@ class ProductController extends Controller
                             'profit_center_id' => $variation->profit_center_id !== null
                                 ? (int) $variation->profit_center_id
                                 : ($product->profit_center_id !== null ? (int) $product->profit_center_id : null),
-                            'main_image' => $this->pickerPrimaryImage($variation),
+                            'main_image' => $this->pickerPrimaryImage($variation)
+                                ?: $this->pickerPrimaryImage($product),
                             'attribute_values' => $this->pickerAttributePayload($variation),
                             'attribute_summary' => $variationAttributeSummary,
                         ];

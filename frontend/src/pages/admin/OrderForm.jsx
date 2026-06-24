@@ -3445,6 +3445,37 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
     );
 };
 
+const failedProductImageUrls = new Set();
+
+const ProductThumb = ({ src, fallback = null, imageClassName = 'size-full object-cover' }) => {
+    const normalizedSrc = String(src || '').trim();
+    const [failed, setFailed] = useState(() => (
+        normalizedSrc !== '' && failedProductImageUrls.has(normalizedSrc)
+    ));
+
+    useEffect(() => {
+        setFailed(normalizedSrc !== '' && failedProductImageUrls.has(normalizedSrc));
+    }, [normalizedSrc]);
+
+    if (!normalizedSrc || failed) {
+        return fallback || <span className="material-symbols-outlined text-sm">image</span>;
+    }
+
+    return (
+        <img
+            src={normalizedSrc}
+            alt=""
+            className={imageClassName}
+            loading="lazy"
+            decoding="async"
+            onError={() => {
+                failedProductImageUrls.add(normalizedSrc);
+                setFailed(true);
+            }}
+        />
+    );
+};
+
 const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false }) => {
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
@@ -3512,7 +3543,7 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
             className={`w-full px-3 py-2.5 text-left border-b border-primary/5 flex items-center gap-3 transition-colors group relative overflow-visible ${isAlreadyInOrder ? 'cursor-not-allowed bg-primary/[0.03] opacity-75' : 'hover:bg-primary/5'}`}
         >
             <div className="size-8 bg-primary/5 rounded-sm flex items-center justify-center text-primary/10 overflow-hidden shrink-0">
-                {product.main_image ? <img src={product.main_image} alt="" className="size-full object-cover" /> : <span className="material-symbols-outlined text-sm">image</span>}
+                <ProductThumb src={product.main_image} />
             </div>
             <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
@@ -10062,13 +10093,14 @@ const OrderForm = () => {
                                                     className="relative flex-none size-12 rounded bg-primary/[0.05] overflow-hidden group cursor-pointer border border-primary/10"
                                                     onClick={(e) => { e.stopPropagation(); toggleLineItemSelection(item.line_id); }}
                                                 >
-                                                    {item.main_image ? (
-                                                        <img src={item.main_image} alt="" className="size-full object-cover" />
-                                                    ) : (
-                                                        <div className="size-full flex items-center justify-center text-[12px] font-semibold text-primary/40">
-                                                            #{index + 1}
-                                                        </div>
-                                                    )}
+                                                    <ProductThumb
+                                                        src={item.main_image}
+                                                        fallback={(
+                                                            <div className="size-full flex items-center justify-center text-[12px] font-semibold text-primary/40">
+                                                                #{index + 1}
+                                                            </div>
+                                                        )}
+                                                    />
                                                     <div className={`absolute inset-0 flex items-center justify-center bg-black/10 transition-opacity ${selectedLineItemIds.has(item.line_id) ? 'opacity-100' : 'opacity-0'}`}>
                                                         <input
                                                             type="checkbox"

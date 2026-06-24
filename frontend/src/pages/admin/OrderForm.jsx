@@ -3139,29 +3139,59 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
     reader.readAsDataURL(blob);
 });
 
+const canvasImageCache = new Map();
+const CANVAS_IMAGE_CACHE_LIMIT = 60;
+const CANVAS_IMAGE_FETCH_TIMEOUT_MS = 8000;
+
 const loadCanvasImage = async (src) => {
     if (!src) return null;
 
-    try {
-        const normalizedSrc = src.startsWith('data:')
-            ? src
-            : `${String(api.defaults.baseURL || '').replace(/\/+$/, '')}/media/proxy?url=${encodeURIComponent(src)}`;
-
-        const response = await fetch(normalizedSrc, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
-        if (!response.ok) throw new Error(`IMAGE_FETCH_${response.status}`);
-        const blob = await response.blob();
-        const dataUrl = await blobToDataUrl(blob);
-
-        return await new Promise((resolve, reject) => {
-            const image = new Image();
-            image.onload = () => resolve(image);
-            image.onerror = reject;
-            image.src = dataUrl;
-        });
-    } catch (error) {
-        console.error('Failed to load canvas image', src, error);
-        return null;
+    const cacheKey = String(src);
+    if (canvasImageCache.has(cacheKey)) {
+        return canvasImageCache.get(cacheKey);
     }
+
+    const imagePromise = (async () => {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), CANVAS_IMAGE_FETCH_TIMEOUT_MS);
+
+        try {
+            const normalizedSrc = cacheKey.startsWith('data:')
+                ? cacheKey
+                : `${String(api.defaults.baseURL || '').replace(/\/+$/, '')}/media/proxy?url=${encodeURIComponent(cacheKey)}`;
+
+            const response = await fetch(normalizedSrc, {
+                mode: 'cors',
+                credentials: 'omit',
+                cache: 'force-cache',
+                signal: controller.signal,
+            });
+            if (!response.ok) throw new Error(`IMAGE_FETCH_${response.status}`);
+            const blob = await response.blob();
+            const dataUrl = await blobToDataUrl(blob);
+
+            return await new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () => resolve(image);
+                image.onerror = reject;
+                image.src = dataUrl;
+            });
+        } catch (error) {
+            canvasImageCache.delete(cacheKey);
+            console.error('Failed to load canvas image', src, error);
+            return null;
+        } finally {
+            window.clearTimeout(timeoutId);
+        }
+    })();
+
+    canvasImageCache.set(cacheKey, imagePromise);
+
+    if (canvasImageCache.size > CANVAS_IMAGE_CACHE_LIMIT) {
+        canvasImageCache.delete(canvasImageCache.keys().next().value);
+    }
+
+    return imagePromise;
 };
 
 const wrapCanvasText = (ctx, text, maxWidth) => {
@@ -8195,17 +8225,23 @@ const OrderForm = () => {
     const handleScreenshot = async () => {
         if (formData.items.length === 0 || isCapturing) return;
 
-        let nextTemplates = quoteTemplates;
-
-        try {
-            nextTemplates = await refreshQuoteBootstrap();
-        } catch (error) {
-            console.error('Error refreshing quote bootstrap', error);
-        }
-
-        const availableTemplates = nextTemplates.filter((template) => template.is_active !== false);
+        const availableTemplates = quoteTemplates.filter((template) => template.is_active !== false);
 
         if (availableTemplates.length === 0) {
+            let refreshedTemplates = [];
+            try {
+                refreshedTemplates = await refreshQuoteBootstrap();
+            } catch (error) {
+                console.error('Error refreshing quote bootstrap', error);
+            }
+
+            const refreshedAvailableTemplates = refreshedTemplates.filter((template) => template.is_active !== false);
+            if (refreshedAvailableTemplates.length > 0) {
+                setQuoteTemplateSearch('');
+                setShowQuoteTemplatePicker(true);
+                return;
+            }
+
             showModal({
                 title: 'Thiếu cấu hình',
                 content: 'Chưa có bộ/mẫu báo giá hoạt động. Vào Cài đặt web > Báo giá để cấu hình trước.',
@@ -8216,6 +8252,9 @@ const OrderForm = () => {
 
         setQuoteTemplateSearch('');
         setShowQuoteTemplatePicker(true);
+        refreshQuoteBootstrap().catch((error) => {
+            console.error('Error refreshing quote bootstrap', error);
+        });
     };
 
     const handleCopyCellValue = async (text, message, event, copyId) => {

@@ -354,6 +354,30 @@ class FinDailyProfitReportController extends Controller
 
     private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null): array
     {
+        $scopedCenterIds = $this->profitCenterIdsForAdSpendScope($profitScope);
+        if (is_array($scopedCenterIds)) {
+            if ($scopedCenterIds === []) {
+                return [];
+            }
+
+            $query = DailyAdsSpend::query()
+                ->where('platform', $platform)
+                ->whereDate('date', '>=', $startDate)
+                ->whereDate('date', '<=', $endDate)
+                ->whereIn('profit_center_id', $scopedCenterIds)
+                ->select(DB::raw('DATE(date) as spend_date'), DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
+                ->groupBy(DB::raw('DATE(date)'));
+
+            if ($configuredAccountIds !== []) {
+                $query->whereIn('account_id', array_map('intval', $configuredAccountIds));
+            }
+
+            return $query
+                ->pluck('total_amount', 'spend_date')
+                ->map(fn ($amount) => (float) $amount)
+                ->toArray();
+        }
+
         $scopedAccountIds = $this->adAccountIdsForProfitScope($platform, $profitScope);
         if (is_array($scopedAccountIds)) {
             $configuredAccountIds = $configuredAccountIds !== []
@@ -367,16 +391,18 @@ class FinDailyProfitReportController extends Controller
 
         $query = DailyAdsSpend::query()
             ->where('platform', $platform)
-            ->whereBetween('date', [$startDate, $endDate])
-            ->select('date', DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
-            ->groupBy('date');
+            ->whereDate('date', '>=', $startDate)
+            ->whereDate('date', '<=', $endDate)
+            ->select(DB::raw('DATE(date) as spend_date'), DB::raw('SUM(COALESCE(amount, 0)) as total_amount'))
+            ->groupBy(DB::raw('DATE(date)'));
 
         if (is_array($scopedAccountIds)) {
             $query->whereIn('account_id', $configuredAccountIds);
         } elseif ($configuredAccountIds !== []) {
             $hasConfiguredAccountRows = DailyAdsSpend::query()
                 ->where('platform', $platform)
-                ->whereBetween('date', [$startDate, $endDate])
+                ->whereDate('date', '>=', $startDate)
+                ->whereDate('date', '<=', $endDate)
                 ->whereIn('account_id', $configuredAccountIds)
                 ->exists();
 
@@ -390,9 +416,37 @@ class FinDailyProfitReportController extends Controller
         }
 
         return $query
-            ->pluck('total_amount', 'date')
+            ->pluck('total_amount', 'spend_date')
             ->map(fn ($amount) => (float) $amount)
             ->toArray();
+    }
+
+    private function profitCenterIdsForAdSpendScope(?array $scope): ?array
+    {
+        if ($scope === null) {
+            return null;
+        }
+
+        if (!($scope['can_view'] ?? false)) {
+            return [];
+        }
+
+        $requestedCenterIds = array_values(array_filter(array_map('intval', $scope['requested_profit_center_ids'] ?? [])));
+        $restrictedCenterIds = ($scope['all'] ?? false)
+            ? []
+            : array_values(array_filter(array_map('intval', $scope['profit_center_ids'] ?? [])));
+
+        if ($requestedCenterIds !== []) {
+            return ($scope['all'] ?? false)
+                ? $requestedCenterIds
+                : array_values(array_intersect($requestedCenterIds, $restrictedCenterIds));
+        }
+
+        if (!($scope['all'] ?? false)) {
+            return $restrictedCenterIds;
+        }
+
+        return null;
     }
 
     private function shouldSyncAdsForReport(Request $request): bool

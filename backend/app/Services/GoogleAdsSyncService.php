@@ -355,7 +355,8 @@ class GoogleAdsSyncService
                     foreach ($dailyAmounts as $date => $amount) {
                         $profitCenterId = AdAccountProfitCenter::resolveProfitCenterId(
                             DailyAdsSpend::PLATFORM_GOOGLE,
-                            $storageAccountId
+                            $storageAccountId,
+                            $date
                         );
 
                         DailyAdsSpend::updateOrCreate(

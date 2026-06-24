@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { financeApi, userApi } from '../../services/api';
 
+const todayInputDate = () => new Date().toISOString().slice(0, 10);
+
 const emptyCenterForm = {
     id: null,
     name: '',
@@ -12,14 +14,16 @@ const emptyCenterForm = {
     sort_order: 0,
 };
 
-const emptyMappingRow = {
+const createEmptyMappingRow = () => ({
     platform: 'facebook',
     external_account_id: '',
     external_account_name: '',
     profit_center_id: '',
+    effective_from: todayInputDate(),
+    effective_to: '',
     allocation_percent: 100,
     is_active: true,
-};
+});
 
 const PLATFORM_OPTIONS = [
     { value: 'facebook', label: 'Facebook' },
@@ -27,13 +31,22 @@ const PLATFORM_OPTIONS = [
 ];
 
 const platformLabel = (value) => PLATFORM_OPTIONS.find((item) => item.value === value)?.label || value || '-';
+const adAccountKey = (account) => `${account.platform || 'facebook'}:${account.external_account_id || ''}`;
 
 const ProfitCenterManager = () => {
     const [profitCenters, setProfitCenters] = useState([]);
     const [adMappings, setAdMappings] = useState([]);
+    const [availableAdAccounts, setAvailableAdAccounts] = useState([]);
     const [users, setUsers] = useState([]);
     const [centerForm, setCenterForm] = useState(emptyCenterForm);
-    const [mappingDraft, setMappingDraft] = useState(emptyMappingRow);
+    const [mappingDraft, setMappingDraft] = useState(createEmptyMappingRow());
+    const [quickAssignment, setQuickAssignment] = useState({
+        platform: 'facebook',
+        profit_center_id: '',
+        effective_from: todayInputDate(),
+        selected_keys: [],
+        search: '',
+    });
     const [loading, setLoading] = useState(true);
     const [savingCenter, setSavingCenter] = useState(false);
     const [savingMappings, setSavingMappings] = useState(false);
@@ -42,6 +55,26 @@ const ProfitCenterManager = () => {
     const activeCenters = useMemo(
         () => profitCenters.filter((center) => center.is_active),
         [profitCenters]
+    );
+
+    const filteredAvailableAdAccounts = useMemo(() => {
+        const search = quickAssignment.search.trim().toLowerCase();
+
+        return availableAdAccounts
+            .filter((account) => (account.platform || 'facebook') === quickAssignment.platform)
+            .filter((account) => {
+                if (!search) return true;
+
+                return [
+                    account.external_account_id,
+                    account.external_account_name,
+                ].some((value) => String(value || '').toLowerCase().includes(search));
+            });
+    }, [availableAdAccounts, quickAssignment.platform, quickAssignment.search]);
+
+    const selectedQuickAccounts = useMemo(
+        () => availableAdAccounts.filter((account) => quickAssignment.selected_keys.includes(adAccountKey(account))),
+        [availableAdAccounts, quickAssignment.selected_keys]
     );
 
     const loadData = async () => {
@@ -55,6 +88,7 @@ const ProfitCenterManager = () => {
 
             setProfitCenters(centerResponse?.data?.profit_centers || []);
             setAdMappings(centerResponse?.data?.ad_account_mappings || []);
+            setAvailableAdAccounts(centerResponse?.data?.available_ad_accounts || []);
             setUsers(Array.isArray(usersResponse?.data) ? usersResponse.data : []);
         } catch (requestError) {
             setError(requestError.response?.data?.message || 'Không thể tải cấu hình nhóm quản lý lãi lỗ.');
@@ -129,15 +163,88 @@ const ProfitCenterManager = () => {
         )));
     };
 
+    const toggleQuickAccount = (account) => {
+        const key = adAccountKey(account);
+        setQuickAssignment((current) => ({
+            ...current,
+            selected_keys: current.selected_keys.includes(key)
+                ? current.selected_keys.filter((item) => item !== key)
+                : [...current.selected_keys, key],
+        }));
+    };
+
+    const addQuickMappings = () => {
+        if (!quickAssignment.profit_center_id) {
+            setError('Chọn nhóm quản lý trước khi gán nhanh tài khoản quảng cáo.');
+            return;
+        }
+
+        if (!quickAssignment.effective_from) {
+            setError('Chọn ngày bắt đầu hiệu lực trước khi gán nhanh.');
+            return;
+        }
+
+        if (selectedQuickAccounts.length === 0) {
+            setError('Tick ít nhất một tài khoản quảng cáo để gán nhanh.');
+            return;
+        }
+
+        if (quickAssignment.selected_keys.length < 0 && !mappingDraft.effective_from) {
+            setError('Chọn ngày bắt đầu hiệu lực trước khi thêm mapping.');
+            return;
+        }
+
+        setError('');
+        setAdMappings((current) => {
+            const existingKeys = new Set(current.map((row) => [
+                row.platform || 'facebook',
+                String(row.external_account_id || '').replace(/\D+/g, '') || String(row.external_account_id || ''),
+                row.effective_from || '',
+            ].join(':')));
+
+            const nextRows = selectedQuickAccounts
+                .map((account) => ({
+                    platform: account.platform || quickAssignment.platform,
+                    external_account_id: account.external_account_id || '',
+                    external_account_name: account.external_account_name || '',
+                    profit_center_id: quickAssignment.profit_center_id,
+                    effective_from: quickAssignment.effective_from,
+                    effective_to: '',
+                    allocation_percent: 100,
+                    is_active: true,
+                }))
+                .filter((row) => {
+                    const key = [
+                        row.platform || 'facebook',
+                        String(row.external_account_id || '').replace(/\D+/g, '') || String(row.external_account_id || ''),
+                        row.effective_from || '',
+                    ].join(':');
+
+                    if (existingKeys.has(key)) return false;
+                    existingKeys.add(key);
+                    return true;
+                });
+
+            return [...current, ...nextRows];
+        });
+
+        setQuickAssignment((current) => ({ ...current, selected_keys: [] }));
+    };
+
     const addMappingDraft = () => {
         if (!String(mappingDraft.external_account_id || '').trim()) {
             setError('Nhập ID tài khoản quảng cáo trước khi thêm.');
             return;
         }
 
+        if (!mappingDraft.effective_from) {
+            setError('Chọn ngày bắt đầu hiệu lực trước khi thêm mapping.');
+            return;
+        }
+
         setError('');
         setAdMappings((current) => [...current, { ...mappingDraft }]);
-        setMappingDraft(emptyMappingRow);
+        setMappingDraft(createEmptyMappingRow());
     };
 
     const removeMapping = (index) => {
@@ -156,6 +263,8 @@ const ProfitCenterManager = () => {
                     external_account_id: String(row.external_account_id || '').trim(),
                     external_account_name: String(row.external_account_name || '').trim(),
                     profit_center_id: Number(row.profit_center_id) || null,
+                    effective_from: row.effective_from || '1900-01-01',
+                    effective_to: row.effective_to || null,
                     allocation_percent: Number(row.allocation_percent) || 100,
                     is_active: Boolean(row.is_active),
                 }));
@@ -322,7 +431,76 @@ const ProfitCenterManager = () => {
                         </button>
                     </div>
 
-                    <div className="mb-4 grid grid-cols-1 gap-2 rounded-xl border border-gray-100 bg-gray-50 p-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_180px_auto]">
+
+                    <div className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <h3 className="text-[13px] font-black uppercase tracking-wide text-emerald-800">Gán nhanh từ tài khoản đã kết nối</h3>
+                                <p className="mt-1 text-[12px] font-medium text-emerald-700/70">Tick nhiều tài khoản, chọn mảng và ngày bắt đầu hiệu lực.</p>
+                            </div>
+                            <span className="rounded-full bg-white px-3 py-1 text-[12px] font-bold text-emerald-700 shadow-sm">
+                                Đã chọn {selectedQuickAccounts.length} TK
+                            </span>
+                        </div>
+                        <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-[120px_minmax(0,1fr)_180px_160px_auto]">
+                            <select
+                                value={quickAssignment.platform}
+                                onChange={(event) => setQuickAssignment((current) => ({ ...current, platform: event.target.value, selected_keys: [] }))}
+                                className="h-10 rounded-lg border border-emerald-100 bg-white px-2 text-[13px] font-medium text-gray-700 outline-none"
+                            >
+                                {PLATFORM_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                            </select>
+                            <input
+                                value={quickAssignment.search}
+                                onChange={(event) => setQuickAssignment((current) => ({ ...current, search: event.target.value }))}
+                                placeholder="Tìm theo ID hoặc tên tài khoản"
+                                className="h-10 rounded-lg border border-emerald-100 bg-white px-3 text-[13px] font-medium text-gray-700 outline-none"
+                            />
+                            <select
+                                value={quickAssignment.profit_center_id || ''}
+                                onChange={(event) => setQuickAssignment((current) => ({ ...current, profit_center_id: event.target.value }))}
+                                className="h-10 rounded-lg border border-emerald-100 bg-white px-2 text-[13px] font-medium text-gray-700 outline-none"
+                            >
+                                <option value="">Chọn mảng</option>
+                                {activeCenters.map((center) => <option key={center.id} value={center.id}>{center.manager_name ? `${center.manager_name} - ${center.name}` : center.name}</option>)}
+                            </select>
+                            <input
+                                type="date"
+                                value={quickAssignment.effective_from}
+                                onChange={(event) => setQuickAssignment((current) => ({ ...current, effective_from: event.target.value }))}
+                                className="h-10 rounded-lg border border-emerald-100 bg-white px-2 text-[13px] font-medium text-gray-700 outline-none"
+                            />
+                            <button type="button" onClick={addQuickMappings} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-[13px] font-bold text-white hover:bg-emerald-700">
+                                <span className="material-symbols-outlined text-[18px]">playlist_add</span>
+                                Thêm mốc
+                            </button>
+                        </div>
+                        <div className="max-h-56 overflow-y-auto rounded-xl border border-emerald-100 bg-white">
+                            {filteredAvailableAdAccounts.map((account) => {
+                                const key = adAccountKey(account);
+                                const checked = quickAssignment.selected_keys.includes(key);
+                                return (
+                                    <label key={key} className={`flex cursor-pointer items-center gap-3 border-b border-gray-50 px-3 py-2 text-[13px] last:border-b-0 ${checked ? 'bg-emerald-50' : 'hover:bg-gray-50'}`}>
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggleQuickAccount(account)}
+                                            className="rounded border-gray-300 text-emerald-600"
+                                        />
+                                        <span className="min-w-[88px] rounded-md bg-gray-100 px-2 py-1 text-center text-[11px] font-black uppercase text-gray-600">{platformLabel(account.platform)}</span>
+                                        <span className="font-mono font-bold text-gray-700">{account.external_account_id}</span>
+                                        <span className="min-w-0 flex-1 truncate text-gray-500">{account.external_account_name || 'Chưa có tên gợi nhớ'}</span>
+                                        {account.is_mapped ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-600">Đã có lịch sử</span> : null}
+                                    </label>
+                                );
+                            })}
+                            {!loading && filteredAvailableAdAccounts.length === 0 ? (
+                                <div className="px-4 py-6 text-center text-[13px] font-medium text-gray-400">Chưa có tài khoản phù hợp. Có thể nhập tay bên dưới.</div>
+                            ) : null}
+                        </div>
+                    </div>
+
+                    <div className="mb-4 grid grid-cols-1 gap-2 rounded-xl border border-gray-100 bg-gray-50 p-3 md:grid-cols-[120px_minmax(0,1fr)_minmax(0,1fr)_180px_150px_auto]">
                         <select
                             value={mappingDraft.platform}
                             onChange={(event) => setMappingDraft((current) => ({ ...current, platform: event.target.value }))}
@@ -354,19 +532,27 @@ const ProfitCenterManager = () => {
                                 <option key={center.id} value={center.id}>{center.manager_name ? `${center.manager_name} - ${center.name}` : center.name}</option>
                             ))}
                         </select>
+                        <input
+                            type="date"
+                            value={mappingDraft.effective_from || ''}
+                            onChange={(event) => setMappingDraft((current) => ({ ...current, effective_from: event.target.value }))}
+                            className="h-10 rounded-lg border border-gray-200 bg-white px-2 text-[13px] font-medium text-gray-700 outline-none"
+                        />
                         <button type="button" onClick={addMappingDraft} className="inline-flex h-10 items-center justify-center rounded-lg bg-emerald-600 px-3 text-white hover:bg-emerald-700">
                             <span className="material-symbols-outlined text-[18px]">add</span>
                         </button>
                     </div>
 
                     <div className="overflow-hidden rounded-xl border border-gray-100">
-                        <table className="w-full min-w-[760px] border-collapse text-left text-[13px]">
+                        <table className="w-full min-w-[980px] border-collapse text-left text-[13px]">
                             <thead className="bg-gray-50 text-[11px] font-black uppercase tracking-wide text-gray-400">
                                 <tr>
                                     <th className="px-3 py-3">Nền tảng</th>
                                     <th className="px-3 py-3">Account ID</th>
                                     <th className="px-3 py-3">Tên</th>
                                     <th className="px-3 py-3">Nhóm quản lý</th>
+                                    <th className="px-3 py-3">Từ ngày</th>
+                                    <th className="px-3 py-3">Đến ngày</th>
                                     <th className="px-3 py-3 text-center">Hoạt động</th>
                                     <th className="px-3 py-3 text-right">#</th>
                                 </tr>
@@ -391,6 +577,15 @@ const ProfitCenterManager = () => {
                                                 {activeCenters.map((center) => <option key={center.id} value={center.id}>{center.manager_name ? `${center.manager_name} - ${center.name}` : center.name}</option>)}
                                             </select>
                                         </td>
+                                        <td className="px-3 py-2">
+                                            <input type="date" value={row.effective_from || '1900-01-01'} onChange={(event) => updateMapping(index, 'effective_from', event.target.value)} className="h-9 w-full rounded-lg border border-gray-200 px-2" />
+                                        </td>
+                                        <td className="px-3 py-2">
+                                            <div className="flex items-center gap-2">
+                                                <input type="date" value={row.effective_to || ''} onChange={(event) => updateMapping(index, 'effective_to', event.target.value)} className="h-9 w-full rounded-lg border border-gray-200 px-2" />
+                                                {row.is_current ? <span className="whitespace-nowrap rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black uppercase text-emerald-600">Đang áp dụng</span> : null}
+                                            </div>
+                                        </td>
                                         <td className="px-3 py-2 text-center">
                                             <input type="checkbox" checked={Boolean(row.is_active)} onChange={(event) => updateMapping(index, 'is_active', event.target.checked)} className="rounded border-gray-300 text-emerald-600" />
                                         </td>
@@ -403,7 +598,7 @@ const ProfitCenterManager = () => {
                                 ))}
                                 {!loading && adMappings.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="px-4 py-10 text-center text-[13px] font-medium text-gray-400">
+                                        <td colSpan={8} className="px-4 py-10 text-center text-[13px] font-medium text-gray-400">
                                             Chưa có tài khoản quảng cáo nào được gắn nhóm quản lý.
                                         </td>
                                     </tr>

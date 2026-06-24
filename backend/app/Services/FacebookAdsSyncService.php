@@ -204,7 +204,8 @@ class FacebookAdsSyncService
                     foreach ($dailyAmounts as $date => $amount) {
                         $profitCenterId = AdAccountProfitCenter::resolveProfitCenterId(
                             DailyAdsSpend::PLATFORM_FACEBOOK,
-                            $storageAccountId
+                            $storageAccountId,
+                            $date
                         );
 
                         DailyAdsSpend::updateOrCreate(

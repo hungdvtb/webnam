@@ -16,6 +16,7 @@ use App\Support\OrderShippingFeeCalculator;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Collection;
 
 class FinDailyProfitReportController extends Controller
@@ -392,6 +393,60 @@ class FinDailyProfitReportController extends Controller
             ->pluck('total_amount', 'date')
             ->map(fn ($amount) => (float) $amount)
             ->toArray();
+    }
+
+    private function shouldSyncAdsForReport(Request $request): bool
+    {
+        return filter_var($request->input('sync_ads', false), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    private function syncAdSpendForReport(string $startDate, string $endDate, Request $request): array
+    {
+        if (!$this->shouldSyncAdsForReport($request)) {
+            return [
+                'requested' => false,
+                'facebook' => 'skipped',
+                'google' => 'skipped',
+                'warnings' => [],
+            ];
+        }
+
+        $warnings = [];
+        $facebookStatus = 'success';
+        $googleStatus = 'success';
+
+        try {
+            if (!app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate)) {
+                $facebookStatus = 'failed';
+                $warnings[] = 'Khong dong bo duoc Facebook Ads, bao cao dang dung du lieu da luu.';
+            }
+        } catch (\Throwable $exception) {
+            $facebookStatus = 'failed';
+            $warnings[] = 'Khong dong bo duoc Facebook Ads, bao cao dang dung du lieu da luu.';
+            Log::warning('Daily PnL report Facebook auto sync failed.', [
+                'message' => $exception->getMessage(),
+            ]);
+        }
+
+        try {
+            if (!app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate)) {
+                $googleStatus = 'failed';
+                $warnings[] = 'Khong dong bo duoc Google Ads, bao cao dang dung du lieu da luu.';
+            }
+        } catch (\Throwable $exception) {
+            $googleStatus = 'failed';
+            $warnings[] = 'Khong dong bo duoc Google Ads, bao cao dang dung du lieu da luu.';
+            Log::warning('Daily PnL report Google auto sync failed.', [
+                'message' => $exception->getMessage(),
+            ]);
+        }
+
+        return [
+            'requested' => true,
+            'facebook' => $facebookStatus,
+            'google' => $googleStatus,
+            'warnings' => array_values(array_unique($warnings)),
+        ];
     }
 
     private function extractRequestedValues(mixed $values): array
@@ -1713,8 +1768,7 @@ class FinDailyProfitReportController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
         }
 
-        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
-        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
+        $syncMeta = $this->syncAdSpendForReport($startDate, $endDate, $request);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate, [
             'status' => $request->input('status'),
@@ -1727,7 +1781,9 @@ class FinDailyProfitReportController extends Controller
             'status' => 'success',
             'data' => $payload['data'],
             'summary' => $payload['summary'],
-            'meta' => $payload['meta'] ?? [],
+            'meta' => array_merge($payload['meta'] ?? [], [
+                'ads_sync' => $syncMeta,
+            ]),
         ]);
     }
 
@@ -1749,8 +1805,7 @@ class FinDailyProfitReportController extends Controller
             || !empty($profitScope['requested_profit_center_ids'] ?? []);
         $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL && !$hasProfitScopeFilter;
 
-        app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate);
-        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
+        $syncMeta = $this->syncAdSpendForReport($startDate, $endDate, $request);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate, $filters);
         $config = FinDailyReportConfig::query()->first();
@@ -1884,6 +1939,7 @@ class FinDailyProfitReportController extends Controller
                 'shared_costs_included' => $includeSharedCosts,
                 'profit_scope' => $profitScope,
                 'profit_scope_label' => $profitScope['label'] ?? 'Tong tat ca nguoi quan ly',
+                'ads_sync' => $syncMeta,
             ],
         ]);
     }

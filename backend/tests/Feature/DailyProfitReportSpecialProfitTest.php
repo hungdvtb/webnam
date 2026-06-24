@@ -3,10 +3,12 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\DailyAdsSpend;
 use App\Models\FinDailyReportConfig;
 use App\Models\Order;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -163,6 +165,64 @@ class DailyProfitReportSpecialProfitTest extends TestCase
         $this->assertSame(0, (int) $response->json('summary.partial_delivery_order_count'));
         $this->assertSame(1, (int) $response->json('summary.extra_profit_order_count'));
         $this->assertSame(55.0, (float) $response->json('summary.total_extra_profit'));
+    }
+
+    public function test_daily_report_load_uses_saved_ad_spend_without_auto_syncing_external_apis(): void
+    {
+        $account = Account::query()->create([
+            'name' => 'Daily Report Saved Ads Test Account',
+        ]);
+
+        $user = User::factory()->create();
+        $user->accounts()->attach($account->id, ['role' => 'owner']);
+
+        Sanctum::actingAs($user);
+
+        FinDailyReportConfig::query()->create([
+            'return_rate' => 0,
+            'packaging_fee' => 0,
+            'shipping_estimate_rate' => 10,
+            'tax_rate' => 0,
+            'fb_tax_rate' => 0,
+            'google_tax_rate' => 0,
+            'fb_access_token' => 'fb-token',
+            'fb_ad_account_ids' => 'act_123',
+            'google_developer_token' => 'google-dev-token',
+            'google_client_id' => 'google-client-id',
+            'google_client_secret' => 'google-client-secret',
+            'google_refresh_token' => 'google-refresh-token',
+            'google_customer_ids' => '456-789-0123',
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+            'date' => '2026-04-18',
+            'amount' => 120,
+            'account_id' => null,
+        ]);
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
+            'date' => '2026-04-18',
+            'amount' => 80,
+            'account_id' => null,
+        ]);
+
+        Http::fake(function () {
+            throw new \RuntimeException('Daily report should not call external Ads APIs while loading.');
+        });
+
+        $response = $this->getJson('/api/finance/daily-pnl/report?start_date=2026-04-18&end_date=2026-04-18', [
+            'X-Account-Id' => (string) $account->id,
+        ])->assertOk();
+
+        $row = collect($response->json('data'))->firstWhere('date', '2026-04-18');
+
+        $this->assertNotNull($row);
+        $this->assertSame(120.0, (float) ($row['fb_ads_spend'] ?? 0));
+        $this->assertSame(80.0, (float) ($row['google_ads_spend'] ?? 0));
+        $this->assertSame(200.0, (float) ($row['ads_spend'] ?? 0));
+        $this->assertFalse((bool) $response->json('meta.ads_sync.requested'));
+        Http::assertNothingSent();
     }
 
     private function createOrder(Account $account, array $attributes): Order

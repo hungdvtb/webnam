@@ -32,6 +32,7 @@ webgom/public/tmp-*
 .codex-backups/
 brain/
 scratch/
+.worktrees/
 
 # Local database snapshots
 database-backups/*.dump

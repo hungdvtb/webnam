@@ -142,6 +142,26 @@ fix_backend_permissions() {
     fi
 }
 
+restart_php_fpm() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "Khong co systemctl, bo qua restart PHP-FPM"
+        return
+    fi
+
+    local services
+    services="$(systemctl list-unit-files 'php*-fpm.service' --no-legend 2>/dev/null | awk '{print $1}' || true)"
+
+    if [ -z "$services" ]; then
+        warn "Khong tim thay service PHP-FPM de restart"
+        return
+    fi
+
+    while IFS= read -r service; do
+        [ -n "$service" ] || continue
+        systemctl restart "$service" || warn "Khong restart duoc $service. Hay restart PHP-FPM thu cong neu API van treo."
+    done <<< "$services"
+}
+
 deploy_backend() {
     require_cmd composer
     require_cmd php
@@ -169,6 +189,7 @@ deploy_backend() {
     php artisan view:cache || warn "view:cache loi, bo qua cache view"
 
     fix_backend_permissions
+    restart_php_fpm
     success "Backend xong"
 }
 

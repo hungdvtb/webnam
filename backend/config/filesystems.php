@@ -13,6 +13,11 @@ $mediaHttpVerifyOption = $mediaHttpVerify
 $mediaHttpConnectTimeout = (float) env('MEDIA_HTTP_CONNECT_TIMEOUT', 5);
 $mediaHttpTimeout = (float) env('MEDIA_HTTP_TIMEOUT', 15);
 $r2Retries = (int) env('R2_RETRIES', 1);
+$r2ForceIpResolve = strtolower(trim((string) env('R2_FORCE_IP_RESOLVE', 'v4')));
+
+if (!in_array($r2ForceIpResolve, ['v4', 'v6'], true)) {
+    $r2ForceIpResolve = 'v4';
+}
 
 return [
 
@@ -94,6 +99,7 @@ return [
                 'verify' => $mediaHttpVerifyOption,
                 'connect_timeout' => $mediaHttpConnectTimeout,
                 'timeout' => $mediaHttpTimeout,
+                'force_ip_resolve' => $r2ForceIpResolve,
             ],
             'throw' => false,
             'report' => false,

@@ -22,6 +22,7 @@ use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\AI\AiExceptionClassifier;
 use App\Services\AI\ProductReviewAiGenerationService;
+use App\Services\AccountDataScopeService;
 use App\Services\MediaService;
 use App\Services\GoogleMerchant\GoogleMerchantSettingsService;
 use App\Services\OrderInventorySlipService;
@@ -177,9 +178,25 @@ class ProductController extends Controller
         protected ProductPricingService $productPricingService,
         protected OrderInventorySlipService $orderInventorySlipService,
         protected MediaService $mediaService,
-        protected ProductParentRetailPriceSyncService $productParentRetailPriceSyncService
+        protected ProductParentRetailPriceSyncService $productParentRetailPriceSyncService,
+        protected AccountDataScopeService $accountDataScopeService
     )
     {
+    }
+
+    private function catalogAccountId(Request $request): ?int
+    {
+        return $this->accountDataScopeService->catalogAccountIdForRequest($request);
+    }
+
+    private function inventoryAccountId(Request $request): ?int
+    {
+        return $this->accountDataScopeService->inventoryAccountIdForRequest($request);
+    }
+
+    private function inventoryOrderAccountIds(Request $request): array
+    {
+        return $this->accountDataScopeService->accountIdsSharingInventoryScopeForRequest($request);
     }
 
     private function resolveProductProfitCenterIdForRequest(Request $request, mixed $value, string $field = 'profit_center_id'): ?int
@@ -850,7 +867,8 @@ class ProductController extends Controller
 
     private function makeProductImportContextV2(Request $request): array
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->catalogAccountId($request) ?? 0);
+        $activeAccountId = (int) ($this->accountDataScopeService->rawActiveAccountId($request) ?? 0);
         $categoryQuery = Category::query();
         $attributeQuery = Attribute::query()->where('entity_type', 'product');
         $productQuery = Product::query();
@@ -872,7 +890,9 @@ class ProductController extends Controller
                     ->where('account_id', $accountId)
                     ->orWhereNull('account_id');
             });
-            $postQuery->where('account_id', $accountId);
+            if ($activeAccountId > 0) {
+                $postQuery->where('account_id', $activeAccountId);
+            }
         }
 
         $products = $productQuery->get(['id', 'account_id', 'type', 'name', 'sku', 'slug']);
@@ -3055,8 +3075,14 @@ class ProductController extends Controller
     }
     protected function supplierExistsRule(Request $request)
     {
-        return Rule::exists('suppliers', 'id')->where(function ($query) {
+        $inventoryAccountId = $this->inventoryAccountId($request);
+
+        return Rule::exists('suppliers', 'id')->where(function ($query) use ($inventoryAccountId) {
             $query->whereNull('deleted_at');
+
+            if ($inventoryAccountId) {
+                $query->where('account_id', $inventoryAccountId);
+            }
         });
     }
 
@@ -4313,7 +4339,7 @@ class ProductController extends Controller
 
     protected function attachActualStockSubqueries(Builder $query, Request $request): array
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
 
         // Compute real-time base stock from inventory_batches (same source of truth
         // as InventoryService::refreshProducts). This avoids stale products.stock_quantity
@@ -4377,7 +4403,7 @@ class ProductController extends Controller
 
     protected function buildPendingOutboundQuantitySubquery(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $manualExportScopeSql = "
             CASE
                 WHEN inventory_documents.reference_type = 'order'
@@ -4449,10 +4475,10 @@ class ProductController extends Controller
 
     protected function applyPendingOutboundEligibleOrderScope($query, Request $request): void
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountIds = $this->inventoryOrderAccountIds($request);
 
-        if ($accountId > 0) {
-            $query->where('orders.account_id', $accountId);
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
         }
 
         if (Schema::hasColumn('orders', 'deleted_at')) {
@@ -4491,10 +4517,10 @@ class ProductController extends Controller
 
     protected function applyPendingReturnEligibleOrderScope($query, Request $request): void
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountIds = $this->inventoryOrderAccountIds($request);
 
-        if ($accountId > 0) {
-            $query->where('orders.account_id', $accountId);
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
         }
 
         if (Schema::hasColumn('orders', 'deleted_at')) {
@@ -10256,7 +10282,7 @@ class ProductController extends Controller
 
         try {
             $product = DB::transaction(function () use ($request, $validated, $categoryIds, $supplierIds) {
-                $accountId = $request->header('X-Account-Id');
+                $accountId = $this->catalogAccountId($request);
                 $this->prepareProductSku($validated);
                 $preparedVariants = $validated['type'] === 'configurable'
                     ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'])

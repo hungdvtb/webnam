@@ -3,6 +3,7 @@
 namespace App\Traits;
 
 use App\Models\Account;
+use App\Services\AccountDataScopeService;
 use Illuminate\Database\Eloquent\Builder;
 
 trait BelongsToAccount
@@ -14,19 +15,9 @@ trait BelongsToAccount
     {
         // Require account_id to be added on creation if not set out-of-band
         static::creating(function ($model) {
-            $accountId = session()->get('active_account_id') ?? request()->header('X-Account-Id');
+            $accountId = app(AccountDataScopeService::class)
+                ->accountIdForCurrentRequest(static::accountScopeType());
             
-            if (!$accountId && auth()->check()) {
-                // If no explicit account is given, default to the first account this user has access to.
-                $accountId = auth()->user()->accounts()->first()?->id;
-                
-                // If still no account (e.g., brand new superadmin without accounts?), 
-                // we might try to grab the very first account in the system as a fallback.
-                if (!$accountId && auth()->user()->is_admin) {
-                     $accountId = Account::first()?->id;
-                }
-            }
-
             if ($accountId && empty($model->account_id)) {
                 $model->account_id = $accountId;
             }
@@ -38,11 +29,17 @@ trait BelongsToAccount
             // Better to force even super admin to filter if they are acting on a specific admin view, 
             // but let's make it scoped via session/header for everyone.
             $accountId = session()->get('active_account_id') ?? request()->header('X-Account-Id');
+            $scopeService = app(AccountDataScopeService::class);
+            $scopeType = static::accountScopeType();
 
             if ($accountId && $accountId !== 'all') {
-                $builder->where($builder->getModel()->getTable() . '.account_id', $accountId);
+                $scopedAccountId = $scopeService->resolveScopedAccountId($accountId, $scopeType);
+                if ($scopedAccountId) {
+                    $builder->where($builder->getModel()->getTable() . '.account_id', $scopedAccountId);
+                }
             } elseif (auth()->check() && !auth()->user()->is_admin) {
                 $userAccountIds = auth()->user()->accounts()->pluck('accounts.id')->toArray();
+                $userAccountIds = $scopeService->resolveScopedAccountIds($userAccountIds, $scopeType);
                 if (empty($userAccountIds)) {
                     $builder->where($builder->getModel()->getTable() . '.account_id', 0);
                 } else {
@@ -58,5 +55,12 @@ trait BelongsToAccount
     public function account()
     {
         return $this->belongsTo(Account::class);
+    }
+
+    protected static function accountScopeType(): string
+    {
+        return property_exists(static::class, 'accountScopeType')
+            ? static::$accountScopeType
+            : AccountDataScopeService::SCOPE_ACTIVE;
     }
 }

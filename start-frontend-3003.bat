@@ -11,6 +11,7 @@ if not exist "%NODE_EXE%" set "NODE_EXE=node"
 echo.
 echo ============================================
 echo  Webnam frontend dev dang chay tai:
+echo  http://localhost:3003
 echo  http://127.0.0.1:3003
 echo ============================================
 echo.
@@ -18,7 +19,7 @@ echo Script nay se tu khoi dong backend 8003 neu can.
 echo Dang dung cua so nay neu ban con muon su dung frontend.
 echo.
 
-"%NODE_EXE%" ".\scripts\dev-with-backend.mjs" --host 127.0.0.1 --port 3003
+"%NODE_EXE%" ".\scripts\dev-with-backend.mjs" --host :: --port 3003
 
 echo.
 echo Frontend da dung. Nhan phim bat ky de dong cua so.

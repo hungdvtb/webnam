@@ -16,6 +16,7 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
+use App\Services\AccountDataScopeService;
 use App\Support\ImportCostRounding;
 use App\Support\InventoryQuantity;
 use Illuminate\Database\QueryException;
@@ -30,7 +31,8 @@ class InventoryService
     private const OVERSOLD_RESERVE_SOURCE = 'oversold_reserve';
 
     public function __construct(
-        private readonly ProductPricingService $productPricingService
+        private readonly ProductPricingService $productPricingService,
+        private readonly AccountDataScopeService $accountDataScopeService
     ) {
     }
 
@@ -411,6 +413,7 @@ class InventoryService
             ]);
         }
 
+        $inventoryAccountId = $this->inventoryAccountIdForOrder($order);
         $createdItems = [];
         $touchedProductIds = [];
 
@@ -421,7 +424,7 @@ class InventoryService
             $inventoryProduct = $actualProduct ?: $product;
             $quantity = InventoryQuantity::normalize($item['quantity']);
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
-            $allocation = $this->allocateOrderSellableBatches($order->account_id, $inventoryProduct, $quantity);
+            $allocation = $this->allocateOrderSellableBatches($inventoryAccountId, $inventoryProduct, $quantity);
             $avgUnitCost = $quantity > 0
                 ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
                 : 0;
@@ -457,7 +460,7 @@ class InventoryService
 
             foreach ($allocation['allocations'] as $row) {
                 InventoryBatchAllocation::create([
-                    'account_id' => $order->account_id,
+                    'account_id' => $inventoryAccountId,
                     'inventory_batch_id' => $row['inventory_batch_id'],
                     'product_id' => $inventoryProduct->id,
                     'order_id' => $order->id,
@@ -520,6 +523,7 @@ class InventoryService
             ]);
         }
 
+        $inventoryAccountId = $this->inventoryAccountIdForOrder($order);
         $touchedProductIds = [];
         $totalPrice = 0;
         $costTotal = 0;
@@ -529,7 +533,7 @@ class InventoryService
             $product = $products->get((int) ($item->actual_product_id ?: $item->product_id));
             $quantity = InventoryQuantity::normalize($item->quantity);
             $sellingPrice = round((float) ($item->price ?? 0), 2);
-            $allocation = $this->allocateOrderSellableBatches($order->account_id, $product, $quantity);
+            $allocation = $this->allocateOrderSellableBatches($inventoryAccountId, $product, $quantity);
             $avgUnitCost = $quantity > 0
                 ? ImportCostRounding::roundUnitCost($allocation['total_cost'] / $quantity)
                 : 0;
@@ -548,7 +552,7 @@ class InventoryService
 
             foreach ($allocation['allocations'] as $row) {
                 InventoryBatchAllocation::create([
-                    'account_id' => $order->account_id,
+                    'account_id' => $inventoryAccountId,
                     'inventory_batch_id' => $row['inventory_batch_id'],
                     'product_id' => $product->id,
                     'order_id' => $order->id,
@@ -582,9 +586,9 @@ class InventoryService
 
     public function releaseOrderInventory(Order $order): void
     {
-        $allocations = InventoryBatchAllocation::query()
+        $allocations = InventoryBatchAllocation::withoutGlobalScopes()
             ->where('order_id', $order->id)
-            ->with('batch')
+            ->with(['batch' => fn ($query) => $query->withoutGlobalScopes()])
             ->lockForUpdate()
             ->get();
 
@@ -609,8 +613,15 @@ class InventoryService
             $touchedProductIds[] = $batch->product_id;
         }
 
-        InventoryBatchAllocation::query()->where('order_id', $order->id)->delete();
+        InventoryBatchAllocation::withoutGlobalScopes()->where('order_id', $order->id)->delete();
         $this->refreshProducts($touchedProductIds);
+    }
+
+    private function inventoryAccountIdForOrder(Order $order): int
+    {
+        $orderAccountId = (int) ($order->account_id ?? 0);
+
+        return (int) ($this->accountDataScopeService->inventoryAccountId($orderAccountId) ?? $orderAccountId);
     }
 
     public function refreshProducts(array $productIds): void

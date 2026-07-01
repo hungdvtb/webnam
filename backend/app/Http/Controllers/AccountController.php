@@ -31,6 +31,8 @@ class AccountController extends Controller
             'subdomain' => 'nullable|string|unique:accounts,subdomain',
             'site_code' => 'nullable|string|unique:accounts,site_code',
             'ai_api_key' => 'nullable|string|max:255',
+            'catalog_account_id' => 'nullable|integer|exists:accounts,id',
+            'inventory_account_id' => 'nullable|integer|exists:accounts,id',
         ]);
 
         $subdomain = $request->subdomain ?: Str::slug($request->name);
@@ -45,6 +47,8 @@ class AccountController extends Controller
             'subdomain' => $subdomain,
             'site_code' => $request->site_code,
             'ai_api_key' => $request->ai_api_key,
+            'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
+            'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
         ]);
 
         // Attach current user as owner
@@ -65,6 +69,8 @@ class AccountController extends Controller
             'domain' => 'nullable|string|unique:accounts,domain',
             'subdomain' => 'nullable|string|unique:accounts,subdomain',
             'ai_api_key' => 'nullable|string|max:255',
+            'catalog_account_id' => 'nullable|integer|exists:accounts,id',
+            'inventory_account_id' => 'nullable|integer|exists:accounts,id',
             'user_name' => 'required|string|max:255',
             'user_email' => 'required|string|email|unique:users,email',
             'user_password' => 'required|string|min:6',
@@ -83,6 +89,8 @@ class AccountController extends Controller
                 'subdomain' => $subdomain,
                 'site_code' => $request->site_code,
                 'ai_api_key' => $request->ai_api_key,
+                'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
+                'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
             ]);
 
             $user = \App\Models\User::create([
@@ -134,9 +142,21 @@ class AccountController extends Controller
             'site_code' => 'nullable|string|unique:accounts,site_code,' . $account->id,
             'status' => 'boolean',
             'ai_api_key' => 'nullable|string|max:255',
+            'catalog_account_id' => 'nullable|integer|exists:accounts,id',
+            'inventory_account_id' => 'nullable|integer|exists:accounts,id',
         ]);
 
-        $account->update($request->only('name', 'domain', 'subdomain', 'site_code', 'status', 'ai_api_key'));
+        $payload = $request->only('name', 'domain', 'subdomain', 'site_code', 'status', 'ai_api_key');
+
+        if ($request->exists('catalog_account_id')) {
+            $payload['catalog_account_id'] = $this->nullableAccountLink($request->input('catalog_account_id'), (int) $account->id);
+        }
+
+        if ($request->exists('inventory_account_id')) {
+            $payload['inventory_account_id'] = $this->nullableAccountLink($request->input('inventory_account_id'), (int) $account->id);
+        }
+
+        $account->update($payload);
 
         return response()->json($account);
     }
@@ -182,5 +202,16 @@ class AccountController extends Controller
             'permissions' => json_encode(AccessControlService::permissionsForRole($role)),
             'data_permissions' => json_encode(AccessControlService::dataPermissionsForRole($role)),
         ];
+    }
+
+    private function nullableAccountLink($value, ?int $selfAccountId = null): ?int
+    {
+        if ($value === null || $value === '' || $value === '0') {
+            return null;
+        }
+
+        $accountId = (int) $value;
+
+        return $accountId > 0 && $accountId !== $selfAccountId ? $accountId : null;
     }
 }

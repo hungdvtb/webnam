@@ -9,6 +9,8 @@ class InventoryImport extends Model
 {
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $table = 'imports';
 
     protected $fillable = [

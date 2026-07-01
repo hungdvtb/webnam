@@ -9,6 +9,8 @@ class InventoryImportAttachment extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $appends = ['url'];
 
     protected $fillable = [

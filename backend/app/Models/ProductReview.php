@@ -9,6 +9,8 @@ class ProductReview extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'catalog';
+
     public const STATUS_PENDING = 'pending';
     public const STATUS_VISIBLE = 'visible';
     public const STATUS_HIDDEN = 'hidden';

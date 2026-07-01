@@ -9,6 +9,8 @@ class InventoryItem extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $fillable = [
         'product_id',
         'warehouse_id',

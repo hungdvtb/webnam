@@ -58,6 +58,11 @@ const nextConfig = {
       },
       {
         protocol: 'https',
+        hostname: 'api.gomdaithanh.com',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
         hostname: 'placehold.co',
         pathname: '/**',
       },

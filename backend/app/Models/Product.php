@@ -10,6 +10,8 @@ class Product extends Model
 {
     use \App\Traits\BelongsToAccount, SoftDeletes;
 
+    protected static string $accountScopeType = 'catalog';
+
     protected static array $schemaColumnCache = [];
 
     protected $fillable = [

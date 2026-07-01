@@ -10,6 +10,8 @@ class Supplier extends Model
     use \App\Traits\BelongsToAccount;
     use SoftDeletes;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $fillable = [
         'account_id',
         'code',

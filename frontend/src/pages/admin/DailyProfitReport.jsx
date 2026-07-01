@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { financeApi } from '../../services/api';
 
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(Number(value || 0));
@@ -7,6 +7,11 @@ const formatInputDate = (date) => `${date.getFullYear()}-${padNumber(date.getMon
 const getMonthStartInputDate = () => {
     const now = new Date();
     return `${now.getFullYear()}-${padNumber(now.getMonth() + 1)}-01`;
+};
+const getTodayInputDate = () => formatInputDate(new Date());
+const getPreviousMonthStartInputDate = () => {
+    const now = new Date();
+    return formatInputDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
 };
 const getStartOfWeek = (date) => {
     const start = new Date(date);
@@ -32,6 +37,57 @@ const formatDisplayDate = (value) => {
     if (Number.isNaN(date.getTime())) return '-';
     return `${padNumber(date.getDate())}/${padNumber(date.getMonth() + 1)}/${date.getFullYear()}`;
 };
+
+const normalizeAdAccountId = (value) => {
+    const id = String(value || '').trim();
+    if (!id) return '';
+    return id.startsWith('act_') ? id : `act_${id}`;
+};
+
+const splitAdAccountIds = (value) => String(value || '')
+    .split(/[,\s]+/)
+    .map(normalizeAdAccountId)
+    .filter(Boolean)
+    .filter((id, index, ids) => ids.indexOf(id) === index);
+
+const normalizeTrackingDate = (value) => {
+    const date = String(value || '').trim().slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+};
+
+const normalizeFbAccountTracking = (group = {}) => {
+    const rawEntries = Array.isArray(group.account_tracking)
+        ? group.account_tracking
+        : Array.isArray(group.account_ranges)
+            ? group.account_ranges
+            : [];
+
+    return rawEntries.map((entry) => ({
+        account_id: normalizeAdAccountId(entry.account_id || entry.id || entry.accountId),
+        start_date: normalizeTrackingDate(entry.start_date || entry.startDate || entry.date_from || entry.dateFrom),
+        end_date: normalizeTrackingDate(entry.end_date || entry.endDate || entry.date_to || entry.dateTo),
+    })).filter((entry) => entry.account_id);
+};
+
+const emptyFbTokenGroup = () => ({
+    token: '',
+    account_ids: '',
+    account_tracking: [],
+    accounts: [],
+    fetching: false,
+    showList: false,
+});
+
+const normalizeFbTokenGroupForState = (group = {}) => ({
+    ...emptyFbTokenGroup(),
+    ...group,
+    token: group.token || '',
+    account_ids: splitAdAccountIds(group.account_ids).join(', '),
+    account_tracking: normalizeFbAccountTracking(group),
+    accounts: [],
+    fetching: false,
+    showList: false,
+});
 
 const AD_CHANNEL_OPTIONS = [
     { value: 'all', label: 'Tất cả kênh' },
@@ -124,7 +180,9 @@ const Eye = ({ size, className }) => (
 
 const DailyProfitReport = () => {
     const [loading, setLoading] = useState(false);
+    const [syncingAds, setSyncingAds] = useState(false);
     const [hideZeroRevenue, setHideZeroRevenue] = useState(false);
+    const autoRefreshKeyRef = useRef('');
 
     const defaultCols = [
         { id: 'date', label: 'Ngày' },
@@ -177,7 +235,9 @@ const DailyProfitReport = () => {
                 });
                 return merged;
             }
-        } catch(e) {}
+        } catch {
+            // Ignore malformed saved column preferences and fall back to defaults.
+        }
         return defaultCols.map(c => c.id);
     });
 
@@ -596,7 +656,7 @@ const DailyProfitReport = () => {
         }
     };
     const [reportData, setReportData] = useState([]);
-    const [summary, setSummary] = useState({ total_profit: 0, total_revenue: 0, total_orders: 0 });
+    const [, setSummary] = useState({ total_profit: 0, total_revenue: 0, total_orders: 0 });
     const [profitCenters, setProfitCenters] = useState([]);
     const [config, setConfig] = useState({
         return_rate: 2,
@@ -618,13 +678,13 @@ const DailyProfitReport = () => {
 
     const [filters, setFilters] = useState({
         start_date: getMonthStartInputDate(),
-        end_date: formatInputDate(new Date()),
+        end_date: getTodayInputDate(),
         ad_channel: 'all',
         manager_user_id: '',
     });
 
     const [showConfig, setShowConfig] = useState(false);
-    const [tokenGroups, setTokenGroups] = useState([{ token: '', account_ids: '', accounts: [], fetching: false, showList: false }]);
+    const [tokenGroups, setTokenGroups] = useState([emptyFbTokenGroup()]);
     const [showFbSplit, setShowFbSplit] = useState(false);
     const [fbSplitData, setFbSplitData] = useState(null);
     const [fetchingSplit, setFetchingSplit] = useState(false);
@@ -647,12 +707,12 @@ const DailyProfitReport = () => {
     )).map(([id, name]) => ({ id, name })), [profitCenters]);
 
     const addTokenGroup = () => {
-        setTokenGroups([...tokenGroups, { token: '', account_ids: '', accounts: [], fetching: false, showList: false }]);
+        setTokenGroups([...tokenGroups, emptyFbTokenGroup()]);
     };
 
     const removeTokenGroup = (index) => {
         if (tokenGroups.length <= 1) {
-            setTokenGroups([{ token: '', account_ids: '', accounts: [], fetching: false, showList: false }]);
+            setTokenGroups([emptyFbTokenGroup()]);
             return;
         }
         const updated = [...tokenGroups];
@@ -664,6 +724,154 @@ const DailyProfitReport = () => {
         const updated = [...tokenGroups];
         updated[index][field] = value;
         setTokenGroups(updated);
+    };
+
+    const updateAccountTracking = (index, accountId, field, value) => {
+        const normalizedId = normalizeAdAccountId(accountId);
+        if (!normalizedId) return;
+
+        setTokenGroups(prev => prev.map((group, groupIndex) => {
+            if (groupIndex !== index) return group;
+
+            const tracking = normalizeFbAccountTracking(group);
+            const existingIndex = tracking.findIndex(item => item.account_id === normalizedId);
+            const nextEntry = {
+                ...(existingIndex >= 0 ? tracking[existingIndex] : { account_id: normalizedId, start_date: '', end_date: '' }),
+                [field]: normalizeTrackingDate(value),
+            };
+            const nextTracking = existingIndex >= 0
+                ? tracking.map((item, itemIndex) => (itemIndex === existingIndex ? nextEntry : item))
+                : [...tracking, nextEntry];
+
+            return { ...group, account_tracking: nextTracking };
+        }));
+    };
+
+    const setAccountTrackingPreset = (index, accountId, preset) => {
+        const normalizedId = normalizeAdAccountId(accountId);
+        if (!normalizedId) return;
+
+        const presets = {
+            today: { start_date: getTodayInputDate(), end_date: '' },
+            previous_month: { start_date: getPreviousMonthStartInputDate(), end_date: '' },
+            unlimited: { start_date: '', end_date: '' },
+        };
+        const nextPreset = presets[preset] || presets.unlimited;
+
+        setTokenGroups(prev => prev.map((group, groupIndex) => {
+            if (groupIndex !== index) return group;
+
+            const tracking = normalizeFbAccountTracking(group);
+            const existingIndex = tracking.findIndex(item => item.account_id === normalizedId);
+            const nextEntry = {
+                ...(existingIndex >= 0 ? tracking[existingIndex] : { account_id: normalizedId }),
+                ...nextPreset,
+            };
+            const nextTracking = existingIndex >= 0
+                ? tracking.map((item, itemIndex) => (itemIndex === existingIndex ? nextEntry : item))
+                : [...tracking, nextEntry];
+
+            return { ...group, account_tracking: nextTracking };
+        }));
+    };
+
+    const buildFbTokenConfigs = () => {
+        const invalidRanges = [];
+        const configs = tokenGroups.map((group, groupIndex) => {
+            const token = String(group.token || '').trim();
+            const accountIds = splitAdAccountIds(group.account_ids);
+            const trackingByAccountId = new Map(
+                normalizeFbAccountTracking(group).map(item => [item.account_id, item])
+            );
+            const accountTracking = accountIds.map((accountId) => {
+                const tracking = trackingByAccountId.get(accountId) || {};
+                const startDate = normalizeTrackingDate(tracking.start_date);
+                const endDate = normalizeTrackingDate(tracking.end_date);
+
+                if (startDate && endDate && startDate > endDate) {
+                    invalidRanges.push(`Cụm ${groupIndex + 1} - ${accountId}`);
+                }
+
+                if (!startDate && !endDate) {
+                    return null;
+                }
+
+                return {
+                    account_id: accountId,
+                    start_date: startDate || null,
+                    end_date: endDate || null,
+                };
+            }).filter(Boolean);
+
+            return {
+                token,
+                account_ids: accountIds.join(', '),
+                account_tracking: accountTracking,
+            };
+        }).filter(group => group.token && group.account_ids);
+
+        return { configs, invalidRanges };
+    };
+
+    const renderAccountTrackingControls = (index, group) => {
+        const accountIds = splitAdAccountIds(group.account_ids);
+        if (accountIds.length === 0) return null;
+
+        const accountNames = new Map((group.accounts || []).map(acc => [normalizeAdAccountId(acc.id), acc.name]));
+        const trackingByAccountId = new Map(normalizeFbAccountTracking(group).map(item => [item.account_id, item]));
+
+        return (
+            <div className="mt-4 border border-blue-100 rounded-xl overflow-hidden bg-slate-50/70">
+                <div className="bg-blue-50 px-3 py-2 border-b border-blue-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                    <p className="text-[11px] font-bold text-blue-700 tracking-wider">PHẠM VI THEO DÕI TỪNG TÀI KHOẢN</p>
+                    <p className="text-[11px] text-blue-500">Bỏ trống ngày = không giới hạn</p>
+                </div>
+                <div className="divide-y divide-blue-50">
+                    {accountIds.map(accountId => {
+                        const tracking = trackingByAccountId.get(accountId) || {};
+                        return (
+                            <div key={accountId} className="grid grid-cols-1 xl:grid-cols-[minmax(180px,1fr)_160px_160px_auto] gap-3 p-3 items-end">
+                                <div className="min-w-0">
+                                    <p className="text-[13px] font-bold text-gray-800 truncate">
+                                        {accountNames.get(accountId) || accountId}
+                                    </p>
+                                    <p className="text-[11px] text-gray-400 font-mono">{accountId}</p>
+                                </div>
+                                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                                    Theo dõi từ
+                                    <input
+                                        type="date"
+                                        value={tracking.start_date || ''}
+                                        onChange={(event) => updateAccountTracking(index, accountId, 'start_date', event.target.value)}
+                                        className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-2 text-[12px] font-semibold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    />
+                                </label>
+                                <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wide">
+                                    Theo dõi đến
+                                    <input
+                                        type="date"
+                                        value={tracking.end_date || ''}
+                                        onChange={(event) => updateAccountTracking(index, accountId, 'end_date', event.target.value)}
+                                        className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-2 text-[12px] font-semibold text-gray-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    />
+                                </label>
+                                <div className="flex flex-wrap gap-1.5">
+                                    <button type="button" onClick={() => setAccountTrackingPreset(index, accountId, 'today')} className="px-2 py-1.5 rounded-lg bg-white border border-blue-100 text-[11px] font-bold text-blue-600 hover:bg-blue-50">
+                                        Từ hôm nay
+                                    </button>
+                                    <button type="button" onClick={() => setAccountTrackingPreset(index, accountId, 'previous_month')} className="px-2 py-1.5 rounded-lg bg-white border border-blue-100 text-[11px] font-bold text-blue-600 hover:bg-blue-50">
+                                        Từ tháng trước
+                                    </button>
+                                    <button type="button" onClick={() => setAccountTrackingPreset(index, accountId, 'unlimited')} className="px-2 py-1.5 rounded-lg bg-white border border-gray-200 text-[11px] font-bold text-gray-500 hover:bg-gray-50">
+                                        Không giới hạn
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
     };
 
     const handleFetchAccounts = async (index) => {
@@ -703,23 +911,33 @@ const DailyProfitReport = () => {
     const toggleAdAccount = (index, accId) => {
         if (!accId) return;
         const group = tokenGroups[index];
-        const currentIds = group.account_ids ? group.account_ids.split(',').map(id => id.trim()).filter(id => id) : [];
+        const normalizedId = normalizeAdAccountId(accId);
+        const currentIds = splitAdAccountIds(group.account_ids);
         let nextIds;
-        if (currentIds.includes(accId)) {
-            nextIds = currentIds.filter(id => id !== accId);
+        let nextTracking = normalizeFbAccountTracking(group);
+        if (currentIds.includes(normalizedId)) {
+            nextIds = currentIds.filter(id => id !== normalizedId);
+            nextTracking = nextTracking.filter(item => item.account_id !== normalizedId);
         } else {
-            nextIds = [...currentIds, accId];
+            nextIds = [...currentIds, normalizedId];
         }
-        updateTokenGroup(index, 'account_ids', nextIds.join(', '));
+        const updated = [...tokenGroups];
+        updated[index] = {
+            ...group,
+            account_ids: nextIds.join(', '),
+            account_tracking: nextTracking,
+        };
+        setTokenGroups(updated);
     };
 
     const handleSaveFBConfig = async () => {
         setLoading(true);
         try {
-            const fb_tokens_configs = tokenGroups.map(g => ({
-                token: g.token,
-                account_ids: g.account_ids
-            })).filter(g => g.token && g.account_ids);
+            const { configs: fb_tokens_configs, invalidRanges } = buildFbTokenConfigs();
+            if (invalidRanges.length > 0) {
+                alert(`Ngày bắt đầu không được lớn hơn ngày kết thúc:\n${invalidRanges.join('\n')}`);
+                return;
+            }
 
             const payload = {
                 ...config,
@@ -730,7 +948,7 @@ const DailyProfitReport = () => {
             await financeApi.updateDailyPnlConfig(payload);
             await loadData();
             alert("Đã lưu cấu hình Facebook Ads thành công!");
-        } catch (error) {
+        } catch {
             alert("Lỗi lưu cấu hình Facebook");
         } finally {
             setLoading(false);
@@ -741,6 +959,7 @@ const DailyProfitReport = () => {
         if (!window.confirm("Anh có chắc muốn xóa/cài lại vùng Token này không?")) return;
         updateTokenGroup(index, 'token', '');
         updateTokenGroup(index, 'account_ids', '');
+        updateTokenGroup(index, 'account_tracking', []);
         updateTokenGroup(index, 'accounts', []);
         updateTokenGroup(index, 'showList', false);
     };
@@ -950,6 +1169,25 @@ const DailyProfitReport = () => {
         }));
     };
 
+    const syncAdSpendForCurrentFilters = useCallback(async () => {
+        const syncParams = {
+            start_date: filters.start_date,
+            end_date: filters.end_date,
+        };
+
+        const results = await Promise.allSettled([
+            financeApi.syncFbAdSpend(syncParams),
+            financeApi.syncGoogleAdSpend(syncParams),
+        ]);
+
+        results.forEach((result, index) => {
+            if (result.status === 'rejected') {
+                const channel = index === 0 ? 'Facebook' : 'Google';
+                console.warn(`Unable to sync ${channel} ads before loading daily PnL report.`, result.reason);
+            }
+        });
+    }, [filters.start_date, filters.end_date]);
+
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
@@ -978,12 +1216,12 @@ const DailyProfitReport = () => {
                 let tokens = configData.fb_tokens_configs || [];
                 if (!tokens.length) {
                     if (configData.fb_access_token) {
-                        tokens = [{ token: configData.fb_access_token, account_ids: configData.fb_ad_account_ids, accounts: [], fetching: false, showList: false }];
+                        tokens = [normalizeFbTokenGroupForState({ token: configData.fb_access_token, account_ids: configData.fb_ad_account_ids })];
                     } else {
-                        tokens = [{ token: '', account_ids: '', accounts: [], fetching: false, showList: false }];
+                        tokens = [emptyFbTokenGroup()];
                     }
                 } else {
-                    tokens = tokens.map(t => ({ ...t, accounts: [], fetching: false, showList: false }));
+                    tokens = tokens.map(normalizeFbTokenGroupForState);
                 }
                 setTokenGroups(tokens);
             }
@@ -996,17 +1234,41 @@ const DailyProfitReport = () => {
         }
     }, [filters]);
 
+    const refreshData = useCallback(async () => {
+        setLoading(true);
+        setSyncingAds(true);
+        try {
+            await syncAdSpendForCurrentFilters();
+            await loadData();
+        } finally {
+            setTimeout(() => setSyncingAds(false), 600);
+        }
+    }, [loadData, syncAdSpendForCurrentFilters]);
+
     useEffect(() => {
-        loadData();
-    }, [loadData]);
+        const autoRefreshKey = [
+            filters.start_date,
+            filters.end_date,
+            filters.ad_channel,
+            filters.manager_user_id,
+        ].join('|');
+
+        if (autoRefreshKeyRef.current === autoRefreshKey) {
+            return;
+        }
+
+        autoRefreshKeyRef.current = autoRefreshKey;
+        refreshData();
+    }, [filters.start_date, filters.end_date, filters.ad_channel, filters.manager_user_id, refreshData]);
 
     const handleUpdateConfig = async () => {
         setLoading(true);
         try {
-            const fb_tokens_configs = tokenGroups.map(g => ({
-                token: g.token,
-                account_ids: g.account_ids
-            })).filter(g => g.token && g.account_ids);
+            const { configs: fb_tokens_configs, invalidRanges } = buildFbTokenConfigs();
+            if (invalidRanges.length > 0) {
+                alert(`Ngày bắt đầu không được lớn hơn ngày kết thúc:\n${invalidRanges.join('\n')}`);
+                return;
+            }
 
             const payload = {
                 ...config,
@@ -1018,7 +1280,7 @@ const DailyProfitReport = () => {
             await financeApi.updateDailyPnlConfig(payload);
             await loadData();
             setShowConfig(false);
-        } catch (error) {
+        } catch {
             alert("Lỗi cập nhật cấu hình");
         } finally {
             setLoading(false);
@@ -1208,12 +1470,12 @@ const DailyProfitReport = () => {
                         <span className="text-[13px] font-medium">Cài đặt định mức</span>
                     </button>
                     <button
-                        onClick={loadData}
+                        onClick={refreshData}
                         disabled={loading}
                         className="bg-gray-800 text-white px-3 py-1.5 rounded-lg text-[13px] font-medium hover:bg-gray-900 active:scale-95 transition-all flex items-center gap-2 disabled:opacity-70"
                     >
                         <RefreshCw className={`${loading ? 'animate-spin' : ''}`} size={14} />
-                        {loading ? 'Đang tải...' : 'Làm mới'}
+                        {syncingAds ? 'Đang đồng bộ...' : loading ? 'Đang tải...' : 'Làm mới'}
                     </button>
                 </div>
             </div>
@@ -1386,7 +1648,7 @@ const DailyProfitReport = () => {
                                                 </div>
                                                 <div className="max-h-56 overflow-y-auto divide-y divide-gray-50 bg-white">
                                                     {group.accounts.map(acc => {
-                                                        const isChecked = (group.account_ids || '').includes(acc.id);
+                                                        const isChecked = splitAdAccountIds(group.account_ids).includes(normalizeAdAccountId(acc.id));
                                                         return (
                                                             <div
                                                                 key={acc.id}
@@ -1412,6 +1674,7 @@ const DailyProfitReport = () => {
                                                 </div>
                                             </div>
                                         )}
+                                        {renderAccountTrackingControls(index, group)}
                                     </div>
                                 </div>
                             </div>

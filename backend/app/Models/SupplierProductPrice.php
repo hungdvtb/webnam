@@ -8,6 +8,8 @@ class SupplierProductPrice extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $fillable = [
         'account_id',
         'supplier_id',

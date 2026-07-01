@@ -18,6 +18,7 @@ use App\Models\SupplierProductPrice;
 use App\Services\Inventory\InvoiceAnalysisService;
 use App\Services\Inventory\InventoryService;
 use App\Services\Inventory\ProductPricingService;
+use App\Services\AccountDataScopeService;
 use App\Services\OrderInventorySlipService;
 use App\Services\ProductSkuService;
 use App\Support\InventoryQuantity;
@@ -43,8 +44,24 @@ class InventoryController extends Controller
         private readonly ProductPricingService $productPricingService,
         private readonly OrderInventorySlipService $orderInventorySlipService,
         private readonly ProductSkuService $productSkuService,
+        private readonly AccountDataScopeService $accountDataScopeService,
     )
     {
+    }
+
+    private function catalogAccountId(Request $request): ?int
+    {
+        return $this->accountDataScopeService->catalogAccountIdForRequest($request);
+    }
+
+    private function inventoryAccountId(Request $request): ?int
+    {
+        return $this->accountDataScopeService->inventoryAccountIdForRequest($request);
+    }
+
+    private function inventoryOrderAccountIds(Request $request): array
+    {
+        return $this->accountDataScopeService->accountIdsSharingInventoryScopeForRequest($request);
     }
 
     protected function throwProductSkuValidation(QueryException $exception, ?string $message = null): never
@@ -276,7 +293,7 @@ class InventoryController extends Controller
 
     public function storeProduct(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->catalogAccountId($request) ?? 0);
         $validated = $request->validate([
             'sku' => 'required|string|max:120',
             'name' => 'required|string|max:255',
@@ -473,7 +490,7 @@ class InventoryController extends Controller
 
     public function storeSupplier(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'code' => 'nullable|string|max:120',
             'name' => 'required|string|max:255',
@@ -1042,7 +1059,7 @@ class InventoryController extends Controller
 
     public function inventoryUnits(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
 
         $units = InventoryUnit::query()
             ->where(function ($builder) use ($accountId) {
@@ -1059,7 +1076,7 @@ class InventoryController extends Controller
 
     public function storeInventoryUnit(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'name' => 'required|string|max:80',
         ]);
@@ -1104,7 +1121,7 @@ class InventoryController extends Controller
 
     public function reorderInventoryUnits(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'ids' => 'required|array|min:1',
             'ids.*' => 'integer',
@@ -1186,7 +1203,7 @@ class InventoryController extends Controller
 
     public function importStatuses(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
 
         $statuses = InventoryImportStatus::query()
             ->where(function ($builder) use ($accountId) {
@@ -1208,7 +1225,7 @@ class InventoryController extends Controller
 
     public function storeImportStatus(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'name' => 'required|string|max:120',
             'color' => ['nullable', 'string', 'max:20', 'regex:/^#?[0-9a-fA-F]{3,8}$/'],
@@ -1243,7 +1260,7 @@ class InventoryController extends Controller
 
     public function updateImportStatus(Request $request, int $id)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'name' => 'required|string|max:120',
             'color' => ['nullable', 'string', 'max:20', 'regex:/^#?[0-9a-fA-F]{3,8}$/'],
@@ -1303,7 +1320,7 @@ class InventoryController extends Controller
 
     public function analyzeImportInvoice(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $request->validate([
             'supplier_id' => 'nullable|integer|exists:suppliers,id',
             'invoice_file' => 'required|file|max:12288|mimes:pdf,jpg,jpeg,png,webp,txt,csv,json',
@@ -1414,7 +1431,7 @@ class InventoryController extends Controller
 
     public function storeImport(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $validated = $this->validatedImportPayload($request);
 
         $import = $this->inventoryService->createImport($validated, $accountId, auth()->id());
@@ -1526,7 +1543,7 @@ class InventoryController extends Controller
 
     public function updateImport(Request $request, int $id)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $import = InventoryImport::query()->findOrFail($id);
         $validated = $this->validatedImportPayload($request);
 
@@ -1725,7 +1742,7 @@ class InventoryController extends Controller
     public function storeDocument(Request $request, string $type)
     {
         $type = $this->normalizeDocumentType($type);
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
 
         $rules = [
             'document_date' => 'required|date',
@@ -1795,7 +1812,7 @@ class InventoryController extends Controller
     public function updateDocument(Request $request, string $type, int $id)
     {
         $type = $this->normalizeDocumentType($type);
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $document = InventoryDocument::query()
             ->where('type', $type)
             ->findOrFail($id);
@@ -2039,7 +2056,8 @@ class InventoryController extends Controller
 
     public function trashedSlips(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
+        $orderAccountIds = $this->inventoryOrderAccountIds($request);
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
         $search = trim((string) $request->input('search', ''));
 
@@ -2098,7 +2116,7 @@ class InventoryController extends Controller
             ->groupBy('order_id');
 
         $exportsQuery = Order::onlyTrashed()
-            ->where('orders.account_id', $accountId)
+            ->when(!empty($orderAccountIds), fn ($query) => $query->whereIn('orders.account_id', $orderAccountIds))
             ->where('orders.type', 'inventory_export')
             ->leftJoinSub($exportTotals, 'order_item_totals', function ($join) {
                 $join->on('order_item_totals.order_id', '=', 'orders.id');
@@ -3168,7 +3186,7 @@ class InventoryController extends Controller
 
     private function buildExportQuantitySubquery(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
         $manualExportScopeSql = "
             CASE
                 WHEN inventory_documents.reference_type = 'order'
@@ -3338,7 +3356,7 @@ class InventoryController extends Controller
 
     private function buildPendingOutboundQuantitySubquery(Request $request)
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
 
         $manualExportQtySub = \App\Models\InventoryDocumentItem::query()
             ->join('inventory_documents', 'inventory_documents.id', '=', 'inventory_document_items.inventory_document_id')
@@ -3404,10 +3422,10 @@ class InventoryController extends Controller
 
     private function applyExportEligibleOrderScope($query, Request $request, $dateColumn): void
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountIds = $this->inventoryOrderAccountIds($request);
 
-        if ($accountId > 0) {
-            $query->where('orders.account_id', $accountId);
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
         }
 
         if (Schema::hasColumn('orders', 'deleted_at')) {
@@ -3427,10 +3445,10 @@ class InventoryController extends Controller
 
     private function applyPendingOutboundEligibleOrderScope($query, Request $request): void
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountIds = $this->inventoryOrderAccountIds($request);
 
-        if ($accountId > 0) {
-            $query->where('orders.account_id', $accountId);
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
         }
 
         if (Schema::hasColumn('orders', 'deleted_at')) {
@@ -3470,10 +3488,10 @@ class InventoryController extends Controller
 
     private function applyPendingReturnEligibleOrderScope($query, Request $request): void
     {
-        $accountId = (int) $request->header('X-Account-Id');
+        $accountIds = $this->inventoryOrderAccountIds($request);
 
-        if ($accountId > 0) {
-            $query->where('orders.account_id', $accountId);
+        if (!empty($accountIds)) {
+            $query->whereIn('orders.account_id', $accountIds);
         }
 
         if (Schema::hasColumn('orders', 'deleted_at')) {

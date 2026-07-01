@@ -9,6 +9,8 @@ class InventoryDocument extends Model
 {
     use \App\Traits\BelongsToAccount, OptionalSoftDeletes;
 
+    protected static string $accountScopeType = 'inventory';
+
     public const ADJUSTMENT_KIND_STOCK = 'stock_adjustment';
     public const ADJUSTMENT_KIND_EXPORT = 'export_adjustment';
 

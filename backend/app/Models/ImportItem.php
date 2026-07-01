@@ -8,6 +8,8 @@ class ImportItem extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $fillable = [
         'account_id',
         'import_id',

@@ -8,6 +8,8 @@ class ProductFaq extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'catalog';
+
     public const STATUS_VISIBLE = 'visible';
     public const STATUS_HIDDEN = 'hidden';
 

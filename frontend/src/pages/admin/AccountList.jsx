@@ -20,16 +20,33 @@ const AccountList = () => {
         site_code: '',
         status: true,
         ai_api_key: '',
+        catalog_account_id: '',
+        inventory_account_id: '',
         user_name: '',
         user_email: '',
         user_password: ''
     });
+
+    const normalizeAccountLink = (value, selfId = null) => {
+        const accountId = Number(value || 0);
+        const currentId = Number(selfId || 0);
+
+        return accountId > 0 && accountId !== currentId ? accountId : null;
+    };
+
+    const accountNameById = (id) => {
+        const accountId = Number(id || 0);
+        return accounts.find(acc => Number(acc.id) === accountId)?.name || `#${accountId}`;
+    };
+
+    const selectableLinkedAccounts = accounts.filter(acc => Number(acc.id) !== Number(formData.id));
 
     const fetchAccounts = async () => {
         setLoading(true);
         try {
             const res = await accountApi.getAll();
             setAccounts(res.data);
+            sessionStorage.setItem('accounts_list', JSON.stringify(res.data));
         } catch (error) {
             console.error('Lỗi khi tải danh sách cửa hàng:', error);
         } finally {
@@ -61,7 +78,9 @@ const AccountList = () => {
                     subdomain: formData.subdomain || null,
                     site_code: formData.site_code || null,
                     status: formData.status,
-                    ai_api_key: formData.ai_api_key
+                    ai_api_key: formData.ai_api_key,
+                    catalog_account_id: normalizeAccountLink(formData.catalog_account_id, formData.id),
+                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id, formData.id)
                 };
                 await accountApi.update(formData.id, payload);
             } else {
@@ -71,12 +90,15 @@ const AccountList = () => {
                     subdomain: formData.subdomain || null,
                     site_code: formData.site_code || null,
                     status: formData.status,
-                    ai_api_key: formData.ai_api_key
+                    ai_api_key: formData.ai_api_key,
+                    catalog_account_id: normalizeAccountLink(formData.catalog_account_id),
+                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id)
                 };
                 await accountApi.store(payload);
             }
 
             setIsFormOpen(false);
+            sessionStorage.removeItem('accounts_list');
             fetchAccounts();
         } catch (error) {
             console.error('Lỗi khi lưu cửa hàng:', error);
@@ -93,7 +115,9 @@ const AccountList = () => {
             subdomain: acc.subdomain || '',
             site_code: acc.site_code || '',
             status: acc.status,
-            ai_api_key: acc.ai_api_key || ''
+            ai_api_key: acc.ai_api_key || '',
+            catalog_account_id: acc.catalog_account_id || '',
+            inventory_account_id: acc.inventory_account_id || ''
         });
         setFormMode('edit');
         setIsFormOpen(true);
@@ -108,9 +132,12 @@ const AccountList = () => {
                     subdomain: acc.subdomain || null,
                     site_code: acc.site_code || null,
                     status: !acc.status,
-                    ai_api_key: acc.ai_api_key
+                    ai_api_key: acc.ai_api_key,
+                    catalog_account_id: normalizeAccountLink(acc.catalog_account_id, acc.id),
+                    inventory_account_id: normalizeAccountLink(acc.inventory_account_id, acc.id)
                 };
                 await accountApi.update(acc.id, payload);
+                sessionStorage.removeItem('accounts_list');
                 fetchAccounts();
             } catch (error) {
                 alert("Không thể cập nhật trạng thái cửa hàng.");
@@ -132,6 +159,9 @@ const AccountList = () => {
             subdomain: '',
             site_code: '',
             status: true,
+            ai_api_key: '',
+            catalog_account_id: '',
+            inventory_account_id: '',
             user_name: '',
             user_email: '',
             user_password: ''
@@ -232,6 +262,32 @@ const AccountList = () => {
                                         <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Subdomain</label>
                                         <input type="text" value={formData.subdomain} onChange={e => setFormData({ ...formData, subdomain: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" />
                                     </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Dung chung san pham voi</label>
+                                        <select
+                                            value={formData.catalog_account_id}
+                                            onChange={e => setFormData({ ...formData, catalog_account_id: e.target.value })}
+                                            className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm"
+                                        >
+                                            <option value="">Du lieu rieng</option>
+                                            {selectableLinkedAccounts.map(acc => (
+                                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Dung chung ton kho voi</label>
+                                        <select
+                                            value={formData.inventory_account_id}
+                                            onChange={e => setFormData({ ...formData, inventory_account_id: e.target.value })}
+                                            className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm"
+                                        >
+                                            <option value="">Du lieu rieng</option>
+                                            {selectableLinkedAccounts.map(acc => (
+                                                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
                                     <div className="md:col-span-2 space-y-1.5 bg- gold/5 p-4 border border-gold/10 rounded-sm">
                                         <label className="text-[10px] font-black uppercase tracking-widest text-primary flex items-center gap-2">
                                             <span className="material-symbols-outlined text-[16px]">key</span>
@@ -282,6 +338,22 @@ const AccountList = () => {
                                     {acc.site_code && (
                                         <div className="text-[9px] font-black text-stone/40 bg-stone/5 px-1.5 py-0.5 rounded border border-stone/10 tracking-[0.1em] uppercase italic mt-1.5 inline-block">
                                             Site: {acc.site_code}
+                                        </div>
+                                    )}
+                                    {(acc.catalog_account_id || acc.inventory_account_id) && (
+                                        <div className="mt-3 space-y-1">
+                                            {acc.catalog_account_id && (
+                                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-primary bg-gold/5 border border-gold/10 px-2 py-1 rounded-sm">
+                                                    <span className="material-symbols-outlined text-[14px] text-gold/70">inventory_2</span>
+                                                    SP: {accountNameById(acc.catalog_account_id)}
+                                                </div>
+                                            )}
+                                            {acc.inventory_account_id && (
+                                                <div className="flex items-center gap-1.5 text-[10px] font-bold text-primary bg-gold/5 border border-gold/10 px-2 py-1 rounded-sm">
+                                                    <span className="material-symbols-outlined text-[14px] text-gold/70">warehouse</span>
+                                                    Kho: {accountNameById(acc.inventory_account_id)}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 

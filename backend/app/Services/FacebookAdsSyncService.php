@@ -14,8 +14,14 @@ class FacebookAdsSyncService
 
     private const MAX_INSIGHTS_PAGES = 50;
 
-    private function configuredAdAccounts(FinDailyReportConfig $config): array
+    public function configuredAdAccounts(?FinDailyReportConfig $config = null): array
     {
+        $config ??= FinDailyReportConfig::first();
+
+        if (!$config) {
+            return [];
+        }
+
         $tokenConfigs = [];
         if (!empty($config->fb_tokens_configs) && is_array($config->fb_tokens_configs)) {
             $tokenConfigs = $config->fb_tokens_configs;
@@ -37,7 +43,11 @@ class FacebookAdsSyncService
                 continue;
             }
 
-            foreach (explode(',', $accountIdsStr) as $rawAccountId) {
+            $trackingByStorageId = $this->accountTrackingByStorageId($tokenGroup['account_tracking'] ?? []);
+            $groupStartDate = $this->normalizeTrackingDate($tokenGroup['start_date'] ?? null);
+            $groupEndDate = $this->normalizeTrackingDate($tokenGroup['end_date'] ?? null);
+
+            foreach (preg_split('/[,\s]+/', $accountIdsStr) ?: [] as $rawAccountId) {
                 $graphAccountId = $this->normalizeGraphAccountId($rawAccountId);
                 $storageAccountId = $this->normalizeStorageAccountId($graphAccountId);
                 if ($graphAccountId === null || $storageAccountId === null) {
@@ -50,10 +60,13 @@ class FacebookAdsSyncService
                 }
 
                 $seen[$dedupeKey] = true;
+                $accountTracking = $trackingByStorageId[$storageAccountId] ?? [];
                 $accounts[] = [
                     'token' => $token,
                     'graph_account_id' => $graphAccountId,
                     'storage_account_id' => $storageAccountId,
+                    'start_date' => $accountTracking['start_date'] ?? $groupStartDate,
+                    'end_date' => $accountTracking['end_date'] ?? $groupEndDate,
                 ];
             }
         }
@@ -76,6 +89,109 @@ class FacebookAdsSyncService
         $digits = preg_replace('/\D+/', '', (string) $value);
 
         return $digits === '' ? null : (int) $digits;
+    }
+
+    private function normalizeTrackingDate(mixed $value): ?string
+    {
+        $date = trim((string) $value);
+        if ($date === '') {
+            return null;
+        }
+
+        try {
+            return \Carbon\Carbon::parse($date)->toDateString();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function accountTrackingByStorageId(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $tracking = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $storageAccountId = $this->normalizeStorageAccountId($row['account_id'] ?? $row['id'] ?? $row['accountId'] ?? null);
+            if ($storageAccountId === null) {
+                continue;
+            }
+
+            $tracking[$storageAccountId] = [
+                'start_date' => $this->normalizeTrackingDate($row['start_date'] ?? $row['startDate'] ?? $row['date_from'] ?? $row['dateFrom'] ?? null),
+                'end_date' => $this->normalizeTrackingDate($row['end_date'] ?? $row['endDate'] ?? $row['date_to'] ?? $row['dateTo'] ?? null),
+            ];
+        }
+
+        return $tracking;
+    }
+
+    private function accountActiveOnDate(array $accountConfig, string $date): bool
+    {
+        $startDate = $accountConfig['start_date'] ?? null;
+        $endDate = $accountConfig['end_date'] ?? null;
+
+        return (!$startDate || $date >= $startDate)
+            && (!$endDate || $date <= $endDate);
+    }
+
+    private function activeDateRangeForAccount(array $accountConfig, string $startDate, string $endDate): ?array
+    {
+        $activeStartDate = $accountConfig['start_date'] && $accountConfig['start_date'] > $startDate
+            ? $accountConfig['start_date']
+            : $startDate;
+        $activeEndDate = $accountConfig['end_date'] && $accountConfig['end_date'] < $endDate
+            ? $accountConfig['end_date']
+            : $endDate;
+
+        if ($activeStartDate > $activeEndDate) {
+            return null;
+        }
+
+        return [$activeStartDate, $activeEndDate];
+    }
+
+    private function datesBetween(string $startDate, string $endDate): array
+    {
+        $period = \Carbon\CarbonPeriod::create($startDate, $endDate);
+        $dates = [];
+        foreach ($period as $date) {
+            $dates[] = $date->format('Y-m-d');
+        }
+
+        return $dates;
+    }
+
+    public function configuredStorageAccountPeriods(?FinDailyReportConfig $config = null): array
+    {
+        $periods = [];
+        $seen = [];
+
+        foreach ($this->configuredAdAccounts($config) as $accountConfig) {
+            $storageAccountId = (int) ($accountConfig['storage_account_id'] ?? 0);
+            if ($storageAccountId <= 0) {
+                continue;
+            }
+
+            $key = $storageAccountId . '|' . ($accountConfig['start_date'] ?? '') . '|' . ($accountConfig['end_date'] ?? '');
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $periods[] = [
+                'account_id' => $storageAccountId,
+                'start_date' => $accountConfig['start_date'] ?? null,
+                'end_date' => $accountConfig['end_date'] ?? null,
+            ];
+        }
+
+        return $periods;
     }
 
     public function configuredStorageAccountIds(?FinDailyReportConfig $config = null): array
@@ -158,36 +274,32 @@ class FacebookAdsSyncService
             return false;
         }
 
-        // Find which dates we actually need to fetch
-        $period = \Carbon\CarbonPeriod::create($startDate, $endDate);
-        $allDates = [];
-        foreach ($period as $date) {
-            $allDates[] = $date->format('Y-m-d');
-        }
-
-        $datesToFetch = [];
-        foreach ($allDates as $d) {
-            // Facebook may adjust spend after the first pull. Re-fetch the requested
-            // range so the report and split modal use the same current account set.
-            $datesToFetch[] = $d;
-        }
-
-        if (empty($datesToFetch)) {
-            // No new fetch needed, return existing aggregate
+        $allDates = $this->datesBetween($startDate, $endDate);
+        if (empty($allDates)) {
             return true;
         }
 
-        $minFetchDate = min($datesToFetch);
-        $maxFetchDate = max($datesToFetch);
-
+        $attemptedRequestCount = 0;
         $successfulRequestCount = 0;
 
         foreach ($configuredAccounts as $accountConfig) {
+            $activeDateRange = $this->activeDateRangeForAccount($accountConfig, $startDate, $endDate);
+            if ($activeDateRange === null) {
+                continue;
+            }
+
+            [$minFetchDate, $maxFetchDate] = $activeDateRange;
+            $datesToFetch = $this->datesBetween($minFetchDate, $maxFetchDate);
+            if (empty($datesToFetch)) {
+                continue;
+            }
+
             $token = $accountConfig['token'];
             $adAccountId = $accountConfig['graph_account_id'];
             $storageAccountId = $accountConfig['storage_account_id'];
 
             try {
+                $attemptedRequestCount++;
                 $response = $this->fetchDailyInsights($adAccountId, $token, $minFetchDate, $maxFetchDate);
 
                 if ($response['successful']) {
@@ -228,19 +340,34 @@ class FacebookAdsSyncService
             }
         }
 
-        if ($successfulRequestCount === 0) {
+        if ($attemptedRequestCount > 0 && $successfulRequestCount === 0) {
             Log::warning('Facebook Ads Sync: No successful responses received; existing spend data was left unchanged.');
 
             return false;
         }
 
-        $configuredAccountIds = collect($configuredAccounts)->pluck('storage_account_id')->unique()->values()->all();
-        foreach ($datesToFetch as $date) {
-            $perAccountTotal = DailyAdsSpend::query()
-                ->where('platform', DailyAdsSpend::PLATFORM_FACEBOOK)
-                ->whereDate('date', $date)
-                ->whereIn('account_id', $configuredAccountIds)
-                ->sum('amount');
+        $this->refreshLegacyDailyTotals($allDates, $configuredAccounts);
+
+        return true;
+    }
+
+    private function refreshLegacyDailyTotals(array $dates, array $configuredAccounts): void
+    {
+        foreach ($dates as $date) {
+            $activeAccountIds = collect($configuredAccounts)
+                ->filter(fn (array $accountConfig) => $this->accountActiveOnDate($accountConfig, $date))
+                ->pluck('storage_account_id')
+                ->unique()
+                ->values()
+                ->all();
+
+            $perAccountTotal = $activeAccountIds === []
+                ? 0
+                : DailyAdsSpend::query()
+                    ->where('platform', DailyAdsSpend::PLATFORM_FACEBOOK)
+                    ->whereDate('date', $date)
+                    ->whereIn('account_id', $activeAccountIds)
+                    ->sum('amount');
 
             DailyAdsSpend::updateOrCreate(
                 [
@@ -251,8 +378,6 @@ class FacebookAdsSyncService
                 ['amount' => (float) $perAccountTotal]
             );
         }
-
-        return true;
     }
 
     public function sync(string $date)

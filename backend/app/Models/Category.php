@@ -15,6 +15,8 @@ class Category extends Model
     use \App\Traits\BelongsToAccount;
     use \App\Models\Concerns\OptionalSoftDeletes;
 
+    protected static string $accountScopeType = 'catalog';
+
     public const VISIBILITY_PUBLIC = 'public';
     public const VISIBILITY_LINK_ONLY = 'link_only';
 

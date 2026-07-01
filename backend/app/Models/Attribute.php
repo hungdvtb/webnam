@@ -9,6 +9,8 @@ class Attribute extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'catalog';
+
     protected static ?bool $sortOrderColumnExists = null;
 
     protected $fillable = ['name', 'entity_type', 'code', 'frontend_type', 'swatch_type', 'is_filterable', 'is_filterable_frontend', 'is_filterable_backend', 'is_required', 'is_variant', 'status', 'sort_order', 'account_id'];

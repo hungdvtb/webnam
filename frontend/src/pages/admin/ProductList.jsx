@@ -6860,8 +6860,7 @@ const ProductList = () => {
                                                                 exit={{ opacity: 0, height: 0 }}
                                                                 className="row-child row-empty-child"
                                                             >
-                                                                <td className="p-3 border border-primary/20 sticky-col-0" />
-                                                                <td colSpan={renderedColumns.length} className="border border-primary/20 bg-[#fcfaf7] px-5 py-4">
+                                                                <td colSpan={renderedColumns.length + 1} className="border border-primary/20 bg-[#fcfaf7] px-5 py-4">
                                                                     <div className="space-y-3">
                                                                         <div>
                                                                             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-primary/55">Tùy chọn bundle</p>
@@ -6918,8 +6917,7 @@ const ProductList = () => {
                                                                 exit={{ opacity: 0, height: 0 }}
                                                                 className="row-child row-empty-child"
                                                             >
-                                                                <td className="p-3 border border-primary/20 sticky-col-0" />
-                                                                <td colSpan={renderedColumns.length} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold flex items-center gap-2">
+                                                                <td colSpan={renderedColumns.length + 1} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold">
                                                                     <span className="material-symbols-outlined text-[16px]">info</span>
                                                                     Bundle này hiện chưa có tùy chọn nào
                                                                 </td>
@@ -6934,8 +6932,7 @@ const ProductList = () => {
                                                             exit={{ opacity: 0, height: 0 }}
                                                             className="row-child row-empty-child"
                                                         >
-                                                            <td className="p-3 border border-primary/20 sticky-col-0" />
-                                                            <td colSpan={renderedColumns.length} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold flex items-center gap-2">
+                                                            <td colSpan={renderedColumns.length + 1} className="px-8 py-5 border border-primary/20 text-red-400 italic text-[12px] font-bold">
                                                                 <span className="material-symbols-outlined text-[16px]">info</span>
                                                                 {product.type === 'grouped' ? 'Nhóm sản phẩm này hiện chưa có thành phần nào' : 'Sản phẩm này hiện chưa được cấu hình biến thể chi tiết'}
                                                             </td>

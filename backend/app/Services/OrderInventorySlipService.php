@@ -36,7 +36,18 @@ class OrderInventorySlipService
 
     public function __construct(
         private readonly InventoryService $inventoryService,
+        private readonly AccountDataScopeService $accountDataScopeService,
     ) {
+    }
+
+    private function inventoryAccountId(int $accountId): int
+    {
+        return (int) ($this->accountDataScopeService->inventoryAccountId($accountId) ?? $accountId);
+    }
+
+    private function inventoryAccountIdForOrder(Order $order): int
+    {
+        return $this->inventoryAccountId((int) ($order->account_id ?? 0));
     }
 
     private function hasInventoryDocumentOrderLinksTable(): bool
@@ -560,6 +571,7 @@ class OrderInventorySlipService
 
         return DB::transaction(function () use ($order, $payload, $type, $userId) {
             $order->loadMissing(['items']);
+            $inventoryAccountId = $this->inventoryAccountIdForOrder($order);
 
             $items = collect($payload['items'] ?? [])
                 ->map(function (array $item) {
@@ -629,8 +641,8 @@ class OrderInventorySlipService
 
             $documentDate = Carbon::parse($payload['document_date'] ?? now());
             $document = InventoryDocument::create([
-                'account_id' => (int) $order->account_id,
-                'document_number' => $this->generateDocumentNumber($type, (int) $order->account_id),
+                'account_id' => $inventoryAccountId,
+                'document_number' => $this->generateDocumentNumber($type, $inventoryAccountId),
                 'type' => $type,
                 'document_date' => $documentDate->toDateString(),
                 'status' => 'completed',
@@ -663,7 +675,7 @@ class OrderInventorySlipService
                 $unitPrice = round((float) ($productMeta['ordered_unit_price'] ?? $product->price ?? 0), 2);
 
                 $documentItem = InventoryDocumentItem::create([
-                    'account_id' => (int) $order->account_id,
+                    'account_id' => $inventoryAccountId,
                     'inventory_document_id' => (int) $document->id,
                     'product_id' => $productId,
                     'product_name_snapshot' => $productMeta['product_name'],
@@ -680,7 +692,7 @@ class OrderInventorySlipService
 
                 if ($type === 'return') {
                     InventoryBatch::create([
-                        'account_id' => (int) $order->account_id,
+                        'account_id' => $inventoryAccountId,
                         'product_id' => $productId,
                         'source_type' => 'document',
                         'source_id' => (int) $document->id,
@@ -2156,6 +2168,7 @@ class OrderInventorySlipService
         int $accountId,
         ?int $userId
     ): InventoryDocument {
+        $accountId = $this->inventoryAccountId($accountId);
         $orders = $orders->values();
         $excludingDocumentId = $document?->id ? (int) $document->id : null;
 

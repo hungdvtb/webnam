@@ -352,8 +352,18 @@ class FinDailyProfitReportController extends Controller
             ->all();
     }
 
-    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null): array
+    private function dailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountIds, ?array $profitScope = null, array $configuredAccountPeriods = []): array
     {
+        if ($configuredAccountPeriods !== []) {
+            return $this->dateScopedDailyAdsSpendTotalsByDate(
+                $startDate,
+                $endDate,
+                $platform,
+                $configuredAccountPeriods,
+                $profitScope
+            );
+        }
+
         $scopedCenterIds = $this->profitCenterIdsForAdSpendScope($profitScope);
         if (is_array($scopedCenterIds)) {
             if ($scopedCenterIds === []) {
@@ -419,6 +429,134 @@ class FinDailyProfitReportController extends Controller
             ->pluck('total_amount', 'spend_date')
             ->map(fn ($amount) => (float) $amount)
             ->toArray();
+    }
+
+    private function dateScopedDailyAdsSpendTotalsByDate(string $startDate, string $endDate, string $platform, array $configuredAccountPeriods, ?array $profitScope = null): array
+    {
+        $periods = $this->normalizeConfiguredAdAccountPeriods($configuredAccountPeriods);
+        if ($periods === []) {
+            return [];
+        }
+
+        $accountIds = collect($periods)
+            ->pluck('account_id')
+            ->unique()
+            ->values()
+            ->all();
+
+        $scopedCenterIds = $this->profitCenterIdsForAdSpendScope($profitScope);
+        if (is_array($scopedCenterIds) && $scopedCenterIds === []) {
+            return [];
+        }
+
+        if (!is_array($scopedCenterIds)) {
+            $scopedAccountIds = $this->adAccountIdsForProfitScope($platform, $profitScope);
+            if (is_array($scopedAccountIds)) {
+                $accountIds = array_values(array_intersect($accountIds, $scopedAccountIds));
+                if ($accountIds === []) {
+                    return [];
+                }
+            }
+        }
+
+        $query = DailyAdsSpend::query()
+            ->where('platform', $platform)
+            ->whereDate('date', '>=', $startDate)
+            ->whereDate('date', '<=', $endDate)
+            ->whereNotNull('account_id')
+            ->whereIn('account_id', $accountIds)
+            ->select(
+                DB::raw('DATE(date) as spend_date'),
+                'account_id',
+                DB::raw('SUM(COALESCE(amount, 0)) as total_amount')
+            )
+            ->groupBy(DB::raw('DATE(date)'), 'account_id');
+
+        if (is_array($scopedCenterIds)) {
+            $query->whereIn('profit_center_id', $scopedCenterIds);
+        }
+
+        $periodsByAccountId = collect($periods)->groupBy('account_id');
+        $totals = [];
+
+        foreach ($query->get() as $row) {
+            $date = (string) $row->spend_date;
+            $accountId = (int) $row->account_id;
+            $accountPeriods = $periodsByAccountId->get($accountId, collect());
+
+            $isActive = $accountPeriods->contains(
+                fn (array $period) => $this->dateWithinConfiguredAdAccountPeriod($date, $period)
+            );
+
+            if (!$isActive) {
+                continue;
+            }
+
+            $totals[$date] = ($totals[$date] ?? 0) + (float) $row->total_amount;
+        }
+
+        return $totals;
+    }
+
+    private function normalizeConfiguredAdAccountPeriods(array $periods): array
+    {
+        $normalized = [];
+
+        foreach ($periods as $period) {
+            if (!is_array($period)) {
+                continue;
+            }
+
+            $accountId = (int) ($period['account_id'] ?? $period['storage_account_id'] ?? 0);
+            if ($accountId <= 0) {
+                continue;
+            }
+
+            $normalized[] = [
+                'account_id' => $accountId,
+                'start_date' => $this->normalizeDateString($period['start_date'] ?? null),
+                'end_date' => $this->normalizeDateString($period['end_date'] ?? null),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    private function normalizeDateString(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value)->toDateString();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function dateWithinConfiguredAdAccountPeriod(string $date, array $period): bool
+    {
+        $startDate = $period['start_date'] ?? null;
+        $endDate = $period['end_date'] ?? null;
+
+        return (!$startDate || $date >= $startDate)
+            && (!$endDate || $date <= $endDate);
+    }
+
+    private function activeDateRangeForConfiguredAdAccount(array $accountConfig, string $startDate, string $endDate): ?array
+    {
+        $accountStartDate = $this->normalizeDateString($accountConfig['start_date'] ?? null);
+        $accountEndDate = $this->normalizeDateString($accountConfig['end_date'] ?? null);
+        $activeStartDate = $accountStartDate && $accountStartDate > $startDate ? $accountStartDate : $startDate;
+        $activeEndDate = $accountEndDate && $accountEndDate < $endDate ? $accountEndDate : $endDate;
+
+        if ($activeStartDate > $activeEndDate) {
+            return null;
+        }
+
+        return [$activeStartDate, $activeEndDate];
     }
 
     private function profitCenterIdsForAdSpendScope(?array $scope): ?array
@@ -758,6 +896,8 @@ class FinDailyProfitReportController extends Controller
         $includeFacebookAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_FACEBOOK], true);
         $includeGoogleAds = in_array($adChannel, [self::REPORT_AD_CHANNEL_ALL, self::REPORT_AD_CHANNEL_GOOGLE], true);
         $includeSharedCosts = $adChannel === self::REPORT_AD_CHANNEL_ALL && !$hasProfitScopeFilter;
+        $facebookAdsSyncService = app(FacebookAdsSyncService::class);
+        $googleAdsSyncService = app(GoogleAdsSyncService::class);
 
         $baseOrdersQuery = $this->dailyReportBaseOrdersQuery($startDate, $endDate, $filters);
 
@@ -797,8 +937,9 @@ class FinDailyProfitReportController extends Controller
                 $startDate,
                 $endDate,
                 DailyAdsSpend::PLATFORM_FACEBOOK,
-                app(FacebookAdsSyncService::class)->configuredStorageAccountIds($config),
-                $profitScope
+                $facebookAdsSyncService->configuredStorageAccountIds($config),
+                $profitScope,
+                $facebookAdsSyncService->configuredStorageAccountPeriods($config)
             )
             : [];
         $googleAdsSpends = $includeGoogleAds
@@ -806,7 +947,7 @@ class FinDailyProfitReportController extends Controller
                 $startDate,
                 $endDate,
                 DailyAdsSpend::PLATFORM_GOOGLE,
-                app(GoogleAdsSyncService::class)->configuredStorageAccountIds($config),
+                $googleAdsSyncService->configuredStorageAccountIds($config),
                 $profitScope
             )
             : [];
@@ -2206,23 +2347,13 @@ class FinDailyProfitReportController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Ads']);
         }
 
-        $tokenConfigs = [];
-        if (!empty($config->fb_tokens_configs) && is_array($config->fb_tokens_configs)) {
-            $tokenConfigs = $config->fb_tokens_configs;
-        } elseif ($config->fb_access_token && $config->fb_ad_account_ids) {
-            $tokenConfigs = [
-                [
-                    'token' => $config->fb_access_token,
-                    'account_ids' => $config->fb_ad_account_ids,
-                ],
-            ];
-        }
+        $facebookAdsSyncService = app(FacebookAdsSyncService::class);
+        $configuredAccounts = $facebookAdsSyncService->configuredAdAccounts($config);
 
-        if (empty($tokenConfigs)) {
+        if (empty($configuredAccounts)) {
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Access Token']);
         }
 
-        $facebookAdsSyncService = app(FacebookAdsSyncService::class);
         $facebookAdsSyncService->syncRange($startDate, $endDate);
 
         $taxRate = (float) ($config->fb_tax_rate ?: 0);
@@ -2240,100 +2371,95 @@ class FinDailyProfitReportController extends Controller
             $currentDate = strtotime('+1 day', $currentDate);
         }
 
-        foreach ($tokenConfigs as $tokenGroup) {
-            $token = trim($tokenGroup['token'] ?? '');
-            $accountIdsStr = trim($tokenGroup['account_ids'] ?? '');
-
-            if (!$token || !$accountIdsStr) {
+        foreach ($configuredAccounts as $accountConfig) {
+            $activeDateRange = $this->activeDateRangeForConfiguredAdAccount($accountConfig, $startDate, $endDate);
+            if ($activeDateRange === null) {
                 continue;
             }
 
-            $adAccountIds = explode(',', $accountIdsStr);
+            [$activeStartDate, $activeEndDate] = $activeDateRange;
+            $token = trim((string) ($accountConfig['token'] ?? ''));
+            $adAccountId = trim((string) ($accountConfig['graph_account_id'] ?? ''));
 
-            foreach ($adAccountIds as $adAccountId) {
-                $adAccountId = trim($adAccountId);
-                if (!$adAccountId) {
-                    continue;
+            if ($token === '' || $adAccountId === '') {
+                continue;
+            }
+
+            if (!isset($accountsInfo[$adAccountId])) {
+                $accountsInfo[$adAccountId] = [
+                    'account_id' => $adAccountId,
+                    'account_name' => $adAccountId,
+                    'tracking_start_date' => $accountConfig['start_date'] ?? null,
+                    'tracking_end_date' => $accountConfig['end_date'] ?? null,
+                    'total_raw' => 0,
+                    'total_taxed' => 0,
+                ];
+            }
+
+            try {
+                $nameResponse = \Illuminate\Support\Facades\Http::withoutVerifying()->get(
+                    "https://graph.facebook.com/v20.0/{$adAccountId}",
+                    [
+                        'access_token' => $token,
+                        'fields' => 'name',
+                    ]
+                );
+
+                if ($nameResponse->successful()) {
+                    $nameData = $nameResponse->json();
+                    if (!empty($nameData['name'])) {
+                        $accountsInfo[$adAccountId]['account_name'] = $nameData['name'];
+                    }
                 }
 
-                if (!str_starts_with($adAccountId, 'act_')) {
-                    $adAccountId = 'act_' . $adAccountId;
-                }
+                $response = $facebookAdsSyncService->fetchDailyInsights(
+                    $adAccountId,
+                    $token,
+                    $activeStartDate,
+                    $activeEndDate,
+                    'spend,account_name'
+                );
 
-                if (!isset($accountsInfo[$adAccountId])) {
-                    $accountsInfo[$adAccountId] = [
-                        'account_id' => $adAccountId,
-                        'account_name' => $adAccountId,
-                        'total_raw' => 0,
-                        'total_taxed' => 0,
-                    ];
-                }
+                if ($response['successful']) {
+                    $data = $response['data'] ?? [];
 
-                try {
-                    $nameResponse = \Illuminate\Support\Facades\Http::withoutVerifying()->get(
-                        "https://graph.facebook.com/v20.0/{$adAccountId}",
-                        [
-                            'access_token' => $token,
-                            'fields' => 'name',
-                        ]
-                    );
-
-                    if ($nameResponse->successful()) {
-                        $nameData = $nameResponse->json();
-                        if (!empty($nameData['name'])) {
-                            $accountsInfo[$adAccountId]['account_name'] = $nameData['name'];
-                        }
+                    if (!empty($data) && isset($data[0]['account_name'])) {
+                        $accountsInfo[$adAccountId]['account_name'] = $data[0]['account_name'];
                     }
 
-                    $response = $facebookAdsSyncService->fetchDailyInsights(
-                        $adAccountId,
-                        $token,
-                        $startDate,
-                        $endDate,
-                        'spend,account_name'
-                    );
-
-                    if ($response['successful']) {
-                        $data = $response['data'] ?? [];
-
-                        if (!empty($data) && isset($data[0]['account_name'])) {
-                            $accountsInfo[$adAccountId]['account_name'] = $data[0]['account_name'];
+                    foreach ($data as $dayData) {
+                        $dateStr = $dayData['date_start'] ?? null;
+                        if (!$dateStr) {
+                            continue;
                         }
 
-                        foreach ($data as $dayData) {
-                            $dateStr = $dayData['date_start'] ?? null;
-                            if (!$dateStr) {
-                                continue;
-                            }
-
-                            $spendRaw = (float) ($dayData['spend'] ?? 0);
-                            if ($spendRaw <= 0) {
-                                continue;
-                            }
-
-                            $spendTaxed = $spendRaw * (1 + $taxRate / 100);
-
-                            if (!isset($dailyData[$dateStr])) {
-                                $dailyData[$dateStr] = [];
-                            }
-
-                            if (!isset($dailyData[$dateStr][$adAccountId])) {
-                                $dailyData[$dateStr][$adAccountId] = ['spend_raw' => 0, 'spend_taxed' => 0];
-                            }
-
-                            $dailyData[$dateStr][$adAccountId]['spend_raw'] += $spendRaw;
-                            $dailyData[$dateStr][$adAccountId]['spend_taxed'] += $spendTaxed;
-
-                            $accountsInfo[$adAccountId]['total_raw'] += $spendRaw;
-                            $accountsInfo[$adAccountId]['total_taxed'] += $spendTaxed;
-
-                            $totalRaw += $spendRaw;
-                            $totalTaxed += $spendTaxed;
+                        $spendRaw = (float) ($dayData['spend'] ?? 0);
+                        if ($spendRaw <= 0) {
+                            continue;
                         }
+
+                        $spendTaxed = $spendRaw * (1 + $taxRate / 100);
+
+                        if (!isset($dailyData[$dateStr])) {
+                            $dailyData[$dateStr] = [];
+                        }
+
+                        if (!isset($dailyData[$dateStr][$adAccountId])) {
+                            $dailyData[$dateStr][$adAccountId] = ['spend_raw' => 0, 'spend_taxed' => 0];
+                        }
+
+                        $dailyData[$dateStr][$adAccountId]['spend_raw'] += $spendRaw;
+                        $dailyData[$dateStr][$adAccountId]['spend_taxed'] += $spendTaxed;
+
+                        $accountsInfo[$adAccountId]['total_raw'] += $spendRaw;
+                        $accountsInfo[$adAccountId]['total_taxed'] += $spendTaxed;
+
+                        $totalRaw += $spendRaw;
+                        $totalTaxed += $spendTaxed;
                     }
-                } catch (\Exception $exception) {
-                    // Ignore individual account failures so the rest of the split view can still load.
                 }
+            } catch (\Exception $exception) {
+                // Ignore individual account failures so the rest of the split view can still load.
             }
         }
 

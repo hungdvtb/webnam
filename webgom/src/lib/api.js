@@ -25,18 +25,6 @@ export async function fetchFromApi(endpoint, options = {}) {
         webgomTiming: response.headers.get('x-webgom-timing') || '',
     };
 
-    if (payload && typeof payload === 'object') {
-        try {
-            Object.defineProperty(payload, '__webgomTiming', {
-                value: timing,
-                enumerable: false,
-                configurable: true,
-            });
-        } catch {
-            // Timing metadata is best-effort and must never affect data flow.
-        }
-    }
-
     if (
         (
             endpoint.includes('/web-api/products')

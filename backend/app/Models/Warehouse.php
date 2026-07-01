@@ -9,6 +9,8 @@ class Warehouse extends Model
 {
     use \App\Traits\BelongsToAccount;
 
+    protected static string $accountScopeType = 'inventory';
+
     protected $fillable = [
         'name',
         'code',

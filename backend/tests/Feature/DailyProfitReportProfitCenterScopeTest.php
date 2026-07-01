@@ -58,6 +58,61 @@ class DailyProfitReportProfitCenterScopeTest extends TestCase
         $this->assertSame(200.0, (float) collect($bResponse->json('data'))->sum('fb_ads_spend'));
     }
 
+    public function test_daily_report_ignores_saved_facebook_spend_outside_account_tracking_dates(): void
+    {
+        [, $headers] = $this->actingAdmin();
+
+        FinDailyReportConfig::query()->create([
+            'return_rate' => 0,
+            'packaging_fee' => 0,
+            'shipping_estimate_rate' => 0,
+            'tax_rate' => 0,
+            'fb_tax_rate' => 0,
+            'google_tax_rate' => 0,
+            'fb_access_token' => 'token',
+            'fb_ad_account_ids' => 'act_123',
+            'fb_tokens_configs' => [
+                [
+                    'token' => 'token',
+                    'account_ids' => 'act_123',
+                    'account_tracking' => [
+                        ['account_id' => 'act_123', 'start_date' => '2026-06-01', 'end_date' => '2026-06-01'],
+                    ],
+                ],
+            ],
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+            'date' => '2026-05-31',
+            'account_id' => 123,
+            'amount' => 100,
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+            'date' => '2026-06-01',
+            'account_id' => 123,
+            'amount' => 200,
+        ]);
+
+        DailyAdsSpend::query()->create([
+            'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+            'date' => '2026-06-02',
+            'account_id' => 123,
+            'amount' => 300,
+        ]);
+
+        $response = $this->getJson('/api/finance/daily-pnl/report?start_date=2026-05-31&end_date=2026-06-02', $headers)
+            ->assertOk();
+
+        $rows = collect($response->json('data'))->keyBy('date');
+
+        $this->assertSame(0.0, (float) $rows->get('2026-05-31')['fb_ads_spend']);
+        $this->assertSame(200.0, (float) $rows->get('2026-06-01')['fb_ads_spend']);
+        $this->assertSame(0.0, (float) $rows->get('2026-06-02')['fb_ads_spend']);
+    }
+
     private function actingAdmin(): array
     {
         $account = Account::query()->create([
@@ -84,4 +139,3 @@ class DailyProfitReportProfitCenterScopeTest extends TestCase
         ]);
     }
 }
-

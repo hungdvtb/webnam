@@ -9,7 +9,7 @@ class DebtSubject extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'interest_rate_percent', 'initial_debt'];
+    protected $fillable = ['account_id', 'name', 'interest_rate_percent', 'initial_debt'];
 
     public function transactions()
     {

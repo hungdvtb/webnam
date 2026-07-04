@@ -9,7 +9,7 @@ class FinAccount extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'type', 'balance', 'description', 'initial_balance'];
+    protected $fillable = ['account_id', 'name', 'type', 'balance', 'description', 'initial_balance'];
 
     public function transactions()
     {

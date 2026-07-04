@@ -2,21 +2,24 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\FinAccount;
 use App\Models\FinCategory;
 use App\Models\FinTransaction;
+use App\Services\AccountDataScopeService;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class FundController extends Controller
 {
-    private function ensureDefaults()
+    private function ensureDefaults(int $accountId): void
     {
-        if (FinAccount::count() === 0) {
-            FinAccount::create(['name' => 'Tiền mặt', 'type' => 'cash', 'balance' => 0]);
-            FinAccount::create(['name' => 'Ngân hàng', 'type' => 'bank', 'balance' => 0]);
+        if (FinAccount::query()->where('account_id', $accountId)->count() === 0) {
+            FinAccount::create(['account_id' => $accountId, 'name' => 'Tiền mặt', 'type' => 'cash', 'balance' => 0, 'initial_balance' => 0]);
+            FinAccount::create(['account_id' => $accountId, 'name' => 'Ngân hàng', 'type' => 'bank', 'balance' => 0, 'initial_balance' => 0]);
         }
-        if (FinCategory::count() === 0) {
+
+        if (FinCategory::query()->where('account_id', $accountId)->count() === 0) {
             $categories = [
                 ['name' => 'Bán hàng', 'type' => 'income', 'color' => '#4caf50'],
                 ['name' => 'Khách nợ', 'type' => 'income', 'color' => '#81c784'],
@@ -28,17 +31,24 @@ class FundController extends Controller
                 ['name' => 'Chuyển quỹ', 'type' => 'expense', 'color' => '#009688'],
                 ['name' => 'Khác', 'type' => 'expense', 'color' => '#9e9e9e'],
             ];
-            foreach ($categories as $index => $cat) {
-                FinCategory::create(array_merge($cat, ['sort_order' => $index + 1]));
+
+            foreach ($categories as $index => $category) {
+                FinCategory::create([...$category, 'account_id' => $accountId, 'sort_order' => $index + 1]);
             }
         }
     }
 
-    public function summary()
+    public function summary(Request $request)
     {
-        $this->ensureDefaults();
+        $accountId = $this->accountId($request);
+        $this->ensureDefaults($accountId);
 
-        $accounts = FinAccount::all();
+        $accounts = FinAccount::query()
+            ->where('account_id', $accountId)
+            ->orderBy('type')
+            ->orderBy('id')
+            ->get();
+
         $totalCash = $accounts->where('type', 'cash')->sum('balance');
         $totalBank = $accounts->where('type', 'bank')->sum('balance');
         $total = $totalCash + $totalBank;
@@ -49,56 +59,61 @@ class FundController extends Controller
                 'total' => $total,
                 'cash' => $totalCash,
                 'bank' => $totalBank,
-                'accounts' => $accounts
-            ]
+                'accounts' => $accounts,
+            ],
         ]);
     }
 
-    public function accounts()
+    public function accounts(Request $request)
     {
+        $accountId = $this->accountId($request);
+        $this->ensureDefaults($accountId);
+
         return response()->json([
             'status' => 'success',
-            'data' => FinAccount::all()
+            'data' => FinAccount::query()
+                ->where('account_id', $accountId)
+                ->orderBy('type')
+                ->orderBy('id')
+                ->get(),
         ]);
     }
 
-    public function categories()
+    public function categories(Request $request)
     {
-        $this->ensureDefaults();
+        $accountId = $this->accountId($request);
+        $this->ensureDefaults($accountId);
+
         return response()->json([
             'status' => 'success',
-            'data' => $this->orderedCategories()
+            'data' => $this->orderedCategories($accountId),
         ]);
     }
 
     public function transactions(Request $request)
     {
-        $query = FinTransaction::with(['account', 'category']);
+        $accountId = $this->accountId($request);
+        $query = FinTransaction::with(['account', 'category'])->where('account_id', $accountId);
 
-        // Account type filter (cash/bank/all)
         if ($request->has('type') && $request->type !== 'all') {
             $type = $request->type;
-            $query->whereHas('account', function($q) use ($type) {
-                $q->where('type', $type);
+            $query->whereHas('account', function ($q) use ($accountId, $type) {
+                $q->where('account_id', $accountId)->where('type', $type);
             });
         }
 
-        // Specific Account ID filter
         if ($request->filled('account_id')) {
             $query->where('fin_account_id', $request->account_id);
         }
 
-        // Category filter
         if ($request->filled('category_id')) {
             $query->where('fin_category_id', $request->category_id);
         }
 
-        // Transaction type filter (income/expense)
         if ($request->filled('tx_type')) {
             $query->where('type', $request->tx_type);
         }
 
-        // Date range filter
         if ($request->filled('start_date')) {
             $query->where('transaction_date', '>=', $request->start_date . ' 00:00:00');
         }
@@ -106,84 +121,86 @@ class FundController extends Controller
             $query->where('transaction_date', '<=', $request->end_date . ' 23:59:59');
         }
 
-        // Quick Search (Search by description or notes)
         if ($request->has('search') && trim($request->search) !== '') {
             $search = trim($request->search);
-            $query->where(function($q) use ($search) {
+            $query->where(function ($q) use ($search) {
                 $q->where('description', 'like', "%{$search}%")
-                  ->orWhere('notes', 'like', "%{$search}%");
+                    ->orWhere('notes', 'like', "%{$search}%");
             });
         }
 
         $transactions = $query->orderBy('transaction_date', 'desc')
-                              ->orderBy('id', 'desc')
-                              ->paginate(100);
+            ->orderBy('id', 'desc')
+            ->paginate(100);
 
         return response()->json([
             'status' => 'success',
-            'data' => $transactions
+            'data' => $transactions,
         ]);
     }
 
     public function saveTransaction(Request $request)
     {
+        $accountId = $this->accountId($request);
         $request->validate([
+            'id' => 'nullable|integer',
             'transaction_date' => 'required|date',
             'description' => 'required|string',
-            'fin_account_id' => 'required|exists:fin_accounts,id',
+            'fin_account_id' => [
+                'required',
+                'integer',
+                Rule::exists('fin_accounts', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
+            ],
+            'fin_category_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('fin_categories', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
+            ],
             'type' => 'required|in:income,expense',
             'amount' => 'required|numeric|min:0',
+            'notes' => 'nullable|string',
+            'new_category_name' => 'nullable|string|max:255',
         ]);
 
         try {
             DB::beginTransaction();
 
-            $category_id = $request->fin_category_id;
-
-            // If user typed a new category name (client sends new category as string in 'new_category_name')
-            if (!$category_id && $request->new_category_name) {
-                $type = $request->type;
-                $cat = FinCategory::firstOrCreate([
+            $categoryId = $request->fin_category_id;
+            if (!$categoryId && $request->filled('new_category_name')) {
+                $category = FinCategory::firstOrCreate([
+                    'account_id' => $accountId,
                     'name' => $request->new_category_name,
-                    'type' => $type
+                    'type' => $request->type,
                 ], [
-                    'sort_order' => FinCategory::nextSortOrder()
+                    'sort_order' => FinCategory::nextSortOrder($accountId),
                 ]);
-                $category_id = $cat->id;
+                $categoryId = $category->id;
             }
 
-            $tx = null;
-            $oldAmount = 0;
-            $oldType = 'income';
             $oldAccountId = null;
-
             if ($request->id) {
-                $tx = FinTransaction::findOrFail($request->id);
-                $oldAmount = $tx->amount;
-                $oldType = $tx->type;
-                $oldAccountId = $tx->fin_account_id;
+                $transaction = FinTransaction::query()
+                    ->where('account_id', $accountId)
+                    ->findOrFail($request->id);
+                $oldAccountId = $transaction->fin_account_id;
             } else {
-                $tx = new FinTransaction();
+                $transaction = new FinTransaction();
             }
 
-            $tx->transaction_date = $request->transaction_date;
-            $tx->description = $request->description;
-            $tx->fin_account_id = $request->fin_account_id;
-            $tx->fin_category_id = $category_id;
-            $tx->type = $request->type;
-            $tx->amount = $request->amount;
-            $tx->notes = $request->notes;
+            $transaction->account_id = $accountId;
+            $transaction->transaction_date = $request->transaction_date;
+            $transaction->description = $request->description;
+            $transaction->fin_account_id = $request->fin_account_id;
+            $transaction->fin_category_id = $categoryId;
+            $transaction->type = $request->type;
+            $transaction->amount = $request->amount;
+            $transaction->notes = $request->notes;
+            $transaction->balance_after = 0;
+            $transaction->save();
 
-            // Just save the transaction without calculating balance_after instantly to fix whole chain.
-            // But we must compute the balance for THIS transaction and RE-CALCULATE future ones for THIS account.
-            $tx->balance_after = 0; // Temp
-            $tx->save();
-
-            // Recompute balances for affected accounts
-            $accountsToRecalc = array_unique([$request->fin_account_id, $oldAccountId]);
-            foreach ($accountsToRecalc as $accId) {
-                if ($accId) {
-                    $this->recomputeAccountBalance($accId);
+            foreach (array_unique([$request->fin_account_id, $oldAccountId]) as $fundAccountId) {
+                if ($fundAccountId) {
+                    $this->recomputeAccountBalance((int) $fundAccountId, $accountId);
                 }
             }
 
@@ -192,199 +209,255 @@ class FundController extends Controller
             return response()->json([
                 'status' => 'success',
                 'message' => 'Lưu giao dịch thành công',
-                'data' => FinTransaction::with(['account', 'category'])->find($tx->id)
+                'data' => FinTransaction::with(['account', 'category'])
+                    ->where('account_id', $accountId)
+                    ->find($transaction->id),
             ]);
-        } catch (\Exception $e) {
+        } catch (\Exception $exception) {
             DB::rollBack();
+
             return response()->json([
                 'status' => 'error',
-                'message' => $e->getMessage()
+                'message' => $exception->getMessage(),
             ], 500);
         }
     }
 
-    public function deleteTransaction($id)
+    public function deleteTransaction(Request $request, int $id)
     {
+        $accountId = $this->accountId($request);
+
         try {
             DB::beginTransaction();
-            $tx = FinTransaction::findOrFail($id);
-            $accId = $tx->fin_account_id;
-            $tx->delete();
 
-            $this->recomputeAccountBalance($accId);
+            $transaction = FinTransaction::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($id);
+            $fundAccountId = $transaction->fin_account_id;
+            $transaction->delete();
+
+            $this->recomputeAccountBalance((int) $fundAccountId, $accountId);
 
             DB::commit();
+
             return response()->json(['status' => 'success']);
-        } catch (\Exception $e) {
+        } catch (\Exception $exception) {
             DB::rollBack();
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+
+            return response()->json(['status' => 'error', 'message' => $exception->getMessage()], 500);
         }
     }
 
     public function transfer(Request $request)
     {
+        $accountId = $this->accountId($request);
+        $fundAccountRule = fn () => Rule::exists('fin_accounts', 'id')
+            ->where(fn ($query) => $query->where('account_id', $accountId));
+
         $request->validate([
-            'from_account_id' => 'required|exists:fin_accounts,id',
-            'to_account_id' => 'required|exists:fin_accounts,id',
+            'from_account_id' => ['required', 'integer', $fundAccountRule()],
+            'to_account_id' => ['required', 'integer', $fundAccountRule()],
             'amount' => 'required|numeric|min:1',
             'transaction_date' => 'required|date',
-            'notes' => 'nullable|string'
+            'notes' => 'nullable|string',
         ]);
 
-        if ($request->from_account_id == $request->to_account_id) {
+        if ((int) $request->from_account_id === (int) $request->to_account_id) {
             return response()->json(['status' => 'error', 'message' => 'Tài khoản nguồn và đích phải khác nhau'], 400);
         }
 
         try {
             DB::beginTransaction();
 
-            $fromAcc = FinAccount::findOrFail($request->from_account_id);
-            $toAcc = FinAccount::findOrFail($request->to_account_id);
+            $fromAccount = FinAccount::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->from_account_id);
+            $toAccount = FinAccount::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->to_account_id);
 
-            // Find or create 'Chuyển quỹ' category
             $category = FinCategory::firstOrCreate(
-                ['name' => 'Chuyển quỹ'],
+                ['account_id' => $accountId, 'name' => 'Chuyển quỹ', 'type' => 'expense'],
                 [
-                    'type' => 'expense',
                     'color' => '#009688',
-                    'sort_order' => FinCategory::nextSortOrder(),
+                    'sort_order' => FinCategory::nextSortOrder($accountId),
                 ]
             );
 
-            // Create Expense (Withdraw) from source
-            $outTx = FinTransaction::create([
+            FinTransaction::create([
+                'account_id' => $accountId,
                 'transaction_date' => $request->transaction_date,
-                'description' => "Chuyển tiền sang [{$toAcc->name}]",
-                'fin_account_id' => $fromAcc->id,
+                'description' => "Chuyển tiền sang [{$toAccount->name}]",
+                'fin_account_id' => $fromAccount->id,
                 'fin_category_id' => $category->id,
                 'type' => 'expense',
                 'amount' => $request->amount,
                 'notes' => $request->notes,
-                'balance_after' => 0
+                'balance_after' => 0,
             ]);
 
-            // Create Income (Deposit) to target
-            $inTx = FinTransaction::create([
+            FinTransaction::create([
+                'account_id' => $accountId,
                 'transaction_date' => $request->transaction_date,
-                'description' => "Nhận tiền từ [{$fromAcc->name}]",
-                'fin_account_id' => $toAcc->id,
+                'description' => "Nhận tiền từ [{$fromAccount->name}]",
+                'fin_account_id' => $toAccount->id,
                 'fin_category_id' => $category->id,
                 'type' => 'income',
                 'amount' => $request->amount,
                 'notes' => $request->notes,
-                'balance_after' => 0
+                'balance_after' => 0,
             ]);
 
-            // Recompute balances
-            $this->recomputeAccountBalance($fromAcc->id);
-            $this->recomputeAccountBalance($toAcc->id);
+            $this->recomputeAccountBalance((int) $fromAccount->id, $accountId);
+            $this->recomputeAccountBalance((int) $toAccount->id, $accountId);
 
             DB::commit();
+
             return response()->json(['status' => 'success', 'message' => 'Chuyển quỹ thành công']);
-        } catch (\Exception $e) {
+        } catch (\Exception $exception) {
             DB::rollBack();
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+
+            return response()->json(['status' => 'error', 'message' => $exception->getMessage()], 500);
         }
     }
 
-    public function recomputeAccountBalance($accountId)
+    public function recomputeAccountBalance($fundAccountId, ?int $accountId = null): void
     {
-        // Fetch all transactions for this account ordered by date ASC, then ID ASC
-        $transactions = FinTransaction::where('fin_account_id', $accountId)
+        $accountQuery = FinAccount::query();
+        if ($accountId !== null) {
+            $accountQuery->where('account_id', $accountId);
+        }
+
+        $account = $accountQuery->find($fundAccountId);
+        if (!$account) {
+            return;
+        }
+
+        $transactions = FinTransaction::query()
+            ->where('account_id', $account->account_id)
+            ->where('fin_account_id', $account->id)
             ->orderBy('transaction_date', 'asc')
             ->orderBy('id', 'asc')
             ->get();
 
-        $account = FinAccount::find($accountId);
-        if (!$account) return;
-
         $runningBalance = $account->initial_balance;
-        foreach ($transactions as $tx) {
-            if ($tx->type === 'income') {
-                $runningBalance += $tx->amount;
+        foreach ($transactions as $transaction) {
+            if ($transaction->type === 'income') {
+                $runningBalance += $transaction->amount;
             } else {
-                $runningBalance -= $tx->amount;
+                $runningBalance -= $transaction->amount;
             }
 
-            if ($tx->balance_after != $runningBalance) {
-                $tx->balance_after = $runningBalance;
-                $tx->save();
+            if ((float) $transaction->balance_after !== (float) $runningBalance) {
+                $transaction->balance_after = $runningBalance;
+                $transaction->save();
             }
         }
 
-        // Update the account total
         $account->balance = $runningBalance;
         $account->save();
     }
 
-    public function updateAccountInitialBalance(Request $request, $id)
+    public function updateAccountInitialBalance(Request $request, int $id)
     {
+        $accountId = $this->accountId($request);
         $request->validate(['initial_balance' => 'required|numeric']);
-        $account = FinAccount::findOrFail($id);
+
+        $account = FinAccount::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
         $account->initial_balance = $request->initial_balance;
         $account->save();
 
-        $this->recomputeAccountBalance($id);
+        $this->recomputeAccountBalance($id, $accountId);
 
         return response()->json(['status' => 'success', 'data' => $account]);
     }
 
     public function saveAccount(Request $request)
     {
+        $accountId = $this->accountId($request);
         $request->validate([
+            'id' => 'nullable|integer',
             'name' => 'required|string',
             'type' => 'required|in:cash,bank',
         ]);
 
         if ($request->id) {
-            $acc = FinAccount::findOrFail($request->id);
-            $acc->update($request->only(['name', 'type']));
+            $account = FinAccount::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->id);
+            $account->update($request->only(['name', 'type']));
         } else {
-            $acc = FinAccount::create(array_merge($request->only(['name', 'type']), ['balance' => 0, 'initial_balance' => 0]));
+            $account = FinAccount::create([
+                ...$request->only(['name', 'type']),
+                'account_id' => $accountId,
+                'balance' => 0,
+                'initial_balance' => 0,
+            ]);
         }
 
-        return response()->json(['status' => 'success', 'data' => $acc]);
+        return response()->json(['status' => 'success', 'data' => $account]);
     }
 
-    public function deleteAccount($id)
+    public function deleteAccount(Request $request, int $id)
     {
+        $accountId = $this->accountId($request);
+
         try {
-            FinAccount::findOrFail($id)->delete();
+            FinAccount::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($id)
+                ->delete();
+
             return response()->json(['status' => 'success']);
-        } catch (\Exception $e) {
+        } catch (\Exception) {
             return response()->json(['status' => 'error', 'message' => 'Không thể xóa tài khoản đã có giao dịch.'], 400);
         }
     }
 
     public function saveCategory(Request $request)
     {
+        $accountId = $this->accountId($request);
         $request->validate([
+            'id' => 'nullable|integer',
             'name' => 'required|string',
-            'type' => 'required|in:income,expense'
+            'type' => 'required|in:income,expense',
+            'color' => 'nullable|string',
         ]);
 
         if ($request->id) {
-            $cat = FinCategory::findOrFail($request->id);
-            $cat->update($request->only(['name', 'type', 'color']));
+            $category = FinCategory::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->id);
+            $category->update($request->only(['name', 'type', 'color']));
         } else {
-            $cat = FinCategory::create(array_merge(
-                $request->only(['name', 'type', 'color']),
-                ['sort_order' => FinCategory::nextSortOrder()]
-            ));
+            $category = FinCategory::create([
+                ...$request->only(['name', 'type', 'color']),
+                'account_id' => $accountId,
+                'sort_order' => FinCategory::nextSortOrder($accountId),
+            ]);
         }
 
-        return response()->json(['status' => 'success', 'data' => $cat]);
+        return response()->json(['status' => 'success', 'data' => $category]);
     }
 
     public function reorderCategories(Request $request)
     {
+        $accountId = $this->accountId($request);
         $validated = $request->validate([
             'ids' => 'required|array',
-            'ids.*' => 'required|integer|distinct|exists:fin_categories,id',
+            'ids.*' => 'required|integer|distinct',
         ]);
 
         $ids = array_map('intval', $validated['ids']);
-        if (count($ids) !== FinCategory::count()) {
+        $categoryCount = FinCategory::query()->where('account_id', $accountId)->count();
+        $validIdCount = FinCategory::query()
+            ->where('account_id', $accountId)
+            ->whereIn('id', $ids)
+            ->count();
+
+        if ($validIdCount !== count($ids) || count($ids) !== $categoryCount) {
             return response()->json([
                 'message' => 'Danh sách hạng mục đã thay đổi. Vui lòng tải lại và thử lại.',
                 'errors' => [
@@ -393,27 +466,37 @@ class FundController extends Controller
             ], 422);
         }
 
-        DB::transaction(function () use ($ids) {
+        DB::transaction(function () use ($ids, $accountId) {
             foreach ($ids as $index => $id) {
-                FinCategory::whereKey($id)->update(['sort_order' => $index + 1]);
+                FinCategory::query()
+                    ->where('account_id', $accountId)
+                    ->whereKey($id)
+                    ->update(['sort_order' => $index + 1]);
             }
         });
 
         return response()->json([
             'status' => 'success',
-            'data' => $this->orderedCategories(),
+            'data' => $this->orderedCategories($accountId),
         ]);
     }
 
-    public function deleteCategory($id)
+    public function deleteCategory(Request $request, int $id)
     {
-        FinCategory::findOrFail($id)->delete();
+        $accountId = $this->accountId($request);
+
+        FinCategory::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id)
+            ->delete();
+
         return response()->json(['status' => 'success']);
     }
 
-    private function orderedCategories()
+    private function orderedCategories(int $accountId)
     {
         return FinCategory::query()
+            ->where('account_id', $accountId)
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get();
@@ -421,14 +504,17 @@ class FundController extends Controller
 
     public function report(Request $request)
     {
+        $accountId = $this->accountId($request);
         $startDate = $request->start_date ? $request->start_date . ' 00:00:00' : date('Y-m-01 00:00:00');
         $endDate = $request->end_date ? $request->end_date . ' 23:59:59' : date('Y-m-t 23:59:59');
 
-        $query = FinTransaction::with('category')->whereBetween('transaction_date', [$startDate, $endDate]);
+        $query = FinTransaction::with('category')
+            ->where('account_id', $accountId)
+            ->whereBetween('transaction_date', [$startDate, $endDate]);
 
         if ($request->has('fin_account_ids') && is_array($request->fin_account_ids) && count($request->fin_account_ids) > 0) {
             $query->whereIn('fin_account_id', $request->fin_account_ids);
-        } else if ($request->has('fin_account_id') && $request->fin_account_id !== 'all') {
+        } elseif ($request->has('fin_account_id') && $request->fin_account_id !== 'all') {
             $query->where('fin_account_id', $request->fin_account_id);
         }
 
@@ -438,17 +524,13 @@ class FundController extends Controller
         $totalIncome = 0;
         $totalExpense = 0;
 
-        foreach ($grouped as $categoryId => $txs) {
-            $cat = $categoryId ? FinCategory::find($categoryId) : null;
-            $catName = $cat ? $cat->name : 'Chưa phân loại';
-            $type = $txs->first()->type;
-
-            // To ensure all txs in this group have same type? Let's just sum based on tx type
-            $incomeSum = $txs->where('type', 'income')->sum('amount');
-            $expenseSum = $txs->where('type', 'expense')->sum('amount');
-
-            $mainType = $incomeSum > 0 ? 'income' : 'expense';
-            $amount = $incomeSum > 0 ? $incomeSum : $expenseSum;
+        foreach ($grouped as $categoryId => $transactions) {
+            $category = $categoryId
+                ? FinCategory::query()->where('account_id', $accountId)->find($categoryId)
+                : null;
+            $categoryName = $category ? $category->name : 'Chưa phân loại';
+            $incomeSum = $transactions->where('type', 'income')->sum('amount');
+            $expenseSum = $transactions->where('type', 'expense')->sum('amount');
 
             $totalIncome += $incomeSum;
             $totalExpense += $expenseSum;
@@ -456,27 +538,24 @@ class FundController extends Controller
             if ($incomeSum > 0) {
                 $report[] = [
                     'id' => $categoryId,
-                    'name' => $catName,
+                    'name' => $categoryName,
                     'type' => 'income',
                     'amount' => $incomeSum,
-                    'color' => $cat ? $cat->color : '#9e9e9e'
+                    'color' => $category ? $category->color : '#9e9e9e',
                 ];
             }
             if ($expenseSum > 0) {
                 $report[] = [
                     'id' => $categoryId,
-                    'name' => $catName,
+                    'name' => $categoryName,
                     'type' => 'expense',
                     'amount' => $expenseSum,
-                    'color' => $cat ? $cat->color : '#9e9e9e'
+                    'color' => $category ? $category->color : '#9e9e9e',
                 ];
             }
         }
 
-        // Sort descending by amount
-        usort($report, function($a, $b) {
-            return $b['amount'] <=> $a['amount'];
-        });
+        usort($report, fn ($a, $b) => $b['amount'] <=> $a['amount']);
 
         return response()->json([
             'status' => 'success',
@@ -484,7 +563,26 @@ class FundController extends Controller
                 'report' => $report,
                 'total_income' => $totalIncome,
                 'total_expense' => $totalExpense,
-            ]
+            ],
         ]);
+    }
+
+    private function accountId(Request $request): int
+    {
+        $accountId = app(AccountDataScopeService::class)
+            ->resolveScopedAccountId(
+                app(AccountDataScopeService::class)->rawActiveAccountId($request),
+                AccountDataScopeService::SCOPE_ACTIVE
+            );
+
+        if (!$accountId) {
+            $accountId = app(AccountDataScopeService::class)->accountIdForCurrentRequest(AccountDataScopeService::SCOPE_ACTIVE);
+        }
+
+        if (!$accountId) {
+            abort(422, 'Can chon cua hang truoc khi thao tac so cai.');
+        }
+
+        return (int) $accountId;
     }
 }

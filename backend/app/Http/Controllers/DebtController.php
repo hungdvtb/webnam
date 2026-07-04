@@ -2,108 +2,123 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use App\Models\DebtSubject;
 use App\Models\DebtTransaction;
-use App\Models\FinAccount;
 use App\Models\FinCategory;
 use App\Models\FinTransaction;
+use App\Services\AccountDataScopeService;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class DebtController extends Controller
 {
-    // Lấy danh sách các chủ nợ (kèm tổng nợ và tiền lãi hàng tháng)
-    public function getSubjects()
+    public function getSubjects(Request $request)
     {
-        $subjects = DebtSubject::with('transactions')->get();
+        $accountId = $this->accountId($request);
+        $subjects = DebtSubject::with([
+            'transactions' => fn ($query) => $query->where('account_id', $accountId),
+        ])
+            ->where('account_id', $accountId)
+            ->get();
 
-        $data = $subjects->map(function($sub) {
-            $borrowSum = $sub->transactions->where('type', 'borrow')->sum('amount');
-            $payPrincipalSum = $sub->transactions->where('type', 'pay_principal')->sum('amount');
-
-            $remainingDebt = $sub->initial_debt + $borrowSum - $payPrincipalSum;
-            $monthlyInterest = $remainingDebt * ($sub->interest_rate_percent / 100);
-
-            // Lấy thêm các con số tổng khác để báo cáo (nếu cần)
-            $totalInterestPaid = $sub->transactions->where('type', 'pay_interest')->sum('amount');
+        $data = $subjects->map(function ($subject) {
+            $borrowSum = $subject->transactions->where('type', 'borrow')->sum('amount');
+            $payPrincipalSum = $subject->transactions->where('type', 'pay_principal')->sum('amount');
+            $remainingDebt = $subject->initial_debt + $borrowSum - $payPrincipalSum;
+            $monthlyInterest = $remainingDebt * ($subject->interest_rate_percent / 100);
+            $totalInterestPaid = $subject->transactions->where('type', 'pay_interest')->sum('amount');
 
             return [
-                'id' => $sub->id,
-                'name' => $sub->name,
-                'interest_rate_percent' => floatval($sub->interest_rate_percent),
-                'initial_debt' => floatval($sub->initial_debt),
+                'id' => $subject->id,
+                'name' => $subject->name,
+                'interest_rate_percent' => (float) $subject->interest_rate_percent,
+                'initial_debt' => (float) $subject->initial_debt,
                 'remaining_debt' => $remainingDebt,
                 'monthly_interest' => $monthlyInterest,
-                'total_interest_paid' => $totalInterestPaid
+                'total_interest_paid' => $totalInterestPaid,
             ];
         });
-
-        // Tính tổng tất cả nợ, tất cả lãi cần trả
-        $totalDebtAll = $data->sum('remaining_debt');
-        $totalMonthlyInterestAll = $data->sum('monthly_interest');
 
         return response()->json([
             'status' => 'success',
             'data' => $data,
             'summary' => [
-                'total_debt' => $totalDebtAll,
-                'total_monthly_interest' => $totalMonthlyInterestAll
-            ]
+                'total_debt' => $data->sum('remaining_debt'),
+                'total_monthly_interest' => $data->sum('monthly_interest'),
+            ],
         ]);
     }
 
     public function saveSubject(Request $request)
     {
+        $accountId = $this->accountId($request);
         $request->validate([
+            'id' => 'nullable|integer',
             'name' => 'required|string',
             'interest_rate_percent' => 'numeric',
-            'initial_debt' => 'numeric'
+            'initial_debt' => 'numeric',
         ]);
 
         if ($request->id) {
-            $sub = DebtSubject::findOrFail($request->id);
-            $sub->update($request->only(['name', 'interest_rate_percent', 'initial_debt']));
+            $subject = DebtSubject::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->id);
+            $subject->update($request->only(['name', 'interest_rate_percent', 'initial_debt']));
         } else {
-            $sub = DebtSubject::create($request->only(['name', 'interest_rate_percent', 'initial_debt']));
+            $subject = DebtSubject::create([
+                ...$request->only(['name', 'interest_rate_percent', 'initial_debt']),
+                'account_id' => $accountId,
+            ]);
         }
 
-        return response()->json(['status' => 'success', 'data' => $sub]);
+        return response()->json(['status' => 'success', 'data' => $subject]);
     }
 
-    public function deleteSubject($id)
+    public function deleteSubject(Request $request, int $id)
     {
-        DebtSubject::findOrFail($id)->delete();
+        $accountId = $this->accountId($request);
+
+        DebtSubject::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id)
+            ->delete();
+
         return response()->json(['status' => 'success']);
     }
 
-    public function getTransactions($subjectId)
+    public function getTransactions(Request $request, int $subjectId)
     {
-        $transactions = DebtTransaction::where('debt_subject_id', $subjectId)
+        $accountId = $this->accountId($request);
+        $subject = DebtSubject::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($subjectId);
+
+        $transactions = DebtTransaction::query()
+            ->where('account_id', $accountId)
+            ->where('debt_subject_id', $subject->id)
             ->orderBy('transaction_date', 'asc')
             ->orderBy('id', 'asc')
             ->get();
 
-        $sub = DebtSubject::findOrFail($subjectId);
-        $runningBalance = $sub->initial_debt;
-
-        $data = $transactions->map(function($tx) use (&$runningBalance) {
-            if ($tx->type === 'borrow') {
-                $runningBalance += $tx->amount;
-            } else if ($tx->type === 'pay_principal') {
-                $runningBalance -= $tx->amount;
+        $runningBalance = $subject->initial_debt;
+        $data = $transactions->map(function ($transaction) use (&$runningBalance) {
+            if ($transaction->type === 'borrow') {
+                $runningBalance += $transaction->amount;
+            } elseif ($transaction->type === 'pay_principal') {
+                $runningBalance -= $transaction->amount;
             }
-            // pay_interest does not affect running balance
 
             return [
-                'id' => $tx->id,
-                'debt_subject_id' => $tx->debt_subject_id,
-                'transaction_date' => $tx->transaction_date,
-                'type' => $tx->type,
-                'amount' => floatval($tx->amount),
-                'note' => $tx->note,
-                'fin_account_id' => $tx->fin_account_id,
-                'fin_transaction_id' => $tx->fin_transaction_id,
-                'running_balance' => $runningBalance
+                'id' => $transaction->id,
+                'debt_subject_id' => $transaction->debt_subject_id,
+                'transaction_date' => $transaction->transaction_date,
+                'type' => $transaction->type,
+                'amount' => (float) $transaction->amount,
+                'note' => $transaction->note,
+                'fin_account_id' => $transaction->fin_account_id,
+                'fin_transaction_id' => $transaction->fin_transaction_id,
+                'running_balance' => $runningBalance,
             ];
         });
 
@@ -112,19 +127,32 @@ class DebtController extends Controller
 
     public function saveTransaction(Request $request)
     {
+        $accountId = $this->accountId($request);
         $request->validate([
-            'debt_subject_id' => 'required|exists:debt_subjects,id',
+            'id' => 'nullable|integer',
+            'debt_subject_id' => [
+                'required',
+                'integer',
+                Rule::exists('debt_subjects', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
+            ],
             'transaction_date' => 'required|date',
             'type' => 'required|in:borrow,pay_principal,pay_interest',
             'amount' => 'required|numeric',
-            'fin_account_id' => 'required|exists:fin_accounts,id'
+            'note' => 'nullable|string',
+            'fin_account_id' => [
+                'required',
+                'integer',
+                Rule::exists('fin_accounts', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
+            ],
         ]);
 
         try {
             DB::beginTransaction();
 
-            $data = $request->only(['debt_subject_id', 'transaction_date', 'type', 'amount', 'note', 'fin_account_id']);
-            $debtTxId = $request->id;
+            $data = [
+                ...$request->only(['debt_subject_id', 'transaction_date', 'type', 'amount', 'note', 'fin_account_id']),
+                'account_id' => $accountId,
+            ];
 
             $typeStr = $request->type === 'borrow' ? 'income' : 'expense';
             $catName = 'Giao dịch Nợ';
@@ -138,28 +166,34 @@ class DebtController extends Controller
                 $catColor = '#ff5722';
             }
 
-            $cat = FinCategory::firstOrCreate(
-                ['name' => $catName],
+            $category = FinCategory::firstOrCreate(
+                ['account_id' => $accountId, 'name' => $catName, 'type' => $typeStr],
                 [
-                    'type' => $typeStr,
                     'color' => $catColor,
-                    'sort_order' => FinCategory::nextSortOrder(),
+                    'sort_order' => FinCategory::nextSortOrder($accountId),
                 ]
             );
 
-            $subject = DebtSubject::find($request->debt_subject_id);
-            $subjectName = $subject ? $subject->name : 'N/A';
+            $subject = DebtSubject::query()
+                ->where('account_id', $accountId)
+                ->findOrFail($request->debt_subject_id);
 
             $actionLabel = 'Giao dịch nợ';
-            if ($request->type === 'borrow') $actionLabel = 'Vay thêm';
-            if ($request->type === 'pay_principal') $actionLabel = 'Trả nợ gốc';
-            if ($request->type === 'pay_interest') $actionLabel = 'Trả lãi nợ';
+            if ($request->type === 'borrow') {
+                $actionLabel = 'Vay thêm';
+            }
+            if ($request->type === 'pay_principal') {
+                $actionLabel = 'Trả nợ gốc';
+            }
+            if ($request->type === 'pay_interest') {
+                $actionLabel = 'Trả lãi nợ';
+            }
 
-            $description = "{$actionLabel}: {$subjectName}" . ($request->note ? " ({$request->note})" : "") . " [Sổ nợ]";
-
-            $finTxData = [
+            $description = "{$actionLabel}: {$subject->name}" . ($request->note ? " ({$request->note})" : '') . ' [Sổ nợ]';
+            $finTransactionData = [
+                'account_id' => $accountId,
                 'fin_account_id' => $request->fin_account_id,
-                'fin_category_id' => $cat->id,
+                'fin_category_id' => $category->id,
                 'transaction_date' => $request->transaction_date,
                 'type' => $typeStr,
                 'amount' => $request->amount,
@@ -168,52 +202,93 @@ class DebtController extends Controller
                 'balance_after' => 0,
             ];
 
-            if ($debtTxId) {
-                $debtTx = DebtTransaction::findOrFail($debtTxId);
-                if ($debtTx->fin_transaction_id) {
-                    $finTx = FinTransaction::find($debtTx->fin_transaction_id);
-                    if ($finTx) {
-                        $finTx->update($finTxData);
+            $oldFundAccountId = null;
+            if ($request->id) {
+                $debtTransaction = DebtTransaction::query()
+                    ->where('account_id', $accountId)
+                    ->findOrFail($request->id);
+                $oldFundAccountId = $debtTransaction->fin_account_id;
+
+                if ($debtTransaction->fin_transaction_id) {
+                    $finTransaction = FinTransaction::query()
+                        ->where('account_id', $accountId)
+                        ->find($debtTransaction->fin_transaction_id);
+
+                    if ($finTransaction) {
+                        $oldFundAccountId = $finTransaction->fin_account_id;
+                        $finTransaction->update($finTransactionData);
                     } else {
-                        $finTx = FinTransaction::create($finTxData);
-                        $data['fin_transaction_id'] = $finTx->id;
+                        $finTransaction = FinTransaction::create($finTransactionData);
+                        $data['fin_transaction_id'] = $finTransaction->id;
                     }
                 } else {
-                    $finTx = FinTransaction::create($finTxData);
-                    $data['fin_transaction_id'] = $finTx->id;
+                    $finTransaction = FinTransaction::create($finTransactionData);
+                    $data['fin_transaction_id'] = $finTransaction->id;
                 }
-                $debtTx->update($data);
+
+                $debtTransaction->update($data);
             } else {
-                $finTx = FinTransaction::create($finTxData);
-                $data['fin_transaction_id'] = $finTx->id;
-                $debtTx = DebtTransaction::create($data);
+                $finTransaction = FinTransaction::create($finTransactionData);
+                $data['fin_transaction_id'] = $finTransaction->id;
+                $debtTransaction = DebtTransaction::create($data);
             }
 
-            // Recompute fin account
-            app(FundController::class)->recomputeAccountBalance($request->fin_account_id);
+            foreach (array_unique([$request->fin_account_id, $oldFundAccountId]) as $fundAccountId) {
+                if ($fundAccountId) {
+                    app(FundController::class)->recomputeAccountBalance((int) $fundAccountId, $accountId);
+                }
+            }
 
             DB::commit();
-            return response()->json(['status' => 'success', 'data' => $debtTx]);
-        } catch (\Exception $e) {
+
+            return response()->json(['status' => 'success', 'data' => $debtTransaction]);
+        } catch (\Exception $exception) {
             DB::rollBack();
-            return response()->json(['status' => 'error', 'message' => $e->getMessage()], 500);
+
+            return response()->json(['status' => 'error', 'message' => $exception->getMessage()], 500);
         }
     }
 
-    public function deleteTransaction($id)
+    public function deleteTransaction(Request $request, int $id)
     {
-        $tx = DebtTransaction::findOrFail($id);
+        $accountId = $this->accountId($request);
+        $transaction = DebtTransaction::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
 
-        if ($tx->fin_transaction_id) {
-            $finTx = FinTransaction::find($tx->fin_transaction_id);
-            if ($finTx) {
-                $accId = $finTx->fin_account_id;
-                $finTx->delete();
-                app(FundController::class)->recomputeAccountBalance($accId);
+        if ($transaction->fin_transaction_id) {
+            $finTransaction = FinTransaction::query()
+                ->where('account_id', $accountId)
+                ->find($transaction->fin_transaction_id);
+
+            if ($finTransaction) {
+                $fundAccountId = $finTransaction->fin_account_id;
+                $finTransaction->delete();
+                app(FundController::class)->recomputeAccountBalance((int) $fundAccountId, $accountId);
             }
         }
 
-        $tx->delete();
+        $transaction->delete();
+
         return response()->json(['status' => 'success']);
+    }
+
+    private function accountId(Request $request): int
+    {
+        $scope = app(AccountDataScopeService::class);
+        $accountId = $scope->resolveScopedAccountId(
+            $scope->rawActiveAccountId($request),
+            AccountDataScopeService::SCOPE_ACTIVE
+        );
+
+        if (!$accountId) {
+            $accountId = $scope->accountIdForCurrentRequest(AccountDataScopeService::SCOPE_ACTIVE);
+        }
+
+        if (!$accountId) {
+            abort(422, 'Can chon cua hang truoc khi thao tac so no.');
+        }
+
+        return (int) $accountId;
     }
 }

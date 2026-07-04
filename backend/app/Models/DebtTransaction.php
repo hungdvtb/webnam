@@ -10,6 +10,7 @@ class DebtTransaction extends Model
     use HasFactory;
 
     protected $fillable = [
+        'account_id',
         'debt_subject_id',
         'transaction_date',
         'type',

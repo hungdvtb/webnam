@@ -10,6 +10,7 @@ class FinTransaction extends Model
     use HasFactory;
 
     protected $fillable = [
+        'account_id',
         'transaction_date',
         'description',
         'fin_account_id',

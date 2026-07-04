@@ -9,11 +9,13 @@ class FinCategory extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['name', 'type', 'color', 'sort_order'];
+    protected $fillable = ['account_id', 'name', 'type', 'color', 'sort_order'];
 
-    public static function nextSortOrder(): int
+    public static function nextSortOrder(?int $accountId = null): int
     {
-        return ((int) static::query()->max('sort_order')) + 1;
+        return ((int) static::query()
+            ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
+            ->max('sort_order')) + 1;
     }
 
     public function transactions()

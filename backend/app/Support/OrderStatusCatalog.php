@@ -8,9 +8,19 @@ use Illuminate\Support\Facades\Schema;
 
 class OrderStatusCatalog
 {
+    public const NEW_CODE = 'new';
+    public const PROCESSING_CODE = 'processing';
+    public const SHIPPING_CODE = 'shipping';
+    public const COMPLETED_CODE = 'completed';
+    public const PENDING_RETURN_CODE = 'pending_return';
+
     public const PRINTED_CODE = 'printed';
     public const PRINTED_NAME = 'Đã in';
     public const PRINTED_COLOR = '#0f766e';
+
+    public const DISPATCHED_CODE = 'dispatched';
+    public const DISPATCHED_NAME = 'Đã tạo đơn';
+    public const DISPATCHED_COLOR = '#eab308';
 
     public const RETURNED_CODE = 'returned';
     public const RETURNED_NAME = 'Đã hoàn';
@@ -39,6 +49,96 @@ class OrderStatusCatalog
         self::EXCHANGE_COMPLETED_CODE,
         self::PARTIAL_DELIVERY_CODE,
     ];
+
+    public static function defaultSystemStatuses(): array
+    {
+        return [
+            [
+                'code' => self::NEW_CODE,
+                'name' => 'Đơn mới',
+                'color' => '#16a34a',
+                'sort_order' => 1,
+                'is_default' => true,
+            ],
+            [
+                'code' => self::PROCESSING_CODE,
+                'name' => 'Cần xử lý',
+                'color' => '#f59e0b',
+                'sort_order' => 2,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::SHIPPING_CODE,
+                'name' => 'Đang giao hàng',
+                'color' => '#8b5cf6',
+                'sort_order' => 3,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::COMPLETED_CODE,
+                'name' => 'Giao hàng thành công',
+                'color' => '#10b981',
+                'sort_order' => 4,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::PENDING_RETURN_CODE,
+                'name' => 'Chờ hoàn',
+                'color' => '#ef4444',
+                'sort_order' => 5,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::RETURNED_CODE,
+                'name' => self::RETURNED_NAME,
+                'color' => self::RETURNED_COLOR,
+                'sort_order' => 6,
+                'is_default' => false,
+            ],
+            [
+                'code' => 'cancelled',
+                'name' => 'Đã hủy',
+                'color' => '#6b7280',
+                'sort_order' => 7,
+                'is_default' => false,
+            ],
+            [
+                'code' => 'confirmed',
+                'name' => 'Đã xác nhận',
+                'color' => '#3b82f6',
+                'sort_order' => 8,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::PRINTED_CODE,
+                'name' => self::PRINTED_NAME,
+                'color' => self::PRINTED_COLOR,
+                'sort_order' => 9,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::DISPATCHED_CODE,
+                'name' => self::DISPATCHED_NAME,
+                'color' => self::DISPATCHED_COLOR,
+                'sort_order' => 10,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::EXCHANGE_COMPLETED_CODE,
+                'name' => self::EXCHANGE_COMPLETED_NAME,
+                'color' => self::EXCHANGE_COMPLETED_COLOR,
+                'sort_order' => 11,
+                'is_default' => false,
+            ],
+            [
+                'code' => self::PARTIAL_DELIVERY_CODE,
+                'name' => self::PARTIAL_DELIVERY_NAME,
+                'color' => self::PARTIAL_DELIVERY_COLOR,
+                'sort_order' => 12,
+                'is_default' => false,
+            ],
+        ];
+    }
 
     public static function ensurePrintedStatus(int $accountId): OrderStatus
     {
@@ -80,11 +180,37 @@ class OrderStatusCatalog
         );
     }
 
-    public static function ensureDefaultSystemStatuses(int $accountId): void
+    public static function ensureDefaultSystemStatuses(int $accountId, bool $normalizeSortOrder = false): void
     {
-        self::ensurePrintedStatus($accountId);
-        self::ensureExchangeCompletedStatus($accountId);
-        self::ensurePartialDeliveryStatus($accountId);
+        if (!Schema::hasTable('order_statuses')) {
+            return;
+        }
+
+        $statuses = self::defaultSystemStatuses();
+        $codes = array_column($statuses, 'code');
+        $existingDefaultStatusCount = OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->whereIn('code', $codes)
+            ->count();
+        $shouldNormalizeSortOrder = $normalizeSortOrder || $existingDefaultStatusCount < count($statuses);
+        $hasDefaultStatus = OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->where('is_default', true)
+            ->exists();
+
+        foreach ($statuses as $status) {
+            self::ensureSystemStatus(
+                $accountId,
+                $status['code'],
+                $status['name'],
+                $status['color'],
+                (int) $status['sort_order'],
+                !$hasDefaultStatus && (bool) $status['is_default'],
+                $shouldNormalizeSortOrder
+            );
+        }
+
+        self::ensureDefaultStatusFlag($accountId);
     }
 
     public static function shouldKeepStatusWhenPrinting(?string $status): bool
@@ -124,7 +250,10 @@ class OrderStatusCatalog
         int $accountId,
         string $code,
         string $name,
-        string $color
+        string $color,
+        ?int $sortOrder = null,
+        bool $isDefault = false,
+        bool $updateSortOrder = false
     ): OrderStatus {
         if (!Schema::hasTable('order_statuses')) {
             return new OrderStatus([
@@ -132,7 +261,7 @@ class OrderStatusCatalog
                 'code' => $code,
                 'name' => $name,
                 'color' => $color,
-                'is_default' => false,
+                'is_default' => $isDefault,
                 'is_system' => true,
                 'is_active' => true,
             ]);
@@ -156,6 +285,11 @@ class OrderStatusCatalog
                 $dirty = true;
             }
 
+            if ($updateSortOrder && $sortOrder !== null && (int) $status->sort_order !== $sortOrder) {
+                $status->sort_order = $sortOrder;
+                $dirty = true;
+            }
+
             if ($dirty) {
                 $status->save();
             }
@@ -172,10 +306,27 @@ class OrderStatusCatalog
             'code' => $code,
             'name' => $name,
             'color' => $color,
-            'sort_order' => $maxSortOrder + 1,
-            'is_default' => false,
+            'sort_order' => $sortOrder ?? ($maxSortOrder + 1),
+            'is_default' => $isDefault,
             'is_system' => true,
             'is_active' => true,
         ]);
+    }
+
+    private static function ensureDefaultStatusFlag(int $accountId): void
+    {
+        $hasDefault = OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->where('is_default', true)
+            ->exists();
+
+        if ($hasDefault) {
+            return;
+        }
+
+        OrderStatus::query()
+            ->where('account_id', $accountId)
+            ->where('code', self::NEW_CODE)
+            ->update(['is_default' => true]);
     }
 }

@@ -17,6 +17,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Collection;
 
 class FinDailyProfitReportController extends Controller
@@ -108,28 +109,111 @@ class FinDailyProfitReportController extends Controller
         ],
     ];
 
-    public function getConfig()
+    private function defaultDailyReportConfigPayload(): array
     {
-        $config = FinDailyReportConfig::first();
+        return [
+            'return_rate' => 2.00,
+            'packaging_fee' => 2000.00,
+            'shipping_estimate_rate' => 10.00,
+            'shipping_fee_type' => '%',
+            'tax_rate' => 1.50,
+            'fb_access_token' => null,
+            'fb_ad_account_ids' => null,
+            'fb_tax_rate' => 0,
+            'fb_tokens_configs' => null,
+            'google_developer_token' => null,
+            'google_client_id' => null,
+            'google_client_secret' => null,
+            'google_refresh_token' => null,
+            'google_login_customer_id' => null,
+            'google_customer_ids' => null,
+            'google_tax_rate' => 0,
+        ];
+    }
 
-        if (!$config) {
-            $config = FinDailyReportConfig::create([
-                'return_rate' => 2.00,
-                'packaging_fee' => 2000.00,
-                'shipping_estimate_rate' => 10.00,
-                'tax_rate' => 1.50,
+    private function dailyReportConfigHasAccountScope(): bool
+    {
+        static $hasAccountScope = null;
+
+        if ($hasAccountScope !== null) {
+            return $hasAccountScope;
+        }
+
+        return $hasAccountScope = Schema::hasColumn('fin_daily_report_configs', 'account_id');
+    }
+
+    private function resolveReportAccountId(Request $request): ?int
+    {
+        return app(AccessControlService::class)->resolveAccountIdFromRequest($request);
+    }
+
+    private function dailyReportConfigForRequest(Request $request, bool $create = true): ?FinDailyReportConfig
+    {
+        return $this->dailyReportConfigForAccount($this->resolveReportAccountId($request), $create);
+    }
+
+    private function dailyReportConfigForAccount(?int $accountId, bool $create = true): ?FinDailyReportConfig
+    {
+        if (!$this->dailyReportConfigHasAccountScope()) {
+            $config = FinDailyReportConfig::query()->orderBy('id')->first();
+
+            return $config ?: ($create ? FinDailyReportConfig::query()->create($this->defaultDailyReportConfigPayload()) : null);
+        }
+
+        if ($accountId !== null) {
+            $config = FinDailyReportConfig::query()
+                ->where('account_id', $accountId)
+                ->first();
+
+            if ($config || !$create) {
+                return $config;
+            }
+
+            return FinDailyReportConfig::query()->create([
+                'account_id' => $accountId,
+                ...$this->dailyReportConfigPayloadFromTemplate($this->globalDailyReportConfig(false, false)),
             ]);
         }
+
+        return $this->globalDailyReportConfig($create);
+    }
+
+    private function globalDailyReportConfig(bool $create = true, bool $allowScopedFallback = true): ?FinDailyReportConfig
+    {
+        $config = FinDailyReportConfig::query()
+            ->whereNull('account_id')
+            ->orderBy('id')
+            ->first();
+
+        if (!$config && $allowScopedFallback) {
+            $config = FinDailyReportConfig::query()->orderBy('id')->first();
+        }
+
+        return $config ?: ($create ? FinDailyReportConfig::query()->create($this->defaultDailyReportConfigPayload()) : null);
+    }
+
+    private function dailyReportConfigPayloadFromTemplate(?FinDailyReportConfig $template): array
+    {
+        $defaults = $this->defaultDailyReportConfigPayload();
+        $payload = [];
+
+        foreach (array_keys($defaults) as $field) {
+            $payload[$field] = $template?->{$field} ?? $defaults[$field];
+        }
+
+        return $payload;
+    }
+
+    public function getConfig(Request $request)
+    {
+        $config = $this->dailyReportConfigForRequest($request);
 
         return response()->json(['status' => 'success', 'data' => $config]);
     }
 
     public function updateConfig(Request $request)
     {
-        $config = FinDailyReportConfig::first();
-        if (!$config) {
-            $config = new FinDailyReportConfig();
-        }
+        $config = $this->dailyReportConfigForRequest($request);
 
         $data = $request->only([
             'return_rate',
@@ -606,9 +690,10 @@ class FinDailyProfitReportController extends Controller
         $warnings = [];
         $facebookStatus = 'success';
         $googleStatus = 'success';
+        $config = $this->dailyReportConfigForRequest($request);
 
         try {
-            if (!app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate)) {
+            if (!app(FacebookAdsSyncService::class)->syncRange($startDate, $endDate, $config)) {
                 $facebookStatus = 'failed';
                 $warnings[] = 'Khong dong bo duoc Facebook Ads, bao cao dang dung du lieu da luu.';
             }
@@ -621,7 +706,7 @@ class FinDailyProfitReportController extends Controller
         }
 
         try {
-            if (!app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate)) {
+            if (!app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate, false, $config)) {
                 $googleStatus = 'failed';
                 $warnings[] = 'Khong dong bo duoc Google Ads, bao cao dang dung du lieu da luu.';
             }
@@ -882,7 +967,7 @@ class FinDailyProfitReportController extends Controller
 
     private function buildDailyReportPayload(string $startDate, string $endDate, array $filters = []): array
     {
-        $config = FinDailyReportConfig::first();
+        $config = $filters['config'] ?? $this->dailyReportConfigForAccount(null, false);
         $returnRate = $config ? (float) $config->return_rate : 2.0;
         $packFee = $config ? (float) $config->packaging_fee : 2000.0;
         $taxRate = $config ? (float) $config->tax_rate : 1.5;
@@ -1962,6 +2047,7 @@ class FinDailyProfitReportController extends Controller
         if (!($profitScope['can_view'] ?? false)) {
             return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
         }
+        $config = $this->dailyReportConfigForRequest($request);
 
         $syncMeta = $this->syncAdSpendForReport($startDate, $endDate, $request);
 
@@ -1970,6 +2056,7 @@ class FinDailyProfitReportController extends Controller
             'order_type' => $request->input('order_type'),
             'ad_channel' => $request->input('ad_channel'),
             'profit_scope' => $profitScope,
+            'config' => $config,
         ]);
 
         return response()->json([
@@ -1991,9 +2078,11 @@ class FinDailyProfitReportController extends Controller
         if (!($profitScope['can_view'] ?? false)) {
             return response()->json(['status' => 'error', 'message' => 'Ban khong co quyen xem bao cao lai lo.'], 403);
         }
+        $config = $this->dailyReportConfigForRequest($request);
         $filters = [
             'ad_channel' => $adChannel,
             'profit_scope' => $profitScope,
+            'config' => $config,
         ];
         $hasProfitScopeFilter = !($profitScope['all'] ?? false)
             || !empty($profitScope['requested_manager_user_ids'] ?? [])
@@ -2003,7 +2092,6 @@ class FinDailyProfitReportController extends Controller
         $syncMeta = $this->syncAdSpendForReport($startDate, $endDate, $request);
 
         $payload = $this->buildDailyReportPayload($startDate, $endDate, $filters);
-        $config = FinDailyReportConfig::query()->first();
         $packagingFeePerOrder = $config ? (float) $config->packaging_fee : 2000.0;
         $taxRate = self::MONTHLY_REPORT_TAX_RATE;
 
@@ -2144,7 +2232,7 @@ class FinDailyProfitReportController extends Controller
         $token = $request->token;
 
         if (!$token) {
-            $config = FinDailyReportConfig::first();
+            $config = $this->dailyReportConfigForRequest($request);
             $token = $config ? $config->fb_access_token : null;
         }
 
@@ -2182,7 +2270,7 @@ class FinDailyProfitReportController extends Controller
         $endDate = $request->end_date ?: date('Y-m-d');
 
         $syncService = app(\App\Services\FacebookAdsSyncService::class);
-        $syncService->syncRange($startDate, $endDate);
+        $syncService->syncRange($startDate, $endDate, $this->dailyReportConfigForRequest($request));
 
         return response()->json([
             'status' => 'success',
@@ -2226,7 +2314,7 @@ class FinDailyProfitReportController extends Controller
 
         $syncService = app(GoogleAdsSyncService::class);
         try {
-            $success = $syncService->syncRange($startDate, $endDate, true);
+            $success = $syncService->syncRange($startDate, $endDate, true, $this->dailyReportConfigForRequest($request));
         } catch (\Exception $exception) {
             return response()->json([
                 'status' => 'error',
@@ -2255,7 +2343,7 @@ class FinDailyProfitReportController extends Controller
         $startDate = $request->start_date ?: date('Y-m-d');
         $endDate = $request->end_date ?: date('Y-m-d');
 
-        $config = FinDailyReportConfig::first();
+        $config = $this->dailyReportConfigForRequest($request);
         if (!$config) {
             return response()->json(['status' => 'error', 'message' => 'Chua cau hinh Google Ads']);
         }
@@ -2265,7 +2353,7 @@ class FinDailyProfitReportController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Chua cau hinh Google Ads Customer ID']);
         }
 
-        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate);
+        app(GoogleAdsSyncService::class)->syncRange($startDate, $endDate, false, $config);
 
         $taxRate = (float) ($config->google_tax_rate ?: 0);
 
@@ -2342,7 +2430,7 @@ class FinDailyProfitReportController extends Controller
         $startDate = $request->start_date ?: date('Y-m-d');
         $endDate = $request->end_date ?: date('Y-m-d');
 
-        $config = FinDailyReportConfig::first();
+        $config = $this->dailyReportConfigForRequest($request);
         if (!$config) {
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Ads']);
         }
@@ -2354,7 +2442,7 @@ class FinDailyProfitReportController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Chưa cấu hình Facebook Access Token']);
         }
 
-        $facebookAdsSyncService->syncRange($startDate, $endDate);
+        $facebookAdsSyncService->syncRange($startDate, $endDate, $config);
 
         $taxRate = (float) ($config->fb_tax_rate ?: 0);
 

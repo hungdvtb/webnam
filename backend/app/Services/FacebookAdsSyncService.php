@@ -258,9 +258,9 @@ class FacebookAdsSyncService
         ];
     }
 
-    public function syncRange(string $startDate, string $endDate)
+    public function syncRange(string $startDate, string $endDate, ?FinDailyReportConfig $config = null)
     {
-        $config = FinDailyReportConfig::first();
+        $config ??= FinDailyReportConfig::first();
 
         if (!$config) {
             Log::warning("Facebook Ads Sync: Missing configuration.");
@@ -369,14 +369,26 @@ class FacebookAdsSyncService
                     ->whereIn('account_id', $activeAccountIds)
                     ->sum('amount');
 
-            DailyAdsSpend::updateOrCreate(
-                [
+            $updated = DailyAdsSpend::query()
+                ->whereDate('date', $date)
+                ->whereNull('account_id')
+                ->where(function ($query) {
+                    $query->where('platform', DailyAdsSpend::PLATFORM_FACEBOOK)
+                        ->orWhereNull('platform');
+                })
+                ->update([
+                    'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
+                    'amount' => (float) $perAccountTotal,
+                ]);
+
+            if ($updated === 0) {
+                DailyAdsSpend::query()->create([
                     'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
                     'date' => $date,
                     'account_id' => null,
-                ],
-                ['amount' => (float) $perAccountTotal]
-            );
+                    'amount' => (float) $perAccountTotal,
+                ]);
+            }
         }
     }
 

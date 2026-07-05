@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class FinDailyReportConfig extends Model
 {
     protected $fillable = [
+        'account_id',
         'return_rate',
         'packaging_fee',
         'shipping_estimate_rate',
@@ -26,6 +27,7 @@ class FinDailyReportConfig extends Model
     ];
 
     protected $casts = [
+        'account_id' => 'integer',
         'fb_tokens_configs' => 'array'
     ];
 }

@@ -11,6 +11,7 @@ use App\Services\AccessControlService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Validation\Rule;
@@ -307,7 +308,22 @@ class ProfitCenterController extends Controller
     private function availableAdAccountsPayload(?int $accountId): array
     {
         $items = [];
-        $config = FinDailyReportConfig::query()->first();
+        $configQuery = FinDailyReportConfig::query();
+
+        if (Schema::hasColumn('fin_daily_report_configs', 'account_id')) {
+            $configQuery
+                ->when($accountId !== null, fn ($query) => $query->where('account_id', $accountId))
+                ->when($accountId === null, fn ($query) => $query->whereNull('account_id'));
+        }
+
+        $config = $configQuery->orderBy('id')->first();
+
+        if (!$config && $accountId !== null && Schema::hasColumn('fin_daily_report_configs', 'account_id')) {
+            $config = FinDailyReportConfig::query()
+                ->whereNull('account_id')
+                ->orderBy('id')
+                ->first();
+        }
 
         if ($config) {
             foreach ($this->configuredFacebookAccountIds($config) as $id) {

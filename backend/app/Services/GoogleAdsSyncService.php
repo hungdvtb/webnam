@@ -263,9 +263,9 @@ class GoogleAdsSyncService
         return implode(' | ', array_values(array_unique(array_filter($messages))));
     }
 
-    public function syncRange(string $startDate, string $endDate, bool $throwOnFailure = false)
+    public function syncRange(string $startDate, string $endDate, bool $throwOnFailure = false, ?FinDailyReportConfig $config = null)
     {
-        $config = FinDailyReportConfig::first();
+        $config ??= FinDailyReportConfig::first();
 
         if (!$config) {
             Log::warning('Google Ads Sync: Missing configuration.');
@@ -403,14 +403,20 @@ class GoogleAdsSyncService
                 ->whereIn('account_id', $configuredAccountIds)
                 ->sum('amount');
 
-            DailyAdsSpend::updateOrCreate(
-                [
+            $updated = DailyAdsSpend::query()
+                ->whereDate('date', $date)
+                ->whereNull('account_id')
+                ->where('platform', DailyAdsSpend::PLATFORM_GOOGLE)
+                ->update(['amount' => (float) $perAccountTotal]);
+
+            if ($updated === 0) {
+                DailyAdsSpend::query()->create([
                     'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
                     'date' => $date,
                     'account_id' => null,
-                ],
-                ['amount' => (float) $perAccountTotal]
-            );
+                    'amount' => (float) $perAccountTotal,
+                ]);
+            }
         }
 
         return true;

@@ -208,6 +208,7 @@ const INITIAL_FORM_DATA = {
     name: '',
     slug: '',
     site_domain_id: '',
+    store_id: '',
     description: '',
     meta_title: '',
     meta_description: '',
@@ -239,6 +240,7 @@ const buildCategoryFormData = (category = {}, categoryItems = []) => {
         name: category.name || '',
         slug: category.slug || '',
         site_domain_id: category.site_domain_id ? String(category.site_domain_id) : '',
+        store_id: category.store_id ? String(category.store_id) : '',
         description: category.description || '',
         meta_title: category.meta_title || '',
         meta_description: category.meta_description || '',
@@ -824,6 +826,7 @@ const CategoryList = () => {
     const [selectedChildOrderSaving, setSelectedChildOrderSaving] = useState(false);
     const [formData, setFormData] = useState(createInitialFormData);
     const [domains, setDomains] = useState([]);
+    const [stores, setStores] = useState([]);
     const [showCategoryLinkModal, setShowCategoryLinkModal] = useState(false);
     const [tempSlug, setTempSlug] = useState('');
     const [slugError, setSlugError] = useState('');
@@ -1678,12 +1681,16 @@ const CategoryList = () => {
     const fetchInitialData = async () => {
         setLoading(true);
         try {
-            const [catRes, attrRes, trashRes, domainRes] = await Promise.all([
+            const [catRes, attrRes, trashRes, domainRes, storeRes] = await Promise.all([
                 categoryApi.getAll(isTrashView ? { is_trash: 1 } : undefined),
                 attributeApi.getAll(), // Fetch all to ensure names show even if inactive in this view
                 categoryApi.getAll({ is_trash: 1 }),
                 cmsApi.domains.getAll().catch((error) => {
                     console.error('Error fetching site domains:', error);
+                    return { data: [] };
+                }),
+                cmsApi.stores.getAll({ status: 1 }).catch((error) => {
+                    console.error('Error fetching stores:', error);
                     return { data: [] };
                 }),
             ]);
@@ -1699,6 +1706,7 @@ const CategoryList = () => {
             // Set attributes for selection
             setAllAttributes(attrRes.data || []);
             setDomains(Array.isArray(domainRes.data) ? domainRes.data : []);
+            setStores(Array.isArray(storeRes.data) ? storeRes.data : []);
             setTrashCount(trashedCategories.length);
             hasLoadedInitialDataRef.current = true;
         } catch (error) {
@@ -1944,6 +1952,7 @@ const CategoryList = () => {
                 data.append('slug', normalizedSlug);
             }
             data.append('site_domain_id', formData.site_domain_id || '');
+            data.append('store_id', formData.store_id || '');
             
             if (formData.banner instanceof File) {
                 data.append('banner', formData.banner);
@@ -4054,6 +4063,27 @@ const CategoryList = () => {
                             </div>
 
                             <div className="space-y-6">
+                                {stores.length > 0 ? (
+                                    <div className="relative flex min-h-[50px] flex-col justify-center rounded-sm border border-stone/30 bg-white px-3 transition-colors focus-within:border-primary/30">
+                                        <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black uppercase leading-none tracking-widest text-gold">
+                                            Cua hang quan ly
+                                        </label>
+                                        <select
+                                            name="store_id"
+                                            value={formData.store_id || ''}
+                                            onChange={(event) => setFormData((previous) => ({ ...previous, store_id: event.target.value }))}
+                                            className="w-full border-none bg-transparent pt-1 text-[13px] font-bold text-primary focus:outline-none focus:ring-0"
+                                        >
+                                            <option value="">Ke thua tu danh muc cha / chua gan</option>
+                                            {stores.map((store) => (
+                                                <option key={store.id} value={store.id}>
+                                                    {store.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ) : null}
+
                                 {domains.length > 0 ? (
                                     <div className="relative flex min-h-[50px] flex-col justify-center rounded-sm border border-stone/30 bg-white px-3 transition-colors focus-within:border-primary/30">
                                         <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black uppercase leading-none tracking-widest text-gold">

@@ -17,7 +17,7 @@ class Product extends Model
     protected $fillable = [
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
-        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id', 'profit_center_id',
+        'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id', 'store_id', 'profit_center_id',
         'sort_order',
         'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
         'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_product_input_name',
@@ -27,6 +27,11 @@ class Product extends Model
     public function siteDomain()
     {
         return $this->belongsTo(SiteDomain::class);
+    }
+
+    public function store()
+    {
+        return $this->belongsTo(Store::class);
     }
 
     public function profitCenter()
@@ -47,6 +52,7 @@ class Product extends Model
         'imported_quantity_total' => 'decimal:3',
         'imported_value_total' => 'decimal:2',
         'video_urls' => 'array',
+        'store_id' => 'integer',
         'sort_order' => 'integer',
         'google_merchant_last_synced_at' => 'datetime',
         'google_merchant_last_attempted_at' => 'datetime',

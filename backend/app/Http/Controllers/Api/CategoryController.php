@@ -9,6 +9,7 @@ use App\Models\Category;
 use App\Models\Post;
 use App\Models\Product;
 use App\Models\SiteDomain;
+use App\Models\Store;
 use App\Services\CategoryDemoLogoService;
 use App\Services\MediaService;
 use App\Support\Utf8Sanitizer;
@@ -38,6 +39,32 @@ class CategoryController extends Controller
         protected MediaService $mediaService,
         protected CategoryDemoLogoService $categoryDemoLogoService
     ) {
+    }
+
+    private function resolveStoreIdForRequest(mixed $value, string $field = 'store_id'): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value)) {
+            throw ValidationException::withMessages([
+                $field => ['Cua hang khong hop le.'],
+            ]);
+        }
+
+        $storeId = (int) $value;
+        if ($storeId <= 0) {
+            return null;
+        }
+
+        if (!Store::query()->whereKey($storeId)->exists()) {
+            throw ValidationException::withMessages([
+                $field => ['Cua hang khong ton tai trong account hien tai.'],
+            ]);
+        }
+
+        return $storeId;
     }
 
     private function calculateFullBundleDiscountedPrice(float $totalPrice): array
@@ -951,6 +978,7 @@ class CategoryController extends Controller
                 'bannerMediaAsset',
                 'logoMediaAsset',
                 'siteDomain:id,domain,is_active,is_default',
+                'store:id,name,slug,status',
                 'parent' => static function ($parentQuery) use ($isTrashView) {
                     if ($isTrashView) {
                         $parentQuery->withTrashed();
@@ -978,6 +1006,7 @@ class CategoryController extends Controller
             'code' => 'nullable|string|max:120',
             'slug' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'store_id' => 'nullable|integer',
             'parent_id' => 'nullable|integer',
             'description' => 'nullable|string',
             'meta_title' => 'nullable|string|max:255',
@@ -998,6 +1027,14 @@ class CategoryController extends Controller
         $parentId = $this->resolveValidatedParentId($request->input('parent_id'));
         $normalizedName = $this->normalizeRequiredString($request->input('name'));
         $slugSource = $this->normalizeRequiredString($request->input('slug') ?: $normalizedName) ?: $normalizedName;
+        $storeId = $this->resolveStoreIdForRequest($request->input('store_id'));
+
+        if ($storeId === null && $parentId) {
+            $storeId = Category::query()
+                ->whereKey($parentId)
+                ->value('store_id');
+            $storeId = $storeId ? (int) $storeId : null;
+        }
 
         $normalizedCode = Category::normalizeCode($request->input('code'));
 
@@ -1019,6 +1056,7 @@ class CategoryController extends Controller
                 'name' => $normalizedName,
                 'code' => $normalizedCode ? Category::buildUniqueCode($normalizedCode) : Category::buildUniqueCode($normalizedName),
                 'site_domain_id' => $request->filled('site_domain_id') ? (int) $request->input('site_domain_id') : null,
+                'store_id' => $storeId,
                 'slug' => Category::buildUniqueSlug($slugSource),
                 'parent_id' => $parentId,
                 'description' => $this->normalizeNullableString($request->input('description')),
@@ -1048,12 +1086,12 @@ class CategoryController extends Controller
             return response()->json(['error' => $exception->getMessage()], 500);
         }
 
-        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']), 201);
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status']), 201);
     }
 
     public function show($id)
     {
-        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])->findOrFail($id);
+        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status'])->findOrFail($id);
 
         return response()->json($category);
     }
@@ -1080,6 +1118,7 @@ class CategoryController extends Controller
             'code' => 'nullable|string|max:120',
             'slug' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'store_id' => 'nullable|integer',
             'parent_id' => 'sometimes|nullable|integer',
             'description' => 'nullable|string',
             'meta_title' => 'nullable|string|max:255',
@@ -1112,6 +1151,10 @@ class CategoryController extends Controller
 
         if ($request->has('site_domain_id')) {
             $category->site_domain_id = $request->filled('site_domain_id') ? (int) $request->input('site_domain_id') : null;
+        }
+
+        if ($request->has('store_id')) {
+            $category->store_id = $this->resolveStoreIdForRequest($request->input('store_id'));
         }
 
         if ($request->filled('code')) {
@@ -1876,11 +1919,18 @@ class CategoryController extends Controller
             'name' => $category->name,
             'slug' => $category->slug,
             'site_domain_id' => $category->site_domain_id ? (int) $category->site_domain_id : null,
+            'store_id' => $category->store_id ? (int) $category->store_id : null,
             'site_domain' => $category->relationLoaded('siteDomain') && $category->siteDomain ? [
                 'id' => (int) $category->siteDomain->id,
                 'domain' => $category->siteDomain->domain,
                 'is_active' => (bool) $category->siteDomain->is_active,
                 'is_default' => (bool) $category->siteDomain->is_default,
+            ] : null,
+            'store' => $category->relationLoaded('store') && $category->store ? [
+                'id' => (int) $category->store->id,
+                'name' => $category->store->name,
+                'slug' => $category->store->slug,
+                'status' => (bool) $category->store->status,
             ] : null,
             'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
             'description' => $category->description,
@@ -2379,6 +2429,7 @@ class CategoryController extends Controller
             'name' => $name,
             'code' => Category::buildUniqueCode($codeSource),
             'site_domain_id' => $sourceCategory->site_domain_id ? (int) $sourceCategory->site_domain_id : null,
+            'store_id' => $sourceCategory->store_id ? (int) $sourceCategory->store_id : null,
             'slug' => Category::buildUniqueSlug($slugSource),
             'parent_id' => $parentId,
             'description' => $sourceCategory->getRawOriginal('description'),

@@ -18,6 +18,7 @@ use App\Models\ProductImage;
 use App\Models\MediaAsset;
 use App\Models\ProfitCenter;
 use App\Models\SiteDomain;
+use App\Models\Store;
 use App\Models\BulkUpdateLog;
 use App\Services\Inventory\ProductPricingService;
 use App\Services\AI\AiExceptionClassifier;
@@ -223,6 +224,60 @@ class ProductController extends Controller
         }
 
         return (int) $resolvedId;
+    }
+
+    private function resolveCatalogStoreId(mixed $value, string $field = 'store_id'): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value)) {
+            throw ValidationException::withMessages([
+                $field => ['Cua hang khong hop le.'],
+            ]);
+        }
+
+        $storeId = (int) $value;
+        if ($storeId <= 0) {
+            return null;
+        }
+
+        if (!Store::query()->whereKey($storeId)->exists()) {
+            throw ValidationException::withMessages([
+                $field => ['Cua hang khong ton tai trong account hien tai.'],
+            ]);
+        }
+
+        return $storeId;
+    }
+
+    private function resolveStoreIdFromCategories(array $categoryIds): ?int
+    {
+        foreach ($categoryIds as $categoryId) {
+            if (!is_numeric($categoryId)) {
+                continue;
+            }
+
+            $storeId = Category::query()
+                ->whereKey((int) $categoryId)
+                ->value('store_id');
+
+            if ($storeId) {
+                return (int) $storeId;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveProductStoreIdForRequest(Request $request, array $categoryIds): ?int
+    {
+        if ($request->has('store_id')) {
+            return $this->resolveCatalogStoreId($request->input('store_id'));
+        }
+
+        return $this->resolveStoreIdFromCategories($categoryIds);
     }
 
     private function queueGoogleMerchantProductSync(Product $product, bool $includeVariants = true): void
@@ -3194,6 +3249,7 @@ class ProductController extends Controller
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
+            'store:id,name,slug,status',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order,file_name,file_size',
             'superAttributes:' . $attributeResourceColumns,
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
@@ -3857,6 +3913,7 @@ class ProductController extends Controller
             'additional_info' => $product->additional_info,
             'bundle_title' => null,
             'site_domain_id' => $product->site_domain_id,
+            'store_id' => $product->store_id,
         ];
     }
 
@@ -6393,6 +6450,7 @@ class ProductController extends Controller
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain',
+            'store:id,name,slug,status',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'images.mediaAsset:id,public_id,disk,variants',
             'attributeValues:id,product_id,attribute_id,value',
@@ -6405,6 +6463,7 @@ class ProductController extends Controller
                 'variations.parentConfigurable:id,name,sku,type',
                 'variations.category:id,name,code,slug',
                 'variations.categories:id,name,code,slug',
+                'variations.store:id,name,slug,status',
                 'variations.supplier:id,name,code',
                 'variations.suppliers:id,name,code',
                 'variations.attributeValues:id,product_id,attribute_id,value',
@@ -6413,20 +6472,22 @@ class ProductController extends Controller
                 'variations.profitCenter:id,name,code,manager_user_id',
                 'variations.profitCenter.manager:id,name',
                 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,profit_center_id',
+                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
                 'groupedItems.profitCenter:id,name,code,manager_user_id',
                 'groupedItems.profitCenter.manager:id,name',
                 'groupedItems.category:id,name,code,slug',
                 'groupedItems.categories:id,name,code,slug',
+                'groupedItems.store:id,name,slug,status',
                 'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,profit_center_id',
+                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
                 'bundleItems.profitCenter:id,name,code,manager_user_id',
                 'bundleItems.profitCenter.manager:id,name',
                 'bundleItems.category:id,name,code,slug',
                 'bundleItems.categories:id,name,code,slug',
+                'bundleItems.store:id,name,slug,status',
                 'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
@@ -6438,7 +6499,7 @@ class ProductController extends Controller
             ->select([
                 'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
                 'supplier_id', 'inventory_unit_id', 'profit_center_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'meta_title', 'meta_description',
+                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'store_id', 'meta_title', 'meta_description',
                 'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
                 'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
             ])
@@ -7045,6 +7106,14 @@ class ProductController extends Controller
                 }
                 );
             });
+        }
+
+        if ($request->filled('store_id')) {
+            if ($request->input('store_id') === 'unassigned') {
+                $query->whereNull('products.store_id');
+            } elseif (is_numeric($request->input('store_id'))) {
+                $query->where('products.store_id', (int) $request->input('store_id'));
+            }
         }
 
         $this->applyAdminProductCategoryCountFilter($query, $request->input('category_count_filter'));
@@ -10204,6 +10273,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug',
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'store_id' => 'nullable|integer',
             'profit_center_id' => 'nullable|integer',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'supplier_ids' => 'nullable|array',
@@ -10271,6 +10341,7 @@ class ProductController extends Controller
             ? []
             : $this->normalizeCategoryIds($request, $validated);
         $validated['category_id'] = $categoryIds[0] ?? null;
+        $validated['store_id'] = $this->resolveProductStoreIdForRequest($request, $categoryIds);
 
         $supplierIds = $this->normalizeSupplierIds($request, $validated);
         $validated['supplier_id'] = $supplierIds[0] ?? null;
@@ -10427,6 +10498,7 @@ class ProductController extends Controller
                             'supplier_id' => $product->supplier_id,
                             'stock_quantity' => $vData['stock_quantity'] ?? 0,
                             'category_id' => $product->category_id,
+                            'store_id' => $product->store_id,
                             'status' => array_key_exists('status', $vData)
                                 ? (filter_var($vData['status'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false)
                                 : ($product->status ?? true),
@@ -10908,6 +10980,7 @@ class ProductController extends Controller
             'slug' => 'nullable|string|max:255|unique:products,slug,' . $id,
             'bundle_title' => 'nullable|string|max:255',
             'site_domain_id' => 'nullable|exists:site_domains,id',
+            'store_id' => 'nullable|integer',
             'profit_center_id' => 'nullable|integer',
             'supplier_id' => ['nullable', $this->supplierExistsRule($request)],
             'supplier_ids' => 'nullable|array',
@@ -10984,6 +11057,10 @@ class ProductController extends Controller
 
         if ($incomingCategoryIds) {
             $validated['category_id'] = $categoryIds[0] ?? null;
+        }
+
+        if ($request->has('store_id')) {
+            $validated['store_id'] = $this->resolveCatalogStoreId($request->input('store_id'));
         }
 
         $incomingSupplierIds = $request->has('supplier_ids') || $request->has('supplier_id') || $request->boolean('clear_supplier_ids');
@@ -11247,6 +11324,7 @@ class ProductController extends Controller
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
                         'supplier_id' => $variant->supplier_id ?? $product->supplier_id,
+                        'store_id' => $product->store_id,
                         'status' => array_key_exists('status', $vData)
                             ? (filter_var($vData['status'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false)
                             : $variant->status,
@@ -11330,6 +11408,7 @@ class ProductController extends Controller
                         'supplier_id' => $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,
+                        'store_id' => $product->store_id,
                         'status' => array_key_exists('status', $vData)
                             ? (filter_var($vData['status'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? false)
                             : ($product->status ?? true),

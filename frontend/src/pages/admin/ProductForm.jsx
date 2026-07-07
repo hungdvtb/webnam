@@ -2332,6 +2332,7 @@ const ProductForm = () => {
     const [isSearchingBlog, setIsSearchingBlog] = useState({}); // { index: loading }
     const [blogResults, setBlogResults] = useState({}); // { index: results }
     const [domains, setDomains] = useState([]);
+    const [stores, setStores] = useState([]);
     const duplicateDraftDefaultsRef = useRef(null);
     const legacyBundleVariantRepairNoticeShownRef = useRef(false);
 
@@ -2376,6 +2377,7 @@ const ProductForm = () => {
         slug: '',
         additional_info: [], // [{row_id, title, display_text, post_id, post_title, post_slug}]
         bundle_title: '',
+        store_id: '',
         site_domain_id: ''
     });
     const initialStockQuantityRef = useRef('');
@@ -4310,6 +4312,7 @@ const ProductForm = () => {
         }
         fetchBlogPosts();
         fetchDomains();
+        fetchStores();
     }, [id, isEdit]);
 
     useEffect(() => {
@@ -4597,6 +4600,15 @@ const ProductForm = () => {
             setDomains(response.data.filter(d => d.is_active));
         } catch (error) {
             console.error("Error fetching domains", error);
+        }
+    };
+
+    const fetchStores = async () => {
+        try {
+            const response = await cmsApi.stores.getAll({ status: 1 });
+            setStores(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            console.error("Error fetching stores", error);
         }
     };
 
@@ -4914,6 +4926,7 @@ const ProductForm = () => {
                     } catch (e) { return []; }
                 })(),
                 bundle_title: data.bundle_title || '',
+                store_id: data.store_id || '',
                 site_domain_id: data.site_domain_id || ''
             };
             setFormData(loadedFormData);
@@ -7390,6 +7403,12 @@ const ProductForm = () => {
                         appendSubmitArray('supplier_ids', val);
                     } else {
                         appendSubmitValue('clear_supplier_ids', true);
+                    }
+                } else if (key === 'store_id') {
+                    if (val !== '' && val !== null && val !== undefined) {
+                        appendSubmitValue(key, val);
+                    } else if (isEdit) {
+                        appendSubmitValue(key, '');
                     }
                 } else if (key === 'stock_quantity') {
                     const normalizedCurrentStock = normalizeStockQuantityComparableValue(val);
@@ -12070,6 +12089,25 @@ const ProductForm = () => {
                                 )}
 
                                 <div className="space-y-6">
+                                    {stores.length > 0 ? (
+                                        <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white">
+                                            <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-gold tracking-widest leading-none uppercase">
+                                                Cua hang quan ly
+                                            </label>
+                                            <select
+                                                name="store_id"
+                                                value={formData.store_id || ''}
+                                                onChange={(e) => setFormData(prev => ({ ...prev, store_id: e.target.value }))}
+                                                className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-bold text-[13px] pt-1"
+                                            >
+                                                <option value="">Tu dong theo danh muc / chua gan</option>
+                                                {stores.map(store => (
+                                                    <option key={store.id} value={store.id}>{store.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    ) : null}
+
                                     <div className="relative border border-stone/30 rounded-sm px-3 focus-within:border-primary/30 transition-colors flex flex-col justify-center min-h-[50px] bg-white">
                                         <label className="absolute -top-3 left-2 bg-white px-1.5 font-sans text-[11px] font-black text-gold tracking-widest leading-none uppercase">
                                             Chọn Tên Miền Hiển Thị

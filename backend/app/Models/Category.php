@@ -24,6 +24,7 @@ class Category extends Model
         'name',
         'code',
         'site_domain_id',
+        'store_id',
         'slug',
         'parent_id',
         'description',
@@ -51,6 +52,7 @@ class Category extends Model
         'logo_media_asset_id' => 'integer',
         'filterable_attribute_ids' => 'array',
         'site_domain_id' => 'integer',
+        'store_id' => 'integer',
         'status' => 'integer',
         'visibility' => 'string',
         'order' => 'integer',
@@ -151,6 +153,11 @@ class Category extends Model
     public function siteDomain()
     {
         return $this->belongsTo(SiteDomain::class);
+    }
+
+    public function store()
+    {
+        return $this->belongsTo(Store::class);
     }
 
     public function children()

@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\SiteSetting;
+use App\Models\Store;
 use App\Support\OrderBootstrapCache;
 use App\Services\AI\GeminiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 class SiteSettingController extends Controller
 {
@@ -211,6 +213,10 @@ class SiteSettingController extends Controller
             );
         }
 
+        if (is_array($storeLocations)) {
+            $this->syncCatalogStoresFromLocations((int) $validated['account_id'], $storeLocations);
+        }
+
         OrderBootstrapCache::forget((int) $validated['account_id'], OrderBootstrapCache::MODE_FORM);
 
         return response()->json([
@@ -305,6 +311,63 @@ class SiteSettingController extends Controller
         }
 
         return json_encode($value, JSON_UNESCAPED_UNICODE);
+    }
+
+    private function syncCatalogStoresFromLocations(int $accountId, array $locations): void
+    {
+        foreach (array_values($locations) as $index => $location) {
+            if (!is_array($location)) {
+                continue;
+            }
+
+            $name = trim((string) ($location['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+
+            $code = trim((string) ($location['id'] ?? '')) ?: 'store-location-' . ($index + 1);
+            $store = Store::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->where('code', $code)
+                ->first();
+
+            if (!$store) {
+                $store = new Store([
+                    'account_id' => $accountId,
+                    'code' => $code,
+                ]);
+            }
+
+            $store->fill([
+                'name' => $name,
+                'slug' => $this->uniqueCatalogStoreSlug($name, $accountId, $store->exists ? (int) $store->id : null),
+                'phone' => trim((string) ($location['phone'] ?? $location['hotline'] ?? '')) ?: null,
+                'address' => trim((string) ($location['address'] ?? '')) ?: null,
+                'status' => array_key_exists('is_active', $location) ? (bool) $location['is_active'] : true,
+                'sort_order' => (int) ($location['order'] ?? $location['sort_order'] ?? ($index + 1)),
+            ]);
+            $store->save();
+        }
+    }
+
+    private function uniqueCatalogStoreSlug(string $source, int $accountId, ?int $exceptId = null): string
+    {
+        $baseSlug = Str::slug($source) ?: 'cua-hang';
+        $slug = $baseSlug;
+        $suffix = 2;
+
+        while (
+            Store::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->where('slug', $slug)
+                ->when($exceptId, fn ($query) => $query->where('id', '!=', $exceptId))
+                ->exists()
+        ) {
+            $slug = $baseSlug . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $slug;
     }
 
     private function normalizeMultilineText(mixed $value): string

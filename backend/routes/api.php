@@ -530,6 +530,12 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::put('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'update']);
         Route::delete('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'destroy']);
 
+        // Admin Store routes
+        Route::get('/stores', [\App\Http\Controllers\Api\StoreController::class, 'index']);
+        Route::post('/stores', [\App\Http\Controllers\Api\StoreController::class, 'store']);
+        Route::put('/stores/{id}', [\App\Http\Controllers\Api\StoreController::class, 'update'])->whereNumber('id');
+        Route::delete('/stores/{id}', [\App\Http\Controllers\Api\StoreController::class, 'destroy'])->whereNumber('id');
+
         // Menus
         Route::get('/menus', [\App\Http\Controllers\Api\MenuController::class , 'index']);
         Route::get('/menus/{id}', [\App\Http\Controllers\Api\MenuController::class , 'show']);

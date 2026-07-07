@@ -1125,6 +1125,12 @@ export const cmsApi = {
         store: (data) => api.post('/site-domains', data),
         update: (id, data) => api.put(`/site-domains/${id}`, data),
         destroy: (id) => api.delete(`/site-domains/${id}`),
+    },
+    stores: {
+        getAll: (params) => api.get('/stores', params ? { params } : {}),
+        store: (data) => api.post('/stores', data),
+        update: (id, data) => api.put(`/stores/${id}`, data),
+        destroy: (id) => api.delete(`/stores/${id}`),
     }
 };
 

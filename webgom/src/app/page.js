@@ -5,6 +5,7 @@ import { HomeDesktopCatalog, HomeDesktopHero } from "@/components/HomeDesktopHom
 import HomeMobileCatalog from "@/components/HomeMobileCatalog";
 import HomeMobileHero from "@/components/HomeMobileHero";
 import { resolveImageObjectUrl, resolveMediaUrl } from "@/lib/media";
+import { getServerPublicHost } from "@/lib/serverPublicHost";
 
 const FALLBACK_CATEGORY_BANNER = "/banner-store.png";
 const FALLBACK_PRODUCT_IMAGE = "/logo-dai-thanh.png";
@@ -141,9 +142,10 @@ function getCategoryHeroDescription(category, totalProducts) {
 }
 
 export default async function Home() {
+  const publicHost = await getServerPublicHost();
   const [homepageResult, categoriesResult] = await Promise.allSettled([
     getStorefrontData(),
-    getWebCategories(),
+    getWebCategories({ publicHost }),
   ]);
 
   let homepageData = null;
@@ -186,6 +188,7 @@ export default async function Home() {
         page: 1,
         per_page: HOME_CATEGORY_PRODUCT_LIMIT,
         sort: "popular",
+        public_host: publicHost,
       });
 
       const products = Array.isArray(productsResponse?.data)

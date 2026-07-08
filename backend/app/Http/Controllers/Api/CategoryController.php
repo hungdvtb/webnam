@@ -978,7 +978,8 @@ class CategoryController extends Controller
                 'bannerMediaAsset',
                 'logoMediaAsset',
                 'siteDomain:id,domain,is_active,is_default',
-                'store:id,name,slug,status',
+                'store:id,name,slug,status,public_domain_id',
+                'store.publicDomain:id,domain,is_active,is_default',
                 'parent' => static function ($parentQuery) use ($isTrashView) {
                     if ($isTrashView) {
                         $parentQuery->withTrashed();
@@ -1086,12 +1087,12 @@ class CategoryController extends Controller
             return response()->json(['error' => $exception->getMessage()], 500);
         }
 
-        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status']), 201);
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default']), 201);
     }
 
     public function show($id)
     {
-        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status'])->findOrFail($id);
+        $category = Category::with(['children.bannerMediaAsset', 'children.logoMediaAsset', 'products', 'bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default'])->findOrFail($id);
 
         return response()->json($category);
     }
@@ -1238,7 +1239,7 @@ class CategoryController extends Controller
             $this->mediaService->deleteAsset($previousLogoAssetId);
         }
 
-        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']));
+        return response()->json($category->load(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default']));
     }
 
     public function duplicate(Request $request, $id)
@@ -1272,7 +1273,7 @@ class CategoryController extends Controller
             ], 500);
         }
 
-        $category = $result['category']->fresh(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']);
+        $category = $result['category']->fresh(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default']);
 
         return response()->json([
             'message' => $includeChildren
@@ -1342,7 +1343,7 @@ class CategoryController extends Controller
             return response()->json([
                 'message' => 'Tree reordered successfully',
                 'categories' => $this->orderedCategoriesForTree(
-                    Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])
+                    Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default'])
                         ->withCount('products')
                         ->get()
                 ),
@@ -1415,7 +1416,7 @@ class CategoryController extends Controller
         return response()->json([
             'message' => 'Tree reordered successfully',
             'categories' => $this->orderedCategoriesForTree(
-                Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default'])
+                Category::with(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default'])
                     ->withCount('products')
                     ->get()
             ),
@@ -1689,7 +1690,7 @@ class CategoryController extends Controller
 
     protected function buildCategoryProductPayload(Category $category): array
     {
-        $category->loadMissing(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default']);
+        $category->loadMissing(['bannerMediaAsset', 'logoMediaAsset', 'siteDomain:id,domain,is_active,is_default', 'store:id,name,slug,status,public_domain_id', 'store.publicDomain:id,domain,is_active,is_default']);
         $assignmentRows = $this->normalizeCategoryAssignmentRowsForDisplay(
             $this->loadCategoryAssignmentRows((int) $category->id)
         );
@@ -1931,6 +1932,13 @@ class CategoryController extends Controller
                 'name' => $category->store->name,
                 'slug' => $category->store->slug,
                 'status' => (bool) $category->store->status,
+                'public_domain_id' => $category->store->public_domain_id ? (int) $category->store->public_domain_id : null,
+                'public_domain' => $category->store->relationLoaded('publicDomain') && $category->store->publicDomain ? [
+                    'id' => (int) $category->store->publicDomain->id,
+                    'domain' => $category->store->publicDomain->domain,
+                    'is_active' => (bool) $category->store->publicDomain->is_active,
+                    'is_default' => (bool) $category->store->publicDomain->is_default,
+                ] : null,
             ] : null,
             'parent_id' => $category->parent_id ? (int) $category->parent_id : null,
             'description' => $category->description,

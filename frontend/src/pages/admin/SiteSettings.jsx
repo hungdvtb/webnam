@@ -38,6 +38,7 @@ const defaultSettings = {
     ai_gemini_has_api_key: false,
     ai_gemini_available: false,
     ai_gemini_key_source: null,
+    ai_gemini_scope: 'global',
     bank_name: '',
     bank_account_number: '',
     bank_account_name: '',
@@ -434,6 +435,7 @@ const createFooterMenuItem = () => ({
 
 const createStoreLocation = () => ({
     id: `store-location-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    public_domain_id: '',
     name: '',
     city: '',
     tag: '',
@@ -466,6 +468,7 @@ const normalizeStoreLocations = (value) => {
         .filter((item) => item && typeof item === 'object')
         .map((item, index) => ({
             id: String(item.id || `store-location-${index + 1}`),
+            public_domain_id: item.public_domain_id ? String(item.public_domain_id) : '',
             name: String(item.name || '').trim(),
             city: String(item.city || '').trim(),
             tag: String(item.tag || '').trim(),
@@ -617,6 +620,7 @@ const StoreLocationEditor = ({
     onRemove,
     onUploadImage,
     onRemoveImage,
+    domains = [],
 }) => (
     <div className="rounded-sm border border-primary/10 bg-white shadow-sm overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-primary/10 bg-primary/[0.02] px-5 py-3">
@@ -740,6 +744,21 @@ const StoreLocationEditor = ({
                             className={inputClasses}
                             placeholder="08:00 - 21:00"
                         />
+                    </div>
+                    <div>
+                        <label className={labelClasses}>Domain public</label>
+                        <select
+                            value={store.public_domain_id || ''}
+                            onChange={(e) => onChange({ public_domain_id: e.target.value })}
+                            className={inputClasses}
+                        >
+                            <option value="">Chưa gắn domain riêng</option>
+                            {domains.map((domain) => (
+                                <option key={domain.id} value={domain.id}>
+                                    {domain.domain} {domain.is_default ? '(Mặc định)' : ''}
+                                </option>
+                            ))}
+                        </select>
                     </div>
                     <div>
                         <label className={labelClasses}>Nhãn hiển thị</label>
@@ -870,6 +889,7 @@ const SiteSettings = () => {
                 ai_gemini_has_api_key: Boolean(normalizedSettings.ai_gemini_has_api_key),
                 ai_gemini_available: Boolean(normalizedSettings.ai_gemini_available),
                 ai_gemini_key_source: normalizedSettings.ai_gemini_key_source || null,
+                ai_gemini_scope: normalizedSettings.ai_gemini_scope || prev.ai_gemini_scope || 'global',
                 header_brand_text: normalizedSettings.header_brand_text || normalizedSettings.site_name || prev.header_brand_text,
                 header_notice_text: normalizedSettings.header_notice_text || prev.header_notice_text,
                 header_search_placeholder: normalizedSettings.header_search_placeholder || prev.header_search_placeholder,
@@ -1637,6 +1657,7 @@ const SiteSettings = () => {
                 ai_gemini_enabled: aiStatus.enabled ?? prev.ai_gemini_enabled,
                 ai_gemini_model: aiStatus.model || prev.ai_gemini_model,
                 ai_gemini_key_source: aiStatus.key_source || prev.ai_gemini_key_source || null,
+                ai_gemini_scope: aiStatus.scope || prev.ai_gemini_scope || 'global',
                 header_menu_items: normalizedHeaderMenus,
                 footer_menu_groups: normalizedFooterMenuGroups,
                 store_locations: normalizedStoreLocations,
@@ -2347,6 +2368,7 @@ const SiteSettings = () => {
                                                     onRemove={() => handleRemoveStoreLocation(store.id)}
                                                     onUploadImage={(e) => handleImageUpload(e, (url) => updateStoreLocation(store.id, { image_url: url }))}
                                                     onRemoveImage={() => updateStoreLocation(store.id, { image_url: '' })}
+                                                    domains={domains}
                                                 />
                                             ))}
                                         </div>
@@ -2520,9 +2542,14 @@ const SiteSettings = () => {
                                 icon="smart_toy"
                                 title="Cấu hình Gemini cho toàn bộ hệ thống"
                                 rightSlot={(
-                                    <span className={`inline-flex items-center rounded-sm px-3 py-1 text-[10px] font-black uppercase tracking-wider ${settings.ai_gemini_available ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-                                        {settings.ai_gemini_available ? 'Sẵn sàng hoạt động' : 'Đang khóa AI'}
-                                    </span>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="inline-flex items-center rounded-sm border border-secondary/20 bg-secondary/5 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-secondary">
+                                            Dùng chung tất cả cửa hàng
+                                        </span>
+                                        <span className={`inline-flex items-center rounded-sm px-3 py-1 text-[10px] font-black uppercase tracking-wider ${settings.ai_gemini_available ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                                            {settings.ai_gemini_available ? 'Sẵn sàng hoạt động' : 'Đang khóa AI'}
+                                        </span>
+                                    </div>
                                 )}
                             >
                                 <div className="space-y-6">
@@ -2705,8 +2732,10 @@ const SiteSettings = () => {
                                         <div className="rounded-sm border border-primary/10 bg-white p-4">
                                             <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Nguồn API key</div>
                                             <div className="mt-2 text-[14px] font-black text-primary">
-                                                {settings.ai_gemini_key_source === 'site_setting'
-                                                    ? 'Cài đặt web'
+                                                {['system_setting', 'system_setting_batch'].includes(settings.ai_gemini_key_source)
+                                                    ? 'Dùng chung toàn hệ thống'
+                                                    : settings.ai_gemini_key_source === 'site_setting'
+                                                        ? 'Cài đặt web'
                                                     : settings.ai_gemini_key_source === 'account'
                                                         ? 'Tài khoản cũ'
                                                         : settings.ai_gemini_key_source === 'env'

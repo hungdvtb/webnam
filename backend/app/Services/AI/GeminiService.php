@@ -2,8 +2,7 @@
 
 namespace App\Services\AI;
 
-use App\Models\Account;
-use App\Models\SiteSetting;
+use App\Models\SystemSetting;
 use App\Support\GeminiClientFactory;
 use Gemini\Data\Blob;
 use Gemini\Enums\MimeType;
@@ -48,6 +47,7 @@ class GeminiService
             'model' => $config['model'],
             'key_source' => $config['key_source'],
             'keys_count' => count($config['all_api_keys']),
+            'scope' => 'global',
         ];
     }
 
@@ -115,10 +115,8 @@ class GeminiService
 
     private function resolveConfig(?int $accountId = null, ?string $overrideModel = null): array
     {
-        $account = $accountId ? Account::query()->find($accountId) : null;
-        
-        // 1. Resolve Keys from new JSON structure
-        $keysJson = $accountId ? SiteSetting::getValue(self::SETTING_KEYS, $accountId) : null;
+        // AI settings are intentionally global so every account/store uses the same provider config.
+        $keysJson = SystemSetting::getValue(self::SETTING_KEYS);
         $decodedKeys = is_string($keysJson) ? json_decode($keysJson, true) : [];
         $structuredKeys = [];
         if (is_array($decodedKeys)) {
@@ -129,28 +127,21 @@ class GeminiService
             }
         }
 
-        // 2. Resolve Keys from legacy structure (and env)
-        $storedEncryptedKey = $accountId ? SiteSetting::getValue(self::SETTING_API_KEY, $accountId) : null;
+        $storedEncryptedKey = SystemSetting::getValue(self::SETTING_API_KEY);
         $storedApiKey = $this->decryptStoredApiKey(is_string($storedEncryptedKey) ? $storedEncryptedKey : null);
-        $legacyAccountKey = $this->geminiClientFactory->resolveApiKey($account?->ai_api_key);
         $envKey = $this->geminiClientFactory->resolveApiKey(env('GEMINI_API_KEY'));
 
-        $storedModel = $accountId
-            ? trim((string) SiteSetting::getValue(self::SETTING_MODEL, $accountId, ''))
-            : '';
+        $storedModel = trim((string) SystemSetting::getValue(self::SETTING_MODEL, ''));
         $model = $this->normalizeModelName(
             $overrideModel ?: $storedModel ?: config('services.gemini.default_model', self::DEFAULT_MODEL)
         );
 
-        $storedEnabled = $accountId ? SiteSetting::getValue(self::SETTING_ENABLED, $accountId) : null;
-        $enabled = $accountId
-            ? $this->normalizeBoolean($storedEnabled, true)
-            : true;
+        $storedEnabled = SystemSetting::getValue(self::SETTING_ENABLED);
+        $enabled = $this->normalizeBoolean($storedEnabled, true);
 
         $allApiKeys = $this->geminiClientFactory->resolveAllApiKeys(
-            implode(',', $structuredKeys), 
-            $storedApiKey, 
-            $legacyAccountKey, 
+            implode(',', $structuredKeys),
+            $storedApiKey,
             $envKey
         );
         $apiKey = $allApiKeys[0] ?? null;
@@ -158,11 +149,9 @@ class GeminiService
         $keySource = null;
         if ($apiKey !== null) {
             if ($keysJson !== null && count($structuredKeys) > 0) {
-                $keySource = 'site_setting_batch';
+                $keySource = 'system_setting_batch';
             } elseif ($storedApiKey !== null && str_contains($storedApiKey, $apiKey)) {
-                $keySource = 'site_setting';
-            } elseif ($legacyAccountKey !== null && $apiKey === $legacyAccountKey) {
-                $keySource = 'account';
+                $keySource = 'system_setting';
             } else {
                 $keySource = 'env';
             }
@@ -176,6 +165,7 @@ class GeminiService
             'available' => $enabled && count($allApiKeys) > 0,
             'model' => $model !== '' ? $model : self::DEFAULT_MODEL,
             'key_source' => $keySource,
+            'scope' => 'global',
         ];
     }
 

@@ -7637,11 +7637,21 @@ const ProductForm = () => {
     const TYPE_INFO = PRODUCT_TYPE_FORM_META;
 
 
-    const selectedDomain = useMemo(() => (
-        domains.find(d => String(d.id) === String(formData.site_domain_id))
-        || domains.find(d => d.is_default)
-        || { domain: 'di-san.com' }
-    ), [domains, formData.site_domain_id]);
+    const selectedStore = useMemo(() => (
+        stores.find(store => String(store.id) === String(formData.store_id))
+        || null
+    ), [formData.store_id, stores]);
+
+    const selectedDomain = useMemo(() => {
+        const storePublicDomain = selectedStore?.public_domain || selectedStore?.publicDomain || null;
+        const storeDomainById = domains.find(d => String(d.id) === String(selectedStore?.public_domain_id));
+
+        return storePublicDomain
+            || storeDomainById
+            || domains.find(d => String(d.id) === String(formData.site_domain_id))
+            || domains.find(d => d.is_default)
+            || { domain: 'di-san.com' };
+    }, [domains, formData.site_domain_id, selectedStore]);
 
     const previewSlug = useMemo(() => (
         String((showSlugModal ? tempSlug : formData.slug) || formData.slug || '').trim()
@@ -11978,7 +11988,7 @@ const ProductForm = () => {
                                     >
                                         <div className="flex items-baseline gap-1 overflow-hidden">
                                             <span className="text-[12px] text-stone/40 shrink-0 font-medium">
-                                                {domains.find(d => String(d.id) === String(formData.site_domain_id))?.domain || domains.find(d => d.is_default)?.domain || 'di-san.com'}/product/
+                                                {selectedDomain?.domain || 'di-san.com'}/product/
                                             </span>
                                             <span className="text-[12px] text-primary font-bold truncate">{tempSlug || '...' }</span>
                                         </div>

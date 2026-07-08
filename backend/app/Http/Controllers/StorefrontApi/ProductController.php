@@ -9,6 +9,7 @@ use App\Models\Attribute;
 use App\Models\Post;
 use App\Models\ProductAttributeValue;
 use App\Models\ProductImage;
+use App\Support\StorefrontDomainScope;
 use App\Support\Utf8Sanitizer;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -436,20 +437,23 @@ class ProductController extends Controller
         });
     }
 
-    private function getOrderedCategoryIds(Category $category, $accountId, bool $includeLinkOnlyDescendants = false): array
+    private function getOrderedCategoryIds(Category $category, $accountId, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null): array
     {
         $ids = [(int) $category->id];
 
-        $children = Category::query()
+        $childrenQuery = Category::query()
             ->where('parent_id', $category->id)
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->orderBy('order')
-            ->orderBy('id')
-            ->get(['id']);
+            ->orderBy('id');
+
+        StorefrontDomainScope::applyStoreScope($childrenQuery, $storeIds, 'categories.store_id');
+
+        $children = $childrenQuery->get(['id']);
 
         foreach ($children as $child) {
-            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants));
+            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants, $storeIds));
         }
 
         return $ids;
@@ -1030,6 +1034,7 @@ class ProductController extends Controller
         $timings = [];
         $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
         $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
         \Illuminate\Support\Facades\Log::info("Resolved Account ID: " . ($accountId ?? 'NULL'));
 
@@ -1037,7 +1042,9 @@ class ProductController extends Controller
             ->select('products.*')
             ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true);
+        StorefrontDomainScope::applyStoreScope($query, $storeIds, 'products.store_id');
         $selectedCategoryIds = [];
+        $missingRequestedCategory = false;
 
         $typeInput = $request->query('types', $request->query('type'));
         $requestedTypes = collect(is_array($typeInput) ? $typeInput : explode(',', (string) $typeInput))
@@ -1053,26 +1060,36 @@ class ProductController extends Controller
 
         // Filter by category slug
         if ($request->filled('category')) {
-            $cat = Category::where('slug', $request->category)
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-                ->first();
+            $categoryQuery = Category::query()
+                ->where('slug', $request->category)
+                ->when($accountId, fn($q) => $q->where('account_id', $accountId));
+            StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+            $cat = $categoryQuery->first();
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds);
+            } else {
+                $missingRequestedCategory = true;
             }
         }
 
         if ($request->filled('category_id')) {
-            $cat = Category::query()
+            $categoryQuery = Category::query()
                 ->when($accountId, fn ($categoryQuery) => $categoryQuery->where('account_id', $accountId))
-                ->find($request->category_id);
+                ->whereKey($request->category_id);
+            StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+            $cat = $categoryQuery->first();
 
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly());
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds);
+            } else {
+                $missingRequestedCategory = true;
             }
         }
         $stepStartedAt = $this->markTiming($timings, 'category', $stepStartedAt);
 
-        if (!empty($selectedCategoryIds)) {
+        if ($missingRequestedCategory) {
+            $query->whereRaw('1 = 0');
+        } elseif (!empty($selectedCategoryIds)) {
             $this->joinCategoryAssignments($query, $selectedCategoryIds);
         } elseif (!$request->boolean('allow_variants') && !$request->filled('parent_id')) {
             $query->whereDoesntHave('parentConfigurable');
@@ -1565,10 +1582,11 @@ class ProductController extends Controller
             $timings = [];
             $stepStartedAt = microtime(true);
             $accountId = $this->getAccountId($request);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
             \Illuminate\Support\Facades\Log::info("Fetching product detail for slug: '{$slug}' (Account: " . ($accountId ?? 'ALL') . ")");
 
-            $product = Product::query()
+            $productQuery = Product::query()
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->where('status', true)
                 ->where(function($q) use ($slug) {
@@ -1583,8 +1601,9 @@ class ProductController extends Controller
                     'images',
                     'category',
                     'attributeValues.attribute',
-                ])
-                ->firstOrFail();
+                ]);
+            StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
+            $product = $productQuery->firstOrFail();
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             // Conditionally load type-specific relations to avoid unnecessary DB queries.
@@ -1800,6 +1819,7 @@ class ProductController extends Controller
             $timings = [];
             $stepStartedAt = microtime(true);
             $accountId = $this->getAccountId($request);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
             $compactRequestedOption = trim((string) (
@@ -1846,7 +1866,7 @@ class ProductController extends Controller
                 }
             }
 
-            $product = Product::query()
+            $productQuery = Product::query()
                 ->when($accountId, fn($q) => $q->where('account_id', $accountId))
                 ->where('status', true)
                 ->where(function($q) use ($slug) {
@@ -1859,8 +1879,9 @@ class ProductController extends Controller
                     'images',
                     'category',
                     'attributeValues.attribute',
-                ])
-                ->firstOrFail();
+                ]);
+            StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
+            $product = $productQuery->firstOrFail();
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             if ($product->type !== 'bundle') {
@@ -2046,6 +2067,7 @@ class ProductController extends Controller
     {
         try {
             $accountId = $this->getAccountId($request);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
             $requestedKey = trim((string) (
                 $request->query('bundle_option_key')
                 ?? $request->query('bk')
@@ -2064,7 +2086,7 @@ class ProductController extends Controller
                 ?? ''
             ));
 
-            $product = Product::query()
+            $productQuery = Product::query()
                 ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
                 ->where('status', true)
                 ->with([
@@ -2079,8 +2101,9 @@ class ProductController extends Controller
                     if (is_numeric($slug)) {
                         $query->orWhere('id', (int) $slug);
                     }
-                })
-                ->firstOrFail();
+                });
+            StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
+            $product = $productQuery->firstOrFail();
 
             $bundleItems = $product->bundleItems instanceof Collection
                 ? $product->bundleItems
@@ -2186,7 +2209,8 @@ class ProductController extends Controller
     public function related(Request $request, $slug)
     {
         $accountId = $this->getAccountId($request);
-        $product = Product::query()
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+        $productQuery = Product::query()
             ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
             ->with([
                 'category:id,name,slug',
@@ -2197,8 +2221,9 @@ class ProductController extends Controller
                 if (is_numeric($slug)) {
                     $q->orWhere('id', (int) $slug);
                 }
-            })
-            ->firstOrFail();
+            });
+        StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
+        $product = $productQuery->firstOrFail();
 
         $limit = 8;
         $fallbackCategory = $this->resolvePrimaryCategory($product);
@@ -2211,8 +2236,9 @@ class ProductController extends Controller
                 'category:id,name,slug',
                 'categories:id,name,slug',
                 'attributeValues.attribute:id,name,code,frontend_type',
-            ])
-            ->get();
+            ]);
+        StorefrontDomainScope::applyStoreScope($explicitRelated, $storeIds, 'products.store_id');
+        $explicitRelated = $explicitRelated->get();
 
         if ($explicitRelated->isNotEmpty()) {
             return response()->json(Utf8Sanitizer::normalize([
@@ -2261,8 +2287,9 @@ class ProductController extends Controller
                 'attributeValues.attribute:id,name,code,frontend_type',
             ])
             ->inRandomOrder()
-            ->limit($limit)
-            ->get();
+            ->limit($limit);
+        StorefrontDomainScope::applyStoreScope($fallback, $storeIds, 'products.store_id');
+        $fallback = $fallback->get();
 
         return response()->json(Utf8Sanitizer::normalize([
             'items' => $this->formatRelatedProductsResponse($fallback),

@@ -1,14 +1,25 @@
 import config from './config';
 
+function getBrowserPublicHost() {
+    if (typeof window === 'undefined') {
+        return '';
+    }
+
+    return String(window.location?.host || '').trim();
+}
+
 export async function fetchFromApi(endpoint, options = {}) {
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const { publicHost: requestedPublicHost, headers: optionHeaders = {}, ...fetchOptions } = options;
+    const publicHost = String(requestedPublicHost || optionHeaders['X-Public-Host'] || optionHeaders['x-public-host'] || getBrowserPublicHost()).trim();
     const response = await fetch(`${config.apiUrl}${endpoint}`, {
-        ...options,
+        ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'X-Site-Code': config.siteCode,
-            ...options.headers,
+            ...(publicHost ? { 'X-Public-Host': publicHost } : {}),
+            ...optionHeaders,
         },
     });
 
@@ -80,6 +91,10 @@ export async function getProducts(params = {}) {
 export async function getWebProducts(params = {}) {
     const urlParams = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
+        if (key === 'publicHost') {
+            return;
+        }
+
         if (key === 'attrs' && typeof value === 'object') {
             Object.entries(value).forEach(([attrKey, attrValue]) => {
                 if (Array.isArray(attrValue)) {
@@ -92,25 +107,28 @@ export async function getWebProducts(params = {}) {
             urlParams.append(key, value);
         }
     });
-    return fetchFromApi(`/web-api/products?${urlParams.toString()}`, { next: { revalidate: 30 } });
+    return fetchFromApi(`/web-api/products?${urlParams.toString()}`, {
+        next: { revalidate: 30 },
+        publicHost: params.public_host || params.publicHost,
+    });
 }
 
-export async function getWebCategories() {
+export async function getWebCategories(options = {}) {
     // Cache for 5 minutes
-    return fetchFromApi('/web-api/categories', { next: { revalidate: 300 } });
+    return fetchFromApi('/web-api/categories', { next: { revalidate: 300 }, publicHost: options.publicHost });
 }
 
-export async function getWebCategory(slug) {
+export async function getWebCategory(slug, options = {}) {
     // Cache for 1 minute
-    return fetchFromApi(`/web-api/categories/${slug}`, { next: { revalidate: 60 } });
+    return fetchFromApi(`/web-api/categories/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost });
 }
 
-export async function getWebProductDetail(slug) {
+export async function getWebProductDetail(slug, options = {}) {
     // Cache for 1 minute
-    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 } });
+    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost });
 }
 
-export async function getWebProductBundleOptionDetail(slug, params = {}) {
+export async function getWebProductBundleOptionDetail(slug, params = {}, options = {}) {
     const urlParams = new URLSearchParams();
     Object.entries(params || {}).forEach(([key, value]) => {
         if (value !== undefined && value !== null && value !== '') {
@@ -121,12 +139,12 @@ export async function getWebProductBundleOptionDetail(slug, params = {}) {
     const query = urlParams.toString();
     return fetchFromApi(
         `/web-api/products/${slug}/bundle-option-detail${query ? `?${query}` : ''}`,
-        { next: { revalidate: 60 } },
+        { next: { revalidate: 60 }, publicHost: options.publicHost || params.public_host },
     );
 }
 
-export async function getWebRelatedProducts(slug) {
-    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 300 } });
+export async function getWebRelatedProducts(slug, options = {}) {
+    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 300 }, publicHost: options.publicHost });
 
     if (Array.isArray(response)) {
         return {

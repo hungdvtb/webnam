@@ -193,11 +193,16 @@ function buildProductPageUrl(product, domains = []) {
         ? domains.filter((item) => item?.is_active !== false)
         : [];
     const requestedDomainId = String(product?.site_domain_id || '').trim();
+    const requestedStoreDomainId = String(product?.store?.public_domain_id || product?.store?.publicDomainId || '').trim();
+    const storeSelectedDomain = activeDomains.find((item) => String(item.id) === requestedStoreDomainId);
     const selectedDomain = activeDomains.find((item) => String(item.id) === requestedDomainId)
         || activeDomains.find((item) => item?.is_default)
         || activeDomains[0];
     const domain = normalizeDomainValue(
-        product?.siteDomain?.domain
+        product?.store?.public_domain?.domain
+        || product?.store?.publicDomain?.domain
+        || storeSelectedDomain?.domain
+        || product?.siteDomain?.domain
         || product?.site_domain?.domain
         || selectedDomain?.domain
     );

@@ -9,6 +9,7 @@ import RelatedProductsSection from '@/components/product/RelatedProductsSection'
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
 import { getPolicyPosts } from '@/lib/policyContent';
 import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
+import { getServerPublicHost } from '@/lib/serverPublicHost';
 
 function buildRelatedViewAllHref(product, relatedMeta) {
   if (relatedMeta?.has_explicit_related) {
@@ -78,6 +79,7 @@ export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
+  const publicHost = await getServerPublicHost();
   const {
     requestedBundleOptionUid,
     requestedBundleOptionKey,
@@ -121,8 +123,8 @@ export default async function ProductDetailPage({ params, searchParams }) {
 
   // Fetch product detail and related products concurrently to minimize SSR latency
   const [productResult, relatedResult, policyResult] = await Promise.allSettled([
-    getWebProductDetail(slug),
-    getWebRelatedProducts(slug),
+    getWebProductDetail(slug, { publicHost }),
+    getWebRelatedProducts(slug, { publicHost }),
     getPolicyPosts(),
   ]);
 
@@ -222,9 +224,10 @@ export async function generateMetadata({ params, searchParams }) {
   }
 
   try {
+    const publicHost = await getServerPublicHost();
     // Next.js deduplicates fetch() calls with the same URL+options within a render pass,
     // so this reuses the cached response from ProductDetailPage without an extra network hit.
-    const product = await getWebProductDetail(slug);
+    const product = await getWebProductDetail(slug, { publicHost });
     const seoTitle = String(product.meta_title || '').trim();
     const seoDescription = product.meta_description || product.description?.substring(0, 160);
     const seoKeywords = String(product.meta_keywords || '').trim();

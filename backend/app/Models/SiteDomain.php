@@ -12,4 +12,9 @@ class SiteDomain extends Model
     {
         return $this->belongsTo(Account::class);
     }
+
+    public function publicStores()
+    {
+        return $this->hasMany(Store::class, 'public_domain_id');
+    }
 }

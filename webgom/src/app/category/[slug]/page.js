@@ -1,4 +1,5 @@
 import { getWebCategory } from '@/lib/api';
+import { getServerPublicHost } from '@/lib/serverPublicHost';
 import ProductsPage from '../../products/page';
 
 export default async function CategoryPage({ params, searchParams }) {
@@ -20,7 +21,8 @@ export async function generateMetadata({ params }) {
   }
 
   try {
-    const category = await getWebCategory(slug);
+    const publicHost = await getServerPublicHost();
+    const category = await getWebCategory(slug, { publicHost });
     const seoTitle = String(category?.meta_title || '').trim();
     const seoDescription = String(category?.meta_description || category?.description || '').trim();
     const seoKeywords = String(category?.meta_keywords || '').trim();

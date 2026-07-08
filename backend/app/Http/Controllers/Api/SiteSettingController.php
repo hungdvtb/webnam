@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
+use App\Models\SiteDomain;
 use App\Models\SiteSetting;
 use App\Models\Store;
+use App\Models\SystemSetting;
 use App\Support\OrderBootstrapCache;
 use App\Services\AI\GeminiService;
 use Illuminate\Http\Request;
@@ -44,6 +46,20 @@ class SiteSettingController extends Controller
         GeminiService::SETTING_API_KEY,
     ];
 
+    private const GLOBAL_AI_SETTING_KEYS = [
+        GeminiService::SETTING_API_KEY,
+        GeminiService::SETTING_KEYS,
+        GeminiService::SETTING_MODEL,
+        GeminiService::SETTING_ENABLED,
+    ];
+
+    private const COMPUTED_AI_SETTING_KEYS = [
+        'ai_gemini_has_api_key',
+        'ai_gemini_available',
+        'ai_gemini_key_source',
+        'ai_gemini_scope',
+    ];
+
     private const MULTILINE_TEXT_SETTING_KEYS = [
         'footer_address',
     ];
@@ -67,38 +83,15 @@ class SiteSettingController extends Controller
             ->where('account_id', $accountId)
             ->get(['key', 'value'])
             ->each(function (SiteSetting $setting) use (&$settings) {
-                if (in_array($setting->key, self::SECRET_SETTING_KEYS, true)) {
+                if (
+                    in_array($setting->key, self::SECRET_SETTING_KEYS, true)
+                    || in_array($setting->key, self::GLOBAL_AI_SETTING_KEYS, true)
+                    || in_array($setting->key, self::COMPUTED_AI_SETTING_KEYS, true)
+                ) {
                     return;
                 }
 
                 $value = $this->decodeSettingValue($setting->key, $setting->value);
-                
-                // Mask API keys for security while still allowing metadata editing
-                if ($setting->key === GeminiService::SETTING_KEYS && is_array($value)) {
-                    $value = array_map(function($item) {
-                        $realKey = $item['key'] ?? '';
-                        $status = 'ready';
-                        $retryAfter = 0;
-
-                        if (!empty($realKey)) {
-                            $cacheKey = 'gemini_key_exhausted_' . md5(trim($realKey));
-                            $exhaustedUntil = \Illuminate\Support\Facades\Cache::get($cacheKey);
-                            if ($exhaustedUntil) {
-                                $status = 'exhausted';
-                                $retryAfter = max(0, (int) $exhaustedUntil - now()->timestamp);
-                            }
-                        }
-
-                        if (is_string($realKey) && strlen($realKey) > 8) {
-                            $item['key'] = substr($realKey, 0, 4) . '...' . substr($realKey, -4);
-                        }
-
-                        $item['status'] = $status;
-                        $item['retry_after_seconds'] = $retryAfter;
-                        
-                        return $item;
-                    }, $value);
-                }
 
                 $settings[$setting->key] = $value;
             });
@@ -109,13 +102,7 @@ class SiteSettingController extends Controller
             }
         }
 
-        $aiStatus = $this->geminiService->status($accountId);
-
-        $settings[GeminiService::SETTING_MODEL] = trim((string) ($aiStatus['model'] ?? $settings[GeminiService::SETTING_MODEL] ?? GeminiService::DEFAULT_MODEL));
-        $settings[GeminiService::SETTING_ENABLED] = (bool) ($settings[GeminiService::SETTING_ENABLED] ?? $aiStatus['enabled']);
-        $settings['ai_gemini_has_api_key'] = (bool) $aiStatus['configured'];
-        $settings['ai_gemini_available'] = (bool) $aiStatus['available'];
-        $settings['ai_gemini_key_source'] = $aiStatus['key_source'];
+        $this->applyGlobalAiSettings($settings, $accountId);
 
         return response()->json($settings);
     }
@@ -135,6 +122,7 @@ class SiteSettingController extends Controller
                     'store_locations' => 'array',
                     'store_locations.*.id' => 'nullable|string|max:100',
                     'store_locations.*.name' => 'required|string|max:255',
+                    'store_locations.*.public_domain_id' => 'nullable|integer',
                     'store_locations.*.city' => 'nullable|string|max:120',
                     'store_locations.*.tag' => 'nullable|string|max:120',
                     'store_locations.*.address' => 'required|string|max:500',
@@ -178,28 +166,13 @@ class SiteSettingController extends Controller
         }
 
         foreach ($validated['settings'] as $key => $value) {
-            if ($key === GeminiService::SETTING_MODEL) {
-                $value = $this->geminiService->normalizeModelName(is_scalar($value) ? (string) $value : null);
+            if (in_array($key, self::COMPUTED_AI_SETTING_KEYS, true)) {
+                continue;
             }
 
-            if ($key === GeminiService::SETTING_KEYS && is_array($value)) {
-                $oldValue = SiteSetting::getValue(GeminiService::SETTING_KEYS, (int) $validated['account_id']);
-                $oldDecoded = is_string($oldValue) ? json_decode($oldValue, true) : [];
-                $oldKeyMap = [];
-                if (is_array($oldDecoded)) {
-                    foreach ($oldDecoded as $oldItem) {
-                        if (isset($oldItem['id'], $oldItem['key'])) {
-                            $oldKeyMap[$oldItem['id']] = $oldItem['key'];
-                        }
-                    }
-                }
-
-                $value = array_map(function($item) use ($oldKeyMap) {
-                    if (isset($item['id'], $item['key']) && str_contains($item['key'], '...') && isset($oldKeyMap[$item['id']])) {
-                        $item['key'] = $oldKeyMap[$item['id']];
-                    }
-                    return $item;
-                }, $value);
+            if (in_array($key, self::GLOBAL_AI_SETTING_KEYS, true)) {
+                $this->saveGlobalAiSetting($key, $value);
+                continue;
             }
 
             if ($this->shouldSkipEmptySecretSetting($key, $value)) {
@@ -223,6 +196,100 @@ class SiteSettingController extends Controller
             'message' => 'Settings updated successfully',
             'ai' => $this->geminiService->status((int) $validated['account_id']),
         ]);
+    }
+
+    private function applyGlobalAiSettings(array &$settings, int $accountId): void
+    {
+        $decodedKeys = $this->decodeSettingValue(
+            GeminiService::SETTING_KEYS,
+            SystemSetting::getValue(GeminiService::SETTING_KEYS)
+        );
+        $settings[GeminiService::SETTING_KEYS] = is_array($decodedKeys)
+            ? $this->maskGeminiKeys($decodedKeys)
+            : [];
+
+        $aiStatus = $this->geminiService->status($accountId);
+
+        $settings[GeminiService::SETTING_MODEL] = trim((string) ($aiStatus['model'] ?? GeminiService::DEFAULT_MODEL));
+        $settings[GeminiService::SETTING_ENABLED] = (bool) ($aiStatus['enabled'] ?? true);
+        $settings['ai_gemini_has_api_key'] = (bool) ($aiStatus['configured'] ?? false);
+        $settings['ai_gemini_available'] = (bool) ($aiStatus['available'] ?? false);
+        $settings['ai_gemini_key_source'] = $aiStatus['key_source'] ?? null;
+        $settings['ai_gemini_scope'] = $aiStatus['scope'] ?? 'global';
+    }
+
+    private function saveGlobalAiSetting(string $key, mixed $value): void
+    {
+        if ($key === GeminiService::SETTING_MODEL) {
+            $value = $this->geminiService->normalizeModelName(is_scalar($value) ? (string) $value : null);
+        }
+
+        if ($key === GeminiService::SETTING_KEYS && is_array($value)) {
+            $value = $this->preserveMaskedGeminiKeys($value);
+        }
+
+        if ($this->shouldSkipEmptySecretSetting($key, $value)) {
+            return;
+        }
+
+        SystemSetting::setValue(
+            $key,
+            $this->encodeSettingValue($key, $value)
+        );
+    }
+
+    private function preserveMaskedGeminiKeys(array $keys): array
+    {
+        $oldValue = SystemSetting::getValue(GeminiService::SETTING_KEYS);
+        $oldDecoded = is_string($oldValue) ? json_decode($oldValue, true) : [];
+        $oldKeyMap = [];
+        if (is_array($oldDecoded)) {
+            foreach ($oldDecoded as $oldItem) {
+                if (isset($oldItem['id'], $oldItem['key'])) {
+                    $oldKeyMap[$oldItem['id']] = $oldItem['key'];
+                }
+            }
+        }
+
+        return array_map(function ($item) use ($oldKeyMap) {
+            if (
+                isset($item['id'], $item['key'])
+                && is_string($item['key'])
+                && str_contains($item['key'], '...')
+                && isset($oldKeyMap[$item['id']])
+            ) {
+                $item['key'] = $oldKeyMap[$item['id']];
+            }
+
+            return $item;
+        }, $keys);
+    }
+
+    private function maskGeminiKeys(array $keys): array
+    {
+        return array_map(function ($item) {
+            $realKey = $item['key'] ?? '';
+            $status = 'ready';
+            $retryAfter = 0;
+
+            if (!empty($realKey)) {
+                $cacheKey = 'gemini_key_exhausted_' . md5(trim((string) $realKey));
+                $exhaustedUntil = \Illuminate\Support\Facades\Cache::get($cacheKey);
+                if ($exhaustedUntil) {
+                    $status = 'exhausted';
+                    $retryAfter = max(0, (int) $exhaustedUntil - now()->timestamp);
+                }
+            }
+
+            if (is_string($realKey) && strlen($realKey) > 8) {
+                $item['key'] = substr($realKey, 0, 4) . '...' . substr($realKey, -4);
+            }
+
+            $item['status'] = $status;
+            $item['retry_after_seconds'] = $retryAfter;
+
+            return $item;
+        }, $keys);
     }
 
     private function resolveAccountId(Request $request): ?int
@@ -338,16 +405,49 @@ class SiteSettingController extends Controller
                 ]);
             }
 
-            $store->fill([
+            $fields = [
                 'name' => $name,
                 'slug' => $this->uniqueCatalogStoreSlug($name, $accountId, $store->exists ? (int) $store->id : null),
                 'phone' => trim((string) ($location['phone'] ?? $location['hotline'] ?? '')) ?: null,
                 'address' => trim((string) ($location['address'] ?? '')) ?: null,
                 'status' => array_key_exists('is_active', $location) ? (bool) $location['is_active'] : true,
                 'sort_order' => (int) ($location['order'] ?? $location['sort_order'] ?? ($index + 1)),
-            ]);
+            ];
+
+            if (array_key_exists('public_domain_id', $location)) {
+                $fields['public_domain_id'] = $this->resolveStorePublicDomainId($location['public_domain_id'], $accountId);
+            }
+
+            $store->fill($fields);
             $store->save();
         }
+    }
+
+    private function resolveStorePublicDomainId(mixed $value, int $accountId): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value) || (int) $value <= 0) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'store_locations' => ['Ten mien public cua cua hang khong hop le.'],
+            ]);
+        }
+
+        $domainId = (int) $value;
+        $exists = SiteDomain::query()
+            ->where('account_id', $accountId)
+            ->whereKey($domainId)
+            ->exists();
+
+        if (!$exists) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'store_locations' => ['Ten mien public cua cua hang khong ton tai trong account hien tai.'],
+            ]);
+        }
+
+        return $domainId;
     }
 
     private function uniqueCatalogStoreSlug(string $source, int $accountId, ?int $exceptId = null): string

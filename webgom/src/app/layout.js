@@ -9,6 +9,7 @@ import TrackingScripts from "@/components/common/TrackingScripts";
 import LeadAttributionTracker from "@/components/common/LeadAttributionTracker";
 import WebAnalyticsTracker from "@/components/common/WebAnalyticsTracker";
 import { Roboto } from "next/font/google";
+import { getServerPublicHost } from "@/lib/serverPublicHost";
 
 const roboto = Roboto({
   weight: ["100", "300", "400", "500", "700", "900"],
@@ -145,12 +146,13 @@ export default async function RootLayout({ children }) {
   let menuData = null;
   let settings = null;
   let productCategories = [];
+  const publicHost = await getServerPublicHost();
 
   try {
     const [menuRes, settingsRes, categoriesRes] = await Promise.all([
       getActiveMenu(),
       getWebSiteSettings(),
-      getWebCategories(),
+      getWebCategories({ publicHost }),
     ]);
     menuData = menuRes;
     settings = settingsRes;

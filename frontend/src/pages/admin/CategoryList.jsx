@@ -878,12 +878,22 @@ const CategoryList = () => {
     });
     const isSelectiveImport = importMode === 'update_selected_fields';
     const canReorderTree = !isTrashView && !searchQuery.trim() && filterLevel === 'all' && filterStatus === 'all';
-    const selectedDomain = React.useMemo(() => (
-        domains.find((domain) => String(domain.id) === String(formData.site_domain_id))
-        || domains.find((domain) => domain.is_default)
-        || domains[0]
-        || { domain: 'di-san.com' }
-    ), [domains, formData.site_domain_id]);
+    const selectedStore = React.useMemo(() => (
+        stores.find((store) => String(store.id) === String(formData.store_id))
+        || null
+    ), [formData.store_id, stores]);
+
+    const selectedDomain = React.useMemo(() => {
+        const storePublicDomain = selectedStore?.public_domain || selectedStore?.publicDomain || null;
+        const storeDomainById = domains.find((domain) => String(domain.id) === String(selectedStore?.public_domain_id));
+
+        return storePublicDomain
+            || storeDomainById
+            || domains.find((domain) => String(domain.id) === String(formData.site_domain_id))
+            || domains.find((domain) => domain.is_default)
+            || domains[0]
+            || { domain: 'di-san.com' };
+    }, [domains, formData.site_domain_id, selectedStore]);
     const previewCategorySlug = React.useMemo(() => (
         String(
             (showCategoryLinkModal ? tempSlug : formData.slug)

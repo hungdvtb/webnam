@@ -12,6 +12,7 @@ class Store extends Model
 
     protected $fillable = [
         'account_id',
+        'public_domain_id',
         'name',
         'slug',
         'code',
@@ -23,9 +24,15 @@ class Store extends Model
 
     protected $casts = [
         'account_id' => 'integer',
+        'public_domain_id' => 'integer',
         'status' => 'boolean',
         'sort_order' => 'integer',
     ];
+
+    public function publicDomain()
+    {
+        return $this->belongsTo(SiteDomain::class, 'public_domain_id');
+    }
 
     public function categories()
     {

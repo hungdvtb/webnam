@@ -13,6 +13,9 @@ const queuedPrefetches = new Map();
 let activePrefetchCount = 0;
 
 const normalizeText = (value) => String(value || '').trim();
+const getBrowserPublicHost = () => (
+  typeof window !== 'undefined' ? normalizeText(window.location?.host) : ''
+);
 
 const isBundleOptionProduct = (product = {}) => (
   normalizeText(product?.item_type || product?.itemType) === 'bundle_option'
@@ -281,6 +284,7 @@ export function prefetchBundleOptionDetail(product = {}, href = '') {
     headers: {
       Accept: 'application/json',
       'X-Site-Code': config.siteCode,
+      ...(getBrowserPublicHost() ? { 'X-Public-Host': getBrowserPublicHost() } : {}),
     },
   })
     .then((response) => (response.ok ? response.json() : null))

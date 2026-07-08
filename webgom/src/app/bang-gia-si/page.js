@@ -8,6 +8,7 @@ import WholesaleControls from "./WholesaleControls";
 import WholesaleOrderTable from "./WholesaleOrderTable";
 import { buildWholesaleMediaImages, buildWholesaleVideoHref, buildWholesaleVideoItems } from "./wholesaleMedia";
 import styles from "./wholesale.module.css";
+import { getServerPublicHost } from "@/lib/serverPublicHost";
 
 const PRODUCTS_PER_PAGE = 36;
 const WHOLESALE_PRODUCT_TYPES = "simple,configurable";
@@ -183,7 +184,7 @@ const resolveContactPhone = (settings = {}) => {
   ).trim();
 };
 
-const categoryHasWholesaleProducts = async (category = {}) => {
+const categoryHasWholesaleProducts = async (category = {}, publicHost = "") => {
   const slug = String(category?.slug || "").trim();
 
   if (!slug || Number(category?.products_count || 0) <= 0) {
@@ -197,6 +198,7 @@ const categoryHasWholesaleProducts = async (category = {}) => {
       page: 1,
       per_page: CATEGORY_PROBE_PER_PAGE,
       sort: "popular",
+      public_host: publicHost,
     });
 
     return Number(payload?.total || 0) > 0;
@@ -206,14 +208,14 @@ const categoryHasWholesaleProducts = async (category = {}) => {
   }
 };
 
-const filterWholesaleCategories = async (categories = []) => {
+const filterWholesaleCategories = async (categories = [], publicHost = "") => {
   const source = Array.isArray(categories) ? categories : [];
 
   if (source.length === 0) {
     return [];
   }
 
-  const visibility = await Promise.all(source.map(categoryHasWholesaleProducts));
+  const visibility = await Promise.all(source.map((category) => categoryHasWholesaleProducts(category, publicHost)));
   return source.filter((category, index) => visibility[index]);
 };
 
@@ -324,6 +326,7 @@ function renderPagination({ currentPage, lastPage, total, itemCount, params }) {
 }
 
 export default async function WholesalePricePage({ searchParams }) {
+  const publicHost = await getServerPublicHost();
   const resolvedSearchParams = await searchParams;
   const currentPage = parsePageParam(resolvedSearchParams?.page);
   const currentSearch = getFirstParamValue(resolvedSearchParams?.search);
@@ -349,8 +352,9 @@ export default async function WholesalePricePage({ searchParams }) {
       page: currentPage,
       per_page: PRODUCTS_PER_PAGE,
       types: WHOLESALE_PRODUCT_TYPES,
+      public_host: publicHost,
     }),
-    getWebCategories(),
+    getWebCategories({ publicHost }),
     getWebSiteSettings(),
   ]);
 
@@ -361,7 +365,7 @@ export default async function WholesalePricePage({ searchParams }) {
   }
 
   if (categoriesResult.status === "fulfilled") {
-    categories = await filterWholesaleCategories(categoriesResult.value);
+    categories = await filterWholesaleCategories(categoriesResult.value, publicHost);
   } else {
     console.error("Failed to fetch wholesale categories:", categoriesResult.reason);
   }
@@ -389,6 +393,7 @@ export default async function WholesalePricePage({ searchParams }) {
         page: currentPage,
         per_page: PRODUCTS_PER_PAGE,
         types: WHOLESALE_PRODUCT_TYPES,
+        public_host: publicHost,
       });
     } catch (error) {
       console.error(`Failed to refetch wholesale products after hiding category "${currentCategorySlug}":`, error);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\SiteDomain;
 use App\Models\SiteSetting;
 use App\Models\Store;
 use App\Services\AccountDataScopeService;
@@ -22,6 +23,7 @@ class StoreController extends Controller
         $this->seedStoresFromSiteSettingsIfEmpty($accountId);
 
         $stores = Store::query()
+            ->with('publicDomain:id,domain,is_active,is_default')
             ->when($request->filled('status'), function ($query) use ($request) {
                 $query->where('status', filter_var($request->input('status'), FILTER_VALIDATE_BOOLEAN));
             })
@@ -38,6 +40,7 @@ class StoreController extends Controller
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'public_domain_id' => ['nullable', 'integer'],
             'slug' => ['nullable', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:80'],
             'phone' => ['nullable', 'string', 'max:50'],
@@ -47,13 +50,14 @@ class StoreController extends Controller
         ]);
 
         $validated['account_id'] = $accountId;
+        $validated['public_domain_id'] = $this->resolvePublicDomainId($validated['public_domain_id'] ?? null, $accountId);
         $validated['slug'] = $this->uniqueSlug($validated['slug'] ?? $validated['name'], $accountId);
         $validated['status'] = $validated['status'] ?? true;
         $validated['sort_order'] = $validated['sort_order'] ?? $this->nextSortOrder($accountId);
 
         $store = Store::create($validated);
 
-        return response()->json($store, 201);
+        return response()->json($store->load('publicDomain:id,domain,is_active,is_default'), 201);
     }
 
     public function update(Request $request, int $id)
@@ -63,6 +67,7 @@ class StoreController extends Controller
 
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'public_domain_id' => ['nullable', 'integer'],
             'slug' => ['nullable', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:80'],
             'phone' => ['nullable', 'string', 'max:50'],
@@ -79,9 +84,13 @@ class StoreController extends Controller
             );
         }
 
+        if ($request->has('public_domain_id')) {
+            $validated['public_domain_id'] = $this->resolvePublicDomainId($request->input('public_domain_id'), $accountId);
+        }
+
         $store->update($validated);
 
-        return response()->json($store->fresh());
+        return response()->json($store->fresh(['publicDomain:id,domain,is_active,is_default']));
     }
 
     public function destroy(int $id)
@@ -120,6 +129,29 @@ class StoreController extends Controller
             ->max('sort_order') + 1;
     }
 
+    private function resolvePublicDomainId(mixed $value, ?int $accountId): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value) || (int) $value <= 0) {
+            abort(422, 'Ten mien public khong hop le.');
+        }
+
+        $domainId = (int) $value;
+        $exists = SiteDomain::query()
+            ->whereKey($domainId)
+            ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            ->exists();
+
+        if (!$exists) {
+            abort(422, 'Ten mien public khong ton tai trong account hien tai.');
+        }
+
+        return $domainId;
+    }
+
     private function seedStoresFromSiteSettingsIfEmpty(?int $accountId): void
     {
         if (!$accountId) {
@@ -153,6 +185,7 @@ class StoreController extends Controller
 
             Store::withoutGlobalScopes()->create([
                 'account_id' => $accountId,
+                'public_domain_id' => $this->resolvePublicDomainId($location['public_domain_id'] ?? null, $accountId),
                 'name' => $name,
                 'slug' => $this->uniqueSlug($name, $accountId),
                 'code' => trim((string) ($location['id'] ?? '')) ?: 'store-location-' . ($index + 1),

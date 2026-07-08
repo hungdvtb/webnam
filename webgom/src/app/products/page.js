@@ -12,6 +12,7 @@ import CategoryPerformanceLogger from '@/components/CategoryPerformanceLogger';
 import BundleProductPrefetchBootstrap from '@/components/BundleProductPrefetchBootstrap';
 import { resolveImageObjectUrl, resolveMediaUrl } from '@/lib/media';
 import config from '@/lib/config';
+import { getServerPublicHost } from '@/lib/serverPublicHost';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -213,6 +214,7 @@ function renderPagination({ stylesModule, currentPage, lastPage, total, itemCoun
 }
 
 export default async function ProductsPage({ searchParams }) {
+  const publicHost = await getServerPublicHost();
   const resolvedSearchParams = await searchParams;
   const requestedCategorySlug = resolvedSearchParams?.category || '';
   const currentSort = resolvedSearchParams?.sort || 'popular';
@@ -249,9 +251,10 @@ export default async function ProductsPage({ searchParams }) {
       attrs: currentAttrs,
       page: currentPage,
       per_page: PRODUCTS_PER_PAGE,
+      public_host: publicHost,
     }),
-    getWebCategories(),
-    requestedCategorySlug ? getWebCategory(requestedCategorySlug) : Promise.resolve(null),
+    getWebCategories({ publicHost }),
+    requestedCategorySlug ? getWebCategory(requestedCategorySlug, { publicHost }) : Promise.resolve(null),
   ]);
 
   if (productsResult.status === 'fulfilled') {

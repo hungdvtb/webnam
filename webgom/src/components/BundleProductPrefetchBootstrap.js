@@ -50,7 +50,10 @@ export default function BundleProductPrefetchBootstrap({ descriptors = [] }) {
     var entry=state.queue.shift();
     if(!entry||isCached(entry)){pump();return;}
     state.active+=1;
-    fetch(entry.url,{headers:{Accept:"application/json","X-Site-Code":entry.siteCode||""}})
+    var publicHost=String(window.location&&window.location.host||"").trim();
+    var headers={Accept:"application/json","X-Site-Code":entry.siteCode||""};
+    if(publicHost){headers["X-Public-Host"]=publicHost;}
+    fetch(entry.url,{headers:headers})
       .then(function(response){return response.ok?response.json():null;})
       .then(function(payload){cache(entry,payload);})
       .catch(function(){})

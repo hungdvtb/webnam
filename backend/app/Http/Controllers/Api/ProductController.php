@@ -3249,7 +3249,8 @@ class ProductController extends Controller
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
-            'store:id,name,slug,status',
+            'store:id,name,slug,status,public_domain_id',
+            'store.publicDomain:id,domain,is_active,is_default',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order,file_name,file_size',
             'superAttributes:' . $attributeResourceColumns,
             'superAttributes.options:id,attribute_id,value,swatch_value,order',
@@ -6450,7 +6451,8 @@ class ProductController extends Controller
             'parentConfigurable:id,name,sku,type',
             'unit:id,name',
             'siteDomain:id,domain',
-            'store:id,name,slug,status',
+            'store:id,name,slug,status,public_domain_id',
+            'store.publicDomain:id,domain,is_active,is_default',
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'images.mediaAsset:id,public_id,disk,variants',
             'attributeValues:id,product_id,attribute_id,value',
@@ -6463,7 +6465,8 @@ class ProductController extends Controller
                 'variations.parentConfigurable:id,name,sku,type',
                 'variations.category:id,name,code,slug',
                 'variations.categories:id,name,code,slug',
-                'variations.store:id,name,slug,status',
+                'variations.store:id,name,slug,status,public_domain_id',
+                'variations.store.publicDomain:id,domain,is_active,is_default',
                 'variations.supplier:id,name,code',
                 'variations.suppliers:id,name,code',
                 'variations.attributeValues:id,product_id,attribute_id,value',
@@ -6477,7 +6480,8 @@ class ProductController extends Controller
                 'groupedItems.profitCenter.manager:id,name',
                 'groupedItems.category:id,name,code,slug',
                 'groupedItems.categories:id,name,code,slug',
-                'groupedItems.store:id,name,slug,status',
+                'groupedItems.store:id,name,slug,status,public_domain_id',
+                'groupedItems.store.publicDomain:id,domain,is_active,is_default',
                 'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
@@ -6487,7 +6491,8 @@ class ProductController extends Controller
                 'bundleItems.profitCenter.manager:id,name',
                 'bundleItems.category:id,name,code,slug',
                 'bundleItems.categories:id,name,code,slug',
-                'bundleItems.store:id,name,slug,status',
+                'bundleItems.store:id,name,slug,status,public_domain_id',
+                'bundleItems.store.publicDomain:id,domain,is_active,is_default',
                 'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
@@ -8709,6 +8714,23 @@ class ProductController extends Controller
 
     private function resolveProductExportDomain(array $product, Collection $domains): string
     {
+        $storeDomain = $this->normalizeDomainValue((string) (
+            data_get($product, 'store.public_domain.domain')
+            ?: data_get($product, 'store.publicDomain.domain')
+            ?: ''
+        ));
+        if ($storeDomain !== '') {
+            return $storeDomain;
+        }
+
+        $requestedStoreDomainId = (int) data_get($product, 'store.public_domain_id', 0);
+        if ($requestedStoreDomainId > 0) {
+            $matchedStoreDomain = $domains->first(fn (SiteDomain $siteDomain) => (int) $siteDomain->id === $requestedStoreDomainId);
+            if ($matchedStoreDomain) {
+                return $this->normalizeDomainValue($matchedStoreDomain->domain);
+            }
+        }
+
         $domain = $this->normalizeDomainValue((string) data_get($product, 'site_domain.domain', ''));
         if ($domain !== '') {
             return $domain;

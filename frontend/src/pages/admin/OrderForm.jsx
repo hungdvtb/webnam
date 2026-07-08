@@ -57,6 +57,10 @@ import {
 } from '../../utils/money';
 import { buildOrderAiPickerEntries, buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
 import { hasAdminPermission } from '../../utils/adminPermissions';
+import {
+    copyProductQuickSetupItemsToNamespace,
+    findProductQuickSetupItems,
+} from '../../utils/orderProductQuickSetup';
 import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
@@ -4136,13 +4140,45 @@ const OrderForm = () => {
         }
         return key;
     }, [activeProductQuickFilterAttribute, hasActiveProductQuickFilter, normalizedProductQuickFilterValues, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2]);
+    const activeProductQuickSetupLookup = useMemo(() => (
+        findProductQuickSetupItems(
+            productQuickSetupStore,
+            productQuickSetupNamespace,
+            activeProductQuickSetupKey
+        )
+    ), [activeProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
     const activeProductQuickSetupItems = useMemo(() => {
         if (!activeProductQuickSetupKey) return [];
 
         return normalizeStoredProductQuickSetupItems(
-            productQuickSetupStore?.[productQuickSetupNamespace]?.[activeProductQuickSetupKey] || []
+            activeProductQuickSetupLookup.items
         );
-    }, [activeProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
+    }, [activeProductQuickSetupKey, activeProductQuickSetupLookup]);
+    useEffect(() => {
+        if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
+        if (!activeProductQuickSetupLookup.sourceNamespace) return;
+        if (activeProductQuickSetupLookup.sourceNamespace === productQuickSetupNamespace) return;
+        if (activeProductQuickSetupItems.length === 0) return;
+
+        setProductQuickSetupStore((prev) => {
+            const existingItems = prev?.[productQuickSetupNamespace]?.[activeProductQuickSetupKey];
+            if (Array.isArray(existingItems) && existingItems.length > 0) {
+                return prev;
+            }
+
+            return copyProductQuickSetupItemsToNamespace(
+                prev,
+                productQuickSetupNamespace,
+                activeProductQuickSetupKey,
+                activeProductQuickSetupItems
+            );
+        });
+    }, [
+        activeProductQuickSetupItems,
+        activeProductQuickSetupKey,
+        activeProductQuickSetupLookup.sourceNamespace,
+        productQuickSetupNamespace,
+    ]);
     const isProductQuickModeToggleDisabled = activeProductQuickSetupItems.length === 0 || hasActiveProductBundleQuickFilter;
     const isProductQuickModeActive = productQuickModeEnabled && activeProductQuickSetupItems.length > 0 && !hasActiveProductBundleQuickFilter;
     const shouldShowProductQuickFilterPanel = showSearchDropdown && showProductQuickFilterPanel && productQuickFilterAttributes.length > 0;

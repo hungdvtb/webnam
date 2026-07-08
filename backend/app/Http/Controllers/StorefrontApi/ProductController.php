@@ -437,23 +437,23 @@ class ProductController extends Controller
         });
     }
 
-    private function getOrderedCategoryIds(Category $category, $accountId, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null): array
+    private function getOrderedCategoryIds(Category $category, $accountId, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null, ?array $accountIds = null): array
     {
         $ids = [(int) $category->id];
 
-        $childrenQuery = Category::query()
+        $childrenQuery = Category::withoutGlobalScope('account_id')
             ->where('parent_id', $category->id)
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed())
             ->orderBy('order')
             ->orderBy('id');
 
+        StorefrontDomainScope::applyAccountScope($childrenQuery, $accountId, $accountIds, 'categories.account_id');
         StorefrontDomainScope::applyStoreScope($childrenQuery, $storeIds, 'categories.store_id');
 
         $children = $childrenQuery->get(['id']);
 
         foreach ($children as $child) {
-            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants, $storeIds));
+            $ids = array_merge($ids, $this->getOrderedCategoryIds($child, $accountId, $includeLinkOnlyDescendants, $storeIds, $accountIds));
         }
 
         return $ids;
@@ -1034,14 +1034,15 @@ class ProductController extends Controller
         $timings = [];
         $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
-        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+        $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
         $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
         \Illuminate\Support\Facades\Log::info("Resolved Account ID: " . ($accountId ?? 'NULL'));
 
-        $query = Product::query()
+        $query = Product::withoutGlobalScope('account_id')
             ->select('products.*')
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
             ->where('status', true);
+        StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($query, $storeIds, 'products.store_id');
         $selectedCategoryIds = [];
         $missingRequestedCategory = false;
@@ -1060,27 +1061,27 @@ class ProductController extends Controller
 
         // Filter by category slug
         if ($request->filled('category')) {
-            $categoryQuery = Category::query()
-                ->where('slug', $request->category)
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId));
+            $categoryQuery = Category::withoutGlobalScope('account_id')
+                ->where('slug', $request->category);
+            StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
             StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
             $cat = $categoryQuery->first();
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds, $accountIds);
             } else {
                 $missingRequestedCategory = true;
             }
         }
 
         if ($request->filled('category_id')) {
-            $categoryQuery = Category::query()
-                ->when($accountId, fn ($categoryQuery) => $categoryQuery->where('account_id', $accountId))
+            $categoryQuery = Category::withoutGlobalScope('account_id')
                 ->whereKey($request->category_id);
+            StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
             StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
             $cat = $categoryQuery->first();
 
             if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds);
+                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds, $accountIds);
             } else {
                 $missingRequestedCategory = true;
             }
@@ -1294,17 +1295,20 @@ class ProductController extends Controller
         $bundleOptionCatalog = [];
 
         if ($bundleOptionProductIds->isNotEmpty()) {
-            $bundleProducts = Product::query()
-                ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            $bundleProducts = Product::withoutGlobalScope('account_id')
                 ->whereIn('id', $bundleOptionProductIds->all())
                 ->with([
                     'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
-                    'bundleItems' => function ($query) {
+                    'bundleItems' => function ($query) use ($accountId, $accountIds) {
+                        $query->withoutGlobalScope('account_id');
+                        StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
                         $query->where('status', true);
                         $this->applyVisibleBundleOptionConstraint($query);
                     },
                 ])
-                ->get();
+            ;
+            StorefrontDomainScope::applyAccountScope($bundleProducts, $accountId, $accountIds, 'products.account_id');
+            $bundleProducts = $bundleProducts->get();
 
             $variantIds = $bundleProducts
                 ->flatMap(fn (Product $product) => $product->bundleItems->pluck('pivot.variant_id'))
@@ -1314,9 +1318,7 @@ class ProductController extends Controller
                 ->values();
 
             $variantMap = $variantIds->isNotEmpty()
-                ? Product::query()
-                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                    ->whereIn('id', $variantIds->all())
+                ? tap(Product::withoutGlobalScope('account_id')->whereIn('id', $variantIds->all()), fn ($query) => StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id'))
                     ->get()
                     ->keyBy(fn (Product $variant) => (int) $variant->id)
                 : collect();
@@ -1329,10 +1331,7 @@ class ProductController extends Controller
                 ->values();
 
             $optionPosts = $optionPostIds->isNotEmpty()
-                ? Post::query()
-                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                    ->with('featuredMediaAsset')
-                    ->whereIn('id', $optionPostIds->all())
+                ? tap(Post::query()->with('featuredMediaAsset')->whereIn('id', $optionPostIds->all()), fn ($query) => StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'posts.account_id'))
                     ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
                     ->keyBy(fn (Post $post) => (int) $post->id)
                 : collect();
@@ -1372,10 +1371,10 @@ class ProductController extends Controller
         // Calculate available filters
         $availableFilters = [];
         
-        $filterableAttributesQuery = \App\Models\Attribute::where('status', true)
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+        $filterableAttributesQuery = \App\Models\Attribute::withoutGlobalScope('account_id')->where('status', true)
             ->ordered()
             ->with('options');
+        StorefrontDomainScope::applyAccountScope($filterableAttributesQuery, $accountId, $accountIds, 'attributes.account_id');
 
         if (isset($cat) && !empty($cat->filterable_attribute_ids)) {
             $ids = array_values(array_unique(array_map('intval', (array)$cat->filterable_attribute_ids)));
@@ -1582,12 +1581,12 @@ class ProductController extends Controller
             $timings = [];
             $stepStartedAt = microtime(true);
             $accountId = $this->getAccountId($request);
-            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+            $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
             \Illuminate\Support\Facades\Log::info("Fetching product detail for slug: '{$slug}' (Account: " . ($accountId ?? 'ALL') . ")");
 
-            $productQuery = Product::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            $productQuery = Product::withoutGlobalScope('account_id')
                 ->where('status', true)
                 ->where(function($q) use ($slug) {
                     $q->where('slug', $slug);
@@ -1602,6 +1601,7 @@ class ProductController extends Controller
                     'category',
                     'attributeValues.attribute',
                 ]);
+            StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
             StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
             $product = $productQuery->firstOrFail();
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
@@ -1610,7 +1610,9 @@ class ProductController extends Controller
             // This is the key optimization for bundle products: skip variations & superAttributes.
             if ($product->type === 'bundle') {
                 $product->load([
-                    'bundleItems' => function ($query) {
+                    'bundleItems' => function ($query) use ($accountId, $accountIds) {
+                        $query->withoutGlobalScope('account_id');
+                        StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
                         $query->where('products.status', true);
                         $this->applyVisibleBundleOptionConstraint($query);
                     },
@@ -1619,7 +1621,9 @@ class ProductController extends Controller
                 ]);
             } elseif ($product->type === 'grouped') {
                 $product->load([
-                    'groupedItems' => function ($query) {
+                    'groupedItems' => function ($query) use ($accountId, $accountIds) {
+                        $query->withoutGlobalScope('account_id');
+                        StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
                         $query->where('products.status', true);
                     },
                     'groupedItems.images',
@@ -1638,7 +1642,9 @@ class ProductController extends Controller
                             ->orderBy('attributes.id');
                     },
                     'superAttributes.options',
-                    'variations' => function($q) {
+                    'variations' => function($q) use ($accountId, $accountIds) {
+                        $q->withoutGlobalScope('account_id');
+                        StorefrontDomainScope::applyAccountScope($q, $accountId, $accountIds, 'products.account_id');
                         $q->where('status', true);
                     },
                     'variations.images',
@@ -1666,19 +1672,22 @@ class ProductController extends Controller
                     ->all();
 
                 if (!empty($variantIds)) {
-                    $variantMap = Product::whereIn('id', $variantIds)
+                    $variantMap = Product::withoutGlobalScope('account_id')->whereIn('id', $variantIds)
                         ->with(['images', 'attributeValues.attribute'])
-                        ->get()
+                    ;
+                    StorefrontDomainScope::applyAccountScope($variantMap, $accountId, $accountIds, 'products.account_id');
+                    $variantMap = $variantMap->get()
                         ->keyBy(fn (Product $variant) => (int) $variant->id);
                 }
                 $stepStartedAt = $this->markTiming($timings, 'bundle_variants_batch', $stepStartedAt);
 
                 if (!empty($optionPostIds)) {
                     $bundleOptionPosts = Post::query()
-                        ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
                         ->with('featuredMediaAsset')
                         ->whereIn('id', $optionPostIds)
-                        ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
+                    ;
+                    StorefrontDomainScope::applyAccountScope($bundleOptionPosts, $accountId, $accountIds, 'posts.account_id');
+                    $bundleOptionPosts = $bundleOptionPosts->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
                         ->keyBy(fn (Post $post) => (int) $post->id);
                 }
                 $stepStartedAt = $this->markTiming($timings, 'bundle_option_posts', $stepStartedAt);
@@ -1718,7 +1727,7 @@ class ProductController extends Controller
                     // Cache the bundle option catalog for 60 seconds per product+account.
                     // The catalog computation (pricing, discounts, option grouping) is
                     // expensive and identical for all visitors viewing the same product.
-                    $catalogCacheKey = 'bundle_catalog:' . ($accountId ?? 'all') . ':' . $product->id . ':' . ($product->updated_at?->timestamp ?? 0);
+                    $catalogCacheKey = 'bundle_catalog:' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds) . ':' . ($accountId ?? 'all') . ':' . $product->id . ':' . ($product->updated_at?->timestamp ?? 0);
                     $bundleOptionCatalog = Cache::remember(
                         $catalogCacheKey,
                         60,
@@ -1753,12 +1762,16 @@ class ProductController extends Controller
 
             // Cache all_attributes for 5 minutes - this list rarely changes and is fetched on every product page.
             $allProductAttributes = Cache::remember(
-                'all_product_attributes:' . ($accountId ?? 'all'),
+                'all_product_attributes:' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds) . ':' . ($accountId ?? 'all'),
                 300,
-                fn () => Attribute::where('entity_type', 'product')
-                    ->where('status', true)
-                    ->ordered()
-                    ->get(['id', 'name', 'code', 'frontend_type'])
+                function () use ($accountId, $accountIds) {
+                    $query = Attribute::withoutGlobalScope('account_id')->where('entity_type', 'product')
+                        ->where('status', true)
+                        ->ordered();
+                    StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'attributes.account_id');
+
+                    return $query->get(['id', 'name', 'code', 'frontend_type']);
+                }
             );
             $stepStartedAt = $this->markTiming($timings, 'attributes_cache', $stepStartedAt);
             
@@ -1819,7 +1832,8 @@ class ProductController extends Controller
             $timings = [];
             $stepStartedAt = microtime(true);
             $accountId = $this->getAccountId($request);
-            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+            $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
             $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
             $compactRequestedOption = trim((string) (
@@ -1866,8 +1880,7 @@ class ProductController extends Controller
                 }
             }
 
-            $productQuery = Product::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+            $productQuery = Product::withoutGlobalScope('account_id')
                 ->where('status', true)
                 ->where(function($q) use ($slug) {
                     $q->where('slug', $slug);
@@ -1880,6 +1893,7 @@ class ProductController extends Controller
                     'category',
                     'attributeValues.attribute',
                 ]);
+            StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
             StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
             $product = $productQuery->firstOrFail();
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
@@ -1907,11 +1921,13 @@ class ProductController extends Controller
             $stepStartedAt = $this->markTiming($timings, 'resolve_option', $stepStartedAt);
 
             $bundleItemsQuery = $product->bundleItems()
+                ->withoutGlobalScope('account_id')
                 ->where('products.status', true)
                 ->with([
                     'images',
                     'attributeValues.attribute',
                 ]);
+            StorefrontDomainScope::applyAccountScope($bundleItemsQuery, $accountId, $accountIds, 'products.account_id');
             if (!$includeInternalOption) {
                 $this->applyVisibleBundleOptionConstraint($bundleItemsQuery);
             }
@@ -1938,10 +1954,7 @@ class ProductController extends Controller
                 ->values();
 
             $variantMap = $variantIds->isNotEmpty()
-                ? Product::query()
-                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                    ->whereIn('id', $variantIds->all())
-                    ->with(['images', 'attributeValues.attribute'])
+                ? tap(Product::withoutGlobalScope('account_id')->whereIn('id', $variantIds->all())->with(['images', 'attributeValues.attribute']), fn ($query) => StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id'))
                     ->get()
                     ->keyBy(fn (Product $variant) => (int) $variant->id)
                 : collect();
@@ -1955,10 +1968,7 @@ class ProductController extends Controller
                 ->values();
 
             $bundleOptionPosts = $optionPostIds->isNotEmpty()
-                ? Post::query()
-                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                    ->with('featuredMediaAsset')
-                    ->whereIn('id', $optionPostIds->all())
+                ? tap(Post::query()->with('featuredMediaAsset')->whereIn('id', $optionPostIds->all()), fn ($query) => StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'posts.account_id'))
                     ->get(['id', 'title', 'slug', 'featured_image', 'featured_media_asset_id'])
                     ->keyBy(fn (Post $post) => (int) $post->id)
                 : collect();
@@ -2067,7 +2077,8 @@ class ProductController extends Controller
     {
         try {
             $accountId = $this->getAccountId($request);
-            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+            $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+            $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
             $requestedKey = trim((string) (
                 $request->query('bundle_option_key')
                 ?? $request->query('bk')
@@ -2086,11 +2097,12 @@ class ProductController extends Controller
                 ?? ''
             ));
 
-            $productQuery = Product::query()
-                ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+            $productQuery = Product::withoutGlobalScope('account_id')
                 ->where('status', true)
                 ->with([
-                    'bundleItems' => function ($query) {
+                    'bundleItems' => function ($query) use ($accountId, $accountIds) {
+                        $query->withoutGlobalScope('account_id');
+                        StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
                         $query->where('status', true);
                         $this->applyVisibleBundleOptionConstraint($query);
                     },
@@ -2102,6 +2114,7 @@ class ProductController extends Controller
                         $query->orWhere('id', (int) $slug);
                     }
                 });
+            StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
             StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
             $product = $productQuery->firstOrFail();
 
@@ -2137,10 +2150,7 @@ class ProductController extends Controller
                 ->values();
 
             $variantMap = $variantIds->isNotEmpty()
-                ? Product::query()
-                    ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
-                    ->whereIn('id', $variantIds->all())
-                    ->with('images')
+                ? tap(Product::withoutGlobalScope('account_id')->whereIn('id', $variantIds->all())->with('images'), fn ($query) => StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id'))
                     ->get()
                     ->keyBy(fn (Product $variant) => (int) $variant->id)
                 : collect();
@@ -2209,9 +2219,9 @@ class ProductController extends Controller
     public function related(Request $request, $slug)
     {
         $accountId = $this->getAccountId($request);
-        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
-        $productQuery = Product::query()
-            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
+        $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
+        $productQuery = Product::withoutGlobalScope('account_id')
             ->with([
                 'category:id,name,slug',
                 'categories:id,name,slug',
@@ -2222,6 +2232,7 @@ class ProductController extends Controller
                     $q->orWhere('id', (int) $slug);
                 }
             });
+        StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
         $product = $productQuery->firstOrFail();
 
@@ -2229,7 +2240,7 @@ class ProductController extends Controller
         $fallbackCategory = $this->resolvePrimaryCategory($product);
 
         $explicitRelated = $product->relatedProducts()
-            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
+            ->withoutGlobalScope('account_id')
             ->where('products.status', true)
             ->with([
                 'images' => fn($q) => $q->orderBy('is_primary', 'desc')->orderBy('sort_order'),
@@ -2237,6 +2248,7 @@ class ProductController extends Controller
                 'categories:id,name,slug',
                 'attributeValues.attribute:id,name,code,frontend_type',
             ]);
+        StorefrontDomainScope::applyAccountScope($explicitRelated, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($explicitRelated, $storeIds, 'products.store_id');
         $explicitRelated = $explicitRelated->get();
 
@@ -2269,8 +2281,7 @@ class ProductController extends Controller
             ]));
         }
 
-        $fallback = Product::query()
-            ->when($accountId, fn($q) => $q->where('products.account_id', $accountId))
+        $fallback = Product::withoutGlobalScope('account_id')
             ->where('products.status', true)
             ->whereDoesntHave('parentConfigurable')
             ->whereKeyNot($product->id)
@@ -2288,6 +2299,7 @@ class ProductController extends Controller
             ])
             ->inRandomOrder()
             ->limit($limit);
+        StorefrontDomainScope::applyAccountScope($fallback, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($fallback, $storeIds, 'products.store_id');
         $fallback = $fallback->get();
 

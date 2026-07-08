@@ -17,4 +17,9 @@ class SiteDomain extends Model
     {
         return $this->hasMany(Store::class, 'public_domain_id');
     }
+
+    public function publicAccounts()
+    {
+        return $this->hasMany(Account::class, 'public_domain_id');
+    }
 }

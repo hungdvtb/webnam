@@ -16,9 +16,9 @@ class AccountController extends Controller
         
         // If system admin, show all accounts. Otherwise, show user's accounts.
         if ($user->is_admin) {
-            $accounts = Account::with('users')->get();
+            $accounts = Account::with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->get();
         } else {
-            $accounts = $user->accounts()->with('users')->get();
+            $accounts = $user->accounts()->with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->get();
         }
 
         return response()->json($accounts);
@@ -34,6 +34,7 @@ class AccountController extends Controller
             'ai_api_key' => 'nullable|string|max:255',
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
+            'public_domain_id' => 'nullable|integer|exists:site_domains,id',
         ]);
 
         $subdomain = $request->subdomain ?: Str::slug($request->name);
@@ -50,6 +51,7 @@ class AccountController extends Controller
             'ai_api_key' => $request->ai_api_key,
             'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
             'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
+            'public_domain_id' => $this->nullablePublicDomainId($request->input('public_domain_id')),
         ]);
 
         // Attach current user as owner
@@ -57,7 +59,7 @@ class AccountController extends Controller
         OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id, true);
         app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
-        return response()->json($account->load('users'), 201);
+        return response()->json($account->load(['users', 'publicDomain:id,account_id,domain,is_active,is_default']), 201);
     }
 
     public function storeWithUser(Request $request)
@@ -70,9 +72,11 @@ class AccountController extends Controller
             'account_name' => 'required|string|max:255',
             'domain' => 'nullable|string|unique:accounts,domain',
             'subdomain' => 'nullable|string|unique:accounts,subdomain',
+            'site_code' => 'nullable|string|unique:accounts,site_code',
             'ai_api_key' => 'nullable|string|max:255',
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
+            'public_domain_id' => 'nullable|integer|exists:site_domains,id',
             'user_name' => 'required|string|max:255',
             'user_email' => 'required|string|email|unique:users,email',
             'user_password' => 'required|string|min:6',
@@ -93,6 +97,7 @@ class AccountController extends Controller
                 'ai_api_key' => $request->ai_api_key,
                 'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
                 'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
+                'public_domain_id' => $this->nullablePublicDomainId($request->input('public_domain_id')),
             ]);
 
             $user = \App\Models\User::create([
@@ -108,7 +113,7 @@ class AccountController extends Controller
 
             \Illuminate\Support\Facades\DB::commit();
 
-            return response()->json($account->load('users'), 201);
+            return response()->json($account->load(['users', 'publicDomain:id,account_id,domain,is_active,is_default']), 201);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             return response()->json(['message' => 'Error: ' . $e->getMessage()], 500);
@@ -120,9 +125,9 @@ class AccountController extends Controller
         $user = $request->user();
         
         if ($user->is_admin) {
-            $account = Account::with('users')->findOrFail($id);
+            $account = Account::with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->findOrFail($id);
         } else {
-            $account = $user->accounts()->with('users')->findOrFail($id);
+            $account = $user->accounts()->with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->findOrFail($id);
         }
 
         return response()->json($account);
@@ -147,6 +152,7 @@ class AccountController extends Controller
             'ai_api_key' => 'nullable|string|max:255',
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
+            'public_domain_id' => 'nullable|integer|exists:site_domains,id',
         ]);
 
         $payload = $request->only('name', 'domain', 'subdomain', 'site_code', 'status', 'ai_api_key');
@@ -159,9 +165,13 @@ class AccountController extends Controller
             $payload['inventory_account_id'] = $this->nullableAccountLink($request->input('inventory_account_id'), (int) $account->id);
         }
 
+        if ($request->exists('public_domain_id')) {
+            $payload['public_domain_id'] = $this->nullablePublicDomainId($request->input('public_domain_id'));
+        }
+
         $account->update($payload);
 
-        return response()->json($account);
+        return response()->json($account->fresh(['publicDomain:id,account_id,domain,is_active,is_default']));
     }
 
     public function destroy($id, Request $request)
@@ -194,6 +204,8 @@ class AccountController extends Controller
             'site_code' => $account->site_code,
             'subdomain' => $account->subdomain,
             'domain' => $account->domain,
+            'public_domain_id' => $account->public_domain_id,
+            'public_domain' => $account->publicDomain?->only(['id', 'domain', 'is_active', 'is_default']),
         ]);
     }
 
@@ -216,5 +228,14 @@ class AccountController extends Controller
         $accountId = (int) $value;
 
         return $accountId > 0 && $accountId !== $selfAccountId ? $accountId : null;
+    }
+
+    private function nullablePublicDomainId($value): ?int
+    {
+        if ($value === null || $value === '' || $value === '0') {
+            return null;
+        }
+
+        return (int) $value;
     }
 }

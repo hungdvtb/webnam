@@ -15,12 +15,14 @@ class Account extends Model
         'ai_api_key',
         'catalog_account_id',
         'inventory_account_id',
+        'public_domain_id',
     ];
 
     protected $casts = [
         'status' => 'boolean',
         'catalog_account_id' => 'integer',
         'inventory_account_id' => 'integer',
+        'public_domain_id' => 'integer',
     ];
 
     public function users()
@@ -39,5 +41,10 @@ class Account extends Model
     public function inventoryAccount()
     {
         return $this->belongsTo(self::class, 'inventory_account_id');
+    }
+
+    public function publicDomain()
+    {
+        return $this->belongsTo(SiteDomain::class, 'public_domain_id');
     }
 }

@@ -153,7 +153,7 @@ class CategoryController extends Controller
         return false;
     }
 
-    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null): void
+    protected function applyStorefrontCategoryItemCounts($categories, $accountId = null, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null, ?array $accountIds = null): void
     {
         $normalizedCategories = collect($categories)->filter();
         $categoryIds = $normalizedCategories
@@ -167,7 +167,7 @@ class CategoryController extends Controller
             return;
         }
 
-        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId, $includeLinkOnlyDescendants, $storeIds);
+        $categoryDescendantIdMap = $this->buildStorefrontCategoryDescendantIdMap($categoryIds->all(), $accountId, $includeLinkOnlyDescendants, $storeIds, $accountIds);
         $queryCategoryIds = collect($categoryDescendantIdMap)
             ->flatten()
             ->map(fn ($categoryId) => (int) $categoryId)
@@ -181,7 +181,6 @@ class CategoryController extends Controller
                 $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
                     ->where('super_links.link_type', '=', 'super_link');
             })
-            ->when($accountId, fn ($query) => $query->where('products.account_id', $accountId))
             ->when($storeIds !== null, fn ($query) => $query->whereIn('products.store_id', $storeIds))
             ->whereIn('category_product.category_id', $queryCategoryIds->all())
             ->where(function ($query) {
@@ -191,7 +190,9 @@ class CategoryController extends Controller
             })
             ->where('products.status', true)
             ->whereNull('products.deleted_at')
-            ->get([
+        ;
+        StorefrontDomainScope::applyAccountScope($assignmentRows, $accountId, $accountIds, 'products.account_id');
+        $assignmentRows = $assignmentRows->get([
                 'category_product.category_id',
                 'category_product.product_id',
                 'category_product.item_type',
@@ -251,7 +252,7 @@ class CategoryController extends Controller
         });
     }
 
-    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null): array
+    protected function buildStorefrontCategoryDescendantIdMap(array $categoryIds, $accountId = null, bool $includeLinkOnlyDescendants = false, ?array $storeIds = null, ?array $accountIds = null): array
     {
         $rootIds = collect($categoryIds)
             ->map(fn ($categoryId) => is_numeric($categoryId) ? (int) $categoryId : null)
@@ -263,10 +264,10 @@ class CategoryController extends Controller
             return [];
         }
 
-        $allCategoriesQuery = Category::query()
-            ->when($accountId, fn ($query) => $query->where('account_id', $accountId))
+        $allCategoriesQuery = Category::withoutGlobalScope('account_id')
             ->where('status', true)
             ->when(!$includeLinkOnlyDescendants, fn ($query) => $query->publiclyListed());
+        StorefrontDomainScope::applyAccountScope($allCategoriesQuery, $accountId, $accountIds, 'categories.account_id');
         StorefrontDomainScope::applyStoreScope($allCategoriesQuery, $storeIds, 'categories.store_id');
         $allCategories = $allCategoriesQuery->get(['id', 'parent_id']);
 
@@ -291,21 +292,22 @@ class CategoryController extends Controller
         $timings = [];
         $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
-        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+        $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
         $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
-        $cacheKey = 'web_api_categories:index:' . ($accountId ?? 'all') . ':' . StorefrontDomainScope::cacheSegment($request, $storeIds);
-        $categories = Cache::remember($cacheKey, 60, function () use ($accountId, $storeIds) {
-            $categoryQuery = Category::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+        $cacheKey = 'web_api_categories:index:' . ($accountId ?? 'all') . ':' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds);
+        $categories = Cache::remember($cacheKey, 60, function () use ($accountId, $storeIds, $accountIds) {
+            $categoryQuery = Category::withoutGlobalScope('account_id')
                 ->where('status', true)
                 ->publiclyListed()
                 ->orderBy('order', 'asc')
                 ->orderBy('id', 'asc'); // Stable sorting
+            StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
             StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
             $categories = $categoryQuery->get();
 
-            $this->applyStorefrontCategoryItemCounts($categories, $accountId, false, $storeIds);
+            $this->applyStorefrontCategoryItemCounts($categories, $accountId, false, $storeIds, $accountIds);
 
             return $categories->toArray();
         });
@@ -319,18 +321,21 @@ class CategoryController extends Controller
         $timings = [];
         $stepStartedAt = microtime(true);
         $accountId = $this->getAccountId($request);
-        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId);
+        $accountIds = StorefrontDomainScope::resolveAccountIds($request, $accountId);
+        $storeIds = StorefrontDomainScope::resolveStoreIds($request, $accountId, $accountIds);
         $stepStartedAt = $this->markTiming($timings, 'account', $stepStartedAt);
 
-        $cacheKey = 'web_api_categories:show:' . ($accountId ?? 'all') . ':' . StorefrontDomainScope::cacheSegment($request, $storeIds) . ':' . $slug;
-        $category = Cache::remember($cacheKey, 60, function () use ($accountId, $storeIds, $slug) {
-            $categoryQuery = Category::query()
-                ->when($accountId, fn($q) => $q->where('account_id', $accountId))
+        $cacheKey = 'web_api_categories:show:' . ($accountId ?? 'all') . ':' . StorefrontDomainScope::cacheSegment($request, $storeIds, $accountIds) . ':' . $slug;
+        $category = Cache::remember($cacheKey, 60, function () use ($accountId, $storeIds, $accountIds, $slug) {
+            $categoryQuery = Category::withoutGlobalScope('account_id')
                 ->where('slug', $slug)
-                ->with(['children' => function($q) use ($storeIds) {
+                ->with(['children' => function($q) use ($accountId, $accountIds, $storeIds) {
+                    $q->withoutGlobalScope('account_id');
                     $q->where('status', true)->publiclyListed()->orderBy('order');
+                    StorefrontDomainScope::applyAccountScope($q, $accountId, $accountIds, 'categories.account_id');
                     StorefrontDomainScope::applyStoreScope($q, $storeIds, 'categories.store_id');
                 }]);
+            StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
             StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
             $category = $categoryQuery->firstOrFail();
 
@@ -338,7 +343,8 @@ class CategoryController extends Controller
                 collect([$category])->merge($category->children),
                 $accountId,
                 $category->isLinkOnly(),
-                $storeIds
+                $storeIds,
+                $accountIds
             );
 
             return $category->toArray();

@@ -12,7 +12,7 @@ class ForceCorsHeaders
 {
     private const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
 
-    private const DEFAULT_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN, X-Account-Id, X-Site-Code, Accept, Origin';
+    private const DEFAULT_ALLOWED_HEADERS = 'Authorization, Content-Type, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN, X-Account-Id, X-Site-Code, X-Public-Host, Accept, Origin';
 
     public function handle(Request $request, Closure $next): Response
     {

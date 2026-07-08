@@ -11,6 +11,15 @@ class SiteDomainController extends Controller
 {
     public function index(Request $request)
     {
+        if (($request->boolean('all') || $request->query('scope') === 'all') && $request->user()?->is_admin) {
+            $domains = SiteDomain::query()
+                ->with('account:id,name')
+                ->orderBy('domain')
+                ->get();
+
+            return response()->json($domains);
+        }
+
         $accountId = $this->getAccountId($request);
         if (!$accountId) {
              return response()->json([]);

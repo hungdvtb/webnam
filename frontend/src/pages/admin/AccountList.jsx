@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { accountApi } from '../../services/api';
+import { accountApi, cmsApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
 const AccountList = () => {
     const { user } = useAuth();
     const [accounts, setAccounts] = useState([]);
+    const [publicDomains, setPublicDomains] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
 
@@ -22,6 +23,7 @@ const AccountList = () => {
         ai_api_key: '',
         catalog_account_id: '',
         inventory_account_id: '',
+        public_domain_id: '',
         user_name: '',
         user_email: '',
         user_password: ''
@@ -40,6 +42,10 @@ const AccountList = () => {
     };
 
     const selectableLinkedAccounts = accounts.filter(acc => Number(acc.id) !== Number(formData.id));
+    const publicDomainNameById = (id) => {
+        const domainId = Number(id || 0);
+        return publicDomains.find(domain => Number(domain.id) === domainId)?.domain || '';
+    };
 
     const fetchAccounts = async () => {
         setLoading(true);
@@ -54,9 +60,19 @@ const AccountList = () => {
         }
     };
 
+    const fetchPublicDomains = async () => {
+        try {
+            const response = await cmsApi.domains.getAll(user?.is_admin ? { all: 1 } : undefined);
+            setPublicDomains(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            console.error('Error fetching public domains:', error);
+        }
+    };
+
     useEffect(() => {
         fetchAccounts();
-    }, []);
+        fetchPublicDomains();
+    }, [user?.is_admin]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -80,7 +96,8 @@ const AccountList = () => {
                     status: formData.status,
                     ai_api_key: formData.ai_api_key,
                     catalog_account_id: normalizeAccountLink(formData.catalog_account_id, formData.id),
-                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id, formData.id)
+                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id, formData.id),
+                    public_domain_id: formData.public_domain_id || null
                 };
                 await accountApi.update(formData.id, payload);
             } else {
@@ -92,7 +109,8 @@ const AccountList = () => {
                     status: formData.status,
                     ai_api_key: formData.ai_api_key,
                     catalog_account_id: normalizeAccountLink(formData.catalog_account_id),
-                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id)
+                    inventory_account_id: normalizeAccountLink(formData.inventory_account_id),
+                    public_domain_id: formData.public_domain_id || null
                 };
                 await accountApi.store(payload);
             }
@@ -117,7 +135,8 @@ const AccountList = () => {
             status: acc.status,
             ai_api_key: acc.ai_api_key || '',
             catalog_account_id: acc.catalog_account_id || '',
-            inventory_account_id: acc.inventory_account_id || ''
+            inventory_account_id: acc.inventory_account_id || '',
+            public_domain_id: acc.public_domain_id || ''
         });
         setFormMode('edit');
         setIsFormOpen(true);
@@ -134,7 +153,8 @@ const AccountList = () => {
                     status: !acc.status,
                     ai_api_key: acc.ai_api_key,
                     catalog_account_id: normalizeAccountLink(acc.catalog_account_id, acc.id),
-                    inventory_account_id: normalizeAccountLink(acc.inventory_account_id, acc.id)
+                    inventory_account_id: normalizeAccountLink(acc.inventory_account_id, acc.id),
+                    public_domain_id: acc.public_domain_id || null
                 };
                 await accountApi.update(acc.id, payload);
                 sessionStorage.removeItem('accounts_list');
@@ -162,6 +182,7 @@ const AccountList = () => {
             ai_api_key: '',
             catalog_account_id: '',
             inventory_account_id: '',
+            public_domain_id: '',
             user_name: '',
             user_email: '',
             user_password: ''
@@ -261,6 +282,24 @@ const AccountList = () => {
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Subdomain</label>
                                         <input type="text" value={formData.subdomain} onChange={e => setFormData({ ...formData, subdomain: e.target.value })} className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm" />
+                                    </div>
+                                    <div className="md:col-span-2 space-y-1.5">
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Domain public website</label>
+                                        <select
+                                            value={formData.public_domain_id}
+                                            onChange={e => setFormData({ ...formData, public_domain_id: e.target.value })}
+                                            className="w-full bg-stone/5 border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm"
+                                        >
+                                            <option value="">Khong gan domain public</option>
+                                            {publicDomains.map(domain => (
+                                                <option key={domain.id} value={domain.id}>
+                                                    {domain.domain}{domain.account?.name ? ` - ${domain.account.name}` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        <p className="text-[9px] text-stone/40 italic font-medium">
+                                            Dung cho website ban hang cong 3000. Nhieu cua hang co the chon chung gomdaithanh.com, cua hang khac chon dongdaithanh.com.
+                                        </p>
                                     </div>
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Dung chung san pham voi</label>
@@ -367,6 +406,14 @@ const AccountList = () => {
                                                 <span className="material-symbols-outlined text-[16px] text-gold/60">language</span>
                                                 <span className="truncate hover:text-primary cursor-pointer w-full italic" onClick={() => window.open(`http://${acc.domain}`, '_blank')}>
                                                     {acc.domain}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {(acc.public_domain || acc.public_domain_id) && (
+                                            <div className="flex items-center gap-2.5 text-[12px] text-stone-600">
+                                                <span className="material-symbols-outlined text-[16px] text-gold/60">public</span>
+                                                <span className="truncate w-full font-semibold text-primary">
+                                                    Web: {acc.public_domain?.domain || publicDomainNameById(acc.public_domain_id) || `#${acc.public_domain_id}`}
                                                 </span>
                                             </div>
                                         )}

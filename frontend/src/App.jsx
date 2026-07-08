@@ -129,6 +129,8 @@ function App() {
               {/* ─── Storefront (Website bán hàng - Public) ─── */}
               <Route element={<StorefrontLayout />}>
                 <Route index element={<StorefrontHome />} />
+                <Route path="products" element={<StorefrontProducts />} />
+                <Route path="product/:slugOrId" element={<StorefrontProductDetail />} />
                 <Route path="san-pham" element={<StorefrontProducts />} />
                 <Route path="san-pham/:slugOrId" element={<StorefrontProductDetail />} />
                 <Route path="danh-muc/:slug" element={<StorefrontProducts />} />

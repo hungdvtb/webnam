@@ -25,13 +25,14 @@ import {
 } from '../../utils/money';
 import { formatCategorySummary, getProductCategoryNames } from '../../utils/productCategories';
 import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
+import { resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
 import {
     hasAdminDataPermission,
     hasAdminPermission,
 } from '../../utils/adminPermissions';
 
 const TYPE_LABELS = PRODUCT_TYPE_META;
-const PRODUCT_DETAIL_PATH = '/san-pham';
+const PRODUCT_DETAIL_PATH = '/product';
 const PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY = 'product_management_persistent_state';
 const PRODUCT_MANAGEMENT_WORKING_STATE_KEY = 'product_management_working_state';
 const quantityFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 });
@@ -194,7 +195,9 @@ function buildProductPageUrl(product, domains = []) {
         : [];
     const requestedDomainId = String(product?.site_domain_id || '').trim();
     const requestedStoreDomainId = String(product?.store?.public_domain_id || product?.store?.publicDomainId || '').trim();
+    const requestedAccountDomainId = String(product?.account?.public_domain_id || product?.account?.publicDomainId || '').trim();
     const storeSelectedDomain = activeDomains.find((item) => String(item.id) === requestedStoreDomainId);
+    const accountSelectedDomain = activeDomains.find((item) => String(item.id) === requestedAccountDomainId);
     const selectedDomain = activeDomains.find((item) => String(item.id) === requestedDomainId)
         || activeDomains.find((item) => item?.is_default)
         || activeDomains[0];
@@ -202,22 +205,27 @@ function buildProductPageUrl(product, domains = []) {
         product?.store?.public_domain?.domain
         || product?.store?.publicDomain?.domain
         || storeSelectedDomain?.domain
+        || product?.account?.public_domain?.domain
+        || product?.account?.publicDomain?.domain
+        || accountSelectedDomain?.domain
         || product?.siteDomain?.domain
         || product?.site_domain?.domain
         || selectedDomain?.domain
     );
+    const currentOrigin = typeof window !== 'undefined' ? window.location?.origin : '';
+    const baseUrl = resolvePublicSiteBaseUrl({
+        explicitBaseUrl: domain,
+        domains: activeDomains,
+        currentOrigin,
+    });
 
     try {
-        if (domain) {
-            return new URL(path, `https://${domain}`).toString();
-        }
-
-        if (typeof window !== 'undefined' && window.location?.origin) {
-            return new URL(path, window.location.origin).toString();
+        if (baseUrl) {
+            return new URL(path, `${baseUrl}/`).toString();
         }
     } catch (error) {
-        if (typeof window !== 'undefined' && window.location?.origin) {
-            return `${window.location.origin}${path}`;
+        if (baseUrl) {
+            return `${baseUrl.replace(/\/+$/, '')}${path}`;
         }
     }
 

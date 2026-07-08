@@ -46,7 +46,7 @@ use Throwable;
 
 class ProductController extends Controller
 {
-    private const PRODUCT_DETAIL_PATH = '/san-pham';
+    private const PRODUCT_DETAIL_PATH = '/product';
     private const BUNDLE_OPTION_STATUS_VISIBLE = 'visible';
     private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
     private const ADMIN_PRODUCT_LIST_HIDDEN_PRODUCT_APPENDS = [
@@ -3247,6 +3247,8 @@ class ProductController extends Controller
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
+            'account:id,name,public_domain_id',
+            'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
             'store:id,name,slug,status,public_domain_id',
@@ -3267,20 +3269,24 @@ class ProductController extends Controller
                     ]);
             },
             'groupedItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
+                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
+                        'account:id,name,public_domain_id',
+                        'account.publicDomain:id,domain,is_active,is_default',
                         'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:' . $attributeSummaryColumns,
                     ]);
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
+                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
+                        'account:id,name,public_domain_id',
+                        'account.publicDomain:id,domain,is_active,is_default',
                         'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
                         'attributeValues.attribute:' . $attributeSummaryColumns,
@@ -6449,6 +6455,8 @@ class ProductController extends Controller
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
+            'account:id,name,public_domain_id',
+            'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
             'siteDomain:id,domain',
             'store:id,name,slug,status,public_domain_id',
@@ -6463,6 +6471,8 @@ class ProductController extends Controller
             $relations = array_merge($relations, [
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
                 'variations.parentConfigurable:id,name,sku,type',
+                'variations.account:id,name,public_domain_id',
+                'variations.account.publicDomain:id,domain,is_active,is_default',
                 'variations.category:id,name,code,slug',
                 'variations.categories:id,name,code,slug',
                 'variations.store:id,name,slug,status,public_domain_id',
@@ -6475,7 +6485,9 @@ class ProductController extends Controller
                 'variations.profitCenter:id,name,code,manager_user_id',
                 'variations.profitCenter.manager:id,name',
                 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'groupedItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'groupedItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'groupedItems.account:id,name,public_domain_id',
+                'groupedItems.account.publicDomain:id,domain,is_active,is_default',
                 'groupedItems.profitCenter:id,name,code,manager_user_id',
                 'groupedItems.profitCenter.manager:id,name',
                 'groupedItems.category:id,name,code,slug',
@@ -6486,7 +6498,9 @@ class ProductController extends Controller
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'bundleItems:id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'bundleItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'bundleItems.account:id,name,public_domain_id',
+                'bundleItems.account.publicDomain:id,domain,is_active,is_default',
                 'bundleItems.profitCenter:id,name,code,manager_user_id',
                 'bundleItems.profitCenter.manager:id,name',
                 'bundleItems.category:id,name,code,slug',
@@ -7842,7 +7856,7 @@ class ProductController extends Controller
                 '#ID nếu cập nhật',
                 '#SKU để cập nhật hoặc tạo mới',
                 '#slug sản phẩm',
-                '#https://ten-mien/san-pham/slug-hoac-id',
+                '#https://ten-mien/product/slug-hoac-id',
                 '#Tên sản phẩm',
                 '#simple / virtual / downloadable / configurable / grouped / bundle',
                 '#CODE:ma-danh-muc hoặc ID:12 hoặc NAME:Tên danh mục',
@@ -8728,6 +8742,23 @@ class ProductController extends Controller
             $matchedStoreDomain = $domains->first(fn (SiteDomain $siteDomain) => (int) $siteDomain->id === $requestedStoreDomainId);
             if ($matchedStoreDomain) {
                 return $this->normalizeDomainValue($matchedStoreDomain->domain);
+            }
+        }
+
+        $accountDomain = $this->normalizeDomainValue((string) (
+            data_get($product, 'account.public_domain.domain')
+            ?: data_get($product, 'account.publicDomain.domain')
+            ?: ''
+        ));
+        if ($accountDomain !== '') {
+            return $accountDomain;
+        }
+
+        $requestedAccountDomainId = (int) data_get($product, 'account.public_domain_id', 0);
+        if ($requestedAccountDomainId > 0) {
+            $matchedAccountDomain = $domains->first(fn (SiteDomain $siteDomain) => (int) $siteDomain->id === $requestedAccountDomainId);
+            if ($matchedAccountDomain) {
+                return $this->normalizeDomainValue($matchedAccountDomain->domain);
             }
         }
 

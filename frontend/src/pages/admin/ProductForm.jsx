@@ -33,6 +33,7 @@ import {
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
+import { resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
 import { formatCategorySummary, getCategoryNamesByIds, getProductCategoryIds, normalizeCategoryIds } from '../../utils/productCategories';
 import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
 import { resolveAiRequestError } from '../../utils/aiError';
@@ -2417,6 +2418,7 @@ const ProductForm = () => {
     const [productMeta, setProductMeta] = useState({
         originalType: '',
         parentConfigurable: null,
+        account: null,
     });
     const [showConvertToConfigurableModal, setShowConvertToConfigurableModal] = useState(false);
     const [isConvertingToConfigurable, setIsConvertingToConfigurable] = useState(false);
@@ -4317,7 +4319,7 @@ const ProductForm = () => {
         if (isEdit) {
             fetchProduct();
         } else {
-            setProductMeta({ originalType: '', parentConfigurable: null });
+            setProductMeta({ originalType: '', parentConfigurable: null, account: null });
             setConvertToConfigurableForm(buildInitialConvertToConfigurableForm());
             setExistingVariantSuperAttributes([]);
         }
@@ -4833,6 +4835,7 @@ const ProductForm = () => {
             setProductMeta({
                 originalType: data.type || 'simple',
                 parentConfigurable,
+                account: data.account || null,
             });
             setConvertToConfigurableForm(buildInitialConvertToConfigurableForm({
                 name: data.name,
@@ -7686,30 +7689,43 @@ const ProductForm = () => {
     const selectedDomain = useMemo(() => {
         const storePublicDomain = selectedStore?.public_domain || selectedStore?.publicDomain || null;
         const storeDomainById = domains.find(d => String(d.id) === String(selectedStore?.public_domain_id));
+        const accountPublicDomain = productMeta.account?.public_domain || productMeta.account?.publicDomain || null;
+        const accountDomainById = domains.find(d => String(d.id) === String(productMeta.account?.public_domain_id));
 
         return storePublicDomain
             || storeDomainById
+            || accountPublicDomain
+            || accountDomainById
             || domains.find(d => String(d.id) === String(formData.site_domain_id))
             || domains.find(d => d.is_default)
             || { domain: 'di-san.com' };
-    }, [domains, formData.site_domain_id, selectedStore]);
+    }, [domains, formData.site_domain_id, productMeta.account, selectedStore]);
 
     const previewSlug = useMemo(() => (
         String((showSlugModal ? tempSlug : formData.slug) || formData.slug || '').trim()
     ), [formData.slug, showSlugModal, tempSlug]);
 
     const baseProductLink = useMemo(() => {
-        const domain = String(selectedDomain?.domain || '').trim().replace(/^https?:\/\//, '');
-        if (!previewSlug || !domain) {
+        if (!previewSlug) {
+            return '';
+        }
+
+        const currentOrigin = typeof window !== 'undefined' ? window.location?.origin : '';
+        const baseUrl = resolvePublicSiteBaseUrl({
+            explicitBaseUrl: selectedDomain?.domain || '',
+            domains,
+            currentOrigin,
+        });
+        if (!baseUrl) {
             return '';
         }
 
         try {
-            return new URL(`/product/${encodeURIComponent(previewSlug)}`, `https://${domain}`).toString();
+            return new URL(`/product/${encodeURIComponent(previewSlug)}`, `${baseUrl}/`).toString();
         } catch (error) {
             return '';
         }
-    }, [previewSlug, selectedDomain]);
+    }, [domains, previewSlug, selectedDomain]);
 
     const hasValidProductLink = Boolean(baseProductLink);
 

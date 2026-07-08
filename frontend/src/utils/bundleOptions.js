@@ -1,3 +1,5 @@
+import { calculateRoundedImportCostLineTotal } from './money.js';
+
 const cloneBundleValue = (value) => {
     if (Array.isArray(value)) {
         return value.map(cloneBundleValue);
@@ -23,6 +25,29 @@ export const createBundleItemEntryId = () => (
 const buildCopiedBundleOptionTitle = (title) => {
     const normalizedTitle = String(title ?? '').trim();
     return normalizedTitle ? `Copy ${normalizedTitle}` : 'Copy';
+};
+
+export const resolveBundleImportCostValue = (...values) => {
+    for (const value of values) {
+        if (value === null || value === undefined || value === '') {
+            continue;
+        }
+
+        const normalizedValue = calculateRoundedImportCostLineTotal(value, 1);
+        if (Number.isFinite(normalizedValue)) {
+            return normalizedValue;
+        }
+    }
+
+    return '';
+};
+
+export const calculateBundleOptionImportCostTotal = (option) => {
+    const items = Array.isArray(option?.items) ? option.items : [];
+
+    return items.reduce((total, item) => (
+        total + calculateRoundedImportCostLineTotal(item?.cost_price, item?.quantity)
+    ), 0);
 };
 
 export const cloneBundleOptionForCopy = (

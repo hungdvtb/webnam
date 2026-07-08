@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import * as bundleOptionUtils from './bundleOptions.js';
 import {
     cloneBundleOptionForCopy,
     copyBundleOptionBelowSource,
@@ -206,6 +207,32 @@ runTest('cloneBundleOptionForCopy tolerates missing items and still returns a va
     assert.equal(clonedOption.uid, 'empty-copy-uid');
     assert.equal(clonedOption.title, 'Copy Không sản phẩm');
     assert.deepEqual(clonedOption.items, []);
+});
+
+runTest('calculateBundleOptionImportCostTotal totals rounded import cost by quantity', () => {
+    assert.equal(typeof bundleOptionUtils.calculateBundleOptionImportCostTotal, 'function');
+    assert.equal(
+        bundleOptionUtils.calculateBundleOptionImportCostTotal({
+            items: [
+                { cost_price: 850000, quantity: 2 },
+                { cost_price: '139.600', quantity: 4 },
+                { cost_price: '', quantity: 99 },
+            ],
+        }),
+        2260000,
+    );
+});
+
+runTest('resolveBundleImportCostValue falls back to expected cost when current cost is empty', () => {
+    assert.equal(typeof bundleOptionUtils.resolveBundleImportCostValue, 'function');
+    assert.equal(
+        bundleOptionUtils.resolveBundleImportCostValue(null, '', '289500.00'),
+        290000,
+    );
+    assert.equal(
+        bundleOptionUtils.resolveBundleImportCostValue(null, undefined, ''),
+        '',
+    );
 });
 
 if (process.exitCode) {

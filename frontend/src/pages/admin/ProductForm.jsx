@@ -19,9 +19,11 @@ import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
 import { PRODUCT_TYPE_FORM_META } from '../../config/productTypes';
 import { compressImage, formatBytes } from '../../utils/imageUtils';
 import {
+    calculateBundleOptionImportCostTotal,
     copyBundleOptionBelowSource,
     createBundleItemEntryId,
     createBundleOptionId,
+    resolveBundleImportCostValue,
 } from '../../utils/bundleOptions';
 import {
     formatRoundedImportCost,
@@ -615,6 +617,7 @@ const DraggableBundleItem = ({
     handleUpdateBundleItemQty,
     handleRemoveItemFromOption,
     formatNumberOutput,
+    formatImportCostOutput,
     isSortingMode
 }) => {
     const ref = useRef(null);
@@ -730,6 +733,9 @@ const DraggableBundleItem = ({
                 ) : (
                     <span className="text-[11px] text-black/60 italic">Sản phẩm đơn</span>
                 )}
+            </td>
+            <td className="px-3 py-3 text-center border-r border-gold/10">
+                <p className="text-[12px] font-black text-primary">{formatImportCostOutput(item.cost_price) || '0'}{"\u20ab"}</p>
             </td>
             <td className="px-3 py-3 text-center border-r border-gold/10">
                 <p className="text-[12px] font-black text-black">{formatNumberOutput(item.price)}₫</p>
@@ -3158,12 +3164,12 @@ const ProductForm = () => {
         });
     };
 
-    const resolveDuplicateSafeCost = (primaryValue, fallbackValue = null) => {
+    const resolveDuplicateSafeCost = (...values) => {
         if (isDuplicate) {
             return '';
         }
 
-        return normalizeImportCostValue(primaryValue ?? fallbackValue);
+        return resolveBundleImportCostValue(...values);
     };
 
     const getBundleItemProductId = (item) => Number(item?.product_id ?? item?.id ?? 0);
@@ -3208,7 +3214,12 @@ const ProductForm = () => {
             name: variant.name || item.product_name || item.name,
             sku: variant.sku || item.product_sku || item.sku,
             price: normalizeMoneyValue(variant.price ?? item.price),
-            cost_price: resolveDuplicateSafeCost(variant.cost_price, item.product_cost_price),
+            cost_price: resolveDuplicateSafeCost(
+                variant.cost_price,
+                variant.expected_cost,
+                variant.inventory_display_cost,
+                item.product_cost_price
+            ),
             image_url: resolveBundleItemImage(variant) || item.product_image_url || item.image_url,
             legacy_missing_variant: false,
         };
@@ -4888,7 +4899,12 @@ const ProductForm = () => {
                     name: item.name,
                     sku: item.sku,
                     price: normalizeMoneyValue(item.pivot?.price ?? item.price),
-                    cost_price: resolveDuplicateSafeCost(item.pivot?.cost_price, item.cost_price),
+                    cost_price: resolveDuplicateSafeCost(
+                        item.pivot?.cost_price,
+                        item.cost_price,
+                        item.expected_cost,
+                        item.inventory_display_cost
+                    ),
                     quantity: item.pivot?.quantity ?? 1,
                     is_required: !!(item.pivot?.is_required),
                     option_title: item.pivot?.option_title || '',
@@ -4984,12 +5000,21 @@ const ProductForm = () => {
                             product_name: item.name,
                         product_sku: item.sku,
                         product_price: normalizeMoneyValue(item.price),
-                        product_cost_price: resolveDuplicateSafeCost(item.cost_price),
+                        product_cost_price: resolveDuplicateSafeCost(
+                            item.cost_price,
+                            item.expected_cost,
+                            item.inventory_display_cost
+                        ),
                         product_image_url: resolveAdminImageUrl(item.images?.find(img => img.is_primary) || item.images?.[0], ''),
                         name: item.name,
                         sku: item.sku,
                         price: normalizeMoneyValue(item.pivot?.price ?? item.price),
-                        cost_price: resolveDuplicateSafeCost(item.pivot?.cost_price, item.cost_price),
+                        cost_price: resolveDuplicateSafeCost(
+                            item.pivot?.cost_price,
+                            item.cost_price,
+                            item.expected_cost,
+                            item.inventory_display_cost
+                        ),
                         quantity: item.pivot?.quantity ?? 1,
                         is_required: !!item.pivot?.is_required,
                         is_default: !!item.pivot?.is_default,
@@ -6902,12 +6927,20 @@ const ProductForm = () => {
                 product_name: product.name,
                 product_sku: product.sku,
                 product_price: normalizeMoneyValue(product.price),
-                product_cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
+                product_cost_price: resolveDuplicateSafeCost(
+                    product.cost_price,
+                    product.expected_cost,
+                    product.inventory_display_cost
+                ),
                 product_image_url: primaryImage?.image_url,
                 name: product.name,
                 sku: product.sku,
                 price: normalizeMoneyValue(product.price),
-                cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
+                cost_price: resolveDuplicateSafeCost(
+                    product.cost_price,
+                    product.expected_cost,
+                    product.inventory_display_cost
+                ),
                 quantity: 1,
                 is_required: true,
                 is_default: o.items.length === 0,
@@ -7113,7 +7146,11 @@ const ProductForm = () => {
                         product_name: product.name,
                         product_sku: product.sku,
                         product_price: normalizeMoneyValue(product.price),
-                        product_cost_price: isDuplicate ? '' : normalizeImportCostValue(product.cost_price),
+                        product_cost_price: resolveDuplicateSafeCost(
+                            product.cost_price,
+                            product.expected_cost,
+                            product.inventory_display_cost
+                        ),
                         product_image_url: primaryImage,
                     };
 
@@ -7127,7 +7164,11 @@ const ProductForm = () => {
                                 name: v.name || product.name,
                                 sku: v.sku || product.sku,
                                 price: normalizeMoneyValue(v.price),
-                                cost_price: isDuplicate ? '' : normalizeImportCostValue(v.cost_price),
+                                cost_price: resolveDuplicateSafeCost(
+                                    v.cost_price,
+                                    v.expected_cost,
+                                    v.inventory_display_cost
+                                ),
                                 image_url: resolveBundleItemImage(v) || primaryImage
                             };
                         });
@@ -9856,6 +9897,7 @@ const ProductForm = () => {
                                                                     </th>
                                                                     <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] border-r border-gold/10">Sản phẩm</th>
                                                                     <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] border-r border-gold/10">Biến thể</th>
+                                                                    <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center border-r border-gold/10">Giá nhập</th>
                                                                     <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center border-r border-gold/10">Giá bán</th>
                                                                     <th className="px-3 py-2.5 uppercase font-black tracking-widest text-[10px] text-center border-r border-gold/10">Số lượng</th>
                                                                     <th className="px-3 py-2 w-12"></th>
@@ -9875,13 +9917,20 @@ const ProductForm = () => {
                                                                         handleUpdateBundleItemQty={handleUpdateBundleItemQty}
                                                                         handleRemoveItemFromOption={handleRemoveItemFromOption}
                                                                         formatNumberOutput={formatNumberOutput}
+                                                                        formatImportCostOutput={formatImportCostOutput}
                                                                         isSortingMode={isSortingBundle[option.id]}
                                                                     />
                                                                 ))}
                                                             </tbody>
                                                             <tfoot>
                                                                 <tr className="border-t border-gold/10 bg-[#fcfaf7]">
-                                                                    <td colSpan={4} className="px-5 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/65">
+                                                                    <td colSpan={3} className="px-5 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/65">
+                                                                        {'T\u1ed5ng gi\u00e1 nh\u1eadp'}
+                                                                    </td>
+                                                                    <td className="px-3 py-3 text-center text-[13px] font-black text-primary">
+                                                                        {formatImportCostOutput(calculateBundleOptionImportCostTotal(option)) || '0'}{"\u20ab"}
+                                                                    </td>
+                                                                    <td className="px-3 py-3 text-right text-[11px] font-black uppercase tracking-[0.14em] text-primary/65">
                                                                         {'T\u1ed5ng ti\u1ec1n t\u00f9y ch\u1ecdn'}
                                                                     </td>
                                                                     <td colSpan={2} className="px-5 py-3 text-right text-[13px] font-black text-brick">

@@ -5,6 +5,7 @@ const ADMIN_HOST_PATTERN = /(^|\.)admin\.gomdaithanh\.com$/i;
 const API_HOST_PATTERN = /(^|\.)api\.gomdaithanh\.com$/i;
 const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)$/i;
 const ABSOLUTE_HTTP_URL_PATTERN = /^https?:\/\//i;
+const STOREFRONT_API_PATH_PATTERN = /(^|\/)storefront\//i;
 const trimTrailingSlash = (value) => String(value || '').trim().replace(/\/+$/, '');
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
@@ -82,6 +83,23 @@ const sleep = (ms) => new Promise((resolve) => {
 });
 
 const normalizeRequestMethod = (method) => String(method || 'get').trim().toLowerCase();
+
+const isStorefrontApiRequest = (url = '') => STOREFRONT_API_PATH_PATTERN.test(String(url || '').replace(/^\/+/, ''));
+
+const resolveCurrentPublicHost = () => {
+    if (typeof window === 'undefined') {
+        return '';
+    }
+
+    const host = String(window.location?.host || '').trim();
+    const hostname = normalizeHostname(window.location?.hostname || '');
+
+    if (!host || !hostname || isLoopbackHostname(hostname) || ADMIN_HOST_PATTERN.test(hostname)) {
+        return '';
+    }
+
+    return host;
+};
 
 const resolveRetryLimit = (config = {}) => {
     const resolvedLimit = Number(config.maxRetries);
@@ -209,6 +227,13 @@ api.interceptors.request.use((config) => {
     const activeSiteCode = localStorage.getItem('activeSiteCode');
     if (activeSiteCode) {
         config.headers['X-Site-Code'] = activeSiteCode;
+    }
+
+    if (isStorefrontApiRequest(config.url)) {
+        const publicHost = resolveCurrentPublicHost();
+        if (publicHost) {
+            config.headers['X-Public-Host'] = publicHost;
+        }
     }
 
     return config;

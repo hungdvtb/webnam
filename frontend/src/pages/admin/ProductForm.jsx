@@ -4609,7 +4609,7 @@ const ProductForm = () => {
 
     const fetchDomains = async () => {
         try {
-            const response = await cmsApi.domains.getAll();
+            const response = await cmsApi.domains.getAll({ scope: 'all' });
             setDomains(response.data.filter(d => d.is_active));
         } catch (error) {
             console.error("Error fetching domains", error);

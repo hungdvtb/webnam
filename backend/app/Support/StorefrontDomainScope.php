@@ -57,6 +57,10 @@ class StorefrontDomainScope
             return null;
         }
 
+        if (self::hasAccountLevelDomainAssignments($domain)) {
+            return null;
+        }
+
         $storeIds = Store::withoutGlobalScopes()
             ->where('public_domain_id', $domain->id)
             ->when(
@@ -73,6 +77,21 @@ class StorefrontDomainScope
             ->all();
 
         return $storeIds === [] ? null : $storeIds;
+    }
+
+    private static function hasAccountLevelDomainAssignments(SiteDomain $domain): bool
+    {
+        if (
+            !Schema::hasTable('accounts')
+            || !Schema::hasColumn('accounts', 'public_domain_id')
+        ) {
+            return false;
+        }
+
+        return Account::query()
+            ->where('public_domain_id', $domain->id)
+            ->where('status', true)
+            ->exists();
     }
 
     public static function applyAccountScope($query, ?int $accountId, ?array $accountIds, string $qualifiedColumn)

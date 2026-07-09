@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Account;
 use App\Models\Product;
 use App\Models\SiteDomain;
+use App\Models\Store;
 use App\Support\StorefrontDomainScope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
@@ -52,8 +53,30 @@ class StorefrontPublicDomainScopeTest extends TestCase
         $secondAccount->update(['public_domain_id' => $gomDomain->id]);
         $thirdAccount->update(['public_domain_id' => $dongDomain->id]);
 
+        $firstStore = Store::query()->create([
+            'account_id' => $firstAccount->id,
+            'public_domain_id' => $gomDomain->id,
+            'name' => 'Store 1 branch',
+            'slug' => 'store-1-branch',
+            'status' => true,
+        ]);
+        $secondStore = Store::query()->create([
+            'account_id' => $secondAccount->id,
+            'name' => 'Store 2 branch',
+            'slug' => 'store-2-branch',
+            'status' => true,
+        ]);
+        $thirdStore = Store::query()->create([
+            'account_id' => $thirdAccount->id,
+            'public_domain_id' => $dongDomain->id,
+            'name' => 'Store 3 branch',
+            'slug' => 'store-3-branch',
+            'status' => true,
+        ]);
+
         Product::query()->create([
             'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
             'type' => 'simple',
             'name' => 'Product on Gom 1',
             'slug' => 'product-on-gom-1',
@@ -63,6 +86,7 @@ class StorefrontPublicDomainScopeTest extends TestCase
         ]);
         Product::query()->create([
             'account_id' => $secondAccount->id,
+            'store_id' => $secondStore->id,
             'type' => 'simple',
             'name' => 'Product on Gom 2',
             'slug' => 'product-on-gom-2',
@@ -72,6 +96,7 @@ class StorefrontPublicDomainScopeTest extends TestCase
         ]);
         Product::query()->create([
             'account_id' => $thirdAccount->id,
+            'store_id' => $thirdStore->id,
             'type' => 'simple',
             'name' => 'Product on Dong',
             'slug' => 'product-on-dong',
@@ -86,6 +111,9 @@ class StorefrontPublicDomainScopeTest extends TestCase
         $this->assertSame(
             [$firstAccount->id, $secondAccount->id],
             StorefrontDomainScope::resolveAccountIds($request, $firstAccount->id)
+        );
+        $this->assertNull(
+            StorefrontDomainScope::resolveStoreIds($request, $firstAccount->id, [$firstAccount->id, $secondAccount->id])
         );
 
         $response = $this

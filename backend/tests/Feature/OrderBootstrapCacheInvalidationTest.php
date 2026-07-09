@@ -6,6 +6,7 @@ use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
 use App\Models\QuoteTemplate;
+use App\Models\SiteSetting;
 use App\Models\User;
 use App\Support\OrderBootstrapCache;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -121,14 +122,47 @@ class OrderBootstrapCacheInvalidationTest extends TestCase
         );
     }
 
+    public function test_order_form_bootstrap_uses_linked_account_quote_config_when_selected_account_has_none(): void
+    {
+        [$sourceAccount, $user] = $this->authenticate();
+        $linkedAccount = $this->createAccount('quote-linked');
+        $linkedAccount->update([
+            'catalog_account_id' => $sourceAccount->id,
+            'inventory_account_id' => $sourceAccount->id,
+        ]);
+        $user->accounts()->attach($linkedAccount->id, ['role' => 'manager']);
+
+        $this->createQuoteConfig($sourceAccount, 'Men lam linked');
+
+        $response = $this
+            ->withHeaders($this->headers($linkedAccount))
+            ->getJson('/api/orders/bootstrap?mode=form');
+
+        $response->assertOk();
+        $response->assertJsonPath('quote_settings.quote_store_name', 'Gom Dai Thanh');
+        $this->assertSame(['Men lam linked'], collect($response->json('quote_templates'))->pluck('name')->all());
+    }
+
+    public function test_order_form_bootstrap_uses_first_configured_quote_account_when_selected_account_has_no_quote_templates(): void
+    {
+        [$configuredAccount, $user] = $this->authenticate();
+        $emptyAccount = $this->createAccount('quote-empty');
+        $user->accounts()->attach($emptyAccount->id, ['role' => 'manager']);
+
+        $this->createQuoteConfig($configuredAccount, 'Men ran shared');
+
+        $response = $this
+            ->withHeaders($this->headers($emptyAccount))
+            ->getJson('/api/orders/bootstrap?mode=form');
+
+        $response->assertOk();
+        $response->assertJsonPath('quote_settings.quote_store_name', 'Gom Dai Thanh');
+        $this->assertSame(['Men ran shared'], collect($response->json('quote_templates'))->pluck('name')->all());
+    }
+
     private function authenticate(): array
     {
-        $account = Account::query()->create([
-            'name' => 'Quote Cache Account',
-            'domain' => 'quote-cache-' . Str::lower(Str::random(6)) . '.local',
-            'subdomain' => 'quote-cache-' . Str::lower(Str::random(6)),
-            'status' => true,
-        ]);
+        $account = $this->createAccount('quote-cache');
 
         $user = User::query()->create([
             'name' => 'Quote Cache Admin',
@@ -141,6 +175,32 @@ class OrderBootstrapCacheInvalidationTest extends TestCase
         Sanctum::actingAs($user, ['*']);
 
         return [$account, $user];
+    }
+
+    private function createAccount(string $prefix): Account
+    {
+        $slug = $prefix . '-' . Str::lower(Str::random(6));
+
+        return Account::query()->create([
+            'name' => 'Quote Account ' . $slug,
+            'domain' => $slug . '.local',
+            'subdomain' => $slug,
+            'status' => true,
+        ]);
+    }
+
+    private function createQuoteConfig(Account $account, string $templateName): QuoteTemplate
+    {
+        SiteSetting::setValue('quote_store_name', 'Gom Dai Thanh', $account->id);
+        SiteSetting::setValue('quote_store_phone', '0326250356', $account->id);
+
+        return QuoteTemplate::query()->create([
+            'account_id' => $account->id,
+            'name' => $templateName,
+            'image_url' => 'https://example.com/' . Str::slug($templateName) . '.png',
+            'sort_order' => 0,
+            'is_active' => true,
+        ]);
     }
 
     private function headers(Account $account): array

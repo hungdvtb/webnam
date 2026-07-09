@@ -4126,18 +4126,75 @@ class OrderController extends Controller
             ->all();
     }
 
-    private function loadQuoteSettings(int $accountId): array
+    private function loadQuoteSettings(int $accountId, ?int $quoteTemplateSourceAccountId = null): array
     {
         $settings = array_fill_keys(self::QUOTE_SETTING_KEYS, '');
+        $fallbackAccountIds = collect($this->quoteCandidateAccountIds($accountId))
+            ->reject(fn (int $candidateId) => $candidateId === $accountId)
+            ->when(
+                $quoteTemplateSourceAccountId && $quoteTemplateSourceAccountId !== $accountId,
+                fn (Collection $collection) => $collection->push((int) $quoteTemplateSourceAccountId)
+            )
+            ->unique()
+            ->values()
+            ->all();
 
-        return array_merge(
-            $settings,
-            SiteSetting::query()
-                ->where('account_id', $accountId)
-                ->whereIn('key', self::QUOTE_SETTING_KEYS)
-                ->pluck('value', 'key')
-                ->toArray()
-        );
+        foreach ([...$fallbackAccountIds, $accountId] as $sourceAccountId) {
+            $settings = array_merge(
+                $settings,
+                SiteSetting::query()
+                    ->where('account_id', $sourceAccountId)
+                    ->whereIn('key', self::QUOTE_SETTING_KEYS)
+                    ->pluck('value', 'key')
+                    ->toArray()
+            );
+        }
+
+        return $settings;
+    }
+
+    private function quoteCandidateAccountIds(int $accountId): array
+    {
+        $candidateIds = [$accountId];
+        $account = Account::query()
+            ->whereKey($accountId)
+            ->first(['id', 'catalog_account_id', 'inventory_account_id']);
+
+        if ($account) {
+            $candidateIds[] = (int) ($account->catalog_account_id ?? 0);
+            $candidateIds[] = (int) ($account->inventory_account_id ?? 0);
+        }
+
+        return collect($candidateIds)
+            ->filter(fn ($candidateId) => (int) $candidateId > 0)
+            ->map(fn ($candidateId) => (int) $candidateId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function resolveQuoteTemplateSourceAccountId(int $accountId): int
+    {
+        foreach ($this->quoteCandidateAccountIds($accountId) as $candidateAccountId) {
+            if (QuoteTemplate::query()->where('account_id', $candidateAccountId)->exists()) {
+                return $candidateAccountId;
+            }
+        }
+
+        return (int) (QuoteTemplate::query()
+            ->where('is_active', true)
+            ->orderBy('account_id')
+            ->value('account_id') ?: $accountId);
+    }
+
+    private function loadQuoteTemplates(int $accountId): array
+    {
+        return QuoteTemplate::query()
+            ->where('account_id', $accountId)
+            ->orderBy('sort_order')
+            ->orderBy('name')
+            ->get()
+            ->toArray();
     }
 
     private function loadOrderQuickPickGroups(int $accountId): array
@@ -4314,19 +4371,16 @@ class OrderController extends Controller
             now()->addSeconds(self::BOOTSTRAP_CACHE_TTL_SECONDS),
             function () use ($accountId, $mode) {
                 if ($mode === 'form') {
+                    $quoteTemplateSourceAccountId = $this->resolveQuoteTemplateSourceAccountId($accountId);
+
                     return [
                         'order_statuses' => $this->loadOrderStatuses($accountId),
                         'order_attributes' => $this->loadOrderAttributes('order'),
                         'product_attributes' => $this->loadOrderProductQuickFilterAttributes($accountId),
                         'profit_centers' => $this->loadOrderProfitCenters($accountId),
                         'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
-                        'quote_settings' => $this->loadQuoteSettings($accountId),
-                        'quote_templates' => QuoteTemplate::query()
-                            ->where('account_id', $accountId)
-                            ->orderBy('sort_order')
-                            ->orderBy('name')
-                            ->get()
-                            ->toArray(),
+                        'quote_settings' => $this->loadQuoteSettings($accountId, $quoteTemplateSourceAccountId),
+                        'quote_templates' => $this->loadQuoteTemplates($quoteTemplateSourceAccountId),
                     ];
                 }
 

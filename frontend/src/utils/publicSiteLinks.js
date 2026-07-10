@@ -125,8 +125,8 @@ function normalizePublicBlogPath(value = '') {
 
 export function resolvePublicSiteBaseUrl({ explicitBaseUrl = '', domains = [], currentOrigin = '' } = {}) {
     const candidates = [
-        explicitBaseUrl,
-        DEFAULT_PUBLIC_SITE_URL,
+        normalizeAbsoluteBaseUrl(explicitBaseUrl),
+        normalizeAbsoluteBaseUrl(DEFAULT_PUBLIC_SITE_URL),
         pickPreferredDomain(domains),
         derivePublicBaseUrlFromCurrentOrigin(currentOrigin),
     ];

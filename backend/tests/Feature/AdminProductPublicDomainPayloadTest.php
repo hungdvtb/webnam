@@ -27,6 +27,17 @@ class AdminProductPublicDomainPayloadTest extends TestCase
         $this->assertArrayHasKey('account.publicDomain', $eagerLoads);
     }
 
+    public function test_product_resource_relations_include_account_site_code_for_public_preview_links(): void
+    {
+        $controller = app(ProductController::class);
+
+        $relations = \Closure::bind(function () {
+            return $this->productResourceRelations(false);
+        }, $controller, $controller::class)();
+
+        $this->assertContains('account:id,name,site_code,public_domain_id', $relations);
+    }
+
     public function test_product_export_link_uses_account_public_domain_and_public_product_path(): void
     {
         $controller = app(ProductController::class);

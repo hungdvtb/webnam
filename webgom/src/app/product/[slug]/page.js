@@ -75,11 +75,19 @@ function getRequestedBundleOptionParams(searchParams) {
   };
 }
 
+function getStorefrontRequestContext(searchParams, fallbackPublicHost = '') {
+  return {
+    publicHost: getSearchParamValue(searchParams, 'public_host', 'publicHost') || fallbackPublicHost,
+    siteCode: getSearchParamValue(searchParams, 'site_code', 'siteCode'),
+  };
+}
+
 export default async function ProductDetailPage({ params, searchParams }) {
   const resolvedParams = await params;
   const resolvedSearchParams = await searchParams;
   const { slug } = resolvedParams;
   const publicHost = await getServerPublicHost();
+  const storefrontContext = getStorefrontRequestContext(resolvedSearchParams, publicHost);
   const {
     requestedBundleOptionUid,
     requestedBundleOptionKey,
@@ -123,8 +131,8 @@ export default async function ProductDetailPage({ params, searchParams }) {
 
   // Fetch product detail and related products concurrently to minimize SSR latency
   const [productResult, relatedResult, policyResult] = await Promise.allSettled([
-    getWebProductDetail(slug, { publicHost }),
-    getWebRelatedProducts(slug, { publicHost }),
+    getWebProductDetail(slug, storefrontContext),
+    getWebRelatedProducts(slug, storefrontContext),
     getPolicyPosts(),
   ]);
 
@@ -225,9 +233,10 @@ export async function generateMetadata({ params, searchParams }) {
 
   try {
     const publicHost = await getServerPublicHost();
+    const storefrontContext = getStorefrontRequestContext(resolvedSearchParams, publicHost);
     // Next.js deduplicates fetch() calls with the same URL+options within a render pass,
     // so this reuses the cached response from ProductDetailPage without an extra network hit.
-    const product = await getWebProductDetail(slug, { publicHost });
+    const product = await getWebProductDetail(slug, storefrontContext);
     const seoTitle = String(product.meta_title || '').trim();
     const seoDescription = product.meta_description || product.description?.substring(0, 160);
     const seoKeywords = String(product.meta_keywords || '').trim();

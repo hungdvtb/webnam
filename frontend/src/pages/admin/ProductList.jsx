@@ -25,7 +25,7 @@ import {
 } from '../../utils/money';
 import { formatCategorySummary, getProductCategoryNames } from '../../utils/productCategories';
 import { resolveProductPrimaryImageUrl } from '../../utils/mediaUrl';
-import { resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
+import { appendPublicSiteContext, resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
 import {
     hasAdminDataPermission,
     hasAdminPermission,
@@ -219,13 +219,17 @@ function buildProductPageUrl(product, domains = []) {
         currentOrigin,
     });
 
+    const siteCode = String(product?.account?.site_code || product?.account?.siteCode || '').trim();
+
     try {
         if (baseUrl) {
-            return new URL(path, `${baseUrl}/`).toString();
+            const url = new URL(path, `${baseUrl}/`).toString();
+            return appendPublicSiteContext(url, { siteCode, publicHost: domain });
         }
     } catch (error) {
         if (baseUrl) {
-            return `${baseUrl.replace(/\/+$/, '')}${path}`;
+            const url = `${baseUrl.replace(/\/+$/, '')}${path}`;
+            return appendPublicSiteContext(url, { siteCode, publicHost: domain });
         }
     }
 

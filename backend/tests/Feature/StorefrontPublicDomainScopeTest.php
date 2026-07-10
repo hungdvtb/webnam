@@ -15,6 +15,59 @@ class StorefrontPublicDomainScopeTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_local_product_detail_uses_requested_site_code_scope(): void
+    {
+        $defaultAccount = Account::query()->create([
+            'name' => 'Default store',
+            'subdomain' => 'default-store',
+            'site_code' => 'GSDT',
+            'status' => true,
+        ]);
+        $previewAccount = Account::query()->create([
+            'name' => 'Preview store',
+            'subdomain' => 'preview-store',
+            'site_code' => 'TEST_STORE',
+            'status' => true,
+        ]);
+
+        Product::query()->create([
+            'account_id' => $defaultAccount->id,
+            'type' => 'simple',
+            'name' => 'Other product',
+            'slug' => 'other-product',
+            'sku' => 'OTHER-1',
+            'price' => 100000,
+            'status' => true,
+        ]);
+        Product::query()->create([
+            'account_id' => $previewAccount->id,
+            'type' => 'simple',
+            'name' => 'Preview product',
+            'slug' => 'preview-product',
+            'sku' => 'PREVIEW-1',
+            'price' => 200000,
+            'status' => true,
+        ]);
+
+        $this
+            ->withHeaders([
+                'X-Site-Code' => 'GSDT',
+                'X-Public-Host' => 'localhost:3000',
+            ])
+            ->getJson('/api/web-api/products/preview-product')
+            ->assertNotFound();
+
+        $this
+            ->withHeaders([
+                'X-Site-Code' => 'TEST_STORE',
+                'X-Public-Host' => 'localhost:3000',
+            ])
+            ->getJson('/api/web-api/products/preview-product')
+            ->assertOk()
+            ->assertJsonPath('slug', 'preview-product')
+            ->assertJsonPath('account_id', $previewAccount->id);
+    }
+
     public function test_public_domain_can_group_products_from_multiple_accounts(): void
     {
         $firstAccount = Account::query()->create([

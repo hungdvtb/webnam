@@ -33,7 +33,7 @@ import {
     normalizeWholeMoneyNumber,
 } from '../../utils/money';
 import { resolveImageObjectUrl } from '../../utils/mediaUrl';
-import { resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
+import { appendPublicSiteContext, resolvePublicSiteBaseUrl } from '../../utils/publicSiteLinks';
 import { formatCategorySummary, getCategoryNamesByIds, getProductCategoryIds, normalizeCategoryIds } from '../../utils/productCategories';
 import { resolveImageUploadError, validateImageFileForUpload } from '../../utils/uploadError';
 import { resolveAiRequestError } from '../../utils/aiError';
@@ -7721,11 +7721,15 @@ const ProductForm = () => {
         }
 
         try {
-            return new URL(`/product/${encodeURIComponent(previewSlug)}`, `${baseUrl}/`).toString();
+            const url = new URL(`/product/${encodeURIComponent(previewSlug)}`, `${baseUrl}/`).toString();
+            return appendPublicSiteContext(url, {
+                siteCode: productMeta.account?.site_code || productMeta.account?.siteCode || '',
+                publicHost: selectedDomain?.domain || '',
+            });
         } catch (error) {
             return '';
         }
-    }, [domains, previewSlug, selectedDomain]);
+    }, [domains, previewSlug, productMeta.account, selectedDomain]);
 
     const hasValidProductLink = Boolean(baseProductLink);
 

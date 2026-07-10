@@ -45,6 +45,40 @@ function normalizeAbsoluteBaseUrl(value = '') {
     }
 }
 
+function isLocalPublicUrl(value = '') {
+    try {
+        const url = new URL(value);
+        return LOCALHOST_NAMES.has(url.hostname.toLowerCase());
+    } catch {
+        return false;
+    }
+}
+
+export function appendPublicSiteContext(url, { siteCode = '', publicHost = '' } = {}) {
+    const rawUrl = String(url || '').trim();
+    if (!rawUrl || !isLocalPublicUrl(rawUrl)) {
+        return rawUrl;
+    }
+
+    try {
+        const nextUrl = new URL(rawUrl);
+        const normalizedSiteCode = String(siteCode || '').trim();
+        const normalizedPublicHost = String(publicHost || '').trim();
+
+        if (normalizedSiteCode) {
+            nextUrl.searchParams.set('site_code', normalizedSiteCode);
+        }
+
+        if (normalizedPublicHost) {
+            nextUrl.searchParams.set('public_host', normalizedPublicHost);
+        }
+
+        return nextUrl.toString();
+    } catch {
+        return rawUrl;
+    }
+}
+
 function derivePublicBaseUrlFromCurrentOrigin(currentOrigin) {
     if (typeof window === 'undefined' && !currentOrigin) {
         return '';

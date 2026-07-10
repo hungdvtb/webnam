@@ -3247,7 +3247,7 @@ class ProductController extends Controller
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
-            'account:id,name,public_domain_id',
+            'account:id,name,site_code,public_domain_id',
             'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
             'siteDomain:id,domain,is_active,is_default',
@@ -3273,7 +3273,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'account:id,name,public_domain_id',
+                        'account:id,name,site_code,public_domain_id',
                         'account.publicDomain:id,domain,is_active,is_default',
                         'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
@@ -3285,7 +3285,7 @@ class ProductController extends Controller
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
-                        'account:id,name,public_domain_id',
+                        'account:id,name,site_code,public_domain_id',
                         'account.publicDomain:id,domain,is_active,is_default',
                         'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                         'attributeValues:id,product_id,attribute_id,value',
@@ -6455,7 +6455,7 @@ class ProductController extends Controller
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
             'parentConfigurable:id,name,sku,type',
-            'account:id,name,public_domain_id',
+            'account:id,name,site_code,public_domain_id',
             'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
             'siteDomain:id,domain',
@@ -6471,7 +6471,7 @@ class ProductController extends Controller
             $relations = array_merge($relations, [
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
                 'variations.parentConfigurable:id,name,sku,type',
-                'variations.account:id,name,public_domain_id',
+                'variations.account:id,name,site_code,public_domain_id',
                 'variations.account.publicDomain:id,domain,is_active,is_default',
                 'variations.category:id,name,code,slug',
                 'variations.categories:id,name,code,slug',
@@ -6486,7 +6486,7 @@ class ProductController extends Controller
                 'variations.profitCenter.manager:id,name',
                 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'groupedItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
-                'groupedItems.account:id,name,public_domain_id',
+                'groupedItems.account:id,name,site_code,public_domain_id',
                 'groupedItems.account.publicDomain:id,domain,is_active,is_default',
                 'groupedItems.profitCenter:id,name,code,manager_user_id',
                 'groupedItems.profitCenter.manager:id,name',
@@ -6499,7 +6499,7 @@ class ProductController extends Controller
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
                 'bundleItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
-                'bundleItems.account:id,name,public_domain_id',
+                'bundleItems.account:id,name,site_code,public_domain_id',
                 'bundleItems.account.publicDomain:id,domain,is_active,is_default',
                 'bundleItems.profitCenter:id,name,code,manager_user_id',
                 'bundleItems.profitCenter.manager:id,name',

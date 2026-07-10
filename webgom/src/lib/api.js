@@ -5,19 +5,38 @@ function getBrowserPublicHost() {
         return '';
     }
 
+    const queryPublicHost = new URLSearchParams(window.location?.search || '').get('public_host');
+    if (queryPublicHost) {
+        return String(queryPublicHost).trim();
+    }
+
     return String(window.location?.host || '').trim();
+}
+
+function getBrowserSiteCode() {
+    if (typeof window === 'undefined') {
+        return '';
+    }
+
+    return String(new URLSearchParams(window.location?.search || '').get('site_code') || '').trim();
 }
 
 export async function fetchFromApi(endpoint, options = {}) {
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const { publicHost: requestedPublicHost, headers: optionHeaders = {}, ...fetchOptions } = options;
+    const {
+        publicHost: requestedPublicHost,
+        siteCode: requestedSiteCode,
+        headers: optionHeaders = {},
+        ...fetchOptions
+    } = options;
     const publicHost = String(requestedPublicHost || optionHeaders['X-Public-Host'] || optionHeaders['x-public-host'] || getBrowserPublicHost()).trim();
+    const siteCode = String(requestedSiteCode || optionHeaders['X-Site-Code'] || optionHeaders['x-site-code'] || getBrowserSiteCode() || config.siteCode).trim();
     const response = await fetch(`${config.apiUrl}${endpoint}`, {
         ...fetchOptions,
         headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'X-Site-Code': config.siteCode,
+            ...(siteCode ? { 'X-Site-Code': siteCode } : {}),
             ...(publicHost ? { 'X-Public-Host': publicHost } : {}),
             ...optionHeaders,
         },
@@ -110,22 +129,23 @@ export async function getWebProducts(params = {}) {
     return fetchFromApi(`/web-api/products?${urlParams.toString()}`, {
         next: { revalidate: 30 },
         publicHost: params.public_host || params.publicHost,
+        siteCode: params.site_code || params.siteCode,
     });
 }
 
 export async function getWebCategories(options = {}) {
     // Cache for 5 minutes
-    return fetchFromApi('/web-api/categories', { next: { revalidate: 300 }, publicHost: options.publicHost });
+    return fetchFromApi('/web-api/categories', { next: { revalidate: 300 }, publicHost: options.publicHost, siteCode: options.siteCode });
 }
 
 export async function getWebCategory(slug, options = {}) {
     // Cache for 1 minute
-    return fetchFromApi(`/web-api/categories/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost });
+    return fetchFromApi(`/web-api/categories/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost, siteCode: options.siteCode });
 }
 
 export async function getWebProductDetail(slug, options = {}) {
     // Cache for 1 minute
-    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost });
+    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost, siteCode: options.siteCode });
 }
 
 export async function getWebProductBundleOptionDetail(slug, params = {}, options = {}) {
@@ -139,12 +159,12 @@ export async function getWebProductBundleOptionDetail(slug, params = {}, options
     const query = urlParams.toString();
     return fetchFromApi(
         `/web-api/products/${slug}/bundle-option-detail${query ? `?${query}` : ''}`,
-        { next: { revalidate: 60 }, publicHost: options.publicHost || params.public_host },
+        { next: { revalidate: 60 }, publicHost: options.publicHost || params.public_host, siteCode: options.siteCode || params.site_code },
     );
 }
 
 export async function getWebRelatedProducts(slug, options = {}) {
-    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 300 }, publicHost: options.publicHost });
+    const response = await fetchFromApi(`/web-api/products/${slug}/related`, { next: { revalidate: 300 }, publicHost: options.publicHost, siteCode: options.siteCode });
 
     if (Array.isArray(response)) {
         return {

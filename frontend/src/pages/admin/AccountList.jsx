@@ -7,6 +7,7 @@ const AccountList = () => {
     const { user } = useAuth();
     const [accounts, setAccounts] = useState([]);
     const [publicDomains, setPublicDomains] = useState([]);
+    const [storefrontThemes, setStorefrontThemes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isFormOpen, setIsFormOpen] = useState(false);
 
@@ -24,6 +25,10 @@ const AccountList = () => {
         catalog_account_id: '',
         inventory_account_id: '',
         public_domain_id: '',
+        storefront_theme_id: '',
+        simple_product_theme_id: '',
+        configurable_product_theme_id: '',
+        bundle_product_theme_id: '',
         user_name: '',
         user_email: '',
         user_password: ''
@@ -46,6 +51,15 @@ const AccountList = () => {
         const domainId = Number(id || 0);
         return publicDomains.find(domain => Number(domain.id) === domainId)?.domain || '';
     };
+    const productThemeFields = [
+        { key: 'simple_product_theme_id', relation: 'simple_product_theme', type: 'simple', label: 'Sản phẩm đơn', shortLabel: 'Đơn' },
+        { key: 'configurable_product_theme_id', relation: 'configurable_product_theme', type: 'configurable', label: 'Sản phẩm có biến thể', shortLabel: 'Biến thể' },
+        { key: 'bundle_product_theme_id', relation: 'bundle_product_theme', type: 'bundle', label: 'Sản phẩm bundle', shortLabel: 'Bundle' },
+    ];
+    const themesForProductType = (productType) => storefrontThemes.filter(theme => (
+        theme.status !== false && (theme.product_type || 'simple') === productType
+    ));
+    const themeLabel = (theme) => theme?.name || 'Mặc định';
 
     const fetchAccounts = async () => {
         setLoading(true);
@@ -69,9 +83,19 @@ const AccountList = () => {
         }
     };
 
+    const fetchStorefrontThemes = async () => {
+        try {
+            const response = await cmsApi.storefrontThemes.getAll();
+            setStorefrontThemes(Array.isArray(response.data) ? response.data : []);
+        } catch (error) {
+            console.error('Error fetching storefront themes:', error);
+        }
+    };
+
     useEffect(() => {
         fetchAccounts();
         fetchPublicDomains();
+        fetchStorefrontThemes();
     }, [user?.is_admin]);
 
     useEffect(() => {
@@ -97,7 +121,11 @@ const AccountList = () => {
                     ai_api_key: formData.ai_api_key,
                     catalog_account_id: normalizeAccountLink(formData.catalog_account_id, formData.id),
                     inventory_account_id: normalizeAccountLink(formData.inventory_account_id, formData.id),
-                    public_domain_id: formData.public_domain_id || null
+                    public_domain_id: formData.public_domain_id || null,
+                    storefront_theme_id: formData.storefront_theme_id || null,
+                    simple_product_theme_id: formData.simple_product_theme_id || null,
+                    configurable_product_theme_id: formData.configurable_product_theme_id || null,
+                    bundle_product_theme_id: formData.bundle_product_theme_id || null
                 };
                 await accountApi.update(formData.id, payload);
             } else {
@@ -110,7 +138,11 @@ const AccountList = () => {
                     ai_api_key: formData.ai_api_key,
                     catalog_account_id: normalizeAccountLink(formData.catalog_account_id),
                     inventory_account_id: normalizeAccountLink(formData.inventory_account_id),
-                    public_domain_id: formData.public_domain_id || null
+                    public_domain_id: formData.public_domain_id || null,
+                    storefront_theme_id: formData.storefront_theme_id || null,
+                    simple_product_theme_id: formData.simple_product_theme_id || null,
+                    configurable_product_theme_id: formData.configurable_product_theme_id || null,
+                    bundle_product_theme_id: formData.bundle_product_theme_id || null
                 };
                 await accountApi.store(payload);
             }
@@ -136,7 +168,11 @@ const AccountList = () => {
             ai_api_key: acc.ai_api_key || '',
             catalog_account_id: acc.catalog_account_id || '',
             inventory_account_id: acc.inventory_account_id || '',
-            public_domain_id: acc.public_domain_id || ''
+            public_domain_id: acc.public_domain_id || '',
+            storefront_theme_id: acc.storefront_theme_id || '',
+            simple_product_theme_id: acc.simple_product_theme_id || '',
+            configurable_product_theme_id: acc.configurable_product_theme_id || '',
+            bundle_product_theme_id: acc.bundle_product_theme_id || ''
         });
         setFormMode('edit');
         setIsFormOpen(true);
@@ -154,7 +190,11 @@ const AccountList = () => {
                     ai_api_key: acc.ai_api_key,
                     catalog_account_id: normalizeAccountLink(acc.catalog_account_id, acc.id),
                     inventory_account_id: normalizeAccountLink(acc.inventory_account_id, acc.id),
-                    public_domain_id: acc.public_domain_id || null
+                    public_domain_id: acc.public_domain_id || null,
+                    storefront_theme_id: acc.storefront_theme_id || null,
+                    simple_product_theme_id: acc.simple_product_theme_id || null,
+                    configurable_product_theme_id: acc.configurable_product_theme_id || null,
+                    bundle_product_theme_id: acc.bundle_product_theme_id || null
                 };
                 await accountApi.update(acc.id, payload);
                 sessionStorage.removeItem('accounts_list');
@@ -183,6 +223,10 @@ const AccountList = () => {
             catalog_account_id: '',
             inventory_account_id: '',
             public_domain_id: '',
+            storefront_theme_id: '',
+            simple_product_theme_id: '',
+            configurable_product_theme_id: '',
+            bundle_product_theme_id: '',
             user_name: '',
             user_email: '',
             user_password: ''
@@ -301,6 +345,33 @@ const AccountList = () => {
                                             Dung cho website ban hang cong 3000. Nhieu cua hang co the chon chung gomdaithanh.com, cua hang khac chon dongdaithanh.com.
                                         </p>
                                     </div>
+                                    <div className="md:col-span-2 space-y-3 rounded-sm border border-gold/10 bg-gold/5 p-4">
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Giao diện trang chi tiết sản phẩm</label>
+                                            <p className="mt-1 text-[9px] text-stone/40 italic font-medium">
+                                                Mỗi loại sản phẩm có thể chọn một giao diện riêng cho cửa hàng/account này.
+                                            </p>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                            {productThemeFields.map(field => (
+                                                <div key={field.key} className="space-y-1.5">
+                                                    <label className="text-[9px] font-black uppercase tracking-widest text-primary/50">{field.label}</label>
+                                                    <select
+                                                        value={formData[field.key]}
+                                                        onChange={e => setFormData({ ...formData, [field.key]: e.target.value })}
+                                                        className="w-full bg-white border border-gold/10 px-4 py-2.5 focus:outline-none focus:border-primary font-body text-sm rounded-sm"
+                                                    >
+                                                        <option value="">Dùng mặc định</option>
+                                                        {themesForProductType(field.type).map(theme => (
+                                                            <option key={theme.id} value={theme.id}>
+                                                                {theme.name} ({theme.code})
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-black uppercase tracking-widest text-stone/50">Dung chung san pham voi</label>
                                         <select
@@ -417,6 +488,19 @@ const AccountList = () => {
                                                 </span>
                                             </div>
                                         )}
+                                        <div className="flex items-start gap-2.5 text-[12px] text-stone-600">
+                                            <span className="material-symbols-outlined text-[16px] text-gold/60 mt-0.5">palette</span>
+                                            <div className="min-w-0 w-full space-y-1">
+                                                {productThemeFields.map(field => (
+                                                    <div key={field.key} className="flex items-center justify-between gap-2 rounded-sm bg-gold/5 border border-gold/10 px-2 py-1">
+                                                        <span className="text-[9px] font-black uppercase tracking-wider text-primary/45">{field.shortLabel}</span>
+                                                        <span className="truncate text-[10px] font-semibold text-primary">
+                                                            {themeLabel(acc[field.relation] || acc.storefront_theme)}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
                                         <div className="flex items-center gap-2.5 text-[12px] text-stone-600">
                                             <span className="material-symbols-outlined text-[16px] text-gold/60">group</span>
                                             <span className="font-body"><b>{acc.users?.length || 0}</b> quản trị viên</span>

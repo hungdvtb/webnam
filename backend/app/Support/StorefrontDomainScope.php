@@ -5,9 +5,11 @@ namespace App\Support;
 use App\Models\Account;
 use App\Models\SiteDomain;
 use App\Models\Store;
+use App\Models\StorefrontTheme;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 class StorefrontDomainScope
 {
@@ -35,9 +37,16 @@ class StorefrontDomainScope
             ->values()
             ->all();
 
-        if ($accountIds === [] && $domain->account_id) {
-            $accountIds = [(int) $domain->account_id];
+        if ($domain->account_id) {
+            $accountIds[] = (int) $domain->account_id;
         }
+
+        $accountIds = collect($accountIds)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
 
         return $accountIds === [] ? null : $accountIds;
     }
@@ -147,6 +156,269 @@ class StorefrontDomainScope
         }
 
         return implode('|', $segments);
+    }
+
+    public static function resolvePublicDomainForRequest(Request $request): ?SiteDomain
+    {
+        return self::resolvePublicDomain($request);
+    }
+
+    public static function resolveStorefrontTheme(Request $request, ?int $accountId = null, ?array $accountIds = null, ?array $storeIds = null, ?string $productType = null): ?StorefrontTheme
+    {
+        if (!Schema::hasTable('storefront_themes')) {
+            return null;
+        }
+
+        $requestedCode = Str::slug(
+            $request->query('storefront_theme')
+            ?: $request->query('theme')
+            ?: ''
+        );
+
+        if ($requestedCode !== '') {
+            $requestedTheme = self::themeQueryForAccounts($accountId, $accountIds)
+                ->where('code', $requestedCode)
+                ->where('status', true)
+                ->first();
+
+            if ($requestedTheme instanceof StorefrontTheme) {
+                return $requestedTheme;
+            }
+        }
+
+        $storeTheme = self::resolveStoreAssignedTheme($request, $accountId, $accountIds, $storeIds, $productType);
+        if ($storeTheme instanceof StorefrontTheme) {
+            return $storeTheme;
+        }
+
+        $accountTheme = self::resolveAccountAssignedTheme($accountId, $accountIds, $productType);
+        if ($accountTheme instanceof StorefrontTheme) {
+            return $accountTheme;
+        }
+
+        return self::defaultStorefrontTheme($accountId, $accountIds);
+    }
+
+    public static function storefrontThemePayload(?StorefrontTheme $theme): array
+    {
+        $resolvedTheme = $theme;
+
+        if (!$resolvedTheme instanceof StorefrontTheme && Schema::hasTable('storefront_themes')) {
+            $resolvedTheme = self::defaultStorefrontTheme();
+        }
+
+        if (!$resolvedTheme instanceof StorefrontTheme) {
+            return [
+                'id' => null,
+                'name' => 'Giao diện số 1',
+                'code' => 'do-tho',
+                'folder' => 'do-tho',
+                'preview_image' => null,
+                'description' => null,
+                'is_default' => true,
+            ];
+        }
+
+        return $resolvedTheme->toStorefrontPayload();
+    }
+
+    private static function resolveStoreAssignedTheme(Request $request, ?int $accountId = null, ?array $accountIds = null, ?array $storeIds = null, ?string $productType = null): ?StorefrontTheme
+    {
+        if (!Schema::hasTable('stores')) {
+            return null;
+        }
+
+        $themeColumns = array_values(array_filter(
+            self::themeAssignmentColumns($productType),
+            fn (string $column) => Schema::hasColumn('stores', $column)
+        ));
+
+        if ($themeColumns === []) {
+            return null;
+        }
+
+        $storeQuery = Store::withoutGlobalScopes()
+            ->where('status', true)
+            ->where(function (Builder $query) use ($themeColumns) {
+                foreach ($themeColumns as $column) {
+                    $query->orWhereNotNull($column);
+                }
+            })
+            ->orderBy('sort_order')
+            ->orderBy('id');
+
+        if ($storeIds !== null) {
+            $normalizedStoreIds = self::normalizeIds($storeIds);
+            if ($normalizedStoreIds === []) {
+                return null;
+            }
+
+            $storeQuery->whereIn('id', $normalizedStoreIds);
+        } else {
+            if (!Schema::hasColumn('stores', 'public_domain_id')) {
+                return null;
+            }
+
+            $domain = self::resolvePublicDomain($request);
+            if (!$domain) {
+                return null;
+            }
+
+            $storeQuery->where('public_domain_id', $domain->id);
+        }
+
+        StorefrontDomainScope::applyAccountScope($storeQuery, $accountId, $accountIds, 'stores.account_id');
+
+        $store = $storeQuery->first();
+
+        if (!$store instanceof Store) {
+            return null;
+        }
+
+        foreach ($themeColumns as $column) {
+            $themeId = (int) ($store->{$column} ?? 0);
+            if ($themeId > 0) {
+                $theme = self::activeThemeById($themeId, $accountId, $accountIds, self::productTypeForAssignmentColumn($column));
+                if ($theme instanceof StorefrontTheme) {
+                    return $theme;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static function resolveAccountAssignedTheme(?int $accountId = null, ?array $accountIds = null, ?string $productType = null): ?StorefrontTheme
+    {
+        if (!Schema::hasTable('accounts')) {
+            return null;
+        }
+
+        $themeColumns = array_values(array_filter(
+            self::themeAssignmentColumns($productType),
+            fn (string $column) => Schema::hasColumn('accounts', $column)
+        ));
+
+        if ($themeColumns === []) {
+            return null;
+        }
+
+        $normalizedAccountIds = $accountIds !== null
+            ? self::normalizeIds($accountIds)
+            : ($accountId ? [(int) $accountId] : []);
+
+        if ($normalizedAccountIds === []) {
+            return null;
+        }
+
+        $account = Account::query()
+            ->whereIn('id', $normalizedAccountIds)
+            ->where('status', true)
+            ->where(function (Builder $query) use ($themeColumns) {
+                foreach ($themeColumns as $column) {
+                    $query->orWhereNotNull($column);
+                }
+            })
+            ->orderBy('id')
+            ->first();
+
+        if (!$account instanceof Account) {
+            return null;
+        }
+
+        foreach ($themeColumns as $column) {
+            $themeId = (int) ($account->{$column} ?? 0);
+            if ($themeId > 0) {
+                $theme = self::activeThemeById($themeId, $accountId, $accountIds, self::productTypeForAssignmentColumn($column));
+                if ($theme instanceof StorefrontTheme) {
+                    return $theme;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static function activeThemeById(int $themeId, ?int $accountId = null, ?array $accountIds = null, ?string $productType = null): ?StorefrontTheme
+    {
+        if ($themeId <= 0) {
+            return null;
+        }
+
+        return self::themeQueryForAccounts($accountId, $accountIds)
+            ->whereKey($themeId)
+            ->where('status', true)
+            ->when($productType, fn (Builder $query) => $query->where('product_type', $productType))
+            ->first();
+    }
+
+    private static function productTypeForAssignmentColumn(string $column): ?string
+    {
+        return match ($column) {
+            'simple_product_theme_id' => 'simple',
+            'configurable_product_theme_id' => 'configurable',
+            'bundle_product_theme_id' => 'bundle',
+            default => null,
+        };
+    }
+
+    private static function themeAssignmentColumns(?string $productType = null): array
+    {
+        $fallbackColumn = 'storefront_theme_id';
+        $normalizedType = self::normalizeProductThemeType($productType);
+
+        if ($normalizedType === null) {
+            return [$fallbackColumn];
+        }
+
+        $typedColumn = match ($normalizedType) {
+            'bundle' => 'bundle_product_theme_id',
+            'configurable' => 'configurable_product_theme_id',
+            default => 'simple_product_theme_id',
+        };
+
+        return array_values(array_unique([$typedColumn, $fallbackColumn]));
+    }
+
+    private static function normalizeProductThemeType(?string $productType = null): ?string
+    {
+        $type = Str::lower(Str::squish((string) $productType));
+
+        if ($type === '') {
+            return null;
+        }
+
+        return match ($type) {
+            'bundle' => 'bundle',
+            'configurable' => 'configurable',
+            default => 'simple',
+        };
+    }
+
+    private static function defaultStorefrontTheme(?int $accountId = null, ?array $accountIds = null): ?StorefrontTheme
+    {
+        return self::themeQueryForAccounts($accountId, $accountIds)
+            ->where('status', true)
+            ->orderByDesc('is_default')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->first();
+    }
+
+    private static function themeQueryForAccounts(?int $accountId = null, ?array $accountIds = null)
+    {
+        return StorefrontTheme::query()
+            ->where(function ($query) use ($accountId, $accountIds) {
+                $query->whereNull('account_id');
+
+                $normalizedAccountIds = $accountIds !== null
+                    ? self::normalizeIds($accountIds)
+                    : ($accountId ? [(int) $accountId] : []);
+
+                if ($normalizedAccountIds !== []) {
+                    $query->orWhereIn('account_id', $normalizedAccountIds);
+                }
+            });
     }
 
     public static function publicHost(Request $request): string

@@ -168,6 +168,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     // Admin User routes
     Route::get('/users', [\App\Http\Controllers\Api\UserController::class , 'index']);
     Route::post('/users', [\App\Http\Controllers\Api\UserController::class , 'store']);
+    Route::put('/users/{id}/password', [\App\Http\Controllers\Api\UserController::class , 'changePassword'])->whereNumber('id');
     Route::put('/users/{id}', [\App\Http\Controllers\Api\UserController::class , 'update']);
     Route::delete('/users/{id}', [\App\Http\Controllers\Api\UserController::class , 'destroy']);
 
@@ -529,12 +530,21 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::post('/site-domains', [\App\Http\Controllers\Api\SiteDomainController::class , 'store']);
         Route::put('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'update']);
         Route::delete('/site-domains/{id}', [\App\Http\Controllers\Api\SiteDomainController::class , 'destroy']);
+        Route::get('/public-category-trees/{domainId}', [\App\Http\Controllers\Api\PublicCategoryTreeController::class, 'show'])->whereNumber('domainId');
+        Route::put('/public-category-trees/{domainId}', [\App\Http\Controllers\Api\PublicCategoryTreeController::class, 'update'])->whereNumber('domainId');
 
         // Admin Store routes
         Route::get('/stores', [\App\Http\Controllers\Api\StoreController::class, 'index']);
         Route::post('/stores', [\App\Http\Controllers\Api\StoreController::class, 'store']);
         Route::put('/stores/{id}', [\App\Http\Controllers\Api\StoreController::class, 'update'])->whereNumber('id');
         Route::delete('/stores/{id}', [\App\Http\Controllers\Api\StoreController::class, 'destroy'])->whereNumber('id');
+
+        // Admin Storefront Theme routes
+        Route::get('/storefront-themes', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'index']);
+        Route::post('/storefront-themes', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'store']);
+        Route::put('/storefront-themes/{id}', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'update'])->whereNumber('id');
+        Route::post('/storefront-themes/{id}/duplicate', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'duplicate'])->whereNumber('id');
+        Route::delete('/storefront-themes/{id}', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'destroy'])->whereNumber('id');
 
         // Menus
         Route::get('/menus', [\App\Http\Controllers\Api\MenuController::class , 'index']);

@@ -188,6 +188,7 @@ function App() {
                 <Route path="blog/new" element={<BlogForm />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />
                 <Route path="settings" element={<SiteSettings />} />
+                <Route path="storefront-themes" element={<Navigate to="/admin/settings?tab=themes" replace />} />
                 <Route path="shipping-settings" element={<ShippingSettingsPage />} />
                 <Route path="ai-training" element={<AiTrainingManager />} />
                 <Route path="users" element={<UserList />} />

@@ -93,6 +93,19 @@ class UserController extends Controller
             'account_accesses.*.data_permissions.*' => 'string',
         ]);
 
+        if ($request->filled('password')) {
+            if ($user->is_admin && !$request->user()?->is_admin) {
+                return response()->json(['message' => 'Không thể đổi mật khẩu super admin.'], 403);
+            }
+
+            if (!$this->requesterCanChangePasswords($request)) {
+                return response()->json([
+                    'message' => 'Bạn không có quyền đổi mật khẩu quản trị viên.',
+                    'required_permission' => AccessControlService::USER_CHANGE_PASSWORD_PERMISSION,
+                ], 403);
+            }
+        }
+
         try {
             DB::beginTransaction();
 
@@ -140,6 +153,41 @@ class UserController extends Controller
         }
         $user->delete();
         return response()->json(['message' => 'Xoá thành công']);
+    }
+
+    public function changePassword(Request $request, $id)
+    {
+        $user = User::findOrFail($id);
+
+        if ($user->is_admin && !$request->user()?->is_admin) {
+            return response()->json(['message' => 'Không thể đổi mật khẩu super admin.'], 403);
+        }
+
+        $validated = $request->validate([
+            'password' => 'required|string|min:6',
+            'password_confirmation' => 'nullable|string|same:password',
+        ]);
+
+        $user->password = Hash::make($validated['password']);
+        $user->save();
+
+        return response()->json(['message' => 'Đổi mật khẩu thành công.']);
+    }
+
+    private function requesterCanChangePasswords(Request $request): bool
+    {
+        $requester = $request->user();
+        if (!$requester) {
+            return false;
+        }
+
+        $access = app(AccessControlService::class);
+
+        return $access->can(
+            $requester,
+            AccessControlService::USER_CHANGE_PASSWORD_PERMISSION,
+            $access->resolveAccountIdFromRequest($request)
+        );
     }
 
     private function buildAccountSyncPayload(array $validated, mixed $legacyPermissions): array

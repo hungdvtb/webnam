@@ -169,6 +169,23 @@ const isRequestCanceled = (error) => (
     || String(error?.message || '').toLowerCase().includes('canceled')
 );
 
+const getApiErrorMessage = (error, fallback) => {
+    const data = error?.response?.data || {};
+    const errors = data.errors;
+
+    if (errors && typeof errors === 'object') {
+        const firstMessage = Object.values(errors)
+            .flat()
+            .find((message) => Boolean(message));
+
+        if (firstMessage) {
+            return String(firstMessage);
+        }
+    }
+
+    return String(data.message || data.error || fallback);
+};
+
 const trackingPlatforms = [
     {
         key: 'facebook',
@@ -436,6 +453,10 @@ const createFooterMenuItem = () => ({
 const createStoreLocation = () => ({
     id: `store-location-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
     public_domain_id: '',
+    storefront_theme_id: '',
+    simple_product_theme_id: '',
+    configurable_product_theme_id: '',
+    bundle_product_theme_id: '',
     name: '',
     city: '',
     tag: '',
@@ -469,6 +490,14 @@ const normalizeStoreLocations = (value) => {
         .map((item, index) => ({
             id: String(item.id || `store-location-${index + 1}`),
             public_domain_id: item.public_domain_id ? String(item.public_domain_id) : '',
+            storefront_theme_id: item.storefront_theme_id ? String(item.storefront_theme_id) : '',
+            storefront_theme: item.storefront_theme && typeof item.storefront_theme === 'object' ? item.storefront_theme : null,
+            simple_product_theme_id: item.simple_product_theme_id ? String(item.simple_product_theme_id) : '',
+            configurable_product_theme_id: item.configurable_product_theme_id ? String(item.configurable_product_theme_id) : '',
+            bundle_product_theme_id: item.bundle_product_theme_id ? String(item.bundle_product_theme_id) : '',
+            simple_product_theme: item.simple_product_theme && typeof item.simple_product_theme === 'object' ? item.simple_product_theme : null,
+            configurable_product_theme: item.configurable_product_theme && typeof item.configurable_product_theme === 'object' ? item.configurable_product_theme : null,
+            bundle_product_theme: item.bundle_product_theme && typeof item.bundle_product_theme === 'object' ? item.bundle_product_theme : null,
             name: String(item.name || '').trim(),
             city: String(item.city || '').trim(),
             tag: String(item.tag || '').trim(),
@@ -609,6 +638,168 @@ const ImageUploadCard = ({ imageUrl, onUpload, onRemove, emptyLabel, previewClas
         )}
     </div>
 );
+
+const productThemeTypes = [
+    { id: 'simple', label: 'Sản phẩm đơn', icon: 'inventory_2' },
+    { id: 'configurable', label: 'Có biến thể', icon: 'tune' },
+    { id: 'bundle', label: 'Bundle', icon: 'inventory' },
+];
+
+const StorefrontThemeManager = ({
+    themes = [],
+    cloneDraft,
+    onCloneDraftChange,
+    onDuplicateTheme,
+    onRenameTheme,
+    savingThemeId,
+}) => {
+    const activeThemes = themes.filter((theme) => theme.status !== false);
+    const selectedSourceId = cloneDraft.source_theme_id || activeThemes[0]?.id || themes[0]?.id || '';
+    const [nameDrafts, setNameDrafts] = useState({});
+    const [activeProductType, setActiveProductType] = useState('simple');
+    const activeTypeMeta = productThemeTypes.find((type) => type.id === activeProductType) || productThemeTypes[0];
+    const themesForActiveType = themes.filter((theme) => (theme.product_type || 'simple') === activeProductType);
+    const productTypeLabel = (productType) => productThemeTypes.find((type) => type.id === (productType || 'simple'))?.label || 'Sản phẩm đơn';
+
+    useEffect(() => {
+        const nextDrafts = {};
+        themes.forEach((theme) => {
+            nextDrafts[theme.id] = theme.name || '';
+        });
+        setNameDrafts(nextDrafts);
+    }, [themes]);
+
+    const updateNameDraft = (themeId, value) => {
+        setNameDrafts((prev) => ({ ...prev, [themeId]: value }));
+    };
+
+    return (
+        <SectionCard
+            icon="palette"
+            title="Giao diện trang chi tiết sản phẩm"
+            rightSlot={<span className="text-[11px] font-bold text-primary/40">Gán riêng theo từng loại sản phẩm trong Danh sách cửa hàng</span>}
+        >
+            <div className="space-y-5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {productThemeTypes.map((type) => (
+                        <button
+                            key={type.id}
+                            type="button"
+                            onClick={() => setActiveProductType(type.id)}
+                            className={`h-11 rounded-sm border px-4 text-[11px] font-black uppercase tracking-wider transition-all inline-flex items-center justify-center gap-2 ${activeProductType === type.id ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/55 hover:border-primary/30 hover:text-primary'}`}
+                        >
+                            <span className="material-symbols-outlined text-[17px]">{type.icon}</span>
+                            {type.label}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_170px] gap-3 items-end rounded-sm border border-primary/10 bg-primary/[0.02] p-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                            <label className={labelClasses}>Nhân bản từ</label>
+                            <select
+                                value={selectedSourceId}
+                                onChange={(event) => onCloneDraftChange({ source_theme_id: event.target.value })}
+                                className={inputClasses}
+                            >
+                                {themes.map((theme) => (
+                                    <option key={theme.id} value={theme.id}>
+                                        {theme.name} ({theme.code}) - {productTypeLabel(theme.product_type)}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className={labelClasses}>Tên giao diện mới</label>
+                            <input
+                                type="text"
+                                value={cloneDraft.name}
+                                onChange={(event) => onCloneDraftChange({ name: event.target.value })}
+                                className={inputClasses}
+                                placeholder="VD: Giao diện số 2"
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClasses}>Mã giao diện</label>
+                            <input
+                                type="text"
+                                value={cloneDraft.code}
+                                onChange={(event) => onCloneDraftChange({ code: event.target.value })}
+                                className={inputClasses}
+                                placeholder="VD: giao-dien-so-2"
+                            />
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => onDuplicateTheme(selectedSourceId, activeProductType)}
+                        disabled={savingThemeId === 'clone' || !selectedSourceId}
+                        className="h-10 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all disabled:opacity-50 inline-flex items-center justify-center gap-2"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                        {savingThemeId === 'clone' ? 'Đang nhân bản' : `Nhân bản ${activeTypeMeta.label}`}
+                    </button>
+                </div>
+
+                <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 text-[12px] font-bold text-primary/50">
+                    Đang quản lý giao diện cho: <span className="text-primary">{activeTypeMeta.label}</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {themesForActiveType.length === 0 ? (
+                        <div className="md:col-span-2 rounded-sm border border-dashed border-primary/15 bg-white px-6 py-10 text-center">
+                            <span className="material-symbols-outlined text-[34px] text-primary/25">{activeTypeMeta.icon}</span>
+                            <p className="mt-3 text-[13px] font-black text-primary">Chưa có giao diện cho {activeTypeMeta.label.toLowerCase()}</p>
+                            <p className="mt-1 text-[12px] text-primary/45">Nhân bản từ giao diện có sẵn để tạo mẫu riêng cho loại sản phẩm này.</p>
+                        </div>
+                    ) : themesForActiveType.map((theme) => {
+                        const draftName = nameDrafts[theme.id] ?? theme.name ?? '';
+                        const normalizedDraftName = draftName.trim();
+                        const hasNameChange = normalizedDraftName !== (theme.name || '').trim();
+                        const isRenaming = savingThemeId === `rename-${theme.id}`;
+
+                        return (
+                        <div key={theme.id} className="rounded-sm border border-primary/10 bg-white p-4">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/35">{theme.code}</p>
+                                    <h4 className="text-[15px] font-black text-primary truncate">{theme.name}</h4>
+                                    <p className="mt-1 text-[12px] text-primary/45">Folder: <span className="font-bold text-primary/70">webgom/src/themes/storefront/{theme.folder || theme.code}</span></p>
+                                </div>
+                                <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black uppercase ${theme.status ? 'bg-green-50 text-green-700' : 'bg-stone-100 text-stone-500'}`}>
+                                    {theme.status ? 'Đang bật' : 'Tạm tắt'}
+                                </span>
+                            </div>
+                            <div className="mt-4 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_110px] gap-2">
+                                <input
+                                    type="text"
+                                    value={draftName}
+                                    onChange={(event) => updateNameDraft(theme.id, event.target.value)}
+                                    className={inputClasses}
+                                    placeholder="Tên giao diện"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => onRenameTheme(theme.id, normalizedDraftName)}
+                                    disabled={isRenaming || !normalizedDraftName || !hasNameChange}
+                                    className="h-10 px-3 rounded-sm border border-primary/20 text-primary text-[11px] font-black uppercase tracking-wider hover:bg-primary/[0.04] transition-all disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1"
+                                >
+                                    <span className="material-symbols-outlined text-[16px]">save</span>
+                                    {isRenaming ? 'Đang lưu' : 'Lưu tên'}
+                                </button>
+                            </div>
+                            {theme.cloned_from ? (
+                                <p className="mt-2 text-[11px] font-bold text-primary/35">Nhân bản từ: {theme.cloned_from.name}</p>
+                            ) : null}
+                        </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </SectionCard>
+    );
+};
 
 const StoreLocationEditor = ({
     store,
@@ -828,6 +1019,9 @@ const SiteSettings = () => {
     const [headerMenus, setHeaderMenus] = useState(createDefaultHeaderMenus());
     const [footerMenuGroups, setFooterMenuGroups] = useState(createDefaultFooterMenuGroups());
     const [storeLocations, setStoreLocations] = useState([]);
+    const [storefrontThemes, setStorefrontThemes] = useState([]);
+    const [themeCloneDraft, setThemeCloneDraft] = useState({ source_theme_id: '', name: '', code: '' });
+    const [savingThemeId, setSavingThemeId] = useState(null);
     const [orderQuickPickAttributes, setOrderQuickPickAttributes] = useState([]);
     const [copiedRoute, setCopiedRoute] = useState('');
 
@@ -841,6 +1035,20 @@ const SiteSettings = () => {
             setDomains(response.data || []);
         } catch {
             console.error('Error fetching domains');
+        }
+    }, []);
+
+    const fetchStorefrontThemes = useCallback(async () => {
+        try {
+            const response = await cmsApi.storefrontThemes.getAll();
+            const nextThemes = response.data || [];
+            setStorefrontThemes(nextThemes);
+            setThemeCloneDraft((prev) => ({
+                ...prev,
+                source_theme_id: prev.source_theme_id || nextThemes.find((theme) => theme.status !== false)?.id || nextThemes[0]?.id || '',
+            }));
+        } catch (error) {
+            console.error('Error fetching storefront themes', error);
         }
     }, []);
 
@@ -929,14 +1137,31 @@ const SiteSettings = () => {
     useEffect(() => {
         fetchSettings();
         fetchDomains();
+        fetchStorefrontThemes();
         fetchQuoteTemplates();
         fetchOrderQuickPickAttributes();
         fetchGoogleMerchantSettings();
-    }, [fetchSettings, fetchDomains, fetchQuoteTemplates, fetchOrderQuickPickAttributes, fetchGoogleMerchantSettings]);
+    }, [fetchSettings, fetchDomains, fetchStorefrontThemes, fetchQuoteTemplates, fetchOrderQuickPickAttributes, fetchGoogleMerchantSettings]);
+
+    const handleTabChange = useCallback((tabId) => {
+        setActiveTab(tabId);
+
+        const next = new URLSearchParams(searchParams);
+        next.set('tab', tabId);
+        next.delete('shippingTab');
+        setSearchParams(next, { replace: true });
+    }, [searchParams, setSearchParams]);
 
     useEffect(() => {
         const currentTab = searchParams.get('tab');
+        const normalizedCurrentTab = currentTab === 'shipping' ? 'contact' : currentTab;
         const hasLegacyShippingTab = searchParams.has('shippingTab');
+
+        if (normalizedCurrentTab && normalizedCurrentTab !== activeTab) {
+            setActiveTab(normalizedCurrentTab);
+            return;
+        }
+
         if (currentTab === activeTab && !hasLegacyShippingTab) {
             return;
         }
@@ -1465,6 +1690,101 @@ const SiteSettings = () => {
         });
     };
 
+    const updateThemeCloneDraft = (patch) => {
+        setThemeCloneDraft((prev) => ({ ...prev, ...patch }));
+    };
+
+    const handleDuplicateStorefrontTheme = async (sourceThemeId, productType = 'simple') => {
+        if (!sourceThemeId) {
+            showModal({ title: 'Thiếu giao diện nguồn', content: 'Vui lòng chọn giao diện cần nhân bản.', type: 'error' });
+            return;
+        }
+
+        const name = themeCloneDraft.name.trim();
+        if (!name) {
+            showModal({ title: 'Thiếu tên giao diện', content: 'Vui lòng nhập tên giao diện mới.', type: 'error' });
+            return;
+        }
+
+        setSavingThemeId('clone');
+        try {
+            const response = await cmsApi.storefrontThemes.duplicate(sourceThemeId, {
+                name,
+                code: themeCloneDraft.code.trim(),
+                product_type: productType,
+            });
+            const createdTheme = response.data?.theme;
+            const sourceCopy = response.data?.source_copy;
+
+            await fetchStorefrontThemes();
+            setThemeCloneDraft({
+                source_theme_id: sourceThemeId,
+                name: '',
+                code: '',
+            });
+
+            const copyNote = sourceCopy?.copied
+                ? `Đã copy folder theme sang ${sourceCopy.target_path || createdTheme?.folder || createdTheme?.code}.`
+                : `Đã tạo bản ghi theme. Folder source chưa được copy tự động (${sourceCopy?.reason || 'unknown'}).`;
+
+            showModal({
+                title: 'Đã nhân bản giao diện',
+                content: `${createdTheme?.name || name} đã sẵn sàng để gán cho cửa hàng.\n${copyNote}`,
+                type: 'success',
+            });
+        } catch (error) {
+            console.error('Duplicate storefront theme failed', error);
+            showModal({
+                title: 'Lỗi nhân bản',
+                content: error?.response?.data?.message || 'Không thể nhân bản giao diện. Vui lòng thử lại.',
+                type: 'error',
+            });
+        } finally {
+            setSavingThemeId(null);
+        }
+    };
+
+    const handleRenameStorefrontTheme = async (themeId, nextName) => {
+        const name = (nextName || '').trim();
+        if (!name) {
+            showModal({
+                title: 'Thiếu tên giao diện',
+                content: 'Vui lòng nhập tên giao diện trước khi lưu.',
+                type: 'error',
+            });
+            return;
+        }
+
+        const savingKey = `rename-${themeId}`;
+        setSavingThemeId(savingKey);
+        try {
+            const response = await cmsApi.storefrontThemes.update(themeId, { name });
+            const updatedTheme = response.data;
+
+            setStorefrontThemes((prev) => prev.map((theme) => (
+                Number(theme.id) === Number(themeId)
+                    ? { ...theme, ...updatedTheme }
+                    : theme
+            )));
+            await fetchStorefrontThemes();
+
+            showModal({
+                title: 'Đã lưu tên giao diện',
+                content: `${updatedTheme?.name || name} đã được cập nhật.`,
+                type: 'success',
+            });
+        } catch (error) {
+            console.error('Rename storefront theme failed', error);
+            showModal({
+                title: 'Lỗi lưu tên giao diện',
+                content: error?.response?.data?.message || 'Không thể lưu tên giao diện. Vui lòng thử lại.',
+                type: 'error',
+            });
+        } finally {
+            setSavingThemeId(null);
+        }
+    };
+
     const updateOrderQuickPickGroups = (updater) => {
         setSettings((prev) => {
             const previousGroups = normalizeOrderQuickPickGroups(prev.order_quick_pick_groups);
@@ -1621,7 +1941,7 @@ const SiteSettings = () => {
         const storeValidationError = validateStoreLocations(normalizedStoreLocations);
 
         if (storeValidationError) {
-            setActiveTab('stores');
+            handleTabChange('stores');
             showModal({ title: 'Thiếu dữ liệu cửa hàng', content: storeValidationError, type: 'error' });
             return;
         }
@@ -1680,8 +2000,12 @@ const SiteSettings = () => {
             setNewDomain('');
             fetchDomains();
             showModal({ title: 'Thành công', content: 'Đã thêm tên miền.', type: 'success' });
-        } catch {
-            showModal({ title: 'Lỗi', content: 'Không thể thêm tên miền.', type: 'error' });
+        } catch (error) {
+            showModal({
+                title: 'Lỗi',
+                content: getApiErrorMessage(error, 'Không thể thêm tên miền.'),
+                type: 'error',
+            });
         }
     };
 
@@ -1801,6 +2125,7 @@ const SiteSettings = () => {
         { id: 'header', title: 'Cài đặt Header', icon: 'web' },
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
         { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
+        { id: 'themes', title: 'Giao diện sản phẩm', icon: 'palette' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'ai', title: 'Cài đặt AI (Gemini)', icon: 'smart_toy' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
@@ -1814,6 +2139,7 @@ const SiteSettings = () => {
         { id: 'header', title: 'Cài đặt Header', icon: 'web' },
         { id: 'footer', title: 'Cài đặt Footer', icon: 'bottom_panel_open' },
         { id: 'stores', title: 'Hệ thống cửa hàng', icon: 'storefront' },
+        { id: 'themes', title: 'Giao diện sản phẩm', icon: 'palette' },
         { id: 'pixel', title: 'Pixel & Tracking', icon: 'analytics' },
         { id: 'ai', title: 'Cài đặt AI (Gemini)', icon: 'smart_toy' },
         { id: 'domains', title: 'Quản lý tên miền', icon: 'language' },
@@ -1844,7 +2170,7 @@ const SiteSettings = () => {
                     <p className="text-[10px] font-black text-primary/40 uppercase tracking-[0.2em] mt-1 italic font-sans">Quản lý liên hệ, cửa hàng, thanh toán và mẫu báo giá</p>
                 </div>
 
-                {activeTab !== 'domains' && activeTab !== 'google-merchant' && activeTab !== 'meta-feed' && activeTab !== 'meta-catalog' && (
+                {activeTab !== 'domains' && activeTab !== 'themes' && activeTab !== 'google-merchant' && activeTab !== 'meta-feed' && activeTab !== 'meta-catalog' && (
                     <button
                         onClick={handleSubmit}
                         disabled={saving}
@@ -1865,7 +2191,7 @@ const SiteSettings = () => {
                     <button
                         key={tab.id}
                         type="button"
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => handleTabChange(tab.id)}
                         className={`shrink-0 pb-3 text-[13px] font-black tracking-[0.04em] leading-tight transition-all relative flex items-center gap-2 ${activeTab === tab.id ? 'text-primary' : 'text-primary/40 hover:text-primary/70'}`}
                     >
                         <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
@@ -2375,6 +2701,19 @@ const SiteSettings = () => {
                                     )}
                                 </div>
                             </SectionCard>
+                        </div>
+                    )}
+
+                    {activeTab === 'themes' && (
+                        <div className="space-y-6">
+                            <StorefrontThemeManager
+                                themes={storefrontThemes}
+                                cloneDraft={themeCloneDraft}
+                                onCloneDraftChange={updateThemeCloneDraft}
+                                onDuplicateTheme={handleDuplicateStorefrontTheme}
+                                onRenameTheme={handleRenameStorefrontTheme}
+                                savingThemeId={savingThemeId}
+                            />
                         </div>
                     )}
 

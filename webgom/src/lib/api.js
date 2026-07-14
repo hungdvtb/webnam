@@ -1,5 +1,17 @@
 import config from './config';
 
+const LOOPBACK_HOST_PATTERN = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1)(?::\d+)?$/i;
+
+function resolvePublicHost(host = '') {
+    const normalizedHost = String(host || '').trim();
+
+    if (normalizedHost && !LOOPBACK_HOST_PATTERN.test(normalizedHost)) {
+        return normalizedHost;
+    }
+
+    return String(config.publicHost || normalizedHost || '').trim();
+}
+
 function getBrowserPublicHost() {
     if (typeof window === 'undefined') {
         return '';
@@ -10,7 +22,7 @@ function getBrowserPublicHost() {
         return String(queryPublicHost).trim();
     }
 
-    return String(window.location?.host || '').trim();
+    return resolvePublicHost(window.location?.host || '');
 }
 
 function getBrowserSiteCode() {
@@ -29,7 +41,7 @@ export async function fetchFromApi(endpoint, options = {}) {
         headers: optionHeaders = {},
         ...fetchOptions
     } = options;
-    const publicHost = String(requestedPublicHost || optionHeaders['X-Public-Host'] || optionHeaders['x-public-host'] || getBrowserPublicHost()).trim();
+    const publicHost = resolvePublicHost(requestedPublicHost || optionHeaders['X-Public-Host'] || optionHeaders['x-public-host'] || getBrowserPublicHost());
     const siteCode = String(requestedSiteCode || optionHeaders['X-Site-Code'] || optionHeaders['x-site-code'] || getBrowserSiteCode() || config.siteCode).trim();
     const response = await fetch(`${config.apiUrl}${endpoint}`, {
         ...fetchOptions,

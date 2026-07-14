@@ -33,6 +33,11 @@ export const ADMIN_DATA_PERMISSION_OPTIONS = [
 ];
 
 export const ADMIN_PROFIT_SCOPE_ALL_PERMISSION = 'profit.scope.all';
+export const ADMIN_CHANGE_PASSWORD_PERMISSION = 'users.change_password';
+
+export const ADMIN_SPECIAL_PERMISSION_OPTIONS = [
+    { id: ADMIN_CHANGE_PASSWORD_PERMISSION, label: 'Đổi mật khẩu quản trị' },
+];
 
 export const ADMIN_ROLE_OPTIONS = [
     { id: 'owner', label: 'Chủ / Toàn quyền' },
@@ -46,7 +51,7 @@ export const ADMIN_ROLE_OPTIONS = [
 export const LEGACY_ADMIN_PERMISSION_IDS = ADMIN_PERMISSION_OPTIONS.map((permission) => permission.id);
 export const ADMIN_DETAILED_PERMISSION_IDS = ADMIN_PERMISSION_OPTIONS.flatMap((module) => (
     ADMIN_ACTION_OPTIONS.map((action) => `${module.id}.${action.id}`)
-)).concat('users.manage');
+)).concat('users.manage', ...ADMIN_SPECIAL_PERMISSION_OPTIONS.map((permission) => permission.id));
 
 const ADMIN_MODULE_IDS = new Set(LEGACY_ADMIN_PERMISSION_IDS);
 const ROLE_ALIASES = {
@@ -80,7 +85,10 @@ function modulePermissions(modules, actions) {
 export function permissionsForRole(role) {
     switch (normalizeRole(role)) {
         case 'owner':
-            return ADMIN_PERMISSION_OPTIONS.flatMap((module) => ADMIN_ACTION_OPTIONS.map((action) => `${module.id}.${action.id}`));
+            return unique([
+                ...ADMIN_PERMISSION_OPTIONS.flatMap((module) => ADMIN_ACTION_OPTIONS.map((action) => `${module.id}.${action.id}`)),
+                ...ADMIN_SPECIAL_PERMISSION_OPTIONS.map((permission) => permission.id),
+            ]);
         case 'manager':
             return modulePermissions([
                 'dashboard',
@@ -177,7 +185,7 @@ export function expandLegacyAdminPermissions(rawPermissions) {
         if (!ADMIN_MODULE_IDS.has(id)) return;
 
         if (id === 'users') {
-            expanded.push('users.manage', 'users.view');
+            expanded.push('users.manage', 'users.view', ADMIN_CHANGE_PASSWORD_PERMISSION);
             return;
         }
 

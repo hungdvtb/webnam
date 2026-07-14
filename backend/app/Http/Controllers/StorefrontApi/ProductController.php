@@ -5,6 +5,7 @@ namespace App\Http\Controllers\StorefrontApi;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Category;
+use App\Models\PublicCategoryNode;
 use App\Models\Attribute;
 use App\Models\Post;
 use App\Models\ProductAttributeValue;
@@ -576,6 +577,85 @@ class ProductController extends Controller
             ]);
     }
 
+    private function excludeScopedVariantProducts(Builder $query, ?int $accountId, ?array $accountIds, ?array $storeIds): void
+    {
+        $query->whereNotExists(function ($parentQuery) use ($accountId, $accountIds, $storeIds) {
+            $parentQuery
+                ->selectRaw('1')
+                ->from('product_links as parent_links')
+                ->join('products as parent_products', 'parent_products.id', '=', 'parent_links.product_id')
+                ->whereColumn('parent_links.linked_product_id', 'products.id')
+                ->where('parent_links.link_type', 'super_link')
+                ->whereNull('parent_products.deleted_at');
+
+            StorefrontDomainScope::applyAccountScope($parentQuery, $accountId, $accountIds, 'parent_products.account_id');
+            StorefrontDomainScope::applyStoreScope($parentQuery, $storeIds, 'parent_products.store_id');
+        });
+    }
+
+    private function resolvePublicCategoryIdsForSlug(Request $request, string $slug, ?int $accountId, ?array $accountIds, ?array $storeIds): ?array
+    {
+        if (!Schema::hasTable('public_category_nodes') || !Schema::hasTable('public_category_node_categories')) {
+            return null;
+        }
+
+        $domain = StorefrontDomainScope::resolvePublicDomainForRequest($request);
+        if (!$domain) {
+            return null;
+        }
+
+        $nodes = PublicCategoryNode::query()
+            ->where('site_domain_id', $domain->id)
+            ->where('status', true)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'parent_id', 'slug']);
+
+        $node = $nodes->first(fn (PublicCategoryNode $candidate) => $candidate->slug === $slug);
+        if (!$node) {
+            return null;
+        }
+
+        $childrenByParent = $nodes->groupBy(fn (PublicCategoryNode $candidate) => (int) ($candidate->parent_id ?? 0));
+        $collectNodeIds = function (int $nodeId) use (&$collectNodeIds, $childrenByParent): array {
+            $ids = [$nodeId];
+
+            foreach ($childrenByParent->get($nodeId, collect()) as $child) {
+                $ids = array_merge($ids, $collectNodeIds((int) $child->id));
+            }
+
+            return array_values(array_unique($ids));
+        };
+
+        $nodeIds = $collectNodeIds((int) $node->id);
+        $sourceCategoryIds = DB::table('public_category_node_categories')
+            ->whereIn('public_category_node_id', $nodeIds)
+            ->orderBy('sort_order')
+            ->pluck('category_id')
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($sourceCategoryIds === []) {
+            return [];
+        }
+
+        $categoryQuery = Category::withoutGlobalScope('account_id')
+            ->whereIn('id', $sourceCategoryIds)
+            ->where('status', true);
+        StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
+        StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+
+        return $categoryQuery
+            ->get()
+            ->flatMap(fn (Category $category) => $this->getOrderedCategoryIds($category, $accountId, true, $storeIds, $accountIds))
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     private function mapPostPrimaryImage(?Post $post)
     {
         if (!$post) {
@@ -1061,15 +1141,25 @@ class ProductController extends Controller
 
         // Filter by category slug
         if ($request->filled('category')) {
-            $categoryQuery = Category::withoutGlobalScope('account_id')
-                ->where('slug', $request->category);
-            StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
-            StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
-            $cat = $categoryQuery->first();
-            if ($cat) {
-                $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds, $accountIds);
+            $publicCategoryIds = $this->resolvePublicCategoryIdsForSlug($request, (string) $request->category, $accountId, $accountIds, $storeIds);
+
+            if ($publicCategoryIds !== null) {
+                if ($publicCategoryIds !== []) {
+                    $selectedCategoryIds = $publicCategoryIds;
+                } else {
+                    $missingRequestedCategory = true;
+                }
             } else {
-                $missingRequestedCategory = true;
+                $categoryQuery = Category::withoutGlobalScope('account_id')
+                    ->where('slug', $request->category);
+                StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
+                StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+                $cat = $categoryQuery->first();
+                if ($cat) {
+                    $selectedCategoryIds = $this->getOrderedCategoryIds($cat, $accountId, $cat->isLinkOnly(), $storeIds, $accountIds);
+                } else {
+                    $missingRequestedCategory = true;
+                }
             }
         }
 
@@ -1093,7 +1183,7 @@ class ProductController extends Controller
         } elseif (!empty($selectedCategoryIds)) {
             $this->joinCategoryAssignments($query, $selectedCategoryIds);
         } elseif (!$request->boolean('allow_variants') && !$request->filled('parent_id')) {
-            $query->whereDoesntHave('parentConfigurable');
+            $this->excludeScopedVariantProducts($query, $accountId, $accountIds, $storeIds);
         }
 
         // Search
@@ -1604,6 +1694,11 @@ class ProductController extends Controller
             StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
             StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
             $product = $productQuery->firstOrFail();
+            $themeStoreIds = $product->store_id ? [(int) $product->store_id] : $storeIds;
+            $themeAccountIds = $product->account_id ? [(int) $product->account_id] : $accountIds;
+            $storefrontTheme = StorefrontDomainScope::storefrontThemePayload(
+                StorefrontDomainScope::resolveStorefrontTheme($request, $accountId, $themeAccountIds, $themeStoreIds, $product->type)
+            );
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             // Conditionally load type-specific relations to avoid unnecessary DB queries.
@@ -1782,6 +1877,7 @@ class ProductController extends Controller
             $responseData['review_count'] = $reviewSummary['total_reviews'];
             $responseData['rating_distribution'] = $reviewSummary['distribution'];
             $responseData['review_summary'] = $reviewSummary;
+            $responseData['storefront_theme'] = $storefrontTheme;
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
@@ -1896,6 +1992,11 @@ class ProductController extends Controller
             StorefrontDomainScope::applyAccountScope($productQuery, $accountId, $accountIds, 'products.account_id');
             StorefrontDomainScope::applyStoreScope($productQuery, $storeIds, 'products.store_id');
             $product = $productQuery->firstOrFail();
+            $themeStoreIds = $product->store_id ? [(int) $product->store_id] : $storeIds;
+            $themeAccountIds = $product->account_id ? [(int) $product->account_id] : $accountIds;
+            $storefrontTheme = StorefrontDomainScope::storefrontThemePayload(
+                StorefrontDomainScope::resolveStorefrontTheme($request, $accountId, $themeAccountIds, $themeStoreIds, $product->type)
+            );
             $stepStartedAt = $this->markTiming($timings, 'base_product', $stepStartedAt);
 
             if ($product->type !== 'bundle') {
@@ -1906,6 +2007,7 @@ class ProductController extends Controller
                 $responseData['review_count'] = $reviewSummary['total_reviews'];
                 $responseData['rating_distribution'] = $reviewSummary['distribution'];
                 $responseData['review_summary'] = $reviewSummary;
+                $responseData['storefront_theme'] = $storefrontTheme;
                 $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
                 $responseData['bundle_items'] = [];
                 $responseData['bundle_options'] = [];
@@ -2026,6 +2128,7 @@ class ProductController extends Controller
             $responseData['rating_distribution'] = $reviewSummary['distribution'];
             $responseData['review_summary'] = $reviewSummary;
             $responseData['description'] = '';
+            $responseData['storefront_theme'] = $storefrontTheme;
             $responseData['video_urls'] = $product->video_urls ?: ($product->video_url ? [$product->video_url] : []);
             if (is_array($responseData['bundle_items'] ?? null)) {
                 $responseData['bundle_items'] = collect($responseData['bundle_items'])
@@ -2283,7 +2386,6 @@ class ProductController extends Controller
 
         $fallback = Product::withoutGlobalScope('account_id')
             ->where('products.status', true)
-            ->whereDoesntHave('parentConfigurable')
             ->whereKeyNot($product->id)
             ->where(function ($query) use ($categoryIds) {
                 $query->whereIn('category_id', $categoryIds)
@@ -2299,6 +2401,7 @@ class ProductController extends Controller
             ])
             ->inRandomOrder()
             ->limit($limit);
+        $this->excludeScopedVariantProducts($fallback, $accountId, $accountIds, $storeIds);
         StorefrontDomainScope::applyAccountScope($fallback, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($fallback, $storeIds, 'products.store_id');
         $fallback = $fallback->get();

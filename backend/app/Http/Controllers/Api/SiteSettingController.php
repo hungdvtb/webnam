@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\SiteDomain;
 use App\Models\SiteSetting;
 use App\Models\Store;
+use App\Models\StorefrontTheme;
 use App\Models\SystemSetting;
 use App\Support\OrderBootstrapCache;
 use App\Services\AI\GeminiService;
@@ -102,6 +103,7 @@ class SiteSettingController extends Controller
             }
         }
 
+        $this->hydrateStoreLocationsFromCatalogStores($settings, $accountId);
         $this->applyGlobalAiSettings($settings, $accountId);
 
         return response()->json($settings);
@@ -123,6 +125,10 @@ class SiteSettingController extends Controller
                     'store_locations.*.id' => 'nullable|string|max:100',
                     'store_locations.*.name' => 'required|string|max:255',
                     'store_locations.*.public_domain_id' => 'nullable|integer',
+                    'store_locations.*.storefront_theme_id' => 'nullable|integer',
+                    'store_locations.*.simple_product_theme_id' => 'nullable|integer',
+                    'store_locations.*.configurable_product_theme_id' => 'nullable|integer',
+                    'store_locations.*.bundle_product_theme_id' => 'nullable|integer',
                     'store_locations.*.city' => 'nullable|string|max:120',
                     'store_locations.*.tag' => 'nullable|string|max:120',
                     'store_locations.*.address' => 'required|string|max:500',
@@ -418,9 +424,87 @@ class SiteSettingController extends Controller
                 $fields['public_domain_id'] = $this->resolveStorePublicDomainId($location['public_domain_id'], $accountId);
             }
 
+            if (array_key_exists('storefront_theme_id', $location)) {
+                $fields['storefront_theme_id'] = $this->resolveStorefrontThemeId($location['storefront_theme_id'], $accountId);
+            }
+
+            foreach ([
+                'simple_product_theme_id' => 'simple',
+                'configurable_product_theme_id' => 'configurable',
+                'bundle_product_theme_id' => 'bundle',
+            ] as $themeField => $productType) {
+                if (array_key_exists($themeField, $location)) {
+                    $fields[$themeField] = $this->resolveStorefrontThemeId($location[$themeField], $accountId, $productType);
+                }
+            }
+
             $store->fill($fields);
             $store->save();
         }
+    }
+
+    private function hydrateStoreLocationsFromCatalogStores(array &$settings, int $accountId): void
+    {
+        if (empty($settings['store_locations']) || !is_array($settings['store_locations'])) {
+            return;
+        }
+
+        $catalogStores = Store::withoutGlobalScopes()
+            ->with([
+                'storefrontTheme:id,name,code,folder,status,is_default,preview_image',
+                'simpleProductTheme:id,name,code,folder,status,is_default,preview_image',
+                'configurableProductTheme:id,name,code,folder,status,is_default,preview_image',
+                'bundleProductTheme:id,name,code,folder,status,is_default,preview_image',
+            ])
+            ->where('account_id', $accountId)
+            ->get()
+            ->keyBy(fn (Store $store) => (string) $store->code);
+
+        $settings['store_locations'] = array_values(array_map(function ($location, $index) use ($catalogStores) {
+            if (!is_array($location)) {
+                return $location;
+            }
+
+            $numericIndex = is_numeric($index) ? (int) $index : 0;
+            $code = trim((string) ($location['id'] ?? '')) ?: 'store-location-' . ($numericIndex + 1);
+            $store = $catalogStores->get($code);
+
+            if (!$store) {
+                return $location;
+            }
+
+            $theme = $store->storefrontTheme;
+            $location['storefront_theme_id'] = $store->storefront_theme_id ? (int) $store->storefront_theme_id : null;
+            $location['storefront_theme'] = $theme ? [
+                'id' => (int) $theme->id,
+                'name' => $theme->name,
+                'code' => $theme->code,
+                'folder' => $theme->folder,
+                'preview_image' => $theme->preview_image,
+                'is_default' => (bool) $theme->is_default,
+            ] : null;
+
+            foreach ([
+                'simple_product_theme' => ['id_field' => 'simple_product_theme_id', 'relation' => 'simpleProductTheme'],
+                'configurable_product_theme' => ['id_field' => 'configurable_product_theme_id', 'relation' => 'configurableProductTheme'],
+                'bundle_product_theme' => ['id_field' => 'bundle_product_theme_id', 'relation' => 'bundleProductTheme'],
+            ] as $payloadKey => $meta) {
+                $idField = $meta['id_field'];
+                $relation = $meta['relation'];
+                $typedTheme = $store->{$relation};
+                $location[$idField] = $store->{$idField} ? (int) $store->{$idField} : null;
+                $location[$payloadKey] = $typedTheme ? [
+                    'id' => (int) $typedTheme->id,
+                    'name' => $typedTheme->name,
+                    'code' => $typedTheme->code,
+                    'folder' => $typedTheme->folder,
+                    'preview_image' => $typedTheme->preview_image,
+                    'is_default' => (bool) $typedTheme->is_default,
+                ] : null;
+            }
+
+            return $location;
+        }, $settings['store_locations'], array_keys($settings['store_locations'])));
     }
 
     private function resolveStorePublicDomainId(mixed $value, int $accountId): ?int
@@ -448,6 +532,38 @@ class SiteSettingController extends Controller
         }
 
         return $domainId;
+    }
+
+    private function resolveStorefrontThemeId(mixed $value, int $accountId, ?string $productType = null): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value) || (int) $value <= 0) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'store_locations' => ['Giao dien storefront cua cua hang khong hop le.'],
+            ]);
+        }
+
+        $themeId = (int) $value;
+        $exists = StorefrontTheme::query()
+            ->whereKey($themeId)
+            ->where('status', true)
+            ->when($productType, fn ($query) => $query->where('product_type', $productType))
+            ->where(function ($query) use ($accountId) {
+                $query->whereNull('account_id')
+                    ->orWhere('account_id', $accountId);
+            })
+            ->exists();
+
+        if (!$exists) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'store_locations' => ['Giao dien storefront cua cua hang khong ton tai trong account hien tai.'],
+            ]);
+        }
+
+        return $themeId;
     }
 
     private function uniqueCatalogStoreSlug(string $source, int $accountId, ?int $exceptId = null): string

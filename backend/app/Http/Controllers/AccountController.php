@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Account;
+use App\Models\StorefrontTheme;
 use App\Services\AccessControlService;
 use App\Support\OrderStatusCatalog;
 use Illuminate\Http\Request;
@@ -10,15 +11,30 @@ use Illuminate\Support\Str;
 
 class AccountController extends Controller
 {
+    private const STOREFRONT_THEME_RELATION_SELECT = 'id,name,code,folder,status,is_default,preview_image';
+
+    private function accountRelations(): array
+    {
+        return [
+            'users',
+            'publicDomain:id,account_id,domain,is_active,is_default',
+            'storefrontTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'simpleProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'configurableProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'bundleProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+        ];
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
+        $relations = $this->accountRelations();
         
         // If system admin, show all accounts. Otherwise, show user's accounts.
         if ($user->is_admin) {
-            $accounts = Account::with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->get();
+            $accounts = Account::with($relations)->get();
         } else {
-            $accounts = $user->accounts()->with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->get();
+            $accounts = $user->accounts()->with($relations)->get();
         }
 
         return response()->json($accounts);
@@ -35,6 +51,10 @@ class AccountController extends Controller
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
             'public_domain_id' => 'nullable|integer|exists:site_domains,id',
+            'storefront_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'simple_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'configurable_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'bundle_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
         ]);
 
         $subdomain = $request->subdomain ?: Str::slug($request->name);
@@ -52,14 +72,15 @@ class AccountController extends Controller
             'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
             'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
             'public_domain_id' => $this->nullablePublicDomainId($request->input('public_domain_id')),
-        ]);
+            'storefront_theme_id' => $this->nullableStorefrontThemeId($request->input('storefront_theme_id')),
+        ] + $this->storefrontThemeAssignmentsFromRequest($request, true, ['storefront_theme_id']));
 
         // Attach current user as owner
         $request->user()->accounts()->attach($account->id, $this->pivotPayloadForRole('owner'));
         OrderStatusCatalog::ensureDefaultSystemStatuses((int) $account->id, true);
         app(\App\Services\BlogSystemPostService::class)->ensureForAccount((int) $account->id);
 
-        return response()->json($account->load(['users', 'publicDomain:id,account_id,domain,is_active,is_default']), 201);
+        return response()->json($account->load($this->accountRelations()), 201);
     }
 
     public function storeWithUser(Request $request)
@@ -77,6 +98,10 @@ class AccountController extends Controller
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
             'public_domain_id' => 'nullable|integer|exists:site_domains,id',
+            'storefront_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'simple_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'configurable_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'bundle_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
             'user_name' => 'required|string|max:255',
             'user_email' => 'required|string|email|unique:users,email',
             'user_password' => 'required|string|min:6',
@@ -98,7 +123,8 @@ class AccountController extends Controller
                 'catalog_account_id' => $this->nullableAccountLink($request->input('catalog_account_id')),
                 'inventory_account_id' => $this->nullableAccountLink($request->input('inventory_account_id')),
                 'public_domain_id' => $this->nullablePublicDomainId($request->input('public_domain_id')),
-            ]);
+                'storefront_theme_id' => $this->nullableStorefrontThemeId($request->input('storefront_theme_id')),
+            ] + $this->storefrontThemeAssignmentsFromRequest($request, true, ['storefront_theme_id']));
 
             $user = \App\Models\User::create([
                 'name' => $request->user_name,
@@ -113,7 +139,7 @@ class AccountController extends Controller
 
             \Illuminate\Support\Facades\DB::commit();
 
-            return response()->json($account->load(['users', 'publicDomain:id,account_id,domain,is_active,is_default']), 201);
+            return response()->json($account->load($this->accountRelations()), 201);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\DB::rollBack();
             return response()->json(['message' => 'Error: ' . $e->getMessage()], 500);
@@ -125,9 +151,9 @@ class AccountController extends Controller
         $user = $request->user();
         
         if ($user->is_admin) {
-            $account = Account::with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->findOrFail($id);
+            $account = Account::with($this->accountRelations())->findOrFail($id);
         } else {
-            $account = $user->accounts()->with(['users', 'publicDomain:id,account_id,domain,is_active,is_default'])->findOrFail($id);
+            $account = $user->accounts()->with($this->accountRelations())->findOrFail($id);
         }
 
         return response()->json($account);
@@ -153,6 +179,10 @@ class AccountController extends Controller
             'catalog_account_id' => 'nullable|integer|exists:accounts,id',
             'inventory_account_id' => 'nullable|integer|exists:accounts,id',
             'public_domain_id' => 'nullable|integer|exists:site_domains,id',
+            'storefront_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'simple_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'configurable_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
+            'bundle_product_theme_id' => 'nullable|integer|exists:storefront_themes,id',
         ]);
 
         $payload = $request->only('name', 'domain', 'subdomain', 'site_code', 'status', 'ai_api_key');
@@ -169,9 +199,11 @@ class AccountController extends Controller
             $payload['public_domain_id'] = $this->nullablePublicDomainId($request->input('public_domain_id'));
         }
 
+        $payload = array_merge($payload, $this->storefrontThemeAssignmentsFromRequest($request));
+
         $account->update($payload);
 
-        return response()->json($account->fresh(['publicDomain:id,account_id,domain,is_active,is_default']));
+        return response()->json($account->fresh($this->accountRelations()));
     }
 
     public function destroy($id, Request $request)
@@ -206,6 +238,14 @@ class AccountController extends Controller
             'domain' => $account->domain,
             'public_domain_id' => $account->public_domain_id,
             'public_domain' => $account->publicDomain?->only(['id', 'domain', 'is_active', 'is_default']),
+            'storefront_theme_id' => $account->storefront_theme_id,
+            'storefront_theme' => $account->storefrontTheme?->toStorefrontPayload(),
+            'simple_product_theme_id' => $account->simple_product_theme_id,
+            'simple_product_theme' => $account->simpleProductTheme?->toStorefrontPayload(),
+            'configurable_product_theme_id' => $account->configurable_product_theme_id,
+            'configurable_product_theme' => $account->configurableProductTheme?->toStorefrontPayload(),
+            'bundle_product_theme_id' => $account->bundle_product_theme_id,
+            'bundle_product_theme' => $account->bundleProductTheme?->toStorefrontPayload(),
         ]);
     }
 
@@ -237,5 +277,45 @@ class AccountController extends Controller
         }
 
         return (int) $value;
+    }
+
+    private function storefrontThemeAssignmentsFromRequest(Request $request, bool $includeMissing = false, array $except = []): array
+    {
+        $payload = [];
+
+        foreach ([
+            'storefront_theme_id' => null,
+            'simple_product_theme_id' => 'simple',
+            'configurable_product_theme_id' => 'configurable',
+            'bundle_product_theme_id' => 'bundle',
+        ] as $field => $productType) {
+            if (in_array($field, $except, true)) {
+                continue;
+            }
+
+            if ($includeMissing || $request->exists($field)) {
+                $payload[$field] = $this->nullableStorefrontThemeId($request->input($field), $productType);
+            }
+        }
+
+        return $payload;
+    }
+
+    private function nullableStorefrontThemeId($value, ?string $productType = null): ?int
+    {
+        if ($value === null || $value === '' || $value === '0') {
+            return null;
+        }
+
+        $themeId = (int) $value;
+        $exists = StorefrontTheme::query()
+            ->whereKey($themeId)
+            ->where('status', true)
+            ->when($productType, fn ($query) => $query->where('product_type', $productType))
+            ->exists();
+
+        abort_unless($exists, 422, 'Giao dien storefront khong ton tai.');
+
+        return $themeId;
     }
 }

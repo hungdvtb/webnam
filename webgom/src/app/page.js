@@ -79,7 +79,7 @@ function normalizeCategory(category, index) {
         "large",
         resolveMediaUrl(category?.banner_path) || FALLBACK_CATEGORY_BANNER
       ) || FALLBACK_CATEGORY_BANNER,
-    order: Number(category?.order ?? index),
+    order: Number(category?.sort_order ?? category?.public_sort_order ?? category?.order ?? index),
   };
 }
 
@@ -223,7 +223,7 @@ export default async function Home() {
   });
 
   const visibleDesktopCategorySections = desktopCategorySections.filter((category) => category.totalProducts > 0);
-  const visibleCategories = visibleDesktopCategorySections.map(({ products, totalProducts, ...category }) => category);
+  const sidebarCategories = categories;
   const bannerCategories = visibleDesktopCategorySections;
 
   return (
@@ -235,7 +235,7 @@ export default async function Home() {
             <h2>{HOME_CATEGORY_HEADER}</h2>
           </div>
           <nav className={styles.categoryNav}>
-            {visibleCategories.map((category) => (
+            {sidebarCategories.map((category) => (
               <Link key={category.slug} href={category.href}>
                 <span className={styles.categoryNavLabel}>{category.name}</span>
                 <span className={`material-symbols-outlined ${styles.categoryNavIcon}`}>chevron_right</span>

@@ -8,6 +8,7 @@ import { useUI } from '../../context/UIContext';
 import CategoryProductSortModal from '../../components/admin/CategoryProductSortModal';
 import CategorySubSortModal from '../../components/admin/CategorySubSortModal';
 import CategoryItemPickerModal from '../../components/admin/CategoryItemPickerModal';
+import PublicCategoryTreeModal from '../../components/admin/PublicCategoryTreeModal';
 import { resolveEntityImageUrl } from '../../utils/mediaUrl';
 import { formatWholeMoneyInput } from '../../utils/money';
 import {
@@ -853,6 +854,7 @@ const CategoryList = () => {
     const [isCategorySortModalOpen, setIsCategorySortModalOpen] = useState(false);
     const [isCategorySubSortModalOpen, setIsCategorySubSortModalOpen] = useState(false);
     const [isCategoryItemPickerOpen, setIsCategoryItemPickerOpen] = useState(false);
+    const [isPublicCategoryTreeOpen, setIsPublicCategoryTreeOpen] = useState(false);
     const [categoryItemPickerMode, setCategoryItemPickerMode] = useState('form');
     const [categoryItemSearchQuery, setCategoryItemSearchQuery] = useState('');
     const [categoryItemSearchLoading, setCategoryItemSearchLoading] = useState(false);
@@ -1695,7 +1697,7 @@ const CategoryList = () => {
                 categoryApi.getAll(isTrashView ? { is_trash: 1 } : undefined),
                 attributeApi.getAll(), // Fetch all to ensure names show even if inactive in this view
                 categoryApi.getAll({ is_trash: 1 }),
-                cmsApi.domains.getAll().catch((error) => {
+                cmsApi.domains.getAll({ scope: 'all' }).catch((error) => {
                     console.error('Error fetching site domains:', error);
                     return { data: [] };
                 }),
@@ -2838,6 +2840,15 @@ const CategoryList = () => {
                                 <span className={`material-symbols-outlined text-[18px] ${isImportingExcel ? 'animate-spin' : ''}`}>
                                     {isImportingExcel ? 'sync' : 'upload_file'}
                                 </span>
+                            </button>
+
+                            <button
+                                onClick={() => setIsPublicCategoryTreeOpen(true)}
+                                className="bg-white border border-gold/20 p-1.5 hover:border-primary/40 hover:text-primary transition-all flex items-center justify-center rounded-sm w-9 h-9 shrink-0 shadow-sm text-stone"
+                                title="Sap xep danh muc public theo domain"
+                                disabled={isTrashView}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">account_tree</span>
                             </button>
 
                             <div className="w-px h-5 bg-gold/10 mx-1 shrink-0"></div>
@@ -4174,6 +4185,11 @@ const CategoryList = () => {
                     </div>
                 </div>
             )}
+            <PublicCategoryTreeModal
+                open={isPublicCategoryTreeOpen}
+                onClose={() => setIsPublicCategoryTreeOpen(false)}
+                domains={domains}
+            />
             <CategoryItemPickerModal
                 open={isCategoryItemPickerOpen}
                 onClose={closeCategoryItemPicker}

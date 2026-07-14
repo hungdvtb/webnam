@@ -1,15 +1,11 @@
 import Link from 'next/link';
 import { getWebProductDetail, getWebRelatedProducts } from '@/lib/api';
 import styles from './product.module.css';
-import ProductDetailContent from '@/components/ProductDetailContent';
 import ProductDetailClientShell from '@/components/ProductDetailClientShell';
-import ProductDetailTabs from '@/components/ProductDetailTabs';
-import ProductReviews from '@/components/product/ProductReviews';
-import RelatedProductsSection from '@/components/product/RelatedProductsSection';
 import { buildProductDescriptionHtml } from '@/lib/productDescription';
 import { getPolicyPosts } from '@/lib/policyContent';
-import { ProductAnalyticsTracker } from '@/components/common/WebAnalyticsTracker';
 import { getServerPublicHost } from '@/lib/serverPublicHost';
+import { resolveProductDetailPageTheme } from '@/themes/storefront/productDetailPageThemes';
 
 function buildRelatedViewAllHref(product, relatedMeta) {
   if (relatedMeta?.has_explicit_related) {
@@ -166,40 +162,23 @@ export default async function ProductDetailPage({ params, searchParams }) {
 
   const images = product.images || [];
   const mainImage = images.find((img) => img.is_primary) || images[0];
-  const productPageGapClass =
-    product?.type === 'simple' ? styles.productPageMainSimple : styles.productPageMainCompact;
   const descriptionHtml = buildProductDescriptionHtml(product?.description || '');
   const relatedViewAllHref = buildRelatedViewAllHref(product, relatedMeta);
+  const ProductDetailTheme = resolveProductDetailPageTheme(product?.storefront_theme);
 
   return (
-    <div className={styles.productDetail}>
-      <ProductAnalyticsTracker product={product} />
-      <main className={`container py-10 ${styles.productPageMain} ${productPageGapClass}`}>
-        <div className={styles.productPageSections}>
-          <ProductDetailContent
-            product={product}
-            requestedBundleOptionUid={requestedBundleOptionUid}
-            requestedBundleOptionKey={requestedBundleOptionKey}
-            requestedBundleOptionTitle={requestedBundleOptionTitle}
-            requestedVariantId={requestedVariantId}
-          />
-
-          <ProductDetailTabs
-            descriptionHtml={descriptionHtml}
-            mainImage={mainImage}
-            policyPosts={policyPosts}
-          />
-
-          <ProductReviews product={product} />
-
-          <RelatedProductsSection
-            relatedProducts={relatedProducts}
-            viewAllHref={relatedViewAllHref}
-            currentProduct={product}
-          />
-        </div>
-      </main>
-    </div>
+    <ProductDetailTheme
+      product={product}
+      requestedBundleOptionUid={requestedBundleOptionUid}
+      requestedBundleOptionKey={requestedBundleOptionKey}
+      requestedBundleOptionTitle={requestedBundleOptionTitle}
+      requestedVariantId={requestedVariantId}
+      descriptionHtml={descriptionHtml}
+      mainImage={mainImage}
+      policyPosts={policyPosts}
+      relatedProducts={relatedProducts}
+      relatedViewAllHref={relatedViewAllHref}
+    />
   );
 }
 

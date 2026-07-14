@@ -559,6 +559,10 @@ export const categoryApi = {
 
         return api.post(`/categories/${id}/products/reorder`, { items: normalizedItems });
     },
+    publicTree: {
+        get: (domainId) => api.get(`/public-category-trees/${domainId}`),
+        update: (domainId, data) => api.put(`/public-category-trees/${domainId}`, data),
+    },
 };
 
 export const attributeApi = {
@@ -1156,6 +1160,13 @@ export const cmsApi = {
         store: (data) => api.post('/stores', data),
         update: (id, data) => api.put(`/stores/${id}`, data),
         destroy: (id) => api.delete(`/stores/${id}`),
+    },
+    storefrontThemes: {
+        getAll: (params) => api.get('/storefront-themes', params ? { params } : {}),
+        store: (data) => api.post('/storefront-themes', data),
+        update: (id, data) => api.put(`/storefront-themes/${id}`, data),
+        duplicate: (id, data) => api.post(`/storefront-themes/${id}/duplicate`, data),
+        destroy: (id) => api.delete(`/storefront-themes/${id}`),
     }
 };
 
@@ -1174,6 +1185,7 @@ export const userApi = {
     getAll: () => api.get('/users'),
     store: (data) => api.post('/users', data),
     update: (id, data) => api.put(`/users/${id}`, data),
+    changePassword: (id, data) => api.put(`/users/${id}/password`, data),
     destroy: (id) => api.delete(`/users/${id}`),
 };
 

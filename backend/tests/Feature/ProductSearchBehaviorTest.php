@@ -332,6 +332,87 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'BUNDLE-MEN-LAM-OPTION');
     }
 
+    public function test_fast_picker_search_filters_bundle_options_to_matching_option_title(): void
+    {
+        $account = $this->authenticate();
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chan nen men lam',
+            'sku' => 'CHAN-NEN-LAM-FAST',
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam fast option',
+            'sku' => 'BUNDLE-MEN-LAM-FAST-OPTION',
+            'type' => 'bundle',
+        ]);
+
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 1m75-1m97 3 bat huong',
+            'position' => 0,
+        ]);
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 2m17 5 bat huong',
+            'position' => 1,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'filter_bundle_options_by_search' => 1,
+                'search' => '1m97',
+                'per_page' => 20,
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $bundle->id)
+            ->assertJsonCount(1, 'data.0.bundle_options')
+            ->assertJsonPath('data.0.bundle_options.0.option_title', 'Ban tho 1m75-1m97 3 bat huong');
+    }
+
+    public function test_fast_picker_keeps_all_bundle_options_when_search_matches_parent_only(): void
+    {
+        $account = $this->authenticate();
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chan nen men lam',
+            'sku' => 'CHAN-NEN-LAM-PARENT',
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam parent fast',
+            'sku' => 'BUNDLE-PARENT-FAST-ONLY',
+            'type' => 'bundle',
+        ]);
+
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 1m75-1m97 3 bat huong',
+            'position' => 0,
+        ]);
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 2m17 5 bat huong',
+            'position' => 1,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'filter_bundle_options_by_search' => 1,
+                'search' => 'BUNDLE-PARENT-FAST-ONLY',
+                'per_page' => 20,
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $bundle->id)
+            ->assertJsonCount(2, 'data.0.bundle_options');
+    }
+
     public function test_long_specific_name_search_prefers_phrase_match_over_shared_token_matches(): void
     {
         $account = $this->authenticate();

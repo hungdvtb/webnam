@@ -293,6 +293,7 @@ const AdminLayout = () => {
     const shouldReserveSidebarSpace = shouldShowSidebar && !isSidebarDrawerMode;
     const sidebarReservedWidth = canHoverSidebar ? sidebarCollapsedWidth : sidebarExpandedWidth;
     const sidebarWidth = isSidebarExpanded ? sidebarExpandedWidth : sidebarCollapsedWidth;
+    const isSiteSettingsActive = location.pathname === '/admin/settings';
 
     const getCurrentPermId = () => {
         const path = location.pathname;
@@ -458,9 +459,9 @@ const AdminLayout = () => {
                                             <Link
                                                 to="/admin/settings"
                                                 title="Cài đặt web"
-                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${location.pathname === '/admin/settings' ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                                className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${isSiteSettingsActive ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
                                             >
-                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${location.pathname === '/admin/settings' ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
+                                                <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isSiteSettingsActive ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>web</span>
                                                 <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
                                                     Cài đặt web
                                                 </SidebarText>

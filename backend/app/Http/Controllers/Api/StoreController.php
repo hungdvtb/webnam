@@ -6,15 +6,29 @@ use App\Http\Controllers\Controller;
 use App\Models\SiteDomain;
 use App\Models\SiteSetting;
 use App\Models\Store;
+use App\Models\StorefrontTheme;
 use App\Services\AccountDataScopeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class StoreController extends Controller
 {
+    private const STOREFRONT_THEME_RELATION_SELECT = 'id,name,code,folder,status,is_default,preview_image';
+
     public function __construct(
         protected AccountDataScopeService $accountDataScopeService
     ) {
+    }
+
+    private function storeRelations(): array
+    {
+        return [
+            'publicDomain:id,domain,is_active,is_default',
+            'storefrontTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'simpleProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'configurableProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+            'bundleProductTheme:' . self::STOREFRONT_THEME_RELATION_SELECT,
+        ];
     }
 
     public function index(Request $request)
@@ -23,7 +37,7 @@ class StoreController extends Controller
         $this->seedStoresFromSiteSettingsIfEmpty($accountId);
 
         $stores = Store::query()
-            ->with('publicDomain:id,domain,is_active,is_default')
+            ->with($this->storeRelations())
             ->when($request->filled('status'), function ($query) use ($request) {
                 $query->where('status', filter_var($request->input('status'), FILTER_VALIDATE_BOOLEAN));
             })
@@ -41,6 +55,10 @@ class StoreController extends Controller
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'public_domain_id' => ['nullable', 'integer'],
+            'storefront_theme_id' => ['nullable', 'integer'],
+            'simple_product_theme_id' => ['nullable', 'integer'],
+            'configurable_product_theme_id' => ['nullable', 'integer'],
+            'bundle_product_theme_id' => ['nullable', 'integer'],
             'slug' => ['nullable', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:80'],
             'phone' => ['nullable', 'string', 'max:50'],
@@ -51,13 +69,17 @@ class StoreController extends Controller
 
         $validated['account_id'] = $accountId;
         $validated['public_domain_id'] = $this->resolvePublicDomainId($validated['public_domain_id'] ?? null, $accountId);
+        $validated['storefront_theme_id'] = $this->resolveStorefrontThemeId($validated['storefront_theme_id'] ?? null, $accountId);
+        $validated['simple_product_theme_id'] = $this->resolveStorefrontThemeId($validated['simple_product_theme_id'] ?? null, $accountId, 'simple');
+        $validated['configurable_product_theme_id'] = $this->resolveStorefrontThemeId($validated['configurable_product_theme_id'] ?? null, $accountId, 'configurable');
+        $validated['bundle_product_theme_id'] = $this->resolveStorefrontThemeId($validated['bundle_product_theme_id'] ?? null, $accountId, 'bundle');
         $validated['slug'] = $this->uniqueSlug($validated['slug'] ?? $validated['name'], $accountId);
         $validated['status'] = $validated['status'] ?? true;
         $validated['sort_order'] = $validated['sort_order'] ?? $this->nextSortOrder($accountId);
 
         $store = Store::create($validated);
 
-        return response()->json($store->load('publicDomain:id,domain,is_active,is_default'), 201);
+        return response()->json($store->load($this->storeRelations()), 201);
     }
 
     public function update(Request $request, int $id)
@@ -68,6 +90,10 @@ class StoreController extends Controller
         $validated = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'public_domain_id' => ['nullable', 'integer'],
+            'storefront_theme_id' => ['nullable', 'integer'],
+            'simple_product_theme_id' => ['nullable', 'integer'],
+            'configurable_product_theme_id' => ['nullable', 'integer'],
+            'bundle_product_theme_id' => ['nullable', 'integer'],
             'slug' => ['nullable', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:80'],
             'phone' => ['nullable', 'string', 'max:50'],
@@ -88,9 +114,23 @@ class StoreController extends Controller
             $validated['public_domain_id'] = $this->resolvePublicDomainId($request->input('public_domain_id'), $accountId);
         }
 
+        if ($request->has('storefront_theme_id')) {
+            $validated['storefront_theme_id'] = $this->resolveStorefrontThemeId($request->input('storefront_theme_id'), $accountId);
+        }
+
+        foreach ([
+            'simple_product_theme_id' => 'simple',
+            'configurable_product_theme_id' => 'configurable',
+            'bundle_product_theme_id' => 'bundle',
+        ] as $themeField => $productType) {
+            if ($request->has($themeField)) {
+                $validated[$themeField] = $this->resolveStorefrontThemeId($request->input($themeField), $accountId, $productType);
+            }
+        }
+
         $store->update($validated);
 
-        return response()->json($store->fresh(['publicDomain:id,domain,is_active,is_default']));
+        return response()->json($store->fresh($this->storeRelations()));
     }
 
     public function destroy(int $id)
@@ -152,6 +192,37 @@ class StoreController extends Controller
         return $domainId;
     }
 
+    private function resolveStorefrontThemeId(mixed $value, ?int $accountId, ?string $productType = null): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value) || (int) $value <= 0) {
+            abort(422, 'Giao dien storefront khong hop le.');
+        }
+
+        $themeId = (int) $value;
+        $exists = StorefrontTheme::query()
+            ->whereKey($themeId)
+            ->where('status', true)
+            ->when($productType, fn ($query) => $query->where('product_type', $productType))
+            ->where(function ($query) use ($accountId) {
+                $query->whereNull('account_id');
+
+                if ($accountId) {
+                    $query->orWhere('account_id', $accountId);
+                }
+            })
+            ->exists();
+
+        if (!$exists) {
+            abort(422, 'Giao dien storefront khong ton tai trong account hien tai.');
+        }
+
+        return $themeId;
+    }
+
     private function seedStoresFromSiteSettingsIfEmpty(?int $accountId): void
     {
         if (!$accountId) {
@@ -186,6 +257,10 @@ class StoreController extends Controller
             Store::withoutGlobalScopes()->create([
                 'account_id' => $accountId,
                 'public_domain_id' => $this->resolvePublicDomainId($location['public_domain_id'] ?? null, $accountId),
+                'storefront_theme_id' => $this->resolveStorefrontThemeId($location['storefront_theme_id'] ?? null, $accountId),
+                'simple_product_theme_id' => $this->resolveStorefrontThemeId($location['simple_product_theme_id'] ?? null, $accountId, 'simple'),
+                'configurable_product_theme_id' => $this->resolveStorefrontThemeId($location['configurable_product_theme_id'] ?? null, $accountId, 'configurable'),
+                'bundle_product_theme_id' => $this->resolveStorefrontThemeId($location['bundle_product_theme_id'] ?? null, $accountId, 'bundle'),
                 'name' => $name,
                 'slug' => $this->uniqueSlug($name, $accountId),
                 'code' => trim((string) ($location['id'] ?? '')) ?: 'store-location-' . ($index + 1),

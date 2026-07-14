@@ -3,9 +3,11 @@ import { accountApi, financeApi, userApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import {
     ADMIN_ACTION_OPTIONS,
+    ADMIN_CHANGE_PASSWORD_PERMISSION,
     ADMIN_DATA_PERMISSION_OPTIONS,
     ADMIN_PERMISSION_OPTIONS,
     ADMIN_ROLE_OPTIONS,
+    ADMIN_SPECIAL_PERMISSION_OPTIONS,
     accountAccessesFromUser,
     dataPermissionsForRole,
     hasAdminPermission,
@@ -20,6 +22,11 @@ const emptyFormData = {
     password: '',
     status: 1,
     account_accesses: [],
+};
+
+const emptyPasswordFormData = {
+    password: '',
+    password_confirmation: '',
 };
 
 const labelForModule = (moduleId) => (
@@ -72,11 +79,15 @@ const UserList = () => {
     const [profitCentersByAccount, setProfitCentersByAccount] = useState({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [passwordSaving, setPasswordSaving] = useState(false);
     const [isFormOpen, setIsFormOpen] = useState(false);
+    const [passwordTarget, setPasswordTarget] = useState(null);
     const [formMode, setFormMode] = useState('create');
     const [formData, setFormData] = useState(emptyFormData);
+    const [passwordFormData, setPasswordFormData] = useState(emptyPasswordFormData);
 
     const canManageUsers = currentUser?.is_admin || hasAdminPermission(currentUser, 'users.manage');
+    const canChangePasswords = currentUser?.is_admin || hasAdminPermission(currentUser, ADMIN_CHANGE_PASSWORD_PERMISSION);
 
     const selectedAccessMap = useMemo(() => {
         const map = new Map();
@@ -95,11 +106,15 @@ const UserList = () => {
             if (event.key === 'Escape' && isFormOpen) {
                 setIsFormOpen(false);
             }
+            if (event.key === 'Escape' && passwordTarget) {
+                setPasswordTarget(null);
+                setPasswordFormData(emptyPasswordFormData);
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isFormOpen]);
+    }, [isFormOpen, passwordTarget]);
 
     const fetchInitialData = async () => {
         setLoading(true);
@@ -147,6 +162,37 @@ const UserList = () => {
         });
         setFormMode('edit');
         setIsFormOpen(true);
+    };
+
+    const openPasswordForm = (user) => {
+        setPasswordTarget(user);
+        setPasswordFormData(emptyPasswordFormData);
+    };
+
+    const closePasswordForm = () => {
+        setPasswordTarget(null);
+        setPasswordFormData(emptyPasswordFormData);
+    };
+
+    const submitPasswordForm = async (event) => {
+        event.preventDefault();
+        if (passwordSaving || !passwordTarget) return;
+
+        if (passwordFormData.password !== passwordFormData.password_confirmation) {
+            alert('Mật khẩu xác nhận chưa khớp.');
+            return;
+        }
+
+        setPasswordSaving(true);
+        try {
+            await userApi.changePassword(passwordTarget.id, passwordFormData);
+            closePasswordForm();
+        } catch (error) {
+            console.error('Error changing user password:', error);
+            alert(error.response?.data?.message || 'Không thể đổi mật khẩu.');
+        } finally {
+            setPasswordSaving(false);
+        }
     };
 
     const updateAccess = (accountId, updater) => {
@@ -260,6 +306,9 @@ const UserList = () => {
                 account_accesses: formData.account_accesses.map(normalizeAccessPayload),
                 permissions: moduleIdsFromDetailedPermissions(allDetailedPermissions),
             };
+            if (formMode === 'edit') {
+                delete payload.password;
+            }
 
             if (formMode === 'create') {
                 await userApi.store(payload);
@@ -424,6 +473,11 @@ const UserList = () => {
                                                 <button type="button" onClick={() => handleEdit(item)} className="flex size-8 items-center justify-center rounded-sm text-stone/30 transition-all hover:bg-primary/5 hover:text-primary" title="Phân quyền">
                                                     <span className="material-symbols-outlined text-[18px]">rule_settings</span>
                                                 </button>
+                                                {canChangePasswords && (
+                                                    <button type="button" onClick={() => openPasswordForm(item)} className="flex size-8 items-center justify-center rounded-sm text-stone/30 transition-all hover:bg-primary/5 hover:text-primary" title="Đổi mật khẩu">
+                                                        <span className="material-symbols-outlined text-[18px]">vpn_key</span>
+                                                    </button>
+                                                )}
                                                 <button type="button" onClick={() => handleDelete(item.id, item.name)} className="flex size-8 items-center justify-center rounded-sm text-stone/30 transition-all hover:bg-brick/5 hover:text-brick" title="Xóa tài khoản">
                                                     <span className="material-symbols-outlined text-[18px]">delete_forever</span>
                                                 </button>
@@ -466,10 +520,12 @@ const UserList = () => {
                                     <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Email</span>
                                     <input required type="email" value={formData.email} onChange={(event) => setFormData({ ...formData, email: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
                                 </label>
+                                {formMode === 'create' && (
                                 <label className="space-y-1.5">
                                     <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Mật khẩu {formMode === 'edit' ? '(bỏ trống nếu giữ nguyên)' : ''}</span>
-                                    <input required={formMode === 'create'} minLength="6" type="text" value={formData.password} onChange={(event) => setFormData({ ...formData, password: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                                    <input required minLength="6" type="password" value={formData.password} onChange={(event) => setFormData({ ...formData, password: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
                                 </label>
+                                )}
                                 <label className="flex items-end">
                                     <span className="flex w-full cursor-pointer items-center gap-3 rounded-sm border border-gold/20 bg-stone/5 p-3 transition-all hover:border-gold">
                                         <span className={`flex size-5 items-center justify-center rounded-sm border-2 ${formData.status === 1 ? 'border-primary bg-primary' : 'border-gold/20 bg-white'}`}>
@@ -569,6 +625,20 @@ const UserList = () => {
                                                             </table>
                                                         </div>
 
+                                                        <div className="space-y-2 border-t border-gold/10 pt-4">
+                                                            <div className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/45">Quyền đặc biệt</div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {ADMIN_SPECIAL_PERMISSION_OPTIONS.map((permission) => {
+                                                                    const checked = access.permissions.includes(permission.id);
+                                                                    return (
+                                                                        <button key={permission.id} type="button" onClick={() => togglePermission(account.id, permission.id)} className={`rounded-sm border px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-all ${checked ? 'border-primary bg-primary text-white' : 'border-gold/20 bg-white text-primary/55 hover:border-gold'}`}>
+                                                                            {permission.label}
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+
                                                         <div className="flex flex-wrap gap-2 border-t border-gold/10 pt-4">
                                                             {ADMIN_DATA_PERMISSION_OPTIONS.map((permission) => {
                                                                 const checked = access.data_permissions.includes(permission.id);
@@ -635,6 +705,44 @@ const UserList = () => {
                             </button>
                             <button type="submit" disabled={saving} className="rounded-sm bg-primary px-10 py-2.5 text-[11px] font-black uppercase tracking-widest text-white shadow-premium transition-all hover:bg-umber disabled:opacity-60">
                                 {saving ? 'Đang lưu...' : formMode === 'edit' ? 'Cập nhật' : 'Tạo người dùng'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+
+            {passwordTarget && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-stone-900/60 p-6 backdrop-blur-sm">
+                    <form onSubmit={submitPasswordForm} className="w-full max-w-lg overflow-hidden rounded-sm border border-gold/30 bg-[#fcfcfa] shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+                        <div className="flex items-center justify-between bg-primary px-7 py-5 text-white">
+                            <div>
+                                <h3 className="font-display text-lg font-bold uppercase italic leading-none">Đổi mật khẩu</h3>
+                                <p className="mt-1.5 text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
+                                    {passwordTarget.name}
+                                </p>
+                            </div>
+                            <button type="button" onClick={closePasswordForm} className="flex size-10 items-center justify-center rounded-full text-white/50 transition-all hover:bg-white/10 hover:text-white">
+                                <span className="material-symbols-outlined">close</span>
+                            </button>
+                        </div>
+
+                        <div className="space-y-5 p-7">
+                            <label className="space-y-1.5">
+                                <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Mật khẩu mới</span>
+                                <input required minLength="6" type="password" value={passwordFormData.password} onChange={(event) => setPasswordFormData({ ...passwordFormData, password: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="font-ui text-[10px] font-black uppercase tracking-widest text-primary/40">Nhập lại mật khẩu</span>
+                                <input required minLength="6" type="password" value={passwordFormData.password_confirmation} onChange={(event) => setPasswordFormData({ ...passwordFormData, password_confirmation: event.target.value })} className="w-full rounded-sm border border-gold/20 bg-stone/5 p-3 text-[14px] font-bold text-primary transition-all focus:border-gold focus:bg-white focus:outline-none" />
+                            </label>
+                        </div>
+
+                        <div className="flex justify-end gap-3 border-t border-gold/20 bg-stone/5 px-7 py-5">
+                            <button type="button" onClick={closePasswordForm} className="rounded-sm px-6 py-2.5 text-[11px] font-black uppercase tracking-widest text-stone/40 transition-all hover:bg-brick/5 hover:text-brick">
+                                Bỏ qua
+                            </button>
+                            <button type="submit" disabled={passwordSaving} className="rounded-sm bg-primary px-8 py-2.5 text-[11px] font-black uppercase tracking-widest text-white shadow-premium transition-all hover:bg-umber disabled:opacity-60">
+                                {passwordSaving ? 'Đang lưu...' : 'Cập nhật'}
                             </button>
                         </div>
                     </form>

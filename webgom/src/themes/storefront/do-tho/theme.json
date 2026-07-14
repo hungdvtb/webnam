@@ -1,0 +1,12 @@
+{
+  "name": "Giao diện số 1",
+  "code": "do-tho",
+  "folder": "do-tho",
+  "purpose": "Bộ giao diện sản phẩm hiện tại đã được lưu làm giao diện số 1.",
+  "entry": "ProductDetailPageTheme.js",
+  "product_detail_entries": {
+    "simple": "SimpleProductDetailPageTheme.js",
+    "configurable": "ConfigurableProductDetailPageTheme.js",
+    "bundle": "BundleProductDetailPageTheme.js"
+  }
+}

@@ -3557,6 +3557,53 @@ class ProductController extends Controller
         return $product;
     }
 
+    protected function appendBundleOptionPostMetaToProducts(Collection $products): void
+    {
+        $postIds = $products
+            ->flatMap(function (Product $product) {
+                if (!$product->relationLoaded('bundleItems')) {
+                    return [];
+                }
+
+                return $product->bundleItems
+                    ->pluck('pivot.option_post_id')
+                    ->filter(fn ($postId) => filled($postId))
+                    ->map(fn ($postId) => (int) $postId)
+                    ->all();
+            })
+            ->unique()
+            ->values();
+
+        if ($postIds->isEmpty()) {
+            return;
+        }
+
+        $posts = Post::query()
+            ->whereIn('id', $postIds->all())
+            ->get(['id', 'title', 'slug'])
+            ->keyBy(fn (Post $post) => (int) $post->id);
+
+        $products->each(function (Product $product) use ($posts) {
+            if (!$product->relationLoaded('bundleItems')) {
+                return;
+            }
+
+            $product->bundleItems->each(function (Product $bundleItem) use ($posts) {
+                $postId = filled($bundleItem->pivot?->option_post_id ?? null)
+                    ? (int) $bundleItem->pivot->option_post_id
+                    : null;
+
+                if (!$postId) {
+                    return;
+                }
+
+                $post = $posts->get($postId);
+                $bundleItem->pivot->setAttribute('option_post_title', $post?->title);
+                $bundleItem->pivot->setAttribute('option_post_slug', $post?->slug);
+            });
+        });
+    }
+
     protected function validateGroupedOrBundleItemVariants(array $items): void
     {
         $indexedItems = collect($items)
@@ -6254,12 +6301,16 @@ class ProductController extends Controller
     protected function resolveProductSupplierCodeSortExpression(): ?string
     {
         if (Schema::hasTable('supplier_product_prices') && Schema::hasColumn('supplier_product_prices', 'supplier_product_code')) {
+            $preferredSupplierSort = DB::connection()->getDriverName() !== 'sqlite' && $this->productTableHasColumn('supplier_id')
+                ? 'CASE WHEN supplier_product_prices.supplier_id = products.supplier_id THEN 0 ELSE 1 END ASC,'
+                : '';
+
             return "(SELECT supplier_product_prices.supplier_product_code
                 FROM supplier_product_prices
                 WHERE supplier_product_prices.product_id = products.id
                     AND supplier_product_prices.supplier_product_code IS NOT NULL
                     AND supplier_product_prices.supplier_product_code <> ''
-                ORDER BY CASE WHEN supplier_product_prices.supplier_id = products.supplier_id THEN 0 ELSE 1 END ASC,
+                ORDER BY {$preferredSupplierSort}
                     supplier_product_prices.id ASC
                 LIMIT 1)";
         }
@@ -6269,6 +6320,16 @@ class ProductController extends Controller
         }
 
         return null;
+    }
+
+    protected function productTableHasColumn(string $column): bool
+    {
+        if (DB::connection()->getDriverName() === 'sqlite') {
+            return collect(DB::select('PRAGMA table_info(products)'))
+                ->contains(fn ($row) => ($row->name ?? null) === $column);
+        }
+
+        return Schema::hasTable('products') && Schema::hasColumn('products', $column);
     }
 
     protected function applyRequestedProductSort(Builder $query, string $sortBy, string $direction, string $actualStockSql): bool
@@ -6447,10 +6508,15 @@ class ProductController extends Controller
 
     protected function buildAdminProductListBaseQuery(Request $request, bool $includeNestedProducts = true): array
     {
+        $hasLegacySupplierId = $this->productTableHasColumn('supplier_id');
+        $nestedProductColumns = 'id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id,store_id,profit_center_id';
+        if ($hasLegacySupplierId) {
+            $nestedProductColumns .= ',supplier_id';
+        }
+
         $relations = [
             'categories:id,name,code,slug',
             'category:id,name,code,slug',
-            'supplier:id,name,code',
             'suppliers:id,name,code',
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
@@ -6467,8 +6533,12 @@ class ProductController extends Controller
             'attributeValues.attribute:id,name,code,is_filterable,is_filterable_backend',
         ];
 
+        if ($hasLegacySupplierId) {
+            $relations[] = 'supplier:id,name,code';
+        }
+
         if ($includeNestedProducts) {
-            $relations = array_merge($relations, [
+            $nestedRelations = [
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
                 'variations.parentConfigurable:id,name,sku,type',
                 'variations.account:id,name,site_code,public_domain_id',
@@ -6477,7 +6547,6 @@ class ProductController extends Controller
                 'variations.categories:id,name,code,slug',
                 'variations.store:id,name,slug,status,public_domain_id',
                 'variations.store.publicDomain:id,domain,is_active,is_default',
-                'variations.supplier:id,name,code',
                 'variations.suppliers:id,name,code',
                 'variations.attributeValues:id,product_id,attribute_id,value',
                 'variations.attributeValues.attribute:id,name,code,frontend_type',
@@ -6485,7 +6554,7 @@ class ProductController extends Controller
                 'variations.profitCenter:id,name,code,manager_user_id',
                 'variations.profitCenter.manager:id,name',
                 'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'groupedItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'groupedItems:' . $nestedProductColumns,
                 'groupedItems.account:id,name,site_code,public_domain_id',
                 'groupedItems.account.publicDomain:id,domain,is_active,is_default',
                 'groupedItems.profitCenter:id,name,code,manager_user_id',
@@ -6494,11 +6563,10 @@ class ProductController extends Controller
                 'groupedItems.categories:id,name,code,slug',
                 'groupedItems.store:id,name,slug,status,public_domain_id',
                 'groupedItems.store.publicDomain:id,domain,is_active,is_default',
-                'groupedItems.supplier:id,name,code',
                 'groupedItems.suppliers:id,name,code',
                 'groupedItems.unit:id,name',
                 'groupedItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-                'bundleItems:id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,supplier_id,inventory_unit_id,site_domain_id,store_id,profit_center_id',
+                'bundleItems:' . $nestedProductColumns,
                 'bundleItems.account:id,name,site_code,public_domain_id',
                 'bundleItems.account.publicDomain:id,domain,is_active,is_default',
                 'bundleItems.profitCenter:id,name,code,manager_user_id',
@@ -6507,21 +6575,33 @@ class ProductController extends Controller
                 'bundleItems.categories:id,name,code,slug',
                 'bundleItems.store:id,name,slug,status,public_domain_id',
                 'bundleItems.store.publicDomain:id,domain,is_active,is_default',
-                'bundleItems.supplier:id,name,code',
                 'bundleItems.suppliers:id,name,code',
                 'bundleItems.unit:id,name',
                 'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            ]);
+            ];
+
+            if ($hasLegacySupplierId) {
+                $nestedRelations[] = 'variations.supplier:id,name,code';
+                $nestedRelations[] = 'groupedItems.supplier:id,name,code';
+                $nestedRelations[] = 'bundleItems.supplier:id,name,code';
+            }
+
+            $relations = array_merge($relations, $nestedRelations);
+        }
+
+        $selectColumns = [
+            'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
+            'inventory_unit_id', 'profit_center_id', 'sort_order',
+            'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'store_id', 'meta_title', 'meta_description',
+            'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
+            'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action',
+        ];
+        if ($hasLegacySupplierId) {
+            $selectColumns[] = 'supplier_id';
         }
 
         $query = Product::query()
-            ->select([
-                'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-                'supplier_id', 'inventory_unit_id', 'profit_center_id', 'sort_order',
-                'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'store_id', 'meta_title', 'meta_description',
-                'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
-                'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action'
-            ])
+            ->select($selectColumns)
             ->withCount('suppliers')
             ->with($relations);
 
@@ -6669,6 +6749,205 @@ class ProductController extends Controller
         ]);
     }
 
+    protected function buildPickerBundleOptionSearch(?string $rawSearch): ?array
+    {
+        $search = trim((string) $rawSearch);
+        if ($search === '') {
+            return null;
+        }
+
+        $normalizedName = $this->normalizeNameSearchText($search);
+        $compactName = $this->compactSearchText($search);
+
+        if ($normalizedName === '' && $compactName === '') {
+            return null;
+        }
+
+        return [
+            'name_like' => $normalizedName !== '' ? '%' . $this->escapeLike($normalizedName) . '%' : null,
+            'compact_like' => $compactName !== '' ? '%' . $this->escapeLike($compactName) . '%' : null,
+        ];
+    }
+
+    protected function applyPickerBundleOptionSearchConstraint($query, array $search): void
+    {
+        $optionTitleExpr = $this->normalizedWordsExpression('product_links.option_title');
+        $optionTitleCompactExpr = $this->compactSearchExpression('product_links.option_title');
+        $postTitleExpr = $this->normalizedWordsExpression('posts.title');
+        $postTitleCompactExpr = $this->compactSearchExpression('posts.title');
+        $nameLike = $search['name_like'] ?? null;
+        $compactLike = $search['compact_like'] ?? null;
+
+        $query->where(function ($matchQuery) use (
+            $optionTitleExpr,
+            $optionTitleCompactExpr,
+            $postTitleExpr,
+            $postTitleCompactExpr,
+            $nameLike,
+            $compactLike
+        ) {
+            if ($nameLike !== null) {
+                $matchQuery->whereRaw("{$optionTitleExpr} LIKE ? ESCAPE '\\'", [$nameLike]);
+            }
+
+            if ($compactLike !== null) {
+                $method = $nameLike !== null ? 'orWhereRaw' : 'whereRaw';
+                $matchQuery->{$method}("{$optionTitleCompactExpr} LIKE ? ESCAPE '\\'", [$compactLike]);
+            }
+
+            $matchQuery->orWhereExists(function ($postQuery) use (
+                $postTitleExpr,
+                $postTitleCompactExpr,
+                $nameLike,
+                $compactLike
+            ) {
+                $postQuery
+                    ->selectRaw('1')
+                    ->from('posts')
+                    ->whereColumn('posts.id', 'product_links.option_post_id')
+                    ->where(function ($postMatchQuery) use ($postTitleExpr, $postTitleCompactExpr, $nameLike, $compactLike) {
+                        if ($nameLike !== null) {
+                            $postMatchQuery->whereRaw("{$postTitleExpr} LIKE ? ESCAPE '\\'", [$nameLike]);
+                        }
+
+                        if ($compactLike !== null) {
+                            $method = $nameLike !== null ? 'orWhereRaw' : 'whereRaw';
+                            $postMatchQuery->{$method}("{$postTitleCompactExpr} LIKE ? ESCAPE '\\'", [$compactLike]);
+                        }
+                    });
+            });
+        });
+    }
+
+    protected function findPickerBundleOptionMatchedProductIds(Collection $products, ?array $search): array
+    {
+        if ($search === null) {
+            return [];
+        }
+
+        $bundleProductIds = $products
+            ->filter(fn (Product $product) => $product->type === 'bundle')
+            ->pluck('id')
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($bundleProductIds->isEmpty()) {
+            return [];
+        }
+
+        $query = DB::table('product_links')
+            ->where('link_type', 'bundle')
+            ->whereIn('product_id', $bundleProductIds->all());
+
+        $this->applyPickerBundleOptionSearchConstraint($query, $search);
+
+        return $query
+            ->distinct()
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    protected function loadPickerBundleItems(
+        Collection $products,
+        $pickerAttributeFilters,
+        ?array $bundleOptionSearch = null,
+        array $bundleOptionMatchedProductIds = []
+    ): void {
+        if ($products->isEmpty()) {
+            return;
+        }
+
+        $matchedProductIds = collect($bundleOptionMatchedProductIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $products->load([
+            'bundleItems' => function ($bundleQuery) use ($bundleOptionSearch, $matchedProductIds) {
+                $bundleQuery->select([
+                    'products.id',
+                    'products.sku',
+                    'products.name',
+                    'products.price',
+                    'products.cost_price',
+                    'products.expected_cost',
+                    'products.type',
+                    'products.inventory_unit_id',
+                    'products.profit_center_id',
+                ]);
+
+                if ($bundleOptionSearch !== null && !empty($matchedProductIds)) {
+                    $bundleQuery->where(function ($optionQuery) use ($bundleOptionSearch, $matchedProductIds) {
+                        $optionQuery
+                            ->whereNotIn('product_links.product_id', $matchedProductIds)
+                            ->orWhere(function ($matchedOptionQuery) use ($bundleOptionSearch) {
+                                $this->applyPickerBundleOptionSearchConstraint($matchedOptionQuery, $bundleOptionSearch);
+                            });
+                    });
+                }
+            },
+            'bundleItems.unit:id,name',
+            'bundleItems.attributeValues:id,product_id,attribute_id,value',
+            'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+            'bundleItems.images.mediaAsset:id,public_id,disk,variants',
+        ]);
+    }
+
+    protected function loadPickerBundleSelectedVariantMap(Collection $products, $pickerAttributeFilters): Collection
+    {
+        $variantIds = $products
+            ->flatMap(function (Product $product) {
+                if (!$product->relationLoaded('bundleItems')) {
+                    return [];
+                }
+
+                return $product->bundleItems
+                    ->pluck('pivot.variant_id')
+                    ->filter(fn ($variantId) => filled($variantId))
+                    ->map(fn ($variantId) => (int) $variantId)
+                    ->all();
+            })
+            ->unique()
+            ->values();
+
+        if ($variantIds->isEmpty()) {
+            return collect();
+        }
+
+        $variantQuery = Product::query()
+            ->select([
+                'products.id',
+                'products.sku',
+                'products.name',
+                'products.price',
+                'products.cost_price',
+                'products.expected_cost',
+                'products.type',
+                'products.category_id',
+                'products.inventory_unit_id',
+                'products.profit_center_id',
+            ])
+            ->whereIn('products.id', $variantIds->all())
+            ->where('products.status', true);
+
+        $this->applyVariationAttributeFilters($variantQuery, $pickerAttributeFilters);
+
+        return $variantQuery
+            ->with([
+                'unit:id,name',
+                'attributeValues:id,product_id,attribute_id,value',
+                'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
+                'images.mediaAsset:id,public_id,disk,variants',
+            ])
+            ->get()
+            ->keyBy(fn (Product $product) => (int) $product->id);
+    }
+
     protected function pickerPrimaryImage(?Product $product): ?string
     {
         if (!$product) {
@@ -6737,11 +7016,13 @@ class ProductController extends Controller
         return $parentName;
     }
 
-    protected function pickerBundleOptions(Product $product): array
+    protected function pickerBundleOptions(Product $product, ?Collection $selectedVariantMap = null): array
     {
         if ($product->type !== 'bundle' || !$product->relationLoaded('bundleItems')) {
             return [];
         }
+
+        $selectedVariantMap ??= collect();
 
         return $product->bundleItems
             ->groupBy(function (Product $bundleItem) {
@@ -6761,7 +7042,7 @@ class ProductController extends Controller
                     ? 'post:' . $optionPostId
                     : 'title:' . Str::lower($optionTitle);
             })
-            ->map(function ($items, string $groupKey) {
+            ->map(function ($items, string $groupKey) use ($selectedVariantMap) {
                 /** @var Product|null $firstItem */
                 $firstItem = $items->first();
                 if (!$firstItem) {
@@ -6779,12 +7060,12 @@ class ProductController extends Controller
 
                 $optionStatus = $this->normalizeBundleOptionStatus($firstItem->pivot?->bundle_option_status ?? null);
 
-                $resolvedItems = $items->map(function (Product $bundleItem) {
+                $resolvedItems = $items->map(function (Product $bundleItem) use ($selectedVariantMap) {
                     $selectedVariantId = filled($bundleItem->pivot?->variant_id ?? null)
                         ? (int) $bundleItem->pivot->variant_id
                         : null;
                     $selectedVariant = $selectedVariantId
-                        ? $bundleItem->variations->firstWhere('id', $selectedVariantId)
+                        ? $selectedVariantMap->get($selectedVariantId)
                         : null;
                     $resolvedProduct = $selectedVariant ?: $bundleItem;
 
@@ -6927,19 +7208,6 @@ class ProductController extends Controller
             'variations.attributeValues:id,product_id,attribute_id,value',
             'variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'variations.images.mediaAsset:id,public_id,disk,variants',
-            'bundleItems:id,sku,name,price,cost_price,expected_cost,type,inventory_unit_id,profit_center_id',
-            'bundleItems.unit:id,name',
-            'bundleItems.attributeValues:id,product_id,attribute_id,value',
-            'bundleItems.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            'bundleItems.images.mediaAsset:id,public_id,disk,variants',
-            'bundleItems.variations' => function ($variationQuery) use ($pickerAttributeFilters) {
-                $variationQuery->where('products.status', true);
-                $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
-            },
-            'bundleItems.variations.unit:id,name',
-            'bundleItems.variations.attributeValues:id,product_id,attribute_id,value',
-            'bundleItems.variations.images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
-            'bundleItems.variations.images.mediaAsset:id,public_id,disk,variants',
         ]);
 
         if ($quickFilterRankingSql !== null) {
@@ -6957,9 +7225,26 @@ class ProductController extends Controller
 
         $maxPerPage = $request->boolean('picker') ? 200 : 100;
         $perPage = min(max((int) $request->get('per_page', 50), 1), $maxPerPage);
-        $paginated = $query->paginate($perPage);
-        $pickerPayload = $paginated->getCollection()->map(function (Product $product) {
-            $product = $this->appendBundleOptionPostMeta($product);
+        $paginated = $request->boolean('fast_picker')
+            ? $query->simplePaginate($perPage)
+            : $query->paginate($perPage);
+
+        $pageProducts = $paginated->getCollection();
+        $bundleOptionSearch = $request->boolean('filter_bundle_options_by_search')
+            ? $this->buildPickerBundleOptionSearch($request->input('search'))
+            : null;
+        $bundleOptionMatchedProductIds = $this->findPickerBundleOptionMatchedProductIds($pageProducts, $bundleOptionSearch);
+
+        $this->loadPickerBundleItems(
+            $pageProducts,
+            $pickerAttributeFilters,
+            $bundleOptionSearch,
+            $bundleOptionMatchedProductIds
+        );
+        $this->appendBundleOptionPostMetaToProducts($pageProducts);
+        $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $pickerAttributeFilters);
+
+        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap) {
             $parentProduct = $product->parentConfigurable->first();
             $attributeSummary = $this->pickerAttributeSummary($product);
             $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
@@ -7037,7 +7322,7 @@ class ProductController extends Controller
                     })
                     ->values()
                     ->all(),
-                'bundle_options' => $this->pickerBundleOptions($product),
+                'bundle_options' => $this->pickerBundleOptions($product, $selectedBundleVariantMap),
             ];
         });
 

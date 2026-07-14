@@ -50,6 +50,10 @@ class EnsureAdminPermission
             return 'orders.view';
         }
 
+        if (preg_match('#^users/\d+/password$#', $path)) {
+            return AccessControlService::USER_CHANGE_PASSWORD_PERMISSION;
+        }
+
         $module = $this->resolveModule($path);
         if ($module === null) {
             return null;

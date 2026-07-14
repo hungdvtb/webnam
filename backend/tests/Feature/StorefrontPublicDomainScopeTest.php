@@ -3,12 +3,15 @@
 namespace Tests\Feature;
 
 use App\Models\Account;
+use App\Models\Category;
 use App\Models\Product;
+use App\Models\PublicCategoryNode;
 use App\Models\SiteDomain;
 use App\Models\Store;
 use App\Support\StorefrontDomainScope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class StorefrontPublicDomainScopeTest extends TestCase
@@ -102,7 +105,6 @@ class StorefrontPublicDomainScopeTest extends TestCase
             'is_default' => true,
         ]);
 
-        $firstAccount->update(['public_domain_id' => $gomDomain->id]);
         $secondAccount->update(['public_domain_id' => $gomDomain->id]);
         $thirdAccount->update(['public_domain_id' => $dongDomain->id]);
 
@@ -137,15 +139,34 @@ class StorefrontPublicDomainScopeTest extends TestCase
             'price' => 100000,
             'status' => true,
         ]);
-        Product::query()->create([
+        $secondParentProduct = Product::query()->create([
             'account_id' => $secondAccount->id,
             'store_id' => $secondStore->id,
-            'type' => 'simple',
+            'type' => 'configurable',
             'name' => 'Product on Gom 2',
             'slug' => 'product-on-gom-2',
             'sku' => 'GOM-2',
             'price' => 200000,
             'status' => true,
+        ]);
+        $secondChildProduct = Product::query()->create([
+            'account_id' => $secondAccount->id,
+            'store_id' => $secondStore->id,
+            'type' => 'simple',
+            'name' => 'Product on Gom 2 child',
+            'slug' => 'product-on-gom-2-child',
+            'sku' => 'GOM-2-CHILD',
+            'price' => 210000,
+            'status' => true,
+        ]);
+        DB::table('product_links')->insert([
+            'account_id' => $secondAccount->id,
+            'product_id' => $secondParentProduct->id,
+            'linked_product_id' => $secondChildProduct->id,
+            'link_type' => 'super_link',
+            'position' => 0,
+            'created_at' => now(),
+            'updated_at' => now(),
         ]);
         Product::query()->create([
             'account_id' => $thirdAccount->id,
@@ -184,5 +205,127 @@ class StorefrontPublicDomainScopeTest extends TestCase
             ->all();
 
         $this->assertSame(['product-on-gom-1', 'product-on-gom-2'], $slugs);
+    }
+
+    public function test_public_domain_category_tree_can_merge_categories_from_multiple_accounts(): void
+    {
+        $firstAccount = Account::query()->create([
+            'name' => 'Store 1',
+            'subdomain' => 'store-1',
+            'site_code' => 'STORE1',
+            'status' => true,
+        ]);
+        $secondAccount = Account::query()->create([
+            'name' => 'Store 2',
+            'subdomain' => 'store-2',
+            'site_code' => 'STORE2',
+            'status' => true,
+        ]);
+
+        $domain = SiteDomain::query()->create([
+            'account_id' => $firstAccount->id,
+            'domain' => 'gomdaithanh.com',
+            'is_active' => true,
+            'is_default' => true,
+        ]);
+        $secondAccount->update(['public_domain_id' => $domain->id]);
+
+        $firstCategory = Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'name' => 'Bo do tho men ran',
+            'slug' => 'bo-do-tho-men-ran',
+            'status' => true,
+            'order' => 1,
+        ]);
+        $secondCategory = Category::query()->create([
+            'account_id' => $secondAccount->id,
+            'name' => 'Bo do tho men ran mau 2',
+            'slug' => 'bo-do-tho-men-ran-mau-2',
+            'status' => true,
+            'order' => 1,
+        ]);
+
+        $firstProduct = Product::query()->create([
+            'account_id' => $firstAccount->id,
+            'category_id' => $firstCategory->id,
+            'type' => 'simple',
+            'name' => 'Product from store 1 category',
+            'slug' => 'product-from-store-1-category',
+            'sku' => 'CAT-1',
+            'price' => 100000,
+            'status' => true,
+        ]);
+        $secondProduct = Product::query()->create([
+            'account_id' => $secondAccount->id,
+            'category_id' => $secondCategory->id,
+            'type' => 'simple',
+            'name' => 'Product from store 2 category',
+            'slug' => 'product-from-store-2-category',
+            'sku' => 'CAT-2',
+            'price' => 200000,
+            'status' => true,
+        ]);
+
+        DB::table('category_product')->insert([
+            [
+                'product_id' => $firstProduct->id,
+                'category_id' => $firstCategory->id,
+                'sort_order' => 0,
+                'item_type' => 'product',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+            [
+                'product_id' => $secondProduct->id,
+                'category_id' => $secondCategory->id,
+                'sort_order' => 1,
+                'item_type' => 'product',
+                'created_at' => now(),
+                'updated_at' => now(),
+            ],
+        ]);
+
+        $publicNode = PublicCategoryNode::query()->create([
+            'site_domain_id' => $domain->id,
+            'title' => 'Bo do tho men ran',
+            'slug' => 'bo-do-tho-men-ran-public',
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+        $publicNode->categories()->attach([
+            $firstCategory->id => ['sort_order' => 0],
+            $secondCategory->id => ['sort_order' => 1],
+        ]);
+
+        $categoriesResponse = $this
+            ->withHeaders([
+                'X-Site-Code' => 'STORE1',
+                'X-Public-Host' => 'gomdaithanh.com',
+            ])
+            ->getJson('/api/web-api/categories')
+            ->assertOk();
+
+        $categoriesResponse->assertJsonCount(1);
+        $categoriesResponse->assertJsonPath('0.slug', 'bo-do-tho-men-ran-public');
+        $categoriesResponse->assertJsonPath('0.products_count', 2);
+
+        $productsResponse = $this
+            ->withHeaders([
+                'X-Site-Code' => 'STORE1',
+                'X-Public-Host' => 'gomdaithanh.com',
+            ])
+            ->getJson('/api/web-api/products?category=bo-do-tho-men-ran-public&per_page=50')
+            ->assertOk();
+
+        $slugs = collect($productsResponse->json('data'))
+            ->pluck('slug')
+            ->sort()
+            ->values()
+            ->all();
+
+        $this->assertSame([
+            'product-from-store-1-category',
+            'product-from-store-2-category',
+        ], $slugs);
     }
 }

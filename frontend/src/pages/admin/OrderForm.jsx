@@ -61,6 +61,10 @@ import {
     copyProductQuickSetupItemsToNamespace,
     findProductQuickSetupItems,
 } from '../../utils/orderProductQuickSetup';
+import {
+    calculateBundleItemsSubtotal,
+    resolveBundleOptionEntryPrice,
+} from '../../utils/orderBundleOptionPricing';
 import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
 const AdminSection = ({ icon, title, children, className = '', bodyClassName = '' }) => (
@@ -1110,6 +1114,9 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 ? normalizeStoredProductQuickSetupBundleItems(item?.bundle_items)
                 : [];
             if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION && bundleItems.length === 0) return null;
+            const bundleOptionPrice = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? resolveBundleOptionEntryPrice(item, bundleItems)
+                : (Number(item?.price ?? 0) || 0);
 
             const bundleParentId = Number(item?.bundle_parent_id ?? productId) || productId;
             const bundleOptionTitle = normalizeCanvasText(item?.bundle_option_title || resolveBundleOptionTitle(item));
@@ -1137,7 +1144,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 display_sku: String(item?.display_sku ?? item?.sku ?? '').trim(),
                 name: String(item?.name ?? '').trim(),
                 display_name: displayName,
-                price: Number(item?.price ?? 0) || 0,
+                price: bundleOptionPrice,
                 expected_cost: parseMoneyNumber(item?.expected_cost),
                 cost_price: resolveProductCostPrice(item),
                 unit_name: resolveOrderUnitLabel(item),
@@ -1157,8 +1164,8 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                     bundle_option_status: normalizeCanvasText(item?.bundle_option_status || 'visible'),
                     bundle_title: normalizeCanvasText(item?.bundle_title || item?.bundle_config_title),
                     bundle_config_title: normalizeCanvasText(item?.bundle_config_title || item?.bundle_title),
-                    bundle_option_total_price: resolveMoneyValue(item?.bundle_option_total_price, item?.price, 0),
-                    bundle_option_discounted_price: resolveMoneyValue(item?.bundle_option_discounted_price, item?.price, 0),
+                    bundle_option_total_price: bundleOptionPrice,
+                    bundle_option_discounted_price: bundleOptionPrice,
                     option_post_id: Number(item?.option_post_id) || undefined,
                     option_post_title: normalizeCanvasText(item?.option_post_title),
                     bundle_items: bundleItems,
@@ -2579,64 +2586,41 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         const bundleOptionKey = normalizeCanvasText(entry?.bundle_option_key || resolveBundleOptionKey(entry));
 
         const bundleItems = Array.isArray(entry?.bundle_items) ? entry.bundle_items : [];
-        const optionPrice = resolveMoneyValue(
-            entry?.bundle_option_discounted_price,
-            entry?.price,
-            entry?.bundle_option_total_price,
-            0
-        );
-        const rawBundleTotal = bundleItems.reduce((sum, bundleItem) => {
-            const quantity = Math.max(1, Number(bundleItem?.quantity) || 1);
-            return sum + ((Number(bundleItem?.price ?? 0) || 0) * quantity);
-        }, 0);
-        const shouldAllocateOptionPrice = optionPrice > 0
-            && rawBundleTotal > 0
-            && Math.abs(optionPrice - rawBundleTotal) >= 0.5;
-        let allocatedLineTotal = 0;
 
         return bundleItems
-            .map((bundleItem, index) => {
+            .map((bundleItem) => {
                 const quantity = Math.max(1, Number(bundleItem?.quantity) || 1);
-                const rawUnitPrice = Number(bundleItem?.price ?? 0) || 0;
-                let unitPrice = rawUnitPrice;
-
-                if (shouldAllocateOptionPrice) {
-                    const lineTotal = index === bundleItems.length - 1
-                        ? Math.max(0, optionPrice - allocatedLineTotal)
-                        : (optionPrice * ((rawUnitPrice * quantity) / rawBundleTotal));
-                    allocatedLineTotal += lineTotal;
-                    unitPrice = quantity > 0 ? lineTotal / quantity : lineTotal;
-                }
+                const unitPrice = Number(bundleItem?.price ?? 0) || 0;
 
                 return createOrderLineItem({
-                product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
+                    product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
                 name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
-                sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
-                unit_name: resolveOrderUnitLabel(bundleItem),
-                quantity,
-                price: unitPrice,
-                cost_price: resolveProductCostPrice(bundleItem),
-                computed_stock: bundleItem?.computed_stock,
-                pending_export_quantity: bundleItem?.pending_export_quantity,
-                available_to_sell: bundleItem?.available_to_sell,
-                category_id: bundleItem?.category_id,
-                profit_center_id: bundleItem?.profit_center_id,
-                product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
-                main_image: bundleItem?.main_image || bundleItem?.primary_image?.url || bundleItem?.image_url || '',
-                options: {
-                    bundle_parent_id: bundleParentId || undefined,
-                    bundle_parent_name: bundleParentName,
-                    bundle_option_key: bundleOptionKey,
-                    bundle_option_title: bundleOptionTitle,
-                    bundle_option_post_id: Number(entry?.option_post_id) || undefined,
-                    bundle_option_post_title: normalizeCanvasText(entry?.option_post_title),
-                    bundle_item_base_product_id: Number(bundleItem?.base_product_id) || undefined,
-                    variant_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label),
-                    variant_name: normalizeCanvasText(bundleItem?.variant_name),
-                    search_entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
-                },
-            });
-        })
+                    sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
+                    unit_name: resolveOrderUnitLabel(bundleItem),
+                    quantity,
+                    price: unitPrice,
+                    cost_price: resolveProductCostPrice(bundleItem),
+                    computed_stock: bundleItem?.computed_stock,
+                    pending_export_quantity: bundleItem?.pending_export_quantity,
+                    available_to_sell: bundleItem?.available_to_sell,
+                    category_id: bundleItem?.category_id,
+                    profit_center_id: bundleItem?.profit_center_id,
+                    product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
+                    main_image: bundleItem?.main_image || bundleItem?.primary_image?.url || bundleItem?.image_url || '',
+                    options: {
+                        bundle_parent_id: bundleParentId || undefined,
+                        bundle_parent_name: bundleParentName,
+                        bundle_option_key: bundleOptionKey,
+                        bundle_option_title: bundleOptionTitle,
+                        bundle_option_post_id: Number(entry?.option_post_id) || undefined,
+                        bundle_option_post_title: normalizeCanvasText(entry?.option_post_title),
+                        bundle_item_base_product_id: Number(bundleItem?.base_product_id) || undefined,
+                        variant_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label),
+                        variant_name: normalizeCanvasText(bundleItem?.variant_name),
+                        search_entry_kind: SEARCH_ENTRY_BUNDLE_OPTION,
+                    },
+                });
+            })
             .filter((item) => item.product_id > 0);
     }
 
@@ -2881,23 +2865,9 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             }
 
             const firstBundleImage = bundleItems.find((bundleItem) => bundleItem.main_image)?.main_image || baseEntry.main_image;
-            const optionBaseTotal = bundleItems.reduce((sum, bundleItem) => (
-                sum + ((Number(bundleItem.price) || 0) * (Number(bundleItem.quantity) || 0))
-            ), 0);
-            const optionPrice = resolveMoneyValue(
-                bundleOption?.bundle_option_discounted_price,
-                bundleOption?.discounted_price,
-                bundleOption?.subtotal,
-                optionBaseTotal,
-                0
-            );
-            const optionTotalPrice = resolveMoneyValue(
-                bundleOption?.bundle_option_total_price,
-                bundleOption?.total_price,
-                bundleOption?.subtotal,
-                optionPrice,
-                0
-            );
+            const optionBaseTotal = calculateBundleItemsSubtotal(bundleItems);
+            const optionPrice = resolveBundleOptionEntryPrice(bundleOption, bundleItems);
+            const optionTotalPrice = optionBaseTotal > 0 ? optionBaseTotal : optionPrice;
             const optionCostTotal = bundleItems.reduce((sum, bundleItem) => (
                 sum + (resolveRoundedImportCostValue(bundleItem.cost_price, 0) * (Number(bundleItem.quantity) || 0))
             ), 0);
@@ -3000,6 +2970,9 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
         const displaySku = normalizeCanvasText(item?.display_sku) || sku;
         const optionLabel = normalizeCanvasText(item?.option_label);
         const entryId = normalizeCanvasText(item?.entry_id) || `${entryKind}-${targetProductId}`;
+        const bundleOptionPrice = isBundleOptionEntry
+            ? resolveBundleOptionEntryPrice(item, item?.bundle_items)
+            : (Number(item?.price ?? 0) || 0);
 
         if (seenEntryIds.has(entryId)) {
             return;
@@ -3017,7 +2990,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             display_name: displayName,
             sku,
             display_sku: displaySku,
-            price: Number(item?.price ?? 0) || 0,
+            price: bundleOptionPrice,
             expected_cost: parseMoneyNumber(item?.expected_cost),
             cost_price: resolveProductCostPrice(item),
             unit_name: resolveOrderUnitLabel(item),
@@ -3034,6 +3007,8 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
                 bundle_option_title: bundleOptionTitle,
                 raw_bundle_option_title: rawBundleOptionTitle,
                 bundle_option_status: normalizeCanvasText(item?.bundle_option_status || 'visible'),
+                bundle_option_total_price: bundleOptionPrice,
+                bundle_option_discounted_price: bundleOptionPrice,
                 bundle_title: bundleTitle,
                 bundle_config_title: bundleTitle,
                 option_post_id: Number(item?.option_post_id) || undefined,
@@ -6212,9 +6187,13 @@ const OrderForm = () => {
         const params = {
             per_page: isCompactCompositeProductSearch(term) ? 200 : 100,
             picker: 1,
+            fast_picker: 1,
             quick_filter_enabled: shouldApplyQuickFilter ? 1 : 0,
         };
-        if (term) params.search = term;
+        if (term) {
+            params.search = term;
+            params.filter_bundle_options_by_search = 1;
+        }
         if (shouldRankQuickFilter && !shouldApplyQuickFilter) {
             params.quick_filter_rank = 1;
         }

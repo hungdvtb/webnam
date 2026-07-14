@@ -46,6 +46,10 @@ class AccessControlService
     ];
 
     public const PROFIT_SCOPE_ALL = 'profit.scope.all';
+    public const USER_CHANGE_PASSWORD_PERMISSION = 'users.change_password';
+    public const SPECIAL_PERMISSIONS = [
+        self::USER_CHANGE_PASSWORD_PERMISSION,
+    ];
     private const LEGACY_PROFIT_SCOPE_CHANNEL_PREFIX = 'profit.scope.channel.';
     public const PROFIT_SCOPE_MANAGER_PREFIX = 'profit.scope.manager.';
     public const PROFIT_SCOPE_CENTER_PREFIX = 'profit.scope.center.';
@@ -64,7 +68,10 @@ class AccessControlService
     public static function permissionsForRole(string $role): array
     {
         $role = self::normalizeRole($role);
-        $all = self::allActionPermissions();
+        $all = array_values(array_unique(array_merge(
+            self::allActionPermissions(),
+            self::SPECIAL_PERMISSIONS
+        )));
 
         return match ($role) {
             'owner' => $all,
@@ -143,6 +150,7 @@ class AccessControlService
             if ($permission === 'users') {
                 $expanded[] = 'users.manage';
                 $expanded[] = 'users.view';
+                $expanded[] = self::USER_CHANGE_PASSWORD_PERMISSION;
                 continue;
             }
 
@@ -388,7 +396,8 @@ class AccessControlService
         $permissions = self::normalizePermissions($permissions);
         $validDetailedPermissions = array_flip(array_merge(
             self::allActionPermissions(),
-            ['users.manage']
+            ['users.manage'],
+            self::SPECIAL_PERMISSIONS
         ));
 
         $sanitized = [];

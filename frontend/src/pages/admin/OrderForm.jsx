@@ -3366,6 +3366,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                     <thead>
                         <tr className="bg-[#6B0F0F] text-white">
                             <th className="w-[168px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight">Ảnh bộ / mẫu</th>
+                            <th className="w-[58px] border border-[#2F1A14] px-2 py-3 text-[25px] font-bold leading-tight text-center">STT</th>
                             <th className="border border-[#2F1A14] px-3 py-3 text-left text-[25px] font-bold leading-tight">Tên sản phẩm</th>
                             <th className="w-[84px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-center">Số lượng</th>
                             <th className="w-[96px] border border-[#2F1A14] px-3 py-3 text-[25px] font-bold leading-tight text-center">Đơn vị tính</th>
@@ -3395,6 +3396,7 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                         </div>
                                     </td>
                                 )}
+                                <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{index + 1}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 align-middle text-[12px] leading-6">{item.name}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{getOrderUnitDisplay(item)}</td>
@@ -3403,14 +3405,14 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                             </tr>
                         ))}
                         <tr className="bg-[#F5E7BF]">
-                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold uppercase leading-tight" colSpan={2}>Tổng món</td>
+                            <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold uppercase leading-tight" colSpan={3}>Tổng món</td>
                             <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-center">{totalQuantity}</td>
                             <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right" colSpan={2}>Tổng tiền</td>
                             <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right">{formatQuoteMoney(quoteSubtotal)}</td>
                         </tr>
                         {quoteExtraRows.map((row) => (
                             <tr key={row.key} className={row.isEmphasis ? 'bg-[#F5E7BF]' : 'bg-[#FCF8F3]'}>
-                                <td className="border border-[#2F1A14] px-5 py-4" colSpan={3}>&nbsp;</td>
+                                <td className="border border-[#2F1A14] px-5 py-4" colSpan={4}>&nbsp;</td>
                                 <td className="border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right" colSpan={2}>{row.label}</td>
                                 <td className={`border border-[#2F1A14] px-5 py-4 text-[22px] font-bold leading-tight text-right ${row.isDeduction ? 'text-[#8E0B0B]' : 'text-slate-900'}`}>
                                     {row.prefix ?? (row.isDeduction ? '-' : '')}{formatQuoteMoney(row.value)}
@@ -7792,12 +7794,14 @@ const OrderForm = () => {
             const pageWidth = quoteCanvasPageWidth;
             const tableHeaderHeight = 76;
             const imageColWidth = 182;
+            const indexColWidth = 58;
             const qtyColWidth = 112;
             const unitColWidth = 135;
             const priceColWidth = 125;
             const totalColWidth = 150;
-            const nameColWidth = pageWidth - imageColWidth - qtyColWidth - unitColWidth - priceColWidth - totalColWidth;
-            const xName = imageColWidth;
+            const nameColWidth = pageWidth - imageColWidth - indexColWidth - qtyColWidth - unitColWidth - priceColWidth - totalColWidth;
+            const xIndex = imageColWidth;
+            const xName = xIndex + indexColWidth;
             const xQty = xName + nameColWidth;
             const xUnit = xQty + qtyColWidth;
             const xPrice = xUnit + unitColWidth;
@@ -8028,6 +8032,7 @@ const OrderForm = () => {
             ctx.textBaseline = 'middle';
             const tableHeaderTextY = headerHeight + (tableHeaderHeight / 2);
             ctx.fillText(normalizeCanvasText('Ảnh bộ / mẫu'), imageColWidth / 2, tableHeaderTextY);
+            ctx.fillText(normalizeCanvasText('STT'), xIndex + (indexColWidth / 2), tableHeaderTextY);
             ctx.fillText(normalizeCanvasText('Tên sản phẩm'), xName + (nameColWidth / 2), tableHeaderTextY);
             ctx.fillText(normalizeCanvasText('S\u1ed1 l\u01b0\u1ee3ng'), xQty + (qtyColWidth / 2), tableHeaderTextY);
             ctx.fillText(normalizeCanvasText('\u0110\u01a1n v\u1ecb t\u00ednh'), xUnit + (unitColWidth / 2), tableHeaderTextY);
@@ -8073,8 +8078,9 @@ const OrderForm = () => {
                 const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - (nameCellPaddingX * 2));
 
                 ctx.fillStyle = index % 2 === 0 ? '#FFFFFF' : '#FBF8F4';
-                ctx.fillRect(xName, currentY, pageWidth - xName, rowHeight);
+                ctx.fillRect(xIndex, currentY, pageWidth - xIndex, rowHeight);
                 ctx.strokeStyle = borderColor;
+                ctx.strokeRect(xIndex + 0.5, currentY + 0.5, indexColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xName + 0.5, currentY + 0.5, nameColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xQty + 0.5, currentY + 0.5, qtyColWidth - 1, rowHeight - 1);
                 ctx.strokeRect(xUnit + 0.5, currentY + 0.5, unitColWidth - 1, rowHeight - 1);
@@ -8091,6 +8097,7 @@ const OrderForm = () => {
                 ctx.textAlign = 'center';
                 ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 ctx.textBaseline = 'middle';
+                ctx.fillText(String(index + 1), xIndex + (indexColWidth / 2), valueY);
                 ctx.fillText(String(item.quantity || 0), xQty + (qtyColWidth / 2), valueY);
                 ctx.fillText(getOrderUnitDisplay(item), xUnit + (unitColWidth / 2), valueY);
 

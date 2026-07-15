@@ -5,6 +5,7 @@ namespace App\Http\Controllers\StorefrontApi;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use App\Models\PublicCategoryNode;
+use App\Support\CategoryTreeOrder;
 use App\Support\StorefrontDomainScope;
 use App\Support\Utf8Sanitizer;
 use Illuminate\Http\Request;
@@ -493,13 +494,20 @@ class CategoryController extends Controller
 
             $categoryQuery = Category::withoutGlobalScope('account_id')
                 ->where('status', true)
-                ->publiclyListed()
-                ->orderBy('account_id', 'asc')
-                ->orderBy('order', 'asc')
-                ->orderBy('id', 'asc'); // Stable sorting
+                ->publiclyListed();
             StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
             StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
-            $categories = $categoryQuery->get();
+            $categories = CategoryTreeOrder::ordered(
+                $categoryQuery
+                    ->orderBy('account_id')
+                    ->orderBy('store_id')
+                    ->orderBy('parent_id')
+                    ->orderBy('order')
+                    ->orderBy('id')
+                    ->get(),
+                $accountIds,
+                $storeIds
+            );
 
             $this->applyStorefrontCategoryItemCounts($categories, $accountId, false, $storeIds, $accountIds);
 

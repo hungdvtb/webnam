@@ -72,6 +72,37 @@ class CategoryProductOrderingTest extends TestCase
         $this->assertSame([$second->id, $first->id, $third->id], $webApiIds);
     }
 
+    public function test_web_api_all_products_follow_category_tree_order_then_category_product_order(): void
+    {
+        $firstCategory = Category::query()->create([
+            'name' => 'Bo do tho men lam ve vang',
+            'slug' => 'bo-do-tho-men-lam-ve-vang',
+            'status' => true,
+            'order' => 0,
+        ]);
+        $secondCategory = Category::query()->create([
+            'name' => 'Bo do tho men ran',
+            'slug' => 'bo-do-tho-men-ran',
+            'status' => true,
+            'order' => 1,
+        ]);
+
+        $firstCategorySecondProduct = $this->createProduct($firstCategory, 'San pham A2', 'san-pham-a2', Carbon::parse('2026-03-02 08:00:00'), 1);
+        $secondCategoryProduct = $this->createProduct($secondCategory, 'San pham B1', 'san-pham-b1', Carbon::parse('2026-03-03 08:00:00'), 0);
+        $uncategorizedProduct = $this->createProduct(null, 'San pham khong danh muc', 'san-pham-khong-danh-muc', Carbon::parse('2026-03-04 08:00:00'));
+        $firstCategoryFirstProduct = $this->createProduct($firstCategory, 'San pham A1', 'san-pham-a1', Carbon::parse('2026-03-01 08:00:00'), 0);
+
+        $response = $this->getJson('/api/web-api/products?sort=popular&per_page=10')
+            ->assertOk();
+
+        $this->assertSame([
+            $firstCategoryFirstProduct->id,
+            $firstCategorySecondProduct->id,
+            $secondCategoryProduct->id,
+            $uncategorizedProduct->id,
+        ], collect($response->json('data'))->pluck('id')->all());
+    }
+
     public function test_category_update_normalizes_variant_assignments_to_parent_and_keeps_bundle_options_distinct(): void
     {
         [$category, $variantParent, $variant, $bundle, $optionPost] = $this->seedCategoryWithVariantAndBundleOptionAssignments();

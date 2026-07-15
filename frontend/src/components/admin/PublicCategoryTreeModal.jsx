@@ -179,6 +179,7 @@ const PublicCategoryTreeModal = ({ open, onClose, domains = [] }) => {
 
     const mergeSameNameSources = () => {
         const groups = new Map();
+        const groupKeyByCategoryId = new Map();
         sourceCategories.forEach((category) => {
             const key = slugify(category.name);
             if (!key) {
@@ -188,16 +189,51 @@ const PublicCategoryTreeModal = ({ open, onClose, domains = [] }) => {
                 groups.set(key, []);
             }
             groups.get(key).push(category);
+            groupKeyByCategoryId.set(Number(category.id), key);
         });
 
-        const nextNodes = Array.from(groups.values())
-            .filter((items) => items.length > 0)
-            .map((items, index) => normalizeNode({
+        const nodeKeyByGroupKey = new Map();
+        const groupedNodes = Array.from(groups.entries())
+            .filter(([, items]) => items.length > 0)
+            .map(([groupKey, items], index) => {
+                const node = normalizeNode({
+                    client_id: makeClientId(),
+                    title: items[0].name,
+                    slug: items[0].slug || slugify(items[0].name),
+                    category_ids: items.map((item) => Number(item.id)).filter(Boolean),
+                }, index);
+                nodeKeyByGroupKey.set(groupKey, nodeKey(node));
+
+                return {
+                    ...node,
+                    _groupKey: groupKey,
+                    _sourceItems: items,
+                };
+            });
+
+        const nextNodes = groupedNodes.map(({ _groupKey: groupKey, _sourceItems: sourceItems, ...node }) => {
+            const parentGroupKey = (sourceItems || [])
+                .map((item) => groupKeyByCategoryId.get(Number(item.parent_id)))
+                .find((candidate) => candidate && candidate !== groupKey && nodeKeyByGroupKey.has(candidate));
+
+            return {
+                ...node,
+                parent_key: parentGroupKey ? nodeKeyByGroupKey.get(parentGroupKey) : '',
+            };
+        });
+
+        if (nextNodes.length === 0 && sourceCategories.length > 0) {
+            const fallbackNodes = sourceCategories.map((category, index) => normalizeNode({
                 client_id: makeClientId(),
-                title: items[0].name,
-                slug: items[0].slug || slugify(items[0].name),
-                category_ids: items.map((item) => Number(item.id)).filter(Boolean),
+                title: category.name,
+                slug: category.slug || slugify(category.name),
+                category_ids: [Number(category.id)].filter(Boolean),
             }, index));
+
+            setNodes(fallbackNodes);
+            setActiveNodeKey(fallbackNodes[0]?.client_id || '');
+            return;
+        }
 
         setNodes(nextNodes);
         setActiveNodeKey(nextNodes[0]?.client_id || '');

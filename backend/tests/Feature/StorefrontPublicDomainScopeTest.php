@@ -8,10 +8,12 @@ use App\Models\Product;
 use App\Models\PublicCategoryNode;
 use App\Models\SiteDomain;
 use App\Models\Store;
+use App\Models\User;
 use App\Support\StorefrontDomainScope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class StorefrontPublicDomainScopeTest extends TestCase
@@ -327,5 +329,190 @@ class StorefrontPublicDomainScopeTest extends TestCase
             'product-from-store-1-category',
             'product-from-store-2-category',
         ], $slugs);
+    }
+
+    public function test_public_domain_categories_follow_source_tree_order_by_store(): void
+    {
+        $firstAccount = Account::query()->create([
+            'name' => 'Store 1',
+            'subdomain' => 'store-1',
+            'site_code' => 'STORE1',
+            'status' => true,
+        ]);
+        $secondAccount = Account::query()->create([
+            'name' => 'Store 2',
+            'subdomain' => 'store-2',
+            'site_code' => 'STORE2',
+            'status' => true,
+        ]);
+
+        $domain = SiteDomain::query()->create([
+            'account_id' => $firstAccount->id,
+            'domain' => 'gomdaithanh.com',
+            'is_active' => true,
+            'is_default' => true,
+        ]);
+        $secondAccount->update(['public_domain_id' => $domain->id]);
+
+        $firstStore = Store::query()->create([
+            'account_id' => $firstAccount->id,
+            'name' => 'Store 1 branch',
+            'slug' => 'store-1-branch',
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+        $secondStore = Store::query()->create([
+            'account_id' => $secondAccount->id,
+            'name' => 'Store 2 branch',
+            'slug' => 'store-2-branch',
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+
+        Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'name' => 'Root A',
+            'slug' => 'root-a',
+            'status' => true,
+            'order' => 0,
+        ]);
+        $rootB = Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'name' => 'Root B',
+            'slug' => 'root-b',
+            'status' => true,
+            'order' => 1,
+        ]);
+        Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'parent_id' => $rootB->id,
+            'name' => 'Child B',
+            'slug' => 'child-b',
+            'status' => true,
+            'order' => 0,
+        ]);
+        Category::query()->create([
+            'account_id' => $secondAccount->id,
+            'store_id' => $secondStore->id,
+            'name' => 'Store 2 Root',
+            'slug' => 'store-2-root',
+            'status' => true,
+            'order' => 0,
+        ]);
+
+        $response = $this
+            ->withHeaders([
+                'X-Site-Code' => 'STORE1',
+                'X-Public-Host' => 'gomdaithanh.com',
+            ])
+            ->getJson('/api/web-api/categories')
+            ->assertOk();
+
+        $this->assertSame([
+            'root-a',
+            'root-b',
+            'child-b',
+            'store-2-root',
+        ], collect($response->json())->pluck('slug')->all());
+    }
+
+    public function test_public_category_tree_source_and_auto_nodes_follow_source_tree_order(): void
+    {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $firstAccount = Account::query()->create([
+            'name' => 'Store 1',
+            'subdomain' => 'store-1',
+            'site_code' => 'STORE1',
+            'status' => true,
+        ]);
+        $secondAccount = Account::query()->create([
+            'name' => 'Store 2',
+            'subdomain' => 'store-2',
+            'site_code' => 'STORE2',
+            'status' => true,
+        ]);
+
+        $domain = SiteDomain::query()->create([
+            'account_id' => $firstAccount->id,
+            'domain' => 'gomdaithanh.com',
+            'is_active' => true,
+            'is_default' => true,
+        ]);
+        $secondAccount->update(['public_domain_id' => $domain->id]);
+
+        $firstStore = Store::query()->create([
+            'account_id' => $firstAccount->id,
+            'name' => 'Store 1 branch',
+            'slug' => 'store-1-branch',
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+        $secondStore = Store::query()->create([
+            'account_id' => $secondAccount->id,
+            'name' => 'Store 2 branch',
+            'slug' => 'store-2-branch',
+            'status' => true,
+            'sort_order' => 0,
+        ]);
+
+        Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'name' => 'Root A',
+            'slug' => 'root-a',
+            'status' => true,
+            'order' => 0,
+        ]);
+        $rootB = Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'name' => 'Root B',
+            'slug' => 'root-b',
+            'status' => true,
+            'order' => 1,
+        ]);
+        Category::query()->create([
+            'account_id' => $firstAccount->id,
+            'store_id' => $firstStore->id,
+            'parent_id' => $rootB->id,
+            'name' => 'Child B',
+            'slug' => 'child-b',
+            'status' => true,
+            'order' => 0,
+        ]);
+        Category::query()->create([
+            'account_id' => $secondAccount->id,
+            'store_id' => $secondStore->id,
+            'name' => 'Store 2 Root',
+            'slug' => 'store-2-root',
+            'status' => true,
+            'order' => 0,
+        ]);
+
+        $response = $this
+            ->getJson("/api/public-category-trees/{$domain->id}")
+            ->assertOk();
+
+        $this->assertSame([
+            'root-a',
+            'root-b',
+            'child-b',
+            'store-2-root',
+        ], collect($response->json('source_categories'))->pluck('slug')->all());
+
+        $nodes = collect($response->json('nodes'));
+        $this->assertSame([
+            'root-a',
+            'root-b',
+            'child-b',
+            'store-2-root',
+        ], $nodes->pluck('slug')->all());
+
+        $childNode = $nodes->firstWhere('slug', 'child-b');
+        $this->assertSame('auto-category-' . $rootB->id, $childNode['parent_key'] ?? null);
     }
 }

@@ -7,6 +7,7 @@ use App\Models\Account;
 use App\Models\Category;
 use App\Models\PublicCategoryNode;
 use App\Models\SiteDomain;
+use App\Support\CategoryTreeOrder;
 use App\Support\StorefrontDomainScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -253,6 +254,8 @@ class PublicCategoryTreeController extends Controller
             ->where('status', true)
             ->publiclyListed()
             ->orderBy('account_id')
+            ->orderBy('store_id')
+            ->orderBy('parent_id')
             ->orderBy('order')
             ->orderBy('id')
             ->get([
@@ -267,6 +270,7 @@ class PublicCategoryTreeController extends Controller
                 'visibility',
                 'order',
             ]);
+        $categories = CategoryTreeOrder::ordered($categories, $accountIds);
 
         $byId = $categories->keyBy(fn (Category $category) => (int) $category->id);
         $depthFor = function (Category $category) use (&$depthFor, $byId): int {

@@ -23,7 +23,6 @@ use Illuminate\Support\Str;
 class ProductController extends Controller
 {
     private const BUNDLE_FULL_SET_DISCOUNT_RATE = 0.10;
-    private const BUNDLE_TOTAL_ROUNDING_UNIT = 10000;
     private const BUNDLE_OPTION_STATUS_INTERNAL = 'internal';
 
     private function calculateFullBundleDiscountedPrice(float $totalPrice): array
@@ -33,7 +32,7 @@ class ProductController extends Controller
             ? round($normalizedTotal * self::BUNDLE_FULL_SET_DISCOUNT_RATE, 0)
             : 0.0;
         $subtotalAfterBaseDiscount = max($normalizedTotal - $baseDiscountAmount, 0);
-        $discountedPrice = floor($subtotalAfterBaseDiscount / self::BUNDLE_TOTAL_ROUNDING_UNIT) * self::BUNDLE_TOTAL_ROUNDING_UNIT;
+        $discountedPrice = round($subtotalAfterBaseDiscount, 2);
         $discountAmount = max($normalizedTotal - $discountedPrice, 0);
 
         return [
@@ -478,18 +477,55 @@ class ProductController extends Controller
             ->map(fn ($categoryId, $index) => "WHEN {$categoryId} THEN {$index}")
             ->implode(' ');
 
+        $hasBundleOptionUid = Schema::hasColumn('category_product', 'bundle_option_uid');
+        $bundleOptionUidAssignmentSql = $hasBundleOptionUid ? " OR COALESCE(category_product.bundle_option_uid, '') <> ''" : '';
+        $bundleOptionAssignmentSql = "category_product.item_type = 'bundle_option'{$bundleOptionUidAssignmentSql} OR COALESCE(category_product.bundle_option_key, '') <> '' OR category_product.bundle_option_post_id IS NOT NULL OR COALESCE(category_product.bundle_option_title, '') <> ''";
+        $resolvedProductIdSql = "CASE WHEN {$bundleOptionAssignmentSql} THEN category_product.product_id ELSE COALESCE(super_links.product_id, category_product.product_id) END";
+
         $subquery = DB::table('category_product')
-            ->select('product_id')
-            ->selectRaw("MIN((CASE category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(sort_order, 999999)) as category_order_key")
-            ->where('item_type', 'product')
-            ->whereIn('category_id', $normalizedCategoryIds)
-            ->groupBy('product_id');
+            ->leftJoin('product_links as super_links', function ($join) {
+                $join->on('super_links.linked_product_id', '=', 'category_product.product_id')
+                    ->where('super_links.link_type', '=', 'super_link');
+            })
+            ->selectRaw("{$resolvedProductIdSql} as product_id")
+            ->selectRaw("MIN((CASE category_product.category_id {$caseSql} ELSE 999999 END) * 1000000 + COALESCE(category_product.sort_order, 999999)) as category_order_key")
+            ->whereIn('category_product.category_id', $normalizedCategoryIds)
+            ->where(function ($categoryQuery) {
+                $categoryQuery
+                    ->whereIn('category_product.item_type', ['product', 'bundle_option'])
+                    ->orWhereNull('category_product.item_type');
+            })
+            ->when($this->hasProductLinksBundleOptionStatus(), function ($categoryQuery) use ($bundleOptionAssignmentSql, $hasBundleOptionUid) {
+                $categoryQuery->where(function ($visibilityQuery) use ($bundleOptionAssignmentSql, $hasBundleOptionUid) {
+                    $visibilityQuery
+                        ->whereRaw("NOT ({$bundleOptionAssignmentSql})")
+                        ->orWhereNotExists(function ($hiddenQuery) use ($hasBundleOptionUid) {
+                            $hiddenQuery
+                                ->selectRaw('1')
+                                ->from('product_links as hidden_bundle_options')
+                                ->whereColumn('hidden_bundle_options.product_id', 'category_product.product_id')
+                                ->where('hidden_bundle_options.link_type', 'bundle')
+                                ->where('hidden_bundle_options.bundle_option_status', self::BUNDLE_OPTION_STATUS_INTERNAL)
+                                ->where(function ($matchQuery) use ($hasBundleOptionUid) {
+                                    if ($hasBundleOptionUid) {
+                                        $matchQuery->whereRaw("(COALESCE(category_product.bundle_option_uid, '') <> '' AND hidden_bundle_options.bundle_option_uid = category_product.bundle_option_uid)");
+                                    }
+
+                                    $matchQuery
+                                        ->orWhereRaw('(category_product.bundle_option_post_id IS NOT NULL AND hidden_bundle_options.option_post_id = category_product.bundle_option_post_id)')
+                                        ->orWhereRaw("(COALESCE(category_product.bundle_option_title, '') <> '' AND LOWER(TRIM(COALESCE(hidden_bundle_options.option_title, ''))) = LOWER(TRIM(COALESCE(category_product.bundle_option_title, ''))))");
+                                });
+                        });
+                });
+            })
+            ->groupByRaw($resolvedProductIdSql);
 
         $query
             ->leftJoinSub($subquery, $alias, function ($join) use ($alias) {
                 $join->on("{$alias}.product_id", '=', 'products.id');
             })
-            ->select('products.*');
+            ->select('products.*')
+            ->addSelect("{$alias}.category_order_key as category_order_key");
     }
 
     private function joinCategoryAssignments(Builder $query, array $categoryIds, string $alias = 'category_assignments'): void
@@ -651,6 +687,124 @@ class ProductController extends Controller
             ->get()
             ->flatMap(fn (Category $category) => $this->getOrderedCategoryIds($category, $accountId, true, $storeIds, $accountIds))
             ->map(fn ($categoryId) => (int) $categoryId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function getAllProductsCategoryOrderIds(Request $request, ?int $accountId, ?array $accountIds, ?array $storeIds): array
+    {
+        $publicCategoryIds = $this->getPublicTreeCategoryOrderIds($request, $accountId, $accountIds, $storeIds);
+        if ($publicCategoryIds !== null && $publicCategoryIds !== []) {
+            return $publicCategoryIds;
+        }
+
+        $categoryQuery = Category::withoutGlobalScope('account_id')
+            ->where('status', true)
+            ->publiclyListed()
+            ->orderBy('account_id', 'asc')
+            ->orderBy('order', 'asc')
+            ->orderBy('id', 'asc');
+
+        StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
+        StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+
+        return $categoryQuery
+            ->get()
+            ->flatMap(fn (Category $category) => $this->getOrderedCategoryIds($category, $accountId, $category->isLinkOnly(), $storeIds, $accountIds))
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function getPublicTreeCategoryOrderIds(Request $request, ?int $accountId, ?array $accountIds, ?array $storeIds): ?array
+    {
+        if (!Schema::hasTable('public_category_nodes') || !Schema::hasTable('public_category_node_categories')) {
+            return null;
+        }
+
+        $domain = StorefrontDomainScope::resolvePublicDomainForRequest($request);
+        if (!$domain) {
+            return null;
+        }
+
+        $nodes = PublicCategoryNode::query()
+            ->where('site_domain_id', $domain->id)
+            ->where('status', true)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'parent_id']);
+
+        if ($nodes->isEmpty()) {
+            return [];
+        }
+
+        $sourceCategoryIdsByNode = DB::table('public_category_node_categories')
+            ->whereIn('public_category_node_id', $nodes->pluck('id')->all())
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['public_category_node_id', 'category_id'])
+            ->groupBy(fn ($row) => (int) $row->public_category_node_id)
+            ->map(fn ($rows) => $rows
+                ->pluck('category_id')
+                ->map(fn ($categoryId) => (int) $categoryId)
+                ->filter()
+                ->values()
+                ->all()
+            );
+
+        $allSourceCategoryIds = $sourceCategoryIdsByNode
+            ->flatten()
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($allSourceCategoryIds === []) {
+            return [];
+        }
+
+        $categoryQuery = Category::withoutGlobalScope('account_id')
+            ->whereIn('id', $allSourceCategoryIds)
+            ->where('status', true);
+
+        StorefrontDomainScope::applyAccountScope($categoryQuery, $accountId, $accountIds, 'categories.account_id');
+        StorefrontDomainScope::applyStoreScope($categoryQuery, $storeIds, 'categories.store_id');
+
+        $categoriesById = $categoryQuery
+            ->get()
+            ->keyBy(fn (Category $category) => (int) $category->id);
+
+        if ($categoriesById->isEmpty()) {
+            return [];
+        }
+
+        $childrenByParent = $nodes->groupBy(fn (PublicCategoryNode $node) => (int) ($node->parent_id ?? 0));
+        $orderedCategoryIds = collect();
+        $appendNodeCategories = function (PublicCategoryNode $node) use (&$appendNodeCategories, $childrenByParent, $sourceCategoryIdsByNode, $categoriesById, $orderedCategoryIds, $accountId, $storeIds, $accountIds): void {
+            foreach ($sourceCategoryIdsByNode->get((int) $node->id, []) as $sourceCategoryId) {
+                $category = $categoriesById->get((int) $sourceCategoryId);
+                if (!$category instanceof Category) {
+                    continue;
+                }
+
+                $orderedCategoryIds->push(...$this->getOrderedCategoryIds($category, $accountId, true, $storeIds, $accountIds));
+            }
+
+            foreach ($childrenByParent->get((int) $node->id, collect()) as $child) {
+                $appendNodeCategories($child);
+            }
+        };
+
+        foreach ($childrenByParent->get(0, collect()) as $rootNode) {
+            $appendNodeCategories($rootNode);
+        }
+
+        return $orderedCategoryIds
+            ->map(fn ($categoryId) => (int) $categoryId)
+            ->filter()
             ->unique()
             ->values()
             ->all();
@@ -1125,6 +1279,7 @@ class ProductController extends Controller
         StorefrontDomainScope::applyAccountScope($query, $accountId, $accountIds, 'products.account_id');
         StorefrontDomainScope::applyStoreScope($query, $storeIds, 'products.store_id');
         $selectedCategoryIds = [];
+        $allProductsCategoryOrderIds = [];
         $missingRequestedCategory = false;
 
         $typeInput = $request->query('types', $request->query('type'));
@@ -1184,6 +1339,10 @@ class ProductController extends Controller
             $this->joinCategoryAssignments($query, $selectedCategoryIds);
         } elseif (!$request->boolean('allow_variants') && !$request->filled('parent_id')) {
             $this->excludeScopedVariantProducts($query, $accountId, $accountIds, $storeIds);
+            $allProductsCategoryOrderIds = $this->getAllProductsCategoryOrderIds($request, $accountId, $accountIds, $storeIds);
+            if ($allProductsCategoryOrderIds !== []) {
+                $this->joinCategoryOrdering($query, $allProductsCategoryOrderIds, 'all_products_category_sorting');
+            }
         }
 
         // Search
@@ -1247,9 +1406,19 @@ class ProductController extends Controller
         $stepStartedAt = $this->markTiming($timings, 'query_build', $stepStartedAt);
 
         $prioritizeCategoryOrder = !empty($selectedCategoryIds) && in_array($sortKey, ['popular', 'newest'], true);
+        $prioritizeAllProductsCategoryOrder = empty($selectedCategoryIds)
+            && !empty($allProductsCategoryOrderIds)
+            && in_array($sortKey, ['popular', 'newest'], true)
+            && !$request->filled('search');
 
         if ($prioritizeCategoryOrder) {
             $finalQuery->orderBy('category_order_key');
+        }
+
+        if ($prioritizeAllProductsCategoryOrder) {
+            $finalQuery
+                ->orderByRaw('CASE WHEN category_order_key IS NULL THEN 1 ELSE 0 END')
+                ->orderBy('category_order_key');
         }
 
         if ($request->filled('search') && $request->boolean('mobile_search')) {
@@ -1374,8 +1543,8 @@ class ProductController extends Controller
             return $product;
         });
 
-        $bundleOptionProductIds = $products->getCollection()
-            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option')
+        $bundleProductIds = $products->getCollection()
+            ->filter(fn ($product) => ($product->item_type ?? '') === 'bundle_option' || ($product->type ?? null) === 'bundle')
             ->pluck('id')
             ->map(fn ($productId) => is_numeric($productId) ? (int) $productId : null)
             ->filter()
@@ -1384,9 +1553,9 @@ class ProductController extends Controller
 
         $bundleOptionCatalog = [];
 
-        if ($bundleOptionProductIds->isNotEmpty()) {
+        if ($bundleProductIds->isNotEmpty()) {
             $bundleProducts = Product::withoutGlobalScope('account_id')
-                ->whereIn('id', $bundleOptionProductIds->all())
+                ->whereIn('id', $bundleProductIds->all())
                 ->with([
                     'images' => fn ($query) => $query->orderBy('is_primary', 'desc')->orderBy('sort_order'),
                     'bundleItems' => function ($query) use ($accountId, $accountIds) {
@@ -1619,6 +1788,9 @@ class ProductController extends Controller
 
                 if (!is_array($optionMeta)) {
                     $productImages = array_values(array_filter($product['images'] ?? []));
+                    $productBundleOptions = (($product['type'] ?? null) === 'bundle' && isset($bundleOptionCatalog[$productId]))
+                        ? $this->uniqueBundleOptionCatalogValues($bundleOptionCatalog[$productId])
+                        : [];
 
                     return [[
                         ...$product,
@@ -1637,8 +1809,8 @@ class ProductController extends Controller
                         'has_variants' => $hasVariants,
                         'variants_count' => $variantsCount,
                         'default_variant_id' => $defaultVariantId,
-                        'bundle_options' => [],
-                        'bundle_items' => [],
+                        'bundle_options' => $productBundleOptions,
+                        'bundle_items' => $productBundleOptions,
                     ]];
                 }
 
@@ -1658,7 +1830,7 @@ class ProductController extends Controller
         $responseData['perf_meta'] = [
             'products_count' => count($responseData['data']),
             'filters_count' => count($availableFilters),
-            'bundle_option_products_count' => $bundleOptionProductIds->count(),
+                'bundle_option_products_count' => $bundleProductIds->count(),
         ];
         $this->markTiming($timings, 'serialize', $stepStartedAt);
 

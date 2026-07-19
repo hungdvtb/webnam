@@ -899,8 +899,13 @@ class ShipmentController extends Controller
 
         $file = $request->file('file');
         $filePath = $file->getRealPath();
+        $accountId = $request->header('X-Account-Id');
         
-        $result = $this->trackingImportService->processFile($filePath, auth()->id());
+        $result = $this->trackingImportService->processFile(
+            $filePath,
+            auth()->id(),
+            filled($accountId) ? (int) $accountId : null
+        );
         
         if (!$result['success']) {
             return response()->json([

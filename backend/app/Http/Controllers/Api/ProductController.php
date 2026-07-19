@@ -7150,6 +7150,24 @@ class ProductController extends Controller
         $quickFilterRankingSql = null;
         $quickFilterRankingBindings = [];
 
+        $selectedIds = $request->input('selected_ids', []);
+        if ($selectedIds !== null && $selectedIds !== '') {
+            $normalizedSelectedIds = is_array($selectedIds)
+                ? $selectedIds
+                : explode(',', (string) $selectedIds);
+
+            $normalizedSelectedIds = collect($normalizedSelectedIds)
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (!empty($normalizedSelectedIds)) {
+                $query->whereIn('products.id', $normalizedSelectedIds);
+            }
+        }
+
         // Apply parent variation filter if requested
         if ($request->filled('parent_id')) {
             $parentId = (int) $request->parent_id;

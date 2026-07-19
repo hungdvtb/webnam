@@ -413,6 +413,54 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonCount(2, 'data.0.bundle_options');
     }
 
+    public function test_picker_selected_ids_returns_latest_bundle_option_prices(): void
+    {
+        $account = $this->authenticate();
+
+        $bundleItem = $this->createProduct($account, [
+            'name' => 'Chan nen men ran selected',
+            'sku' => 'CHAN-NEN-RAN-SELECTED',
+            'price' => 7800000,
+        ]);
+
+        $bundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men ran selected',
+            'sku' => 'BUNDLE-MEN-RAN-SELECTED',
+            'type' => 'bundle',
+        ]);
+
+        $otherBundle = $this->createProduct($account, [
+            'name' => 'Bo do tho men lam selected other',
+            'sku' => 'BUNDLE-MEN-LAM-SELECTED-OTHER',
+            'type' => 'bundle',
+        ]);
+
+        $this->attachBundleItem($bundle, $bundleItem, [
+            'option_title' => 'Ban tho 1m75-1m97 3 bat huong',
+        ]);
+        $this->attachBundleItem($otherBundle, $bundleItem, [
+            'option_title' => 'Bo khac',
+        ]);
+
+        $bundleItem->forceFill(['price' => 8020000])->save();
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'selected_ids' => (string) $bundle->id,
+                'per_page' => 20,
+            ]));
+
+        $response
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $bundle->id)
+            ->assertJsonPath('data.0.bundle_options.0.bundle_option_total_price', 8020000)
+            ->assertJsonPath('data.0.bundle_options.0.items.0.price', 8020000);
+    }
+
     public function test_long_specific_name_search_prefers_phrase_match_over_shared_token_matches(): void
     {
         $account = $this->authenticate();

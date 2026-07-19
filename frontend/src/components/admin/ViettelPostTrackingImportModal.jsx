@@ -1,24 +1,54 @@
 import React, { useState, useRef } from 'react';
-import { shipmentApi } from '../../services/api';
+import { orderApi, shipmentApi } from '../../services/api';
 
 const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
     const [file, setFile] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
+    const [dragActive, setDragActive] = useState(false);
     const fileInputRef = useRef(null);
 
     if (!isOpen) return null;
 
-    const handleFileChange = (e) => {
-        const selectedFile = e.target.files[0];
-        if (selectedFile && (selectedFile.name.endsWith('.xlsx') || selectedFile.name.endsWith('.xls'))) {
+    const selectFile = (selectedFile) => {
+        if (!selectedFile) return;
+
+        const fileName = String(selectedFile?.name || '').toLowerCase();
+        if (selectedFile && (fileName.endsWith('.xlsx') || fileName.endsWith('.xls'))) {
             setFile(selectedFile);
             setError(null);
         } else {
             setError('Vui lòng chọn file Excel (.xlsx hoặc .xls)');
             setFile(null);
         }
+    };
+
+    const handleFileChange = (e) => {
+        selectFile(e.target.files?.[0]);
+    };
+
+    const handleDragOver = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (uploading) return;
+        e.dataTransfer.dropEffect = 'copy';
+        setDragActive(true);
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.currentTarget.contains(e.relatedTarget)) return;
+        setDragActive(false);
+    };
+
+    const handleDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragActive(false);
+        if (uploading) return;
+        selectFile(e.dataTransfer.files?.[0]);
     };
 
     const handleUpload = async () => {
@@ -35,6 +65,7 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
             const response = await shipmentApi.importTrackingViettelPost(formData);
 
             setResult(response.data);
+            orderApi.invalidateAllDetails();
             if (onRefresh) onRefresh();
         } catch (err) {
             setError(err.response?.data?.message || 'Có lỗi xảy ra khi xử lý file.');
@@ -48,6 +79,7 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
         setResult(null);
         setError(null);
         setUploading(false);
+        setDragActive(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
@@ -91,8 +123,11 @@ const ViettelPostTrackingImportModal = ({ isOpen, onClose, onRefresh }) => {
                             {/* Upload Area */}
                             <div 
                                 onClick={() => !uploading && fileInputRef.current?.click()}
+                                onDragOver={handleDragOver}
+                                onDragLeave={handleDragLeave}
+                                onDrop={handleDrop}
                                 className={`group relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 transition-all cursor-pointer ${
-                                    file 
+                                    file || dragActive
                                     ? 'border-emerald-400 bg-emerald-50/50' 
                                     : 'border-slate-200 bg-slate-50 hover:border-emerald-300 hover:bg-emerald-50/30'
                                 }`}

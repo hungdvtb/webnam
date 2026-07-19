@@ -118,6 +118,7 @@ class DebtController extends Controller
                 'note' => $transaction->note,
                 'fin_account_id' => $transaction->fin_account_id,
                 'fin_transaction_id' => $transaction->fin_transaction_id,
+                'is_goods_debt' => $transaction->type === 'borrow' && !$transaction->fin_transaction_id,
                 'running_balance' => $runningBalance,
             ];
         });
@@ -128,6 +129,8 @@ class DebtController extends Controller
     public function saveTransaction(Request $request)
     {
         $accountId = $this->accountId($request);
+        $skipFinanceTransaction = $request->boolean('skip_finance_transaction');
+
         $request->validate([
             'id' => 'nullable|integer',
             'debt_subject_id' => [
@@ -139,70 +142,34 @@ class DebtController extends Controller
             'type' => 'required|in:borrow,pay_principal,pay_interest',
             'amount' => 'required|numeric',
             'note' => 'nullable|string',
+            'skip_finance_transaction' => 'nullable|boolean',
             'fin_account_id' => [
-                'required',
+                $skipFinanceTransaction ? 'nullable' : 'required',
                 'integer',
                 Rule::exists('fin_accounts', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
             ],
         ]);
 
+        if ($skipFinanceTransaction && $request->type !== 'borrow') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Chỉ có thể bỏ qua dòng tiền với giao dịch nợ tiền hàng.',
+            ], 422);
+        }
+
         try {
             DB::beginTransaction();
 
             $data = [
-                ...$request->only(['debt_subject_id', 'transaction_date', 'type', 'amount', 'note', 'fin_account_id']),
+                ...$request->only(['debt_subject_id', 'transaction_date', 'type', 'amount', 'note']),
+                'fin_account_id' => $skipFinanceTransaction ? null : $request->fin_account_id,
                 'account_id' => $accountId,
-            ];
-
-            $typeStr = $request->type === 'borrow' ? 'income' : 'expense';
-            $catName = 'Giao dịch Nợ';
-            $catColor = '#607d8b';
-            if ($request->type === 'pay_interest') {
-                $catName = 'Trả Lãi Nợ';
-                $catColor = '#ff9800';
-            }
-            if ($request->type === 'borrow') {
-                $catName = 'Vay Nợ';
-                $catColor = '#ff5722';
-            }
-
-            $category = FinCategory::firstOrCreate(
-                ['account_id' => $accountId, 'name' => $catName, 'type' => $typeStr],
-                [
-                    'color' => $catColor,
-                    'sort_order' => FinCategory::nextSortOrder($accountId),
-                ]
-            );
-
-            $subject = DebtSubject::query()
-                ->where('account_id', $accountId)
-                ->findOrFail($request->debt_subject_id);
-
-            $actionLabel = 'Giao dịch nợ';
-            if ($request->type === 'borrow') {
-                $actionLabel = 'Vay thêm';
-            }
-            if ($request->type === 'pay_principal') {
-                $actionLabel = 'Trả nợ gốc';
-            }
-            if ($request->type === 'pay_interest') {
-                $actionLabel = 'Trả lãi nợ';
-            }
-
-            $description = "{$actionLabel}: {$subject->name}" . ($request->note ? " ({$request->note})" : '') . ' [Sổ nợ]';
-            $finTransactionData = [
-                'account_id' => $accountId,
-                'fin_account_id' => $request->fin_account_id,
-                'fin_category_id' => $category->id,
-                'transaction_date' => $request->transaction_date,
-                'type' => $typeStr,
-                'amount' => $request->amount,
-                'description' => $description,
-                'notes' => $request->note,
-                'balance_after' => 0,
             ];
 
             $oldFundAccountId = null;
+            $debtTransaction = null;
+            $finTransaction = null;
+
             if ($request->id) {
                 $debtTransaction = DebtTransaction::query()
                     ->where('account_id', $accountId)
@@ -216,24 +183,81 @@ class DebtController extends Controller
 
                     if ($finTransaction) {
                         $oldFundAccountId = $finTransaction->fin_account_id;
-                        $finTransaction->update($finTransactionData);
-                    } else {
-                        $finTransaction = FinTransaction::create($finTransactionData);
-                        $data['fin_transaction_id'] = $finTransaction->id;
                     }
-                } else {
-                    $finTransaction = FinTransaction::create($finTransactionData);
-                    $data['fin_transaction_id'] = $finTransaction->id;
+                }
+            }
+
+            if ($skipFinanceTransaction) {
+                if ($finTransaction) {
+                    $finTransaction->delete();
                 }
 
+                $data['fin_transaction_id'] = null;
+            } else {
+                $typeStr = $request->type === 'borrow' ? 'income' : 'expense';
+                $catName = 'Giao dịch Nợ';
+                $catColor = '#607d8b';
+                if ($request->type === 'pay_interest') {
+                    $catName = 'Trả Lãi Nợ';
+                    $catColor = '#ff9800';
+                }
+                if ($request->type === 'borrow') {
+                    $catName = 'Vay Nợ';
+                    $catColor = '#ff5722';
+                }
+
+                $category = FinCategory::firstOrCreate(
+                    ['account_id' => $accountId, 'name' => $catName, 'type' => $typeStr],
+                    [
+                        'color' => $catColor,
+                        'sort_order' => FinCategory::nextSortOrder($accountId),
+                    ]
+                );
+
+                $subject = DebtSubject::query()
+                    ->where('account_id', $accountId)
+                    ->findOrFail($request->debt_subject_id);
+
+                $actionLabel = 'Giao dịch nợ';
+                if ($request->type === 'borrow') {
+                    $actionLabel = 'Vay thêm';
+                }
+                if ($request->type === 'pay_principal') {
+                    $actionLabel = 'Trả nợ gốc';
+                }
+                if ($request->type === 'pay_interest') {
+                    $actionLabel = 'Trả lãi nợ';
+                }
+
+                $description = "{$actionLabel}: {$subject->name}" . ($request->note ? " ({$request->note})" : '') . ' [Sổ nợ]';
+                $finTransactionData = [
+                    'account_id' => $accountId,
+                    'fin_account_id' => $request->fin_account_id,
+                    'fin_category_id' => $category->id,
+                    'transaction_date' => $request->transaction_date,
+                    'type' => $typeStr,
+                    'amount' => $request->amount,
+                    'description' => $description,
+                    'notes' => $request->note,
+                    'balance_after' => 0,
+                ];
+
+                if ($finTransaction) {
+                    $finTransaction->update($finTransactionData);
+                } else {
+                    $finTransaction = FinTransaction::create($finTransactionData);
+                }
+
+                $data['fin_transaction_id'] = $finTransaction->id;
+            }
+
+            if ($debtTransaction) {
                 $debtTransaction->update($data);
             } else {
-                $finTransaction = FinTransaction::create($finTransactionData);
-                $data['fin_transaction_id'] = $finTransaction->id;
                 $debtTransaction = DebtTransaction::create($data);
             }
 
-            foreach (array_unique([$request->fin_account_id, $oldFundAccountId]) as $fundAccountId) {
+            foreach (array_unique([$skipFinanceTransaction ? null : $request->fin_account_id, $oldFundAccountId]) as $fundAccountId) {
                 if ($fundAccountId) {
                     app(FundController::class)->recomputeAccountBalance((int) $fundAccountId, $accountId);
                 }

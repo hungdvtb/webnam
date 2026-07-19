@@ -180,6 +180,65 @@ class FundDebtAccountScopeTest extends TestCase
         $this->assertSame($subjectB->id, DebtSubject::query()->where('account_id', $accountB->id)->value('id'));
     }
 
+    public function test_goods_debt_increases_debt_without_creating_fund_transaction(): void
+    {
+        [$accountA] = $this->accounts();
+
+        $fundAccountA = FinAccount::query()->create([
+            'account_id' => $accountA->id,
+            'name' => 'Cash A',
+            'type' => 'cash',
+            'initial_balance' => 1000,
+            'balance' => 1000,
+        ]);
+
+        $subjectA = DebtSubject::query()->create([
+            'account_id' => $accountA->id,
+            'name' => 'Supplier A',
+            'interest_rate_percent' => 0,
+            'initial_debt' => 0,
+        ]);
+
+        $response = $this->withHeaders($this->headers($accountA))
+            ->postJson('/api/finance/debts/transactions', [
+                'debt_subject_id' => $subjectA->id,
+                'transaction_date' => '2026-07-19 09:00:00',
+                'type' => 'borrow',
+                'amount' => 750,
+                'note' => 'Nhap hang chua tra tien',
+                'skip_finance_transaction' => true,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.fin_account_id', null)
+            ->assertJsonPath('data.fin_transaction_id', null);
+
+        $this->assertDatabaseHas('debt_transactions', [
+            'account_id' => $accountA->id,
+            'debt_subject_id' => $subjectA->id,
+            'fin_account_id' => null,
+            'fin_transaction_id' => null,
+            'amount' => 750,
+        ]);
+
+        $this->assertSame(0, FinTransaction::query()->where('account_id', $accountA->id)->count());
+        $this->assertSame(1000.0, (float) $fundAccountA->fresh()->balance);
+
+        $subjectsResponse = $this->withHeaders($this->headers($accountA))
+            ->getJson('/api/finance/debts/subjects')
+            ->assertOk();
+
+        $this->assertSame(750.0, (float) $subjectsResponse->json('data.0.remaining_debt'));
+
+        $transactionsResponse = $this->withHeaders($this->headers($accountA))
+            ->getJson("/api/finance/debts/transactions/{$subjectA->id}")
+            ->assertOk();
+
+        $this->assertTrue($transactionsResponse->json('data.0.is_goods_debt'));
+    }
+
     /**
      * @return array{0: Account, 1: Account}
      */

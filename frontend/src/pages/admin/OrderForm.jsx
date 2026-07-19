@@ -3039,6 +3039,21 @@ const getProductQuickSetupEntryId = (entry) => Number(
     ?? entry?.id
     ?? 0
 ) || 0;
+const buildProductQuickSetupRefreshTargets = (items = []) => {
+    const targets = [];
+    const seenEntryKeys = new Set();
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const entryKey = getProductQuickSetupEntryKey(item);
+        const productId = getProductQuickSetupEntryId(item);
+        if (!entryKey || productId <= 0 || seenEntryKeys.has(entryKey)) return;
+
+        seenEntryKeys.add(entryKey);
+        targets.push({ entryKey, productId });
+    });
+
+    return targets;
+};
 const mergeProductQuickSetupEntries = (products = [], selectedItems = []) => {
     const fetchedEntries = Array.isArray(products) ? products : [];
     const fetchedMap = new Map();
@@ -3877,6 +3892,7 @@ const OrderForm = () => {
     const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
+    const [productQuickSetupLatestEntries, setProductQuickSetupLatestEntries] = useState([]);
     const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
@@ -3926,6 +3942,7 @@ const OrderForm = () => {
     const productQuickFilterScopeCacheRef = useRef(new Map());
     const productQuickSetupAbortRef = useRef(null);
     const productQuickSetupCacheRef = useRef(new Map());
+    const productQuickSetupRefreshAbortRef = useRef(null);
     const productQuickSetupListRef = useRef(null);
     const productQuickSetupSearchInputRef = useRef(null);
     const pendingProductQuickSetupViewportRef = useRef(null);
@@ -4131,6 +4148,10 @@ const OrderForm = () => {
             activeProductQuickSetupLookup.items
         );
     }, [activeProductQuickSetupKey, activeProductQuickSetupLookup]);
+    const activeProductQuickSetupRefreshKey = useMemo(
+        () => JSON.stringify(buildProductQuickSetupRefreshTargets(activeProductQuickSetupItems)),
+        [activeProductQuickSetupItems]
+    );
     useEffect(() => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
         if (!activeProductQuickSetupLookup.sourceNamespace) return;
@@ -6378,6 +6399,48 @@ const OrderForm = () => {
         });
     }, [activeProductQuickSetupKey, productQuickSetupNamespace]);
 
+    const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = []) => {
+        if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
+
+        const latestEntryMap = new Map();
+        (Array.isArray(latestEntries) ? latestEntries : []).forEach((entry) => {
+            const entryKey = getProductQuickSetupEntryKey(entry);
+            if (entryKey && !latestEntryMap.has(entryKey)) {
+                latestEntryMap.set(entryKey, entry);
+            }
+        });
+
+        if (latestEntryMap.size === 0) return;
+
+        setProductQuickSetupStore((prev) => {
+            const namespaceStore = prev?.[productQuickSetupNamespace] || {};
+            const currentItems = Array.isArray(namespaceStore?.[activeProductQuickSetupKey])
+                ? namespaceStore[activeProductQuickSetupKey]
+                : [];
+            if (currentItems.length === 0) return prev;
+
+            const normalizedCurrentItems = normalizeStoredProductQuickSetupItems(currentItems);
+            const nextItems = normalizeStoredProductQuickSetupItems(
+                normalizedCurrentItems.map((item) => {
+                    const latestEntry = latestEntryMap.get(getProductQuickSetupEntryKey(item));
+                    return latestEntry || item;
+                })
+            );
+
+            if (JSON.stringify(normalizedCurrentItems) === JSON.stringify(nextItems)) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                [productQuickSetupNamespace]: {
+                    ...namespaceStore,
+                    [activeProductQuickSetupKey]: nextItems,
+                },
+            };
+        });
+    }, [activeProductQuickSetupKey, productQuickSetupNamespace]);
+
     const handleAddProductToQuickSetup = useCallback((product) => {
         if (!product) return;
 
@@ -6611,10 +6674,105 @@ const OrderForm = () => {
         normalizedProductQuickFilterValues,
     ]);
 
-    const quickModeSearchEntries = useMemo(
+    useEffect(() => {
+        productQuickSetupRefreshAbortRef.current?.abort();
+
+        if (!isProductQuickModeActive) {
+            setProductQuickSetupLatestEntries([]);
+            return undefined;
+        }
+
+        let refreshTargets = [];
+        try {
+            refreshTargets = JSON.parse(activeProductQuickSetupRefreshKey);
+        } catch (error) {
+            refreshTargets = [];
+        }
+
+        const selectedProductIds = Array.from(new Set(
+            (Array.isArray(refreshTargets) ? refreshTargets : [])
+                .map((target) => Number(target?.productId) || 0)
+                .filter((productId) => productId > 0)
+        ));
+        const activeEntryKeys = new Set(
+            (Array.isArray(refreshTargets) ? refreshTargets : [])
+                .map((target) => normalizeCanvasText(target?.entryKey))
+                .filter(Boolean)
+        );
+
+        if (selectedProductIds.length === 0 || activeEntryKeys.size === 0) {
+            setProductQuickSetupLatestEntries([]);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        productQuickSetupRefreshAbortRef.current = controller;
+
+        const refreshQuickSetupEntries = async () => {
+            try {
+                const response = await productApi.getAll({
+                    picker: 1,
+                    fast_picker: 1,
+                    quick_filter_enabled: 0,
+                    allow_variants: 1,
+                    selected_ids: selectedProductIds.join(','),
+                    per_page: Math.min(Math.max(selectedProductIds.length, 1), 200),
+                }, controller.signal);
+                if (controller.signal.aborted) return;
+
+                const latestEntries = Array.isArray(response.data.data)
+                    ? buildProductQuickSetupEntries(response.data.data)
+                        .filter((entry) => activeEntryKeys.has(getProductQuickSetupEntryKey(entry)))
+                    : [];
+
+                setProductQuickSetupLatestEntries(latestEntries);
+                syncLatestQuickSetupEntriesIntoActiveStore(latestEntries);
+            } catch (error) {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                console.error('Error refreshing quick setup bundle entries', error);
+                setProductQuickSetupLatestEntries([]);
+            } finally {
+                if (productQuickSetupRefreshAbortRef.current === controller) {
+                    productQuickSetupRefreshAbortRef.current = null;
+                }
+            }
+        };
+
+        refreshQuickSetupEntries();
+
+        return () => {
+            controller.abort();
+        };
+    }, [
+        activeProductQuickSetupRefreshKey,
+        isProductQuickModeActive,
+        syncLatestQuickSetupEntriesIntoActiveStore,
+    ]);
+
+    const storedQuickModeSearchEntries = useMemo(
         () => buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems),
         [activeProductQuickSetupItems]
     );
+    const latestQuickModeEntryMap = useMemo(() => {
+        const entryMap = new Map();
+        (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : []).forEach((entry) => {
+            const entryKey = getProductQuickSetupEntryKey(entry);
+            if (entryKey && !entryMap.has(entryKey)) {
+                entryMap.set(entryKey, entry);
+            }
+        });
+        return entryMap;
+    }, [productQuickSetupLatestEntries]);
+    const quickModeSearchEntries = useMemo(() => {
+        if (latestQuickModeEntryMap.size === 0) {
+            return storedQuickModeSearchEntries;
+        }
+
+        return storedQuickModeSearchEntries.map((entry) => {
+            const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
+            return latestEntry || entry;
+        });
+    }, [latestQuickModeEntryMap, storedQuickModeSearchEntries]);
     const shouldRankInactiveProductQuickFilters = !isProductQuickModeActive && activeProductQuickFilterRankCriteria.length > 0;
 
     const rankedSearchProducts = useMemo(() => {
@@ -6856,6 +7014,7 @@ const OrderForm = () => {
         productSearchAbortRef.current?.abort();
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
+        productQuickSetupRefreshAbortRef.current?.abort();
     }, []);
 
     const fetchOrderAiTrainingRules = useCallback(async () => {

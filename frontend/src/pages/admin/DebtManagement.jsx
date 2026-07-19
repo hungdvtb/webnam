@@ -29,6 +29,12 @@ const formatDateString = (dateStr) => {
     }
 };
 
+const GOODS_DEBT_TYPE = 'goods_debt';
+
+const isGoodsDebtTransaction = (tx) => {
+    return tx.type === 'borrow' && (tx.is_goods_debt || (!tx.fin_transaction_id && !tx.fin_account_id));
+};
+
 export default function DebtManagement() {
     const [loading, setLoading] = useState(true);
     const [subjects, setSubjects] = useState([]);
@@ -48,7 +54,7 @@ export default function DebtManagement() {
     const [newTx, setNewTx] = useState({
         id: null,
         transaction_date: getCurrentDateTime(),
-        type: 'borrow', // borrow, pay_principal, pay_interest
+        type: 'borrow', // borrow, goods_debt, pay_principal, pay_interest
         amount: '',
         note: '',
         fin_account_id: ''
@@ -129,11 +135,15 @@ export default function DebtManagement() {
     const handleSaveTransaction = async () => {
         if (!activeSubjectId) return;
         if (!newTx.amount) return alert('Vui lòng nhập số tiền');
-        if (!newTx.fin_account_id) return alert('Vui lòng chọn tài khoản (Tiền mặt/Ngân hàng) để đồng bộ dòng tiền');
+        const isGoodsDebt = newTx.type === GOODS_DEBT_TYPE;
+        if (!isGoodsDebt && !newTx.fin_account_id) return alert('Vui lòng chọn tài khoản (Tiền mặt/Ngân hàng) để đồng bộ dòng tiền');
         setSaving(true);
         try {
             const payload = {
                 ...newTx,
+                type: isGoodsDebt ? 'borrow' : newTx.type,
+                skip_finance_transaction: isGoodsDebt,
+                fin_account_id: isGoodsDebt ? null : newTx.fin_account_id,
                 debt_subject_id: activeSubjectId,
                 transaction_date: newTx.transaction_date.replace('T', ' ') + ':00'
             };
@@ -281,13 +291,14 @@ export default function DebtManagement() {
                     </div>
 
                     <div className="overflow-auto custom-scrollbar flex-1 relative">
-                        <table className="w-full text-left border-separate border-spacing-0 min-w-[1000px]">
+                        <table className="w-full text-left border-separate border-spacing-0 min-w-[1160px]">
                             <thead className="sticky top-0 z-10">
                                 <tr className="bg-gray-100 shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)]">
                                     <th className="py-3 px-4 text-[13px] font-bold text-gray-600 border-b border-r border-gray-200 w-44">Thời gian</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-gray-600 border-b border-r border-gray-200 w-52">Loại giao dịch</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-gray-600 border-b border-r border-gray-200">Diễn giải</th>
-                                    <th className="py-3 px-4 text-[13px] font-bold text-orange-700 border-b border-r border-gray-200 w-36 text-right">Vay Thêm</th>
+                                    <th className="py-3 px-4 text-[13px] font-bold text-orange-700 border-b border-r border-gray-200 w-36 text-right">Vay Tiền</th>
+                                    <th className="py-3 px-4 text-[13px] font-bold text-amber-700 border-b border-r border-gray-200 w-40 text-right">Nợ Tiền Hàng</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-blue-700 border-b border-r border-gray-200 w-36 text-right">Trả Gốc</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-green-700 border-b border-r border-gray-200 w-36 text-right">Trả Lãi</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-gray-800 border-b w-40 text-right bg-gray-200/50">Dư Nợ Còn Lại</th>
@@ -309,20 +320,30 @@ export default function DebtManagement() {
                                         <select
                                             className="w-full bg-transparent border-0 focus:ring-0 text-[13px] font-bold p-1 pr-4"
                                             value={newTx.type}
-                                            onChange={e => setNewTx({...newTx, type: e.target.value})}
+                                            onChange={e => {
+                                                const type = e.target.value;
+                                                setNewTx({...newTx, type, fin_account_id: type === GOODS_DEBT_TYPE ? '' : newTx.fin_account_id});
+                                            }}
                                         >
-                                            <option value="borrow">Vay thêm (+)</option>
+                                            <option value="borrow">Vay tiền vào quỹ (+)</option>
+                                            <option value={GOODS_DEBT_TYPE}>Nợ tiền hàng (+)</option>
                                             <option value="pay_principal">Trả nợ gốc (-)</option>
                                             <option value="pay_interest">Trả tiền lãi (0)</option>
                                         </select>
-                                        <select
-                                            className={`w-full bg-transparent border-b border-dashed focus:ring-0 text-[11px] p-0 pr-4 italic font-medium ${!newTx.fin_account_id ? 'border-red-300 text-red-400' : 'border-gray-200 text-gray-500'}`}
-                                            value={newTx.fin_account_id}
-                                            onChange={e => setNewTx({...newTx, fin_account_id: e.target.value})}
-                                        >
-                                            <option value="">-- BẮT BUỘC CHỌN TÀI KHOẢN --</option>
-                                            {fundAccounts.map(acc => <option key={acc.id} value={acc.id}>Thu/Chi vào: {acc.name}</option>)}
-                                        </select>
+                                        {newTx.type === GOODS_DEBT_TYPE ? (
+                                            <div className="w-full border-b border-dashed border-amber-300 text-[11px] p-0 italic font-medium text-amber-700">
+                                                Không vào tiền mặt/ngân hàng
+                                            </div>
+                                        ) : (
+                                            <select
+                                                className={`w-full bg-transparent border-b border-dashed focus:ring-0 text-[11px] p-0 pr-4 italic font-medium ${!newTx.fin_account_id ? 'border-red-300 text-red-400' : 'border-gray-200 text-gray-500'}`}
+                                                value={newTx.fin_account_id}
+                                                onChange={e => setNewTx({...newTx, fin_account_id: e.target.value})}
+                                            >
+                                                <option value="">-- BẮT BUỘC CHỌN TÀI KHOẢN --</option>
+                                                {fundAccounts.map(acc => <option key={acc.id} value={acc.id}>Thu/Chi vào: {acc.name}</option>)}
+                                            </select>
+                                        )}
                                     </td>
                                     <td className="p-1 px-2 border-r border-gray-200">
                                         <input
@@ -339,6 +360,18 @@ export default function DebtManagement() {
                                             <input
                                                 type="text"
                                                 className="w-full bg-transparent border-0 focus:ring-0 text-[14px] font-bold text-right p-2 text-orange-700"
+                                                placeholder="SỐ TIỀN..."
+                                                value={newTx.amount ? newTx.amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") : ''}
+                                                onChange={e => setNewTx({...newTx, amount: e.target.value.replace(/\D/g, '')})}
+                                                onKeyDown={e => e.key === 'Enter' && handleSaveTransaction()}
+                                            />
+                                        )}
+                                    </td>
+                                    <td className="p-1 px-2 border-r border-gray-200 bg-amber-50/40">
+                                        {newTx.type === GOODS_DEBT_TYPE && (
+                                            <input
+                                                type="text"
+                                                className="w-full bg-transparent border-0 focus:ring-0 text-[14px] font-bold text-right p-2 text-amber-700"
                                                 placeholder="SỐ TIỀN..."
                                                 value={newTx.amount ? newTx.amount.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") : ''}
                                                 onChange={e => setNewTx({...newTx, amount: e.target.value.replace(/\D/g, '')})}
@@ -383,20 +416,25 @@ export default function DebtManagement() {
                                 </tr>
 
                                 {transactions.length === 0 ? (
-                                    <tr><td colSpan="8" className="py-20 text-center text-gray-400 text-[13px] tracking-wide italic leading-relaxed">Chưa có giao dịch nào với {activeSubject.name}.<br/>Vui lòng nhập khoản vay hoặc trả ở dòng vàng phía trên.</td></tr>
+                                    <tr><td colSpan="9" className="py-20 text-center text-gray-400 text-[13px] tracking-wide italic leading-relaxed">Chưa có giao dịch nào với {activeSubject.name}.<br/>Vui lòng nhập khoản vay hoặc trả ở dòng vàng phía trên.</td></tr>
                                 ) : (
                                     transactions.map(tx => (
                                         <tr key={tx.id} className="hover:bg-gray-50 transition-colors group">
                                             <td className="py-3 px-4 text-[13px] text-gray-500 border-r border-gray-50">{formatDateString(tx.transaction_date)}</td>
                                             <td className="py-3 px-4 text-[13px] border-r border-gray-50">
-                                                {tx.type === 'borrow' && <span className="text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded-[4px] border border-orange-100 uppercase text-[10px] tracking-wider">Vay mới</span>}
+                                                {tx.type === 'borrow' && !isGoodsDebtTransaction(tx) && <span className="text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded-[4px] border border-orange-100 uppercase text-[10px] tracking-wider">Vay tiền</span>}
+                                                {isGoodsDebtTransaction(tx) && <span className="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-[4px] border border-amber-100 uppercase text-[10px] tracking-wider">Nợ tiền hàng</span>}
                                                 {tx.type === 'pay_principal' && <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-[4px] border border-blue-100 uppercase text-[10px] tracking-wider">Trả nợ gốc</span>}
                                                 {tx.type === 'pay_interest' && <span className="text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded-[4px] border border-green-100 uppercase text-[10px] tracking-wider">Trả tiền lãi</span>}
                                                 {tx.fin_transaction_id && <div className="text-[10px] text-gray-400 flex items-center gap-1 mt-1 font-medium"><span className="material-symbols-outlined text-[12px]">sync_alt</span> Đã tạo phiếu quỹ</div>}
+                                                {isGoodsDebtTransaction(tx) && <div className="text-[10px] text-amber-600 flex items-center gap-1 mt-1 font-medium"><span className="material-symbols-outlined text-[12px]">block</span> Không vào quỹ</div>}
                                             </td>
                                             <td className="py-3 px-4 text-[13px] text-gray-700 font-medium border-r border-gray-50">{tx.note}</td>
                                             <td className="py-3 px-4 text-[14px] font-bold text-right border-r border-gray-50 text-orange-600">
-                                                {tx.type === 'borrow' ? formatCurrency(tx.amount) : '-'}
+                                                {tx.type === 'borrow' && !isGoodsDebtTransaction(tx) ? formatCurrency(tx.amount) : '-'}
+                                            </td>
+                                            <td className="py-3 px-4 text-[14px] font-bold text-right border-r border-gray-50 text-amber-700">
+                                                {isGoodsDebtTransaction(tx) ? formatCurrency(tx.amount) : '-'}
                                             </td>
                                             <td className="py-3 px-4 text-[14px] font-bold text-right border-r border-gray-50 text-blue-600">
                                                 {tx.type === 'pay_principal' ? formatCurrency(tx.amount) : '-'}

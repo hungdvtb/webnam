@@ -25,7 +25,7 @@ class ViettelPostTrackingImportService
     /**
      * Process Viettel Post Result Excel to sync tracking info and create shipments
      */
-    public function processFile(string $filePath, int $userId): array
+    public function processFile(string $filePath, int $userId, ?int $accountId = null): array
     {
         try {
             $allRows = $this->xlsxService->readRaw($filePath);
@@ -101,12 +101,12 @@ class ViettelPostTrackingImportService
                 ]);
 
                 // Shipping fee: "Tổng phí (9)= (3)+(5)+(6)+(7)-(8)" → 'tổngphí935678'
-                $shippingFee = (float)$this->findInRow($row, $headerMap, [
+                $shippingFee = $this->parseMoneyValue($this->findInRow($row, $headerMap, [
                     'tổngphí935678',    // Col AF – confirmed from real file
                     'tổngphí', 'tongphi',
                     'tổngcước1',        // "Tổng cước (1)" Col W – fallback
                     'tongcuoc', 'moneytotal', 'cuocphi',
-                ], 0);
+                ], 0));
 
                 if (!$orderNumber) {
                     // Skip empty rows
@@ -122,7 +122,7 @@ class ViettelPostTrackingImportService
                     continue;
                 }
 
-                $order = Order::where('order_number', $orderNumber)->first();
+                $order = $this->findOrderByNumber($orderNumber, $accountId);
                 if (!$order) {
                     $summary['not_found']++;
                     $summary['errors'][] = "Dòng " . ($headerIndex + $index + 2) . ": Không tìm thấy đơn hàng #{$orderNumber} trên hệ thống.";
@@ -164,19 +164,77 @@ class ViettelPostTrackingImportService
         return $default;
     }
 
+    private function parseMoneyValue(mixed $value): float
+    {
+        $raw = mb_strtolower(trim((string) $value), 'UTF-8');
+        if ($raw === '') {
+            return 0.0;
+        }
+
+        $negative = str_starts_with($raw, '-') || preg_match('/^\(.*\)$/u', $raw) === 1;
+        $multiplier = str_contains($raw, 'k') ? 1000 : 1;
+        $normalized = preg_replace('/[^\d,.\-]/u', '', $raw) ?? '';
+        $normalized = trim($normalized, '-');
+        if ($normalized === '') {
+            return 0.0;
+        }
+
+        $lastComma = strrpos($normalized, ',');
+        $lastDot = strrpos($normalized, '.');
+
+        if ($lastComma !== false && $lastDot !== false) {
+            $decimalSeparator = $lastComma > $lastDot ? ',' : '.';
+            $thousandSeparator = $decimalSeparator === ',' ? '.' : ',';
+            $normalized = str_replace($thousandSeparator, '', $normalized);
+            $normalized = str_replace($decimalSeparator, '.', $normalized);
+        } elseif ($lastComma !== false) {
+            $digitsAfter = strlen($normalized) - $lastComma - 1;
+            $normalized = $digitsAfter === 3
+                ? str_replace(',', '', $normalized)
+                : str_replace(',', '.', $normalized);
+        } elseif ($lastDot !== false) {
+            $digitsAfter = strlen($normalized) - $lastDot - 1;
+            if ($digitsAfter === 3) {
+                $normalized = str_replace('.', '', $normalized);
+            }
+        }
+
+        $amount = (float) $normalized * $multiplier;
+
+        return round($negative ? -$amount : $amount, 2);
+    }
+
+    private function findOrderByNumber(string $orderNumber, ?int $accountId = null): ?Order
+    {
+        $query = $accountId
+            ? Order::withoutGlobalScope('account_id')->where('account_id', $accountId)
+            : Order::query();
+
+        return $query
+            ->where('order_number', trim($orderNumber))
+            ->first();
+    }
+
     private function syncOrderToShipment(Order $order, string $trackingNumber, float $shippingFee, int $userId): void
     {
         DB::transaction(function () use ($order, $trackingNumber, $shippingFee, $userId) {
             // Check if shipment already exists
-            $shipment = Shipment::where('order_id', $order->id)->first();
+            $shipment = Shipment::withoutGlobalScope('account_id')
+                ->where('order_id', $order->id)
+                ->first();
             
             if (!$shipment) {
                 // Generate shipment number
                 $today = now()->format('Ymd');
-                $count = Shipment::withTrashed()->whereDate('created_at', today())->count() + 1;
+                $count = Shipment::withoutGlobalScope('account_id')
+                    ->withTrashed()
+                    ->where('account_id', $order->account_id)
+                    ->whereDate('created_at', today())
+                    ->count() + 1;
                 $shipmentNumber = 'VD-' . $today . '-' . str_pad($count, 4, '0', STR_PAD_LEFT);
 
                 $shipment = Shipment::create([
+                    'account_id' => $order->account_id,
                     'order_id' => $order->id,
                     'order_code' => $order->order_number,
                     'shipment_number' => $shipmentNumber,
@@ -208,6 +266,7 @@ class ViettelPostTrackingImportService
             } else {
                 // If shipment exists, update it
                 $shipmentData = [
+                    'account_id' => $order->account_id,
                     'carrier_code' => self::CARRIER_CODE,
                     'carrier_name' => $shipment->carrier_name ?: 'Viettel Post',
                     'shipping_cost' => $shippingFee,

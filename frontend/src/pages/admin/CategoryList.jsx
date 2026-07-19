@@ -642,6 +642,17 @@ const reorderSiblingNodesFromDrafts = (nodes = [], draftOrders = {}) => {
         .map(({ node }) => node);
 };
 
+const canRemoveCategoryProduct = (product = {}) => (
+    product?.is_removable !== false
+    && !(product?.item_type === 'product' && product?.is_primary_category)
+);
+
+const getCategoryProductRemoveTitle = (product = {}) => (
+    canRemoveCategoryProduct(product)
+        ? 'Gỡ khỏi danh mục'
+        : 'Sản phẩm đang là danh mục chính nên không thể gỡ tại đây'
+);
+
 const CategoryProductRow = ({
     product,
     index,
@@ -655,9 +666,11 @@ const CategoryProductRow = ({
     onDragEnd,
     onMoveUp,
     onMoveDown,
+    onRemove,
 }) => {
     const priceText = product.item_type === 'bundle_option' ? formatCategoryItemPrice(product) : '';
     const optionKeyText = product.option_key_display || product.bundle_option_key || '';
+    const canRemove = canRemoveCategoryProduct(product);
 
     return (
     <div
@@ -780,6 +793,15 @@ const CategoryProductRow = ({
             </div>
 
             <div className="flex shrink-0 items-center gap-1">
+                <button
+                    type="button"
+                    onClick={onRemove}
+                    disabled={!canRemove}
+                    className="flex h-8 w-8 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-brick hover:text-brick disabled:cursor-not-allowed disabled:opacity-30"
+                    title={getCategoryProductRemoveTitle(product)}
+                >
+                    <span className="material-symbols-outlined text-[16px]">remove_circle</span>
+                </button>
                 <button
                     type="button"
                     onClick={onMoveUp}
@@ -1218,7 +1240,7 @@ const CategoryList = () => {
         setCategoryProducts(currentItems => {
             const existingItemIndex = currentItems.findIndex(item => item.assignment_key === normalizedItem.assignment_key);
             if (existingItemIndex > -1) {
-                if (currentItems[existingItemIndex].is_removable === false || currentItems[existingItemIndex].is_primary_category) return currentItems;
+                if (!canRemoveCategoryProduct(currentItems[existingItemIndex])) return currentItems;
                 const next = [...currentItems];
                 next.splice(existingItemIndex, 1);
                 return next;
@@ -1559,6 +1581,27 @@ const CategoryList = () => {
         setCategoryProductsDirty(true);
     };
 
+    const removeCategoryProduct = (productId) => {
+        const currentProduct = categoryProducts.find((product) => product.assignment_key === productId);
+
+        if (!currentProduct) {
+            return;
+        }
+
+        if (!canRemoveCategoryProduct(currentProduct)) {
+            showToast({
+                message: 'Sản phẩm này đang là danh mục chính nên không thể gỡ tại đây.',
+                type: 'warning',
+            });
+            return;
+        }
+
+        setDraggingProductId(null);
+        setDragOverProductId(null);
+        setCategoryProducts((previous) => previous.filter((product) => product.assignment_key !== productId));
+        setCategoryProductsDirty(true);
+    };
+
     const saveCategoryProductOrder = async () => {
         if (!selectedId || categoryProductsSaving || !categoryProductsDirty) {
             return;
@@ -1581,7 +1624,7 @@ const CategoryList = () => {
             setSelectedCategoryMeta(response.data?.category || null);
             setCategoryProducts(normalizeSortableCategoryProducts(response.data?.products));
             setCategoryProductsDirty(false);
-            showToast({ message: 'Đã lưu thứ tự sản phẩm trong danh mục.', type: 'success' });
+            showToast({ message: 'Đã cập nhật sản phẩm trong danh mục.', type: 'success' });
         } catch (error) {
             console.error('Error saving category product order:', error);
             showModal({
@@ -3892,7 +3935,7 @@ const CategoryList = () => {
                                             disabled={!categoryProductsDirty || categoryProductsLoading || categoryProductsSaving}
                                             className="rounded-sm bg-brick px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-white transition-colors hover:bg-umber disabled:opacity-40"
                                         >
-                                            {categoryProductsSaving ? 'Đang lưu' : 'Lưu thứ tự'}
+                                            {categoryProductsSaving ? 'Đang lưu' : 'Lưu thay đổi'}
                                         </button>
                                     </div>
                                 ) : null}
@@ -3901,7 +3944,7 @@ const CategoryList = () => {
                             {selectedCategoryNode ? (
                                 <div className="flex flex-wrap items-center gap-2 border-b border-gold/10 px-4 py-3">
                                     <span className="rounded-full bg-primary/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-primary">
-                                        {selectedCategoryMeta?.items_count ?? selectedCategoryMeta?.products_count ?? categoryProducts.length} item
+                                        {categoryProductsDirty ? categoryProducts.length : (selectedCategoryMeta?.items_count ?? selectedCategoryMeta?.products_count ?? categoryProducts.length)} item
                                     </span>
                                     <span className={`rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${
                                         Number(selectedCategoryMeta?.status ?? selectedCategoryNode.data?.status ?? 0) === 1
@@ -3975,6 +4018,7 @@ const CategoryList = () => {
                                                 }}
                                                 onMoveUp={() => moveCategoryProductByOffset(product.assignment_key, -1)}
                                                 onMoveDown={() => moveCategoryProductByOffset(product.assignment_key, 1)}
+                                                onRemove={() => removeCategoryProduct(product.assignment_key)}
                                             />
                                         ))}
                                     </div>
@@ -3983,7 +4027,7 @@ const CategoryList = () => {
 
                             {selectedCategoryNode ? (
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gold/10 px-4 py-3 text-[10px] text-stone/50">
-                                    <span>Kéo thả hoặc dùng nút lên/xuống, sau đó bấm "Lưu thứ tự".</span>
+                                    <span>Kéo thả, xóa item hoặc dùng nút lên/xuống, sau đó bấm "Lưu thay đổi".</span>
                                     <span className="font-bold uppercase tracking-[0.14em]">
                                         Frontend dùng đúng thứ tự này
                                     </span>
@@ -4217,6 +4261,7 @@ const CategoryList = () => {
                 onMoveUp={(productId) => moveCategoryProductByOffset(productId, -1)}
                 onMoveDown={(productId) => moveCategoryProductByOffset(productId, 1)}
                 onMoveToPosition={moveCategoryProductToPosition}
+                onRemove={removeCategoryProduct}
                 onRefresh={() => loadCategoryProducts(selectedId)}
                 onReset={() => loadCategoryProducts(selectedId)}
                 onSave={saveCategoryProductOrder}

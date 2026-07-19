@@ -40,6 +40,17 @@ const formatCategoryItemPrice = (item) => {
     return formatted ? `${formatted} VND` : '';
 };
 
+const canRemoveCategoryProduct = (product = {}) => (
+    product?.is_removable !== false
+    && !(product?.item_type === 'product' && product?.is_primary_category)
+);
+
+const getCategoryProductRemoveTitle = (product = {}) => (
+    canRemoveCategoryProduct(product)
+        ? 'Go khoi danh muc'
+        : 'San pham dang la danh muc chinh nen khong the go tai day'
+);
+
 const CategoryProductSortRow = ({
     product,
     index,
@@ -56,11 +67,13 @@ const CategoryProductSortRow = ({
     onDragEnd,
     onMoveUp,
     onMoveDown,
+    onRemove,
 }) => {
     const currentPosition = index + 1;
     const productKey = product.assignment_key || product.id;
     const priceText = product.item_type === 'bundle_option' ? formatCategoryItemPrice(product) : '';
     const optionKeyText = product.option_key_display || product.bundle_option_key || '';
+    const canRemove = canRemoveCategoryProduct(product);
 
     return (
         <tr
@@ -198,6 +211,15 @@ const CategoryProductSortRow = ({
                 <div className="flex items-center justify-center gap-1">
                     <button
                         type="button"
+                        onClick={() => onRemove(productKey)}
+                        disabled={disabled || !canRemove}
+                        className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-brick hover:text-brick disabled:cursor-not-allowed disabled:opacity-30"
+                        title={getCategoryProductRemoveTitle(product)}
+                    >
+                        <span className="material-symbols-outlined text-[16px]">remove_circle</span>
+                    </button>
+                    <button
+                        type="button"
                         onClick={() => onMoveUp(productKey)}
                         disabled={disabled || index === 0}
                         className="flex h-9 w-9 items-center justify-center rounded-sm border border-gold/15 text-stone/60 transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-30"
@@ -237,6 +259,7 @@ const CategoryProductSortModal = ({
     onMoveUp,
     onMoveDown,
     onMoveToPosition,
+    onRemove,
     onRefresh,
     onReset,
     onSave,
@@ -366,7 +389,7 @@ const CategoryProductSortModal = ({
 
                             <div className="flex flex-wrap items-center justify-end gap-2">
                                 <span className="rounded-full bg-primary/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-primary">
-                                    {category?.items_count ?? category?.products_count ?? totalProducts} item
+                                    {isDirty ? totalProducts : (category?.items_count ?? category?.products_count ?? totalProducts)} item
                                 </span>
                                 {normalizedSearchQuery ? (
                                     <span className="rounded-full bg-gold/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] text-amber-700">
@@ -446,7 +469,7 @@ const CategoryProductSortModal = ({
                                         className="flex h-10 items-center gap-2 rounded-sm bg-brick px-4 text-[11px] font-black uppercase tracking-[0.12em] text-white transition-colors hover:bg-umber disabled:cursor-not-allowed disabled:opacity-40"
                                     >
                                         <span className="material-symbols-outlined text-[16px]">save</span>
-                                        {isSaving ? 'Dang luu' : 'Luu thu tu'}
+                                        {isSaving ? 'Dang luu' : 'Luu thay doi'}
                                     </button>
                                     <button
                                         type="button"
@@ -506,7 +529,7 @@ const CategoryProductSortModal = ({
                                             <th className="w-24 px-3 py-3 text-center">Vi tri</th>
                                             <th className="px-3 py-3">San pham</th>
                                             <th className="w-56 px-3 py-3">Nhap so thu tu</th>
-                                            <th className="w-32 px-3 py-3 text-center">Tac vu</th>
+                                            <th className="w-44 px-3 py-3 text-center">Tac vu</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -536,6 +559,7 @@ const CategoryProductSortModal = ({
                                                     onDragEnd={onDragEnd}
                                                     onMoveUp={onMoveUp}
                                                     onMoveDown={onMoveDown}
+                                                    onRemove={onRemove}
                                                 />
                                             );
                                         })}
@@ -546,7 +570,7 @@ const CategoryProductSortModal = ({
                     </div>
 
                     <div className="border-t border-gold/10 bg-white px-6 py-4 text-[11px] text-stone/55">
-                        Frontend se dung dung thu tu nay sau khi ban bam <span className="font-black uppercase tracking-[0.12em] text-primary">Luu thu tu</span>.
+                        Frontend se dung danh sach va thu tu nay sau khi ban bam <span className="font-black uppercase tracking-[0.12em] text-primary">Luu thay doi</span>.
                         {' '}
                         {normalizedSearchQuery ? 'Bang dang hien thi ban loc, nhung so vi tri van la thu tu that.' : ''}
                     </div>

@@ -46,7 +46,6 @@ const normalizeMonthlyProfitRow = (row = {}) => {
     return {
         ...row,
         total_profit: totalProfit,
-        profit_per_house: roundMoney(totalProfit / 2),
     };
 };
 const hasAdsSpendBreakdown = (taxedValue, rawValue) =>
@@ -204,7 +203,6 @@ const MonthlyProfitReport = () => {
         'exchange_profit_loss',
         'partial_delivery_profit_loss',
         'total_profit',
-        'profit_per_house',
     ];
 
     const columnFormulas = {
@@ -224,7 +222,6 @@ const MonthlyProfitReport = () => {
         tax: 'Tổng thuế tạm tính trong tháng.',
         fixed_cost: 'Tổng chi phí cố định trong tháng.',
         total_profit: 'Lợi nhuận tổng = Doanh thu - Tiền hàng thực tế - Tiền ship hàng - Hàng hỏng - Chi phí lương - Chi phí gói hàng - QC - Thuế - Chi phí cố định + Lãi lỗ đổi trả + Lãi lỗ giao 1 phần.',
-        profit_per_house: 'Lợi nhuận tổng chia 2.',
     };
 
     columnFormulas.shipping_fee = 'Tổng phí ship của tất cả đơn hợp lệ trong tháng, gồm đơn thường, đơn đổi trả và giao hàng 1 phần; ưu tiên phí ship thực tế, nếu chưa có thì lấy 5% x doanh số đơn.';
@@ -479,8 +476,6 @@ const MonthlyProfitReport = () => {
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />cố định</>);
             case 'total_profit':
                 return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-red-600', <>Lợi nhuận<br />tổng</>);
-            case 'profit_per_house':
-                return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[13px] font-bold text-red-600', <>Lợi nhuận<br />mỗi nhà</>);
             default:
                 return null;
         }
@@ -601,8 +596,6 @@ const MonthlyProfitReport = () => {
                         )}
                     </td>
                 );
-            case 'profit_per_house':
-                return <td key="profit_per_house" className="bg-white/10 px-3 py-3 text-center text-[13px] font-bold">{formatNumber(totalRow.profit_per_house)}</td>;
             default:
                 return null;
         }
@@ -775,15 +768,6 @@ const MonthlyProfitReport = () => {
                         )}
                     </td>
                 );
-            case 'profit_per_house':
-                return (
-                    <td
-                        key="profit_per_house"
-                        className={`bg-gray-50 px-3 py-3 text-center text-[13px] font-bold ${row.profit_per_house < 0 ? 'text-red-500' : 'text-red-600'}`}
-                    >
-                        {row.profit_per_house !== 0 ? formatNumber(row.profit_per_house) : '-'}
-                    </td>
-                );
             default:
                 return null;
         }
@@ -895,7 +879,7 @@ const MonthlyProfitReport = () => {
 
             <div className="min-h-[460px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:min-h-[560px]">
                 <div className="min-h-[460px] max-h-[75vh] overflow-auto md:min-h-[560px]">
-                    <table className="min-w-[1420px] w-full border-collapse text-left [&_td]:border [&_td]:border-gray-200 [&_th]:border [&_th]:border-gray-200">
+                    <table className="min-w-[1320px] w-full border-collapse text-left [&_td]:border [&_td]:border-gray-200 [&_th]:border [&_th]:border-gray-200">
                         <thead className="sticky top-0 z-20 bg-gray-100 shadow-sm">
                             <tr>
                                 {defaultCols.map((id) => renderHeader(id))}

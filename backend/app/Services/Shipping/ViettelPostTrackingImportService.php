@@ -224,20 +224,11 @@ class ViettelPostTrackingImportService
                 ->first();
             
             if (!$shipment) {
-                // Generate shipment number
-                $today = now()->format('Ymd');
-                $count = Shipment::withoutGlobalScope('account_id')
-                    ->withTrashed()
-                    ->where('account_id', $order->account_id)
-                    ->whereDate('created_at', today())
-                    ->count() + 1;
-                $shipmentNumber = 'VD-' . $today . '-' . str_pad($count, 4, '0', STR_PAD_LEFT);
-
                 $shipment = Shipment::create([
                     'account_id' => $order->account_id,
                     'order_id' => $order->id,
                     'order_code' => $order->order_number,
-                    'shipment_number' => $shipmentNumber,
+                    'shipment_number' => $this->generateShipmentNumber(),
                     'tracking_number' => $trackingNumber,
                     'carrier_code' => self::CARRIER_CODE,
                     'carrier_name' => 'Viettel Post',
@@ -299,5 +290,26 @@ class ViettelPostTrackingImportService
 
             $order->update($orderUpdateData);
         });
+    }
+
+    private function generateShipmentNumber(): string
+    {
+        $today = now()->format('Ymd');
+        $count = Shipment::withoutGlobalScopes()
+            ->withTrashed()
+            ->whereDate('created_at', today())
+            ->count();
+
+        do {
+            $count++;
+            $shipmentNumber = 'VD-' . $today . '-' . str_pad((string) $count, 4, '0', STR_PAD_LEFT);
+        } while (
+            Shipment::withoutGlobalScopes()
+                ->withTrashed()
+                ->where('shipment_number', $shipmentNumber)
+                ->exists()
+        );
+
+        return $shipmentNumber;
     }
 }

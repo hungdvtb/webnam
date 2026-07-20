@@ -10,6 +10,7 @@ use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ViettelPostTrackingImportService;
 use App\Services\SimpleXlsxService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
@@ -18,6 +19,13 @@ use Tests\TestCase;
 class ViettelPostTrackingImportTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
+    }
 
     public function test_tracking_import_only_updates_orders_in_requested_account_and_parses_fee(): void
     {
@@ -63,7 +71,7 @@ class ViettelPostTrackingImportTest extends TestCase
 
         $result = $service->processFile('fake.xlsx', $user->id, $secondAccount->id);
 
-        $this->assertTrue($result['success']);
+        $this->assertTrue($result['success'], json_encode($result, JSON_UNESCAPED_UNICODE));
         $this->assertSame(1, $result['summary']['success']);
         $this->assertSame(0, $result['summary']['not_found']);
         $this->assertSame(0, $result['summary']['failed']);
@@ -82,6 +90,73 @@ class ViettelPostTrackingImportTest extends TestCase
         $this->assertSame('VTP-TRACK-STORE-2', (string) $shipment->tracking_number);
         $this->assertSame(45000.0, (float) $shipment->shipping_cost);
         $this->assertSame(455000.0, (float) $shipment->actual_received_amount);
+    }
+
+    public function test_tracking_import_generates_globally_unique_shipment_number(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-20 09:00:00'));
+
+        $firstAccount = $this->createAccount('VTP Import Store 1');
+        $secondAccount = $this->createAccount('VTP Import Store 2');
+        $user = User::factory()->create([
+            'name' => 'VTP Import Admin',
+            'email' => 'vtp-import-' . Str::lower(Str::random(6)) . '@example.com',
+            'is_admin' => true,
+        ]);
+
+        $firstOrder = $this->createOrder($firstAccount, $user, [
+            'order_number' => 'OR-STORE-1-SHIPMENT-001',
+            'total_price' => 300000,
+        ]);
+        $secondOrder = $this->createOrder($secondAccount, $user, [
+            'order_number' => 'OR-STORE-2-VTP-002',
+            'total_price' => 500000,
+        ]);
+
+        Shipment::withoutGlobalScope('account_id')->create([
+            'account_id' => $firstAccount->id,
+            'order_id' => $firstOrder->id,
+            'order_code' => $firstOrder->order_number,
+            'shipment_number' => 'VD-20260720-0001',
+            'tracking_number' => 'VTP-EXISTING-STORE-1',
+            'carrier_code' => 'viettel_post',
+            'carrier_name' => 'Viettel Post',
+            'carrier_tracking_code' => 'VTP-EXISTING-STORE-1',
+            'channel' => 'vtp_excel_import',
+            'customer_name' => $firstOrder->customer_name,
+            'customer_phone' => $firstOrder->customer_phone,
+            'customer_address' => $firstOrder->shipping_address,
+            'status' => 'waiting_pickup',
+            'shipment_status' => 'waiting_pickup',
+            'cod_amount' => $firstOrder->total_price,
+            'shipping_cost' => 0,
+            'actual_received_amount' => $firstOrder->total_price,
+            'created_by' => $user->id,
+        ]);
+
+        $xlsxService = Mockery::mock(SimpleXlsxService::class);
+        $xlsxService->shouldReceive('readRaw')->once()->andReturn([
+            ['Mã vận đơn', 'Mã đơn hàng', 'Tổng phí'],
+            ['VTP-TRACK-STORE-2-NEW', 'OR-STORE-2-VTP-002', '45.000'],
+        ]);
+
+        $service = new ViettelPostTrackingImportService(
+            $xlsxService,
+            $this->app->make(ShipmentStatusSyncService::class)
+        );
+
+        $result = $service->processFile('fake.xlsx', $user->id, $secondAccount->id);
+
+        $this->assertTrue($result['success'], json_encode($result, JSON_UNESCAPED_UNICODE));
+        $this->assertSame(1, $result['summary']['success']);
+        $this->assertSame(0, $result['summary']['failed']);
+
+        $shipment = Shipment::withoutGlobalScope('account_id')
+            ->where('order_id', $secondOrder->id)
+            ->firstOrFail();
+
+        $this->assertSame('VD-20260720-0002', (string) $shipment->shipment_number);
+        $this->assertSame('VTP-TRACK-STORE-2-NEW', (string) $shipment->tracking_number);
     }
 
     private function createAccount(string $name): Account

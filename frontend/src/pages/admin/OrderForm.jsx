@@ -1601,6 +1601,42 @@ const parseMoneyNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const normalizeOrderPriceMultiplierDraft = (value) => {
+    const rawValue = String(value ?? '');
+    let normalizedValue = '';
+    let hasDecimalSeparator = false;
+
+    rawValue.split('').forEach((char) => {
+        if (/[0-9]/.test(char)) {
+            normalizedValue += char;
+            return;
+        }
+
+        if ((char === '.' || char === ',') && !hasDecimalSeparator) {
+            normalizedValue += '.';
+            hasDecimalSeparator = true;
+        }
+    });
+
+    return normalizedValue;
+};
+const parseOrderPriceMultiplier = (value) => {
+    const normalizedValue = normalizeOrderPriceMultiplierDraft(value);
+    if (!normalizedValue || normalizedValue === '.') {
+        return null;
+    }
+
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null;
+};
+const formatOrderPriceMultiplier = (value) => {
+    const numericValue = parseOrderPriceMultiplier(value);
+    if (numericValue === null) {
+        return 'x-';
+    }
+
+    return `x${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(numericValue)}`;
+};
 const parseSignedMoneyInputValue = (value) => {
     const rawValue = String(value ?? '').replace(/\s+/g, '');
     if (rawValue === '' || rawValue === '-') {
@@ -3611,6 +3647,205 @@ const OrderFormHeaderLabel = ({ label, tooltip = '' }) => (
     </div>
 );
 
+const OrderPriceMultiplierModal = ({
+    show,
+    selectedItems = [],
+    onClose,
+    onApply,
+    currencyFormatter = formatQuoteMoney,
+}) => {
+    const [saleMultiplierInput, setSaleMultiplierInput] = useState('3');
+    const [costMultiplierInput, setCostMultiplierInput] = useState('3');
+
+    const saleMultiplier = parseOrderPriceMultiplier(saleMultiplierInput);
+    const costMultiplier = parseOrderPriceMultiplier(costMultiplierInput);
+    const isValid = saleMultiplier !== null && costMultiplier !== null && selectedItems.length > 0;
+    const previewItems = selectedItems.slice(0, 5).map((item) => {
+        const currentSalePrice = parseMoneyNumber(item?.price, 0) || 0;
+        const currentCostPrice = parseMoneyNumber(item?.cost_price, 0) || 0;
+
+        return {
+            lineId: item?.line_id || `${item?.product_id || 'item'}-${item?.sku || ''}`,
+            name: item?.name || 'Sản phẩm',
+            currentSalePrice,
+            nextSalePrice: saleMultiplier === null ? currentSalePrice : Math.round(currentSalePrice * saleMultiplier),
+            currentCostPrice,
+            nextCostPrice: costMultiplier === null
+                ? currentCostPrice
+                : resolveRoundedImportCostValue(currentCostPrice * costMultiplier, 0),
+        };
+    });
+
+    const handleSubmit = (event) => {
+        event.preventDefault();
+        if (!isValid) return;
+
+        onApply({
+            saleMultiplier,
+            costMultiplier,
+        });
+    };
+
+    const applyPreset = (value) => {
+        const nextValue = String(value);
+        setSaleMultiplierInput(nextValue);
+        setCostMultiplierInput(nextValue);
+    };
+
+    if (!show) return null;
+
+    return (
+        <div className="fixed inset-0 z-[2400] flex items-center justify-center p-4">
+            <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={onClose}
+                className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.form
+                initial={{ opacity: 0, scale: 0.96, y: 18 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 18 }}
+                onSubmit={handleSubmit}
+                className="relative w-full max-w-3xl overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.22)]"
+            >
+                <div className="flex items-start justify-between gap-4 border-b border-primary/10 bg-primary/[0.02] px-6 py-4">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-3">
+                            <div className="inline-flex size-10 items-center justify-center rounded-sm bg-emerald-50 text-emerald-700">
+                                <span className="material-symbols-outlined text-[20px]">percent</span>
+                            </div>
+                            <div className="min-w-0">
+                                <h3 className="text-[15px] font-black uppercase tracking-[0.12em] text-primary">Nhân hệ số giá</h3>
+                                <p className="mt-1 text-[12px] font-semibold text-primary/45">
+                                    Đang chọn {selectedItems.length} dòng trong đơn hiện tại.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="inline-flex size-9 items-center justify-center rounded-sm border border-primary/10 text-primary/35 transition-all hover:border-brick/20 hover:text-brick"
+                        aria-label="Đóng"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                </div>
+
+                <div className="space-y-5 px-6 py-5">
+                    <div className="grid gap-3 md:grid-cols-2">
+                        <label className="block">
+                            <span className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Hệ số giá bán</span>
+                            <div className="flex h-12 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 focus-within:border-primary/30 focus-within:bg-white">
+                                <span className="material-symbols-outlined mr-2 text-[18px] text-emerald-700/70">sell</span>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={saleMultiplierInput}
+                                    onChange={(event) => setSaleMultiplierInput(normalizeOrderPriceMultiplierDraft(event.target.value))}
+                                    className="h-full w-full bg-transparent text-[18px] font-black text-primary focus:outline-none"
+                                    placeholder="3"
+                                    autoFocus
+                                />
+                                <span className="text-[12px] font-black uppercase tracking-[0.1em] text-primary/30">
+                                    {formatOrderPriceMultiplier(saleMultiplierInput)}
+                                </span>
+                            </div>
+                        </label>
+
+                        <label className="block">
+                            <span className="mb-1.5 block text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Hệ số giá nhập</span>
+                            <div className="flex h-12 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 focus-within:border-primary/30 focus-within:bg-white">
+                                <span className="material-symbols-outlined mr-2 text-[18px] text-sky-700/70">inventory_2</span>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={costMultiplierInput}
+                                    onChange={(event) => setCostMultiplierInput(normalizeOrderPriceMultiplierDraft(event.target.value))}
+                                    className="h-full w-full bg-transparent text-[18px] font-black text-primary focus:outline-none"
+                                    placeholder="3"
+                                />
+                                <span className="text-[12px] font-black uppercase tracking-[0.1em] text-primary/30">
+                                    {formatOrderPriceMultiplier(costMultiplierInput)}
+                                </span>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        {[2, 2.5, 3, 4].map((preset) => (
+                            <button
+                                key={preset}
+                                type="button"
+                                onClick={() => applyPreset(preset)}
+                                className="inline-flex h-8 items-center rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black text-primary/60 transition-all hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+                            >
+                                x{preset}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="overflow-hidden rounded-sm border border-primary/10">
+                        <div className="grid grid-cols-[minmax(0,1.6fr)_1fr_1fr] border-b border-primary/10 bg-primary/[0.04] px-4 py-2 text-[11px] font-black uppercase tracking-[0.1em] text-primary/45">
+                            <div>Sản phẩm</div>
+                            <div className="text-right">Giá bán</div>
+                            <div className="text-right">Giá nhập</div>
+                        </div>
+                        <div className="max-h-[260px] overflow-y-auto">
+                            {previewItems.map((item) => (
+                                <div key={item.lineId} className="grid grid-cols-[minmax(0,1.6fr)_1fr_1fr] gap-3 border-b border-primary/5 px-4 py-3 last:border-b-0">
+                                    <div className="min-w-0 text-[12px] font-bold leading-[1.45] text-primary">
+                                        <div className="truncate">{item.name}</div>
+                                    </div>
+                                    <div className="text-right text-[12px] font-bold text-primary/70">
+                                        <div>{currencyFormatter(item.currentSalePrice)}</div>
+                                        <div className="mt-1 text-emerald-700">{currencyFormatter(item.nextSalePrice)}</div>
+                                    </div>
+                                    <div className="text-right text-[12px] font-bold text-primary/45">
+                                        <div>{currencyFormatter(item.currentCostPrice)}</div>
+                                        <div className="mt-1 text-sky-700">{currencyFormatter(item.nextCostPrice)}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        {selectedItems.length > previewItems.length ? (
+                            <div className="border-t border-primary/10 bg-primary/[0.02] px-4 py-2 text-[11px] font-semibold text-primary/40">
+                                Còn {selectedItems.length - previewItems.length} dòng khác sẽ áp dụng cùng hệ số.
+                            </div>
+                        ) : null}
+                    </div>
+
+                    {(!saleMultiplier || !costMultiplier) ? (
+                        <div className="rounded-sm border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-semibold text-rose-700">
+                            Nhập hệ số lớn hơn 0 cho cả giá bán và giá nhập.
+                        </div>
+                    ) : null}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 border-t border-primary/10 bg-primary/[0.02] px-6 py-4">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        className="inline-flex h-10 items-center justify-center rounded-sm border border-primary/10 bg-white px-4 text-[13px] font-bold text-primary/55 transition-all hover:border-primary/25 hover:text-primary"
+                    >
+                        Hủy
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={!isValid}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-sm bg-primary px-4 text-[13px] font-bold text-white shadow-sm transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        <span className="material-symbols-outlined text-[16px]">check</span>
+                        Áp dụng hệ số
+                    </button>
+                </div>
+            </motion.form>
+        </div>
+    );
+};
+
 const normalizeOrderAiPreviewItem = (item, index) => ({
     ...item,
     line_key: item?.line_key || `order-ai-preview-${index + 1}`,
@@ -3898,6 +4133,7 @@ const OrderForm = () => {
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
     const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
+    const [showPriceMultiplierModal, setShowPriceMultiplierModal] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
     const [orderFormTableViewportWidth, setOrderFormTableViewportWidth] = useState(0);
     const [isCapturing, setIsCapturing] = useState(false);
@@ -3917,6 +4153,7 @@ const OrderForm = () => {
     const [notification, setNotification] = useState(null);
     const [copiedText, setCopiedText] = useState(null);
     const [activeTruncatedNameCellKey, setActiveTruncatedNameCellKey] = useState('');
+    const [editingOrderLineName, setEditingOrderLineName] = useState({ lineId: '', value: '' });
     const captureRef = useRef(null);
     const quoteCaptureRef = useRef(null);
     const orderFormTableViewportRef = useRef(null);
@@ -5890,8 +6127,92 @@ const OrderForm = () => {
         showTransientNotification('success', `Đã đổi thành công ${replacements.length} sản phẩm.`);
     }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
 
-    const isAllLineItemsSelected = formData.items.length > 0 && selectedLineItemIds.size === formData.items.length;
-    const hasAnyLineItemSelected = selectedLineItemIds.size > 0;
+    const selectedOrderLineItems = useMemo(
+        () => formData.items.filter((item) => selectedLineItemIds.has(item.line_id)),
+        [formData.items, selectedLineItemIds]
+    );
+    const isAllLineItemsSelected = formData.items.length > 0 && selectedOrderLineItems.length === formData.items.length;
+    const hasAnyLineItemSelected = selectedOrderLineItems.length > 0;
+    const priceMultiplierTargetItems = useMemo(
+        () => (
+            selectedOrderLineItems.length > 0
+                ? selectedOrderLineItems
+                : (selectedOrderLine ? [selectedOrderLine] : [])
+        ),
+        [selectedOrderLine, selectedOrderLineItems]
+    );
+    const hasPriceMultiplierTarget = priceMultiplierTargetItems.length > 0;
+
+    const handleOpenPriceMultiplierModal = useCallback((event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        if (priceMultiplierTargetItems.length === 0) {
+            showTransientNotification('error', 'Tick checkbox hoặc bấm chọn 1 dòng sản phẩm để nhân hệ số.');
+            return;
+        }
+
+        setShowPriceMultiplierModal(true);
+    }, [priceMultiplierTargetItems.length, showTransientNotification]);
+
+    const applyPriceMultiplier = useCallback(({ saleMultiplier, costMultiplier }) => {
+        const normalizedSaleMultiplier = Number(saleMultiplier);
+        const normalizedCostMultiplier = Number(costMultiplier);
+
+        if (
+            !Number.isFinite(normalizedSaleMultiplier)
+            || normalizedSaleMultiplier <= 0
+            || !Number.isFinite(normalizedCostMultiplier)
+            || normalizedCostMultiplier <= 0
+        ) {
+            showTransientNotification('error', 'Hệ số giá bán và giá nhập phải lớn hơn 0.');
+            return;
+        }
+
+        const selectedIds = new Set(priceMultiplierTargetItems.map((item) => item.line_id));
+        const affectedCount = formData.items.filter((item) => selectedIds.has(item.line_id)).length;
+
+        if (affectedCount === 0) {
+            setShowPriceMultiplierModal(false);
+            showTransientNotification('error', 'Không tìm thấy dòng sản phẩm đã chọn.');
+            return;
+        }
+
+        setFormData((prev) => {
+            const nextItems = prev.items.map((item) => {
+                if (!selectedIds.has(item.line_id)) {
+                    return item;
+                }
+
+                const nextSalePrice = Math.max(0, Math.round((parseMoneyNumber(item.price, 0) || 0) * normalizedSaleMultiplier));
+                const nextCostPrice = resolveRoundedImportCostValue((parseMoneyNumber(item.cost_price, 0) || 0) * normalizedCostMultiplier, 0);
+                const nextItem = {
+                    ...item,
+                    price: nextSalePrice,
+                    cost_price: nextCostPrice,
+                };
+
+                if (!hasActualOrderProductOverride(item)) {
+                    nextItem.base_cost_price = nextCostPrice;
+                }
+
+                return nextItem;
+            });
+
+            return {
+                ...prev,
+                items: nextItems,
+                cost_total: calculateItemsCostTotal(nextItems),
+            };
+        });
+
+        setSelectedLineItemIds(new Set());
+        setShowPriceMultiplierModal(false);
+        showTransientNotification(
+            'success',
+            `Đã nhân hệ số ${affectedCount} dòng: giá bán x${normalizedSaleMultiplier}, giá nhập x${normalizedCostMultiplier}.`
+        );
+    }, [formData.items, priceMultiplierTargetItems, showTransientNotification]);
 
     const handleApplyOrderAiPreview = useCallback(async () => {
         if (!orderAiPreview || !Array.isArray(orderAiPreview.items) || orderAiPreview.items.length === 0) {
@@ -6629,11 +6950,14 @@ const OrderForm = () => {
         const params = {
             per_page: 200,
             picker: 1,
+            quick_filter_enabled: 1,
         };
         appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
+        appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
 
         if (term) {
             params.search = term;
+            params.filter_bundle_options_by_search = 1;
         }
 
         const activeAccountId = typeof window === 'undefined'
@@ -6652,12 +6976,24 @@ const OrderForm = () => {
         productQuickSetupAbortRef.current = controller;
 
         try {
-            const response = await productApi.getAll(params, controller.signal);
+            const firstResponse = await productApi.getAll(params, controller.signal);
             if (controller.signal.aborted) return;
 
-            const nextProducts = Array.isArray(response.data.data)
-                ? buildProductQuickSetupEntries(response.data.data)
+            const allRows = Array.isArray(firstResponse.data.data)
+                ? [...firstResponse.data.data]
                 : [];
+            const lastPage = Math.max(1, Number(firstResponse.data.last_page) || 1);
+
+            for (let page = 2; page <= lastPage; page += 1) {
+                const pageResponse = await productApi.getAll({ ...params, page }, controller.signal);
+                if (controller.signal.aborted) return;
+
+                if (Array.isArray(pageResponse.data.data)) {
+                    allRows.push(...pageResponse.data.data);
+                }
+            }
+
+            const nextProducts = buildProductQuickSetupEntries(allRows);
             productQuickSetupCacheRef.current.set(cacheKey, nextProducts);
             setProductQuickSetupProducts(nextProducts);
         } catch (error) {
@@ -6671,7 +7007,9 @@ const OrderForm = () => {
         }
     }, [
         activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
         normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
     ]);
 
     useEffect(() => {
@@ -7768,9 +8106,64 @@ const OrderForm = () => {
         });
     }, []);
 
+    const openOrderLineNameEditor = useCallback((item, event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        setActiveTruncatedNameCellKey('');
+        setEditingOrderLineName({
+            lineId: item?.line_id || '',
+            value: item?.name || '',
+        });
+    }, []);
+
+    const cancelOrderLineNameEditor = useCallback((event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        setEditingOrderLineName({ lineId: '', value: '' });
+    }, []);
+
+    const commitOrderLineNameEditor = useCallback((event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        const lineId = normalizeCanvasText(editingOrderLineName.lineId);
+        const nextName = normalizeCanvasText(editingOrderLineName.value);
+
+        if (!lineId) {
+            setEditingOrderLineName({ lineId: '', value: '' });
+            return;
+        }
+
+        if (!nextName) {
+            showTransientNotification('error', 'Tên sản phẩm không được để trống.');
+            return;
+        }
+
+        setFormData((prev) => ({
+            ...prev,
+            items: prev.items.map((item) => (
+                normalizeCanvasText(item?.line_id) === lineId
+                    ? {
+                        ...item,
+                        name: nextName,
+                        snapshot_name: nextName,
+                    }
+                    : item
+            )),
+        }));
+        setEditingOrderLineName({ lineId: '', value: '' });
+        showTransientNotification('success', 'Đã sửa tên sản phẩm cho đơn này.');
+    }, [editingOrderLineName.lineId, editingOrderLineName.value, showTransientNotification]);
+
     const removeItem = React.useCallback((lineId) => {
         setSelectedOrderLineId((prev) => (
             normalizeCanvasText(prev) === normalizeCanvasText(lineId) ? '' : prev
+        ));
+        setEditingOrderLineName((prev) => (
+            normalizeCanvasText(prev.lineId) === normalizeCanvasText(lineId)
+                ? { lineId: '', value: '' }
+                : prev
         ));
         setFormData(prev => {
             const newItems = applySequentialOrderLineSortOrder(prev.items.filter(item => item.line_id !== lineId));
@@ -10254,6 +10647,7 @@ const OrderForm = () => {
                                     const canReplaceItem = Boolean(item.line_id);
                                     const isSelectedLine = normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id);
                                     const hasActualOverride = hasActualOrderProductOverride(item);
+                                    const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
 
                                     return (
                                         <div
@@ -10294,7 +10688,57 @@ const OrderForm = () => {
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex items-start gap-2">
                                                         <div className="min-w-0 flex-1">
-                                                            <div className={`text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
+                                                            {isEditingName ? (
+                                                                <div
+                                                                    className="flex min-w-0 items-center gap-1.5"
+                                                                    onClick={(event) => event.stopPropagation()}
+                                                                    onPointerDown={(event) => event.stopPropagation()}
+                                                                >
+                                                                    <input
+                                                                        type="text"
+                                                                        value={editingOrderLineName.value}
+                                                                        onChange={(event) => setEditingOrderLineName((prev) => ({ ...prev, value: event.target.value }))}
+                                                                        onKeyDown={(event) => {
+                                                                            if (event.key === 'Enter') {
+                                                                                commitOrderLineNameEditor(event);
+                                                                            }
+                                                                            if (event.key === 'Escape') {
+                                                                                cancelOrderLineNameEditor(event);
+                                                                            }
+                                                                        }}
+                                                                        className="h-9 min-w-0 flex-1 rounded-[12px] border border-primary/15 bg-white px-2.5 text-[13px] font-black text-primary shadow-inner focus:border-primary/30 focus:outline-none"
+                                                                        autoFocus
+                                                                    />
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={commitOrderLineNameEditor}
+                                                                        className="inline-flex size-9 shrink-0 items-center justify-center rounded-[12px] border border-emerald-200 bg-emerald-50 text-emerald-700"
+                                                                        title="Lưu tên"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">check</span>
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={cancelOrderLineNameEditor}
+                                                                        className="inline-flex size-9 shrink-0 items-center justify-center rounded-[12px] border border-primary/10 bg-white text-primary/35"
+                                                                        title="Hủy sửa tên"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex min-w-0 items-start gap-1.5">
+                                                                    <div className={`min-w-0 flex-1 text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => openOrderLineNameEditor(item, event)}
+                                                                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-[10px] border border-primary/10 bg-white text-primary/35 transition-all hover:border-primary/25 hover:text-primary"
+                                                                        title="Sửa tên trong đơn này"
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[14px]">edit</span>
+                                                                    </button>
+                                                                </div>
+                                                            )}
                                                             {item.replaced_from_name && (
                                                                 <p className="text-[11px] font-medium text-slate-400 mt-0.5 italic line-through truncate" title={`Đổi từ: ${item.replaced_from_name}`}>
                                                                     {item.replaced_from_name}
@@ -10559,6 +11003,7 @@ const OrderForm = () => {
                                                                 <div className="flex items-center justify-center gap-1">
                                                                     <AnimatePresence>
                                                                         {hasAnyLineItemSelected && (
+                                                                            <>
                                                                             <motion.button
                                                                                 initial={{ opacity: 0, scale: 0.5 }}
                                                                                 animate={{ opacity: 1, scale: 1 }}
@@ -10571,6 +11016,20 @@ const OrderForm = () => {
                                                                             >
                                                                                 <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
                                                                             </motion.button>
+                                                                            <motion.button
+                                                                                initial={{ opacity: 0, scale: 0.5 }}
+                                                                                animate={{ opacity: 1, scale: 1 }}
+                                                                                exit={{ opacity: 0, scale: 0.5 }}
+                                                                                type="button"
+                                                                                onClick={handleOpenPriceMultiplierModal}
+                                                                                onMouseDown={(event) => event.stopPropagation()}
+                                                                                className="order-form-header-action-icon flex items-center justify-center rounded-sm text-emerald-700 transition-all hover:bg-emerald-50 hover:text-emerald-800"
+                                                                                title="Nhân hệ số giá bán/giá nhập cho các mục đã chọn"
+                                                                                data-screenshot-hide="true"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px]">percent</span>
+                                                                            </motion.button>
+                                                                            </>
                                                                         )}
                                                                     </AnimatePresence>
                                                                     <button
@@ -10662,14 +11121,59 @@ const OrderForm = () => {
                                                             const itemNameCellKey = `${item.line_id || item.product_id || index}-name-cell`;
                                                             const nameCopyId = `${item.line_id || item.product_id}-name-${index}`;
                                                             const isNameTooltipVisible = activeTruncatedNameCellKey === itemNameCellKey;
+                                                            const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
 
                                                             return (
                                                                 <td
                                                                     key={colId}
                                                                     className="order-form-cell border border-primary/10 relative group/cell"
-                                                                    onMouseEnter={() => updateActiveTruncatedNameCell(itemNameCellKey)}
+                                                                    onMouseEnter={() => {
+                                                                        if (!isEditingName) {
+                                                                            updateActiveTruncatedNameCell(itemNameCellKey);
+                                                                        }
+                                                                    }}
                                                                     onMouseLeave={() => clearActiveTruncatedNameCell(itemNameCellKey)}
                                                                 >
+                                                                    {isEditingName ? (
+                                                                        <div
+                                                                            className="flex min-w-0 items-center gap-1.5"
+                                                                            onPointerDown={(event) => event.stopPropagation()}
+                                                                            onClick={(event) => event.stopPropagation()}
+                                                                            data-screenshot-hide="true"
+                                                                        >
+                                                                            <input
+                                                                                type="text"
+                                                                                value={editingOrderLineName.value}
+                                                                                onChange={(event) => setEditingOrderLineName((prev) => ({ ...prev, value: event.target.value }))}
+                                                                                onKeyDown={(event) => {
+                                                                                    if (event.key === 'Enter') {
+                                                                                        commitOrderLineNameEditor(event);
+                                                                                    }
+                                                                                    if (event.key === 'Escape') {
+                                                                                        cancelOrderLineNameEditor(event);
+                                                                                    }
+                                                                                }}
+                                                                                className="h-9 min-w-0 flex-1 rounded-sm border border-primary/15 bg-white px-2 text-[13px] font-bold text-primary shadow-inner focus:border-primary/30 focus:outline-none"
+                                                                                autoFocus
+                                                                            />
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={commitOrderLineNameEditor}
+                                                                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-emerald-200 bg-emerald-50 text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100"
+                                                                                title="Lưu tên"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[16px]">check</span>
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={cancelOrderLineNameEditor}
+                                                                                className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/35 transition-all hover:border-brick/20 hover:text-brick"
+                                                                                title="Hủy sửa tên"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[16px]">close</span>
+                                                                            </button>
+                                                                        </div>
+                                                                    ) : (
                                                                     <div className="flex items-center gap-2 overflow-hidden">
                                                                         <div className="flex-1 min-w-0">
                                                                             <p
@@ -10715,6 +11219,16 @@ const OrderForm = () => {
                                                                                 </div>
                                                                             ) : null}
                                                                         </div>
+                                                                        <div className="flex shrink-0 items-center gap-0.5" data-screenshot-hide="true">
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(e) => e.stopPropagation()}
+                                                                                onClick={(e) => openOrderLineNameEditor(item, e)}
+                                                                                className="p-0.5 text-primary/20 opacity-0 transition-all hover:text-primary group-hover/cell:opacity-100"
+                                                                                title="Sửa tên trong đơn này"
+                                                                            >
+                                                                                <span className="order-form-cell-copy-icon material-symbols-outlined">edit</span>
+                                                                            </button>
                                                                         {item.name && (
                                                                             <button
                                                                                 type="button"
@@ -10726,8 +11240,10 @@ const OrderForm = () => {
                                                                                 <span className="order-form-cell-copy-icon material-symbols-outlined">{copiedText === nameCopyId ? 'check' : 'content_copy'}</span>
                                                                             </button>
                                                                         )}
+                                                                        </div>
                                                                     </div>
-                                                                    {isNameTooltipVisible && (
+                                                                    )}
+                                                                    {!isEditingName && isNameTooltipVisible && (
                                                                         <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl pointer-events-none z-50 w-80 text-[12px] font-bold border border-white/10 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
                                                                             <div>{item.name}</div>
                                                                             {hasActualOrderProductOverride(item) ? (
@@ -10896,6 +11412,21 @@ const OrderForm = () => {
                                             {showActualProductSection ? 'close' : 'local_shipping'}
                                         </span>
                                         {showActualProductSection ? 'Tắt gửi SP khác' : 'Gửi SP khác'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenPriceMultiplierModal}
+                                        disabled={!hasPriceMultiplierTarget}
+                                        className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-emerald-700 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                        data-screenshot-hide="true"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">percent</span>
+                                        Nhân hệ số
+                                        {hasPriceMultiplierTarget ? (
+                                            <span className="rounded-full bg-emerald-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                                {priceMultiplierTargetItems.length}
+                                            </span>
+                                        ) : null}
                                     </button>
                                     {showActualProductSection ? (
                                         <div className="hidden text-[12px] font-semibold text-primary/45 lg:block">
@@ -11411,7 +11942,7 @@ const OrderForm = () => {
                     </div>
                 </div>
 
-                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-6' : 'grid-cols-5'}`}>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null)}
@@ -11439,17 +11970,27 @@ const OrderForm = () => {
                     <button
                         type="button"
                         onClick={() => setShowBulkReplaceModal(true)}
-                        disabled={selectedLineItemIds.size === 0 || saving}
+                        disabled={!hasAnyLineItemSelected || saving}
                         title="Đổi hàng loạt"
                         aria-label="Đổi hàng loạt"
                         className="relative inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-primary/10 bg-white px-2 text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
-                        {selectedLineItemIds.size > 0 && (
+                        {hasAnyLineItemSelected && (
                             <span className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brick px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-[#F8FAFC]">
-                                {selectedLineItemIds.size}
+                                {selectedOrderLineItems.length}
                             </span>
                         )}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleOpenPriceMultiplierModal}
+                        disabled={!hasPriceMultiplierTarget || saving}
+                        title="Nhân hệ số"
+                        aria-label="Nhân hệ số"
+                        className="relative inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-emerald-200 bg-emerald-50 px-2 text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">percent</span>
                     </button>
                     <button
                         type="button"
@@ -11670,9 +12211,16 @@ const OrderForm = () => {
             <ProductBulkReplaceModal
                 show={showBulkReplaceModal}
                 onClose={() => setShowBulkReplaceModal(false)}
-                selectedItems={formData.items.filter(item => selectedLineItemIds.has(item.line_id))}
+                selectedItems={selectedOrderLineItems}
                 attributes={productQuickFilterAttributes}
                 onApply={applyBulkReplacements}
+                currencyFormatter={formatQuoteMoney}
+            />
+            <OrderPriceMultiplierModal
+                show={showPriceMultiplierModal}
+                onClose={() => setShowPriceMultiplierModal(false)}
+                selectedItems={priceMultiplierTargetItems}
+                onApply={applyPriceMultiplier}
                 currencyFormatter={formatQuoteMoney}
             />
         </div>

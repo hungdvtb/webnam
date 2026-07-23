@@ -14,13 +14,9 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       // Listen on all interfaces so Vite can serve both localhost and LAN access.
-      // Use 127.0.0.1 for HMR to avoid IPv6/localhost resolution instability on some Windows machines.
       host: true,
       port: 3003,
       strictPort: true,
-      hmr: {
-        host: '127.0.0.1',
-      },
       // Polling can be heavy on resources; disabling it unless strictly needed.
       watch: {
         usePolling: false,

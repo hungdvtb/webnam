@@ -75,6 +75,7 @@ function getStorefrontRequestContext(searchParams, fallbackPublicHost = '') {
   return {
     publicHost: getSearchParamValue(searchParams, 'public_host', 'publicHost') || fallbackPublicHost,
     siteCode: getSearchParamValue(searchParams, 'site_code', 'siteCode'),
+    theme: getSearchParamValue(searchParams, 'theme', 'storefront_theme'),
   };
 }
 

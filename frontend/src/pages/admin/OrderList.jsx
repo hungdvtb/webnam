@@ -47,6 +47,7 @@ import {
 import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
+    getOrderItemOriginalName,
 } from '../../utils/orderItemDisplay';
 import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
@@ -378,6 +379,7 @@ const OrderProductsPortal = ({
                     {items.map((item, idx) => {
                         const name = getOrderItemDisplayName(item);
                         const sku = getOrderItemDisplaySku(item) || null;
+                        const originalName = getOrderItemOriginalName(item, name);
                         const price = item.price ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(item.price) : null;
 
                         return (
@@ -399,6 +401,11 @@ const OrderProductsPortal = ({
                                             <span className="material-symbols-outlined text-[16px]">{copiedText === name ? 'check_circle' : 'content_copy'}</span>
                                         </button>
                                     </div>
+                                    {originalName && (
+                                        <div className="mt-1 truncate text-[11px] font-semibold text-primary/45">
+                                            {`\u0054\u00ean g\u1ed1c: ${originalName}`}
+                                        </div>
+                                    )}
                                     {sku && (
                                         <div className="flex items-center gap-2 group/sku_p mt-0.5">
                                             <span className="text-[12px] font-mono font-black text-orange-600/70 tracking-tight">#{sku}</span>

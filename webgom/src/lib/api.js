@@ -156,8 +156,16 @@ export async function getWebCategory(slug, options = {}) {
 }
 
 export async function getWebProductDetail(slug, options = {}) {
+    const urlParams = new URLSearchParams();
+    const theme = String(options.theme || options.storefrontTheme || '').trim();
+
+    if (theme) {
+        urlParams.set('theme', theme);
+    }
+
+    const query = urlParams.toString();
     // Cache for 1 minute
-    return fetchFromApi(`/web-api/products/${slug}`, { next: { revalidate: 60 }, publicHost: options.publicHost, siteCode: options.siteCode });
+    return fetchFromApi(`/web-api/products/${slug}${query ? `?${query}` : ''}`, { next: { revalidate: 60 }, publicHost: options.publicHost, siteCode: options.siteCode });
 }
 
 export async function getWebProductBundleOptionDetail(slug, params = {}, options = {}) {

@@ -647,19 +647,13 @@ const productThemeTypes = [
 
 const StorefrontThemeManager = ({
     themes = [],
-    cloneDraft,
-    onCloneDraftChange,
-    onDuplicateTheme,
     onRenameTheme,
     savingThemeId,
 }) => {
-    const activeThemes = themes.filter((theme) => theme.status !== false);
-    const selectedSourceId = cloneDraft.source_theme_id || activeThemes[0]?.id || themes[0]?.id || '';
     const [nameDrafts, setNameDrafts] = useState({});
     const [activeProductType, setActiveProductType] = useState('simple');
     const activeTypeMeta = productThemeTypes.find((type) => type.id === activeProductType) || productThemeTypes[0];
     const themesForActiveType = themes.filter((theme) => (theme.product_type || 'simple') === activeProductType);
-    const productTypeLabel = (productType) => productThemeTypes.find((type) => type.id === (productType || 'simple'))?.label || 'Sản phẩm đơn';
 
     useEffect(() => {
         const nextDrafts = {};
@@ -694,54 +688,6 @@ const StorefrontThemeManager = ({
                     ))}
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_170px] gap-3 items-end rounded-sm border border-primary/10 bg-primary/[0.02] p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div>
-                            <label className={labelClasses}>Nhân bản từ</label>
-                            <select
-                                value={selectedSourceId}
-                                onChange={(event) => onCloneDraftChange({ source_theme_id: event.target.value })}
-                                className={inputClasses}
-                            >
-                                {themes.map((theme) => (
-                                    <option key={theme.id} value={theme.id}>
-                                        {theme.name} ({theme.code}) - {productTypeLabel(theme.product_type)}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                        <div>
-                            <label className={labelClasses}>Tên giao diện mới</label>
-                            <input
-                                type="text"
-                                value={cloneDraft.name}
-                                onChange={(event) => onCloneDraftChange({ name: event.target.value })}
-                                className={inputClasses}
-                                placeholder="VD: Giao diện số 2"
-                            />
-                        </div>
-                        <div>
-                            <label className={labelClasses}>Mã giao diện</label>
-                            <input
-                                type="text"
-                                value={cloneDraft.code}
-                                onChange={(event) => onCloneDraftChange({ code: event.target.value })}
-                                className={inputClasses}
-                                placeholder="VD: giao-dien-so-2"
-                            />
-                        </div>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={() => onDuplicateTheme(selectedSourceId, activeProductType)}
-                        disabled={savingThemeId === 'clone' || !selectedSourceId}
-                        className="h-10 px-4 rounded-sm bg-primary text-white text-[12px] font-black uppercase tracking-wider hover:bg-primary/90 transition-all disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                    >
-                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                        {savingThemeId === 'clone' ? 'Đang nhân bản' : `Nhân bản ${activeTypeMeta.label}`}
-                    </button>
-                </div>
-
                 <div className="rounded-sm border border-primary/10 bg-white px-4 py-3 text-[12px] font-bold text-primary/50">
                     Đang quản lý giao diện cho: <span className="text-primary">{activeTypeMeta.label}</span>
                 </div>
@@ -751,7 +697,6 @@ const StorefrontThemeManager = ({
                         <div className="md:col-span-2 rounded-sm border border-dashed border-primary/15 bg-white px-6 py-10 text-center">
                             <span className="material-symbols-outlined text-[34px] text-primary/25">{activeTypeMeta.icon}</span>
                             <p className="mt-3 text-[13px] font-black text-primary">Chưa có giao diện cho {activeTypeMeta.label.toLowerCase()}</p>
-                            <p className="mt-1 text-[12px] text-primary/45">Nhân bản từ giao diện có sẵn để tạo mẫu riêng cho loại sản phẩm này.</p>
                         </div>
                     ) : themesForActiveType.map((theme) => {
                         const draftName = nameDrafts[theme.id] ?? theme.name ?? '';
@@ -789,9 +734,6 @@ const StorefrontThemeManager = ({
                                     {isRenaming ? 'Đang lưu' : 'Lưu tên'}
                                 </button>
                             </div>
-                            {theme.cloned_from ? (
-                                <p className="mt-2 text-[11px] font-bold text-primary/35">Nhân bản từ: {theme.cloned_from.name}</p>
-                            ) : null}
                         </div>
                         );
                     })}
@@ -1020,7 +962,6 @@ const SiteSettings = () => {
     const [footerMenuGroups, setFooterMenuGroups] = useState(createDefaultFooterMenuGroups());
     const [storeLocations, setStoreLocations] = useState([]);
     const [storefrontThemes, setStorefrontThemes] = useState([]);
-    const [themeCloneDraft, setThemeCloneDraft] = useState({ source_theme_id: '', name: '', code: '' });
     const [savingThemeId, setSavingThemeId] = useState(null);
     const [orderQuickPickAttributes, setOrderQuickPickAttributes] = useState([]);
     const [copiedRoute, setCopiedRoute] = useState('');
@@ -1041,12 +982,7 @@ const SiteSettings = () => {
     const fetchStorefrontThemes = useCallback(async () => {
         try {
             const response = await cmsApi.storefrontThemes.getAll();
-            const nextThemes = response.data || [];
-            setStorefrontThemes(nextThemes);
-            setThemeCloneDraft((prev) => ({
-                ...prev,
-                source_theme_id: prev.source_theme_id || nextThemes.find((theme) => theme.status !== false)?.id || nextThemes[0]?.id || '',
-            }));
+            setStorefrontThemes(response.data || []);
         } catch (error) {
             console.error('Error fetching storefront themes', error);
         }
@@ -1688,60 +1624,6 @@ const SiteSettings = () => {
             next.splice(nextIndex, 0, picked);
             return withStoreLocationOrder(next);
         });
-    };
-
-    const updateThemeCloneDraft = (patch) => {
-        setThemeCloneDraft((prev) => ({ ...prev, ...patch }));
-    };
-
-    const handleDuplicateStorefrontTheme = async (sourceThemeId, productType = 'simple') => {
-        if (!sourceThemeId) {
-            showModal({ title: 'Thiếu giao diện nguồn', content: 'Vui lòng chọn giao diện cần nhân bản.', type: 'error' });
-            return;
-        }
-
-        const name = themeCloneDraft.name.trim();
-        if (!name) {
-            showModal({ title: 'Thiếu tên giao diện', content: 'Vui lòng nhập tên giao diện mới.', type: 'error' });
-            return;
-        }
-
-        setSavingThemeId('clone');
-        try {
-            const response = await cmsApi.storefrontThemes.duplicate(sourceThemeId, {
-                name,
-                code: themeCloneDraft.code.trim(),
-                product_type: productType,
-            });
-            const createdTheme = response.data?.theme;
-            const sourceCopy = response.data?.source_copy;
-
-            await fetchStorefrontThemes();
-            setThemeCloneDraft({
-                source_theme_id: sourceThemeId,
-                name: '',
-                code: '',
-            });
-
-            const copyNote = sourceCopy?.copied
-                ? `Đã copy folder theme sang ${sourceCopy.target_path || createdTheme?.folder || createdTheme?.code}.`
-                : `Đã tạo bản ghi theme. Folder source chưa được copy tự động (${sourceCopy?.reason || 'unknown'}).`;
-
-            showModal({
-                title: 'Đã nhân bản giao diện',
-                content: `${createdTheme?.name || name} đã sẵn sàng để gán cho cửa hàng.\n${copyNote}`,
-                type: 'success',
-            });
-        } catch (error) {
-            console.error('Duplicate storefront theme failed', error);
-            showModal({
-                title: 'Lỗi nhân bản',
-                content: error?.response?.data?.message || 'Không thể nhân bản giao diện. Vui lòng thử lại.',
-                type: 'error',
-            });
-        } finally {
-            setSavingThemeId(null);
-        }
     };
 
     const handleRenameStorefrontTheme = async (themeId, nextName) => {
@@ -2708,9 +2590,6 @@ const SiteSettings = () => {
                         <div className="space-y-6">
                             <StorefrontThemeManager
                                 themes={storefrontThemes}
-                                cloneDraft={themeCloneDraft}
-                                onCloneDraftChange={updateThemeCloneDraft}
-                                onDuplicateTheme={handleDuplicateStorefrontTheme}
                                 onRenameTheme={handleRenameStorefrontTheme}
                                 savingThemeId={savingThemeId}
                             />

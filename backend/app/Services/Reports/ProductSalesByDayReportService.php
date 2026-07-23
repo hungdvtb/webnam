@@ -329,10 +329,10 @@ class ProductSalesByDayReportService
 
         return $query
             ->selectRaw($effectiveProductIdExpression . ' AS child_product_id')
-            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS child_product_name_snapshot')
-            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS child_product_sku_snapshot')
-            ->selectRaw('COALESCE(child_products.name, ' . $effectiveProductNameSnapshotExpression . ') AS child_product_name')
-            ->selectRaw('COALESCE(child_products.sku, ' . $effectiveProductSkuSnapshotExpression . ') AS child_product_sku')
+            ->selectRaw('MIN(' . $effectiveProductNameSnapshotExpression . ') AS child_product_name_snapshot')
+            ->selectRaw('MIN(' . $effectiveProductSkuSnapshotExpression . ') AS child_product_sku_snapshot')
+            ->selectRaw('COALESCE(child_products.name, MIN(' . $effectiveProductNameSnapshotExpression . ')) AS child_product_name')
+            ->selectRaw('COALESCE(child_products.sku, MIN(' . $effectiveProductSkuSnapshotExpression . ')) AS child_product_sku')
             ->selectRaw('parent_products.id AS parent_product_id')
             ->selectRaw('parent_products.name AS parent_product_name')
             ->selectRaw('parent_products.sku AS parent_product_sku')
@@ -348,8 +348,6 @@ class ProductSalesByDayReportService
                 'parent_products.sku'
             )
             ->groupByRaw($effectiveProductIdExpression)
-            ->groupByRaw($effectiveProductNameSnapshotExpression)
-            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->groupByRaw($reportDateExpression)
             ->orderByRaw($reportDateExpression . ' DESC')
             ->orderBy('child_product_name');

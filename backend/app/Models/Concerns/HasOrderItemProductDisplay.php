@@ -97,15 +97,15 @@ trait HasOrderItemProductDisplay
 
     public function getDisplayNameAttribute(): string
     {
-        return $this->getCurrentProductNameAttribute()
-            ?? $this->getSnapshotNameAttribute()
+        return $this->getSnapshotNameAttribute()
+            ?? $this->getCurrentProductNameAttribute()
             ?? ('San pham #' . ((int) ($this->attributes['product_id'] ?? 0) ?: (int) $this->getKey()));
     }
 
     public function getDisplaySkuAttribute(): ?string
     {
-        return $this->getCurrentProductSkuAttribute()
-            ?? $this->getSnapshotSkuAttribute();
+        return $this->getSnapshotSkuAttribute()
+            ?? $this->getCurrentProductSkuAttribute();
     }
 
     public function getActualDisplayNameAttribute(): ?string
@@ -114,8 +114,8 @@ trait HasOrderItemProductDisplay
             return null;
         }
 
-        return $this->getCurrentActualProductNameAttribute()
-            ?? $this->getActualSnapshotNameAttribute()
+        return $this->getActualSnapshotNameAttribute()
+            ?? $this->getCurrentActualProductNameAttribute()
             ?? ('San pham #' . (int) ($this->attributes['actual_product_id'] ?? 0));
     }
 
@@ -125,8 +125,8 @@ trait HasOrderItemProductDisplay
             return null;
         }
 
-        return $this->getCurrentActualProductSkuAttribute()
-            ?? $this->getActualSnapshotSkuAttribute();
+        return $this->getActualSnapshotSkuAttribute()
+            ?? $this->getCurrentActualProductSkuAttribute();
     }
 
     public function getHasProductSnapshotMismatchAttribute(): bool

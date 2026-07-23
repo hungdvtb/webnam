@@ -35,6 +35,9 @@ import {
     getOrderItemActualDisplaySku,
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
+    getOrderItemCurrentName,
+    getOrderItemCurrentSku,
+    getOrderItemOriginalName,
     hasOrderItemActualProductOverride,
     getOrderItemSnapshotName,
     getOrderItemSnapshotSku,
@@ -695,6 +698,7 @@ const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? t
 });
 
 const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
+const getOrderLineOriginalNameLabel = (item) => getOrderItemOriginalName(item, item?.name || '');
 const appendUrlVersion = (url, version) => {
     const normalizedUrl = String(url ?? '').trim();
     const normalizedVersion = String(version ?? '').trim();
@@ -2432,6 +2436,8 @@ const createOrderLineItem = (payload = {}) => {
         actual_sku,
         actual_snapshot_name,
         actual_snapshot_sku,
+        original_name,
+        original_sku,
         unit_name,
         sort_order,
         quantity = 1,
@@ -2464,6 +2470,14 @@ const createOrderLineItem = (payload = {}) => {
         fallbackName: resolvedName,
     });
     const resolvedSnapshotSku = normalizeCanvasText(snapshot_sku ?? sku) || resolvedSku;
+    const resolvedOriginalName = resolveOrderLineItemDisplayName({
+        name: original_name ?? payload.catalog_name ?? payload.current_product_name ?? payload.product?.name ?? resolvedName,
+        options: normalizedOptions,
+        fallbackName: resolvedName,
+    });
+    const resolvedOriginalSku = normalizeCanvasText(
+        original_sku ?? payload.catalog_sku ?? payload.current_product_sku ?? payload.product?.sku ?? resolvedSku
+    ) || resolvedSku;
     const resolvedCostPrice = resolveRoundedImportCostValue(cost_price, 0);
     const normalizedActualProductId = Number(actual_product_id) || 0;
     const resolvedActualName = resolveOrderLineItemDisplayName({
@@ -2487,6 +2501,8 @@ const createOrderLineItem = (payload = {}) => {
         sku: resolvedSku,
         snapshot_name: resolvedSnapshotName,
         snapshot_sku: resolvedSnapshotSku,
+        original_name: resolvedOriginalName,
+        original_sku: resolvedOriginalSku,
         unit_name: resolveOrderUnitLabel(payload, { unit_name }),
         sort_order: Math.max(1, Number(sort_order) || 1),
         quantity: normalizeOrderLineQuantity(quantity),
@@ -3448,7 +3464,14 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                     </td>
                                 )}
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{index + 1}</td>
-                                <td className="border border-[#D5CEC9] px-4 py-3 align-middle text-[12px] leading-6">{item.name}</td>
+                                <td className="border border-[#D5CEC9] px-4 py-3 align-middle text-[12px] leading-6">
+                                    <div className="font-semibold text-slate-900">{item.name}</div>
+                                    {getOrderLineOriginalNameLabel(item) ? (
+                                        <div className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
+                                            {`\u0054\u00ean g\u1ed1c: ${getOrderLineOriginalNameLabel(item)}`}
+                                        </div>
+                                    ) : null}
+                                </td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{getOrderUnitDisplay(item)}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 text-[12px] text-right">{formatQuoteMoney(item.price)}</td>
@@ -4127,6 +4150,7 @@ const OrderForm = () => {
     const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
+    const [productQuickSetupLoading, setProductQuickSetupLoading] = useState(false);
     const [productQuickSetupLatestEntries, setProductQuickSetupLatestEntries] = useState([]);
     const [productQuickFilterScopeProducts, setProductQuickFilterScopeProducts] = useState([]);
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
@@ -4521,11 +4545,22 @@ const OrderForm = () => {
                     item.options,
                     extractOrderItemOptionsFromProductPayload(latest)
                 );
+                const latestName = resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest);
+                const latestSku = normalizeCanvasText(latest.display_sku || latest.sku) || item.sku;
+                const hasCustomDisplayName = Boolean(getOrderLineOriginalNameLabel(item));
+                const nextName = hasCustomDisplayName ? item.name : latestName;
+                const nextSnapshotName = hasCustomDisplayName
+                    ? (item.snapshot_name || item.name)
+                    : latestName;
 
                 return {
                     ...item,
-                    name: resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest),
-                    sku: normalizeCanvasText(latest.display_sku || latest.sku) || item.sku,
+                    name: nextName,
+                    sku: latestSku,
+                    snapshot_name: nextSnapshotName,
+                    snapshot_sku: hasCustomDisplayName ? (item.snapshot_sku || item.sku) : latestSku,
+                    original_name: latestName,
+                    original_sku: latestSku,
                     unit_name: resolveOrderUnitLabel(latest, item),
                     price: Number(latest.price ?? item.price ?? 0) || 0,
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
@@ -6944,6 +6979,7 @@ const OrderForm = () => {
         const activeFilterValue = normalizedProductQuickFilterValues[0];
         if (!activeFilterAttribute || !activeFilterValue) {
             setProductQuickSetupProducts([]);
+            setProductQuickSetupLoading(false);
             return;
         }
 
@@ -6969,11 +7005,14 @@ const OrderForm = () => {
         const cachedProducts = productQuickSetupCacheRef.current.get(cacheKey);
         if (cachedProducts) {
             setProductQuickSetupProducts(cachedProducts);
+            setProductQuickSetupLoading(false);
             return;
         }
 
         const controller = new AbortController();
         productQuickSetupAbortRef.current = controller;
+        setProductQuickSetupLoading(true);
+        let partialProducts = [];
 
         try {
             const firstResponse = await productApi.getAll(params, controller.signal);
@@ -6983,26 +7022,42 @@ const OrderForm = () => {
                 ? [...firstResponse.data.data]
                 : [];
             const lastPage = Math.max(1, Number(firstResponse.data.last_page) || 1);
+            partialProducts = buildProductQuickSetupEntries(allRows);
+            setProductQuickSetupProducts(partialProducts);
 
-            for (let page = 2; page <= lastPage; page += 1) {
-                const pageResponse = await productApi.getAll({ ...params, page }, controller.signal);
+            const remainingPages = Array.from(
+                { length: Math.max(0, lastPage - 1) },
+                (_, index) => index + 2
+            );
+            const pageBatchSize = 4;
+
+            for (let pageIndex = 0; pageIndex < remainingPages.length; pageIndex += pageBatchSize) {
+                const pageBatch = remainingPages.slice(pageIndex, pageIndex + pageBatchSize);
+                const pageResponses = await Promise.all(
+                    pageBatch.map((page) => productApi.getAll({ ...params, page }, controller.signal))
+                );
+
                 if (controller.signal.aborted) return;
 
-                if (Array.isArray(pageResponse.data.data)) {
-                    allRows.push(...pageResponse.data.data);
-                }
+                pageResponses.forEach((pageResponse) => {
+                    if (Array.isArray(pageResponse.data.data)) {
+                        allRows.push(...pageResponse.data.data);
+                    }
+                });
+
+                partialProducts = buildProductQuickSetupEntries(allRows);
+                setProductQuickSetupProducts(partialProducts);
             }
 
-            const nextProducts = buildProductQuickSetupEntries(allRows);
-            productQuickSetupCacheRef.current.set(cacheKey, nextProducts);
-            setProductQuickSetupProducts(nextProducts);
+            productQuickSetupCacheRef.current.set(cacheKey, partialProducts);
         } catch (error) {
             if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
             console.error('Error fetching quick setup products', error);
-            setProductQuickSetupProducts([]);
+            setProductQuickSetupProducts(partialProducts);
         } finally {
             if (productQuickSetupAbortRef.current === controller) {
                 productQuickSetupAbortRef.current = null;
+                setProductQuickSetupLoading(false);
             }
         }
     }, [
@@ -7265,6 +7320,7 @@ const OrderForm = () => {
     useEffect(() => {
         if (!showProductQuickSetupPanel || !hasActiveProductQuickFilter) {
             setProductQuickSetupProducts([]);
+            setProductQuickSetupLoading(false);
             return;
         }
 
@@ -7293,6 +7349,7 @@ const OrderForm = () => {
             setShowProductQuickSetupPanel(false);
             setProductQuickSetupSearchTerm('');
             setProductQuickSetupProducts([]);
+            setProductQuickSetupLoading(false);
             return;
         }
 
@@ -7309,6 +7366,7 @@ const OrderForm = () => {
     useEffect(() => {
         setProductQuickSetupSearchTerm('');
         setProductQuickSetupProducts([]);
+        setProductQuickSetupLoading(false);
     }, [activeProductQuickSetupKey]);
 
     useEffect(() => {
@@ -7499,6 +7557,12 @@ const OrderForm = () => {
                     fallbackName,
                 });
                 const displaySku = getOrderItemDisplaySku(item, 'N/A');
+                const originalName = resolveOrderLineItemDisplayName({
+                    name: getOrderItemCurrentName(item) || item.product?.name || '',
+                    options: item.options || {},
+                    fallbackName: '',
+                });
+                const originalSku = getOrderItemCurrentSku(item) || item.product?.sku || '';
                 const snapshotName = resolveOrderLineItemDisplayName({
                     name: getOrderItemSnapshotName(item) || displayName,
                     options: item.options || {},
@@ -7514,6 +7578,8 @@ const OrderForm = () => {
                     sku: displaySku,
                     snapshot_name: snapshotName,
                     snapshot_sku: snapshotSku,
+                    original_name: originalName || displayName,
+                    original_sku: originalSku || displaySku,
                     actual_name: !isDuplicating && hasActualOrderProductOverride(item)
                         ? getOrderItemActualDisplayName(item, item?.actual_product_name_snapshot || '')
                         : '',
@@ -7628,12 +7694,12 @@ const OrderForm = () => {
             });
             setFormData((prev) => ({
                 ...prev,
-                items: normalizedMappedItems,
+                items: resolvedLoadedItems,
                 cost_total: mappedCostTotal,
-                supplement_items: mappedSupplementItems,
+                supplement_items: resolvedSupplementItems,
             }));
             setRegionType(order.district ? 'old' : 'new');
-            void refreshOrderItemInventorySnapshot(normalizedMappedItems);
+            void refreshOrderItemInventorySnapshot(resolvedLoadedItems);
 
         } catch (error) {
             console.error("Error fetching order", error);
@@ -7679,6 +7745,8 @@ const OrderForm = () => {
                 product_id: item.product_id,
                 name: item.name || item.product_name || `Sản phẩm #${item.product_id}`,
                 sku: item.sku || item.product_sku || 'N/A',
+                original_name: item.product_name || item.product?.name || item.name || '',
+                original_sku: item.product_sku || item.product?.sku || item.sku || '',
                 unit_name: resolveOrderUnitLabel(item, item?.product),
                 quantity: normalizeOrderLineQuantity(item.quantity),
                 price: Number(item.price) || 0,
@@ -8146,6 +8214,8 @@ const OrderForm = () => {
                 normalizeCanvasText(item?.line_id) === lineId
                     ? {
                         ...item,
+                        original_name: item.original_name || item.name,
+                        original_sku: item.original_sku || item.sku,
                         name: nextName,
                         snapshot_name: nextName,
                     }
@@ -8371,6 +8441,9 @@ const OrderForm = () => {
             const tableHeaderFontSize = 25;
             const rowTextFontSize = 20;
             const rowLineHeight = 28;
+            const rowMetaTextFontSize = 14;
+            const rowMetaLineHeight = 20;
+            const rowNameMetaGap = 4;
             const rowMinHeight = 66;
             const rowPaddingY = 16;
             const nameCellPaddingX = 18;
@@ -8454,8 +8527,22 @@ const OrderForm = () => {
             measureCtx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
 
             const rowHeights = formData.items.map((item) => {
+                const originalNameLabel = getOrderLineOriginalNameLabel(item);
+                measureCtx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 const lines = wrapCanvasText(measureCtx, item.name || '', nameColWidth - (nameCellPaddingX * 2));
-                return Math.max(rowMinHeight, (lines.length * rowLineHeight) + (rowPaddingY * 2));
+                measureCtx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
+                const originalLines = originalNameLabel
+                    ? wrapCanvasText(
+                        measureCtx,
+                        `\u0054\u00ean g\u1ed1c: ${originalNameLabel}`,
+                        nameColWidth - (nameCellPaddingX * 2)
+                    )
+                    : [];
+                const metaHeight = originalLines.length > 0
+                    ? rowNameMetaGap + (originalLines.length * rowMetaLineHeight)
+                    : 0;
+
+                return Math.max(rowMinHeight, (lines.length * rowLineHeight) + metaHeight + (rowPaddingY * 2));
             });
 
             const itemsHeight = rowHeights.reduce((sum, height) => sum + height, 0);
@@ -8626,8 +8713,17 @@ const OrderForm = () => {
             let currentY = bodyStartY;
             formData.items.forEach((item, index) => {
                 const rowHeight = rowHeights[index];
+                const originalNameLabel = getOrderLineOriginalNameLabel(item);
                 ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - (nameCellPaddingX * 2));
+                ctx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
+                const originalNameLines = originalNameLabel
+                    ? wrapCanvasText(
+                        ctx,
+                        `\u0054\u00ean g\u1ed1c: ${originalNameLabel}`,
+                        nameColWidth - (nameCellPaddingX * 2)
+                    )
+                    : [];
 
                 ctx.fillStyle = index % 2 === 0 ? '#FFFFFF' : '#FBF8F4';
                 ctx.fillRect(xIndex, currentY, pageWidth - xIndex, rowHeight);
@@ -8641,9 +8737,26 @@ const OrderForm = () => {
 
                 ctx.fillStyle = textPrimary;
                 ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
-                const nameBlockHeight = nameLines.length * rowLineHeight;
+                const nameTextHeight = nameLines.length * rowLineHeight;
+                const originalNameHeight = originalNameLines.length > 0
+                    ? rowNameMetaGap + (originalNameLines.length * rowMetaLineHeight)
+                    : 0;
+                const nameBlockHeight = nameTextHeight + originalNameHeight;
                 const nameTextY = currentY + ((rowHeight - nameBlockHeight) / 2);
                 drawTextLines(ctx, nameLines, xName + nameCellPaddingX, nameTextY, rowLineHeight, 'left');
+                if (originalNameLines.length > 0) {
+                    ctx.fillStyle = textMuted;
+                    ctx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
+                    drawTextLines(
+                        ctx,
+                        originalNameLines,
+                        xName + nameCellPaddingX,
+                        nameTextY + nameTextHeight + rowNameMetaGap,
+                        rowMetaLineHeight,
+                        'left'
+                    );
+                    ctx.fillStyle = textPrimary;
+                }
 
                 const valueY = currentY + (rowHeight / 2);
                 ctx.textAlign = 'center';
@@ -9594,6 +9707,12 @@ const OrderForm = () => {
                                                 ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này.`
                                                 : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                         </div>
+                                        {productQuickSetupLoading && (
+                                            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-primary/10 bg-primary/[0.03] px-2.5 py-1 text-[10px] font-bold text-primary/45">
+                                                <span className="material-symbols-outlined animate-refresh-spin text-[12px]">refresh</span>
+                                                Đang tải thêm sản phẩm...
+                                            </div>
+                                        )}
 
                                         <div ref={productQuickSetupListRef} className="custom-scrollbar mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-1">
                                             {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
@@ -10161,6 +10280,12 @@ const OrderForm = () => {
                                                                         ? `Đang lưu ${activeProductQuickSetupItems.length} sản phẩm cho bộ lọc này.`
                                                                         : 'Chọn vài sản phẩm để tạo lớp lọc nhanh cho thuộc tính đang chọn.'}
                                                                 </div>
+                                                                {productQuickSetupLoading && (
+                                                                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-primary/10 bg-primary/[0.03] px-2.5 py-1 text-[10px] font-bold text-primary/45">
+                                                                        <span className="material-symbols-outlined animate-refresh-spin text-[12px]">refresh</span>
+                                                                        Đang tải thêm sản phẩm...
+                                                                    </div>
+                                                                )}
 
                                                                 <div ref={productQuickSetupListRef} className="mt-3 max-h-[420px] overflow-y-auto custom-scrollbar space-y-2 pr-1">
                                                                     {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
@@ -10648,6 +10773,7 @@ const OrderForm = () => {
                                     const isSelectedLine = normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id);
                                     const hasActualOverride = hasActualOrderProductOverride(item);
                                     const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
+                                    const originalNameLabel = getOrderLineOriginalNameLabel(item);
 
                                     return (
                                         <div
@@ -10744,6 +10870,11 @@ const OrderForm = () => {
                                                                     {item.replaced_from_name}
                                                                 </p>
                                                             )}
+                                                            {originalNameLabel ? (
+                                                                <div className="mt-1 truncate text-[11px] font-semibold leading-[1.35] text-primary/40">
+                                                                    {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
+                                                                </div>
+                                                            ) : null}
                                                             {hasActualOverride ? (
                                                                 <div className="mt-1 text-[12px] font-semibold leading-[1.4] text-rose-700">
                                                                     {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}
@@ -11122,6 +11253,7 @@ const OrderForm = () => {
                                                             const nameCopyId = `${item.line_id || item.product_id}-name-${index}`;
                                                             const isNameTooltipVisible = activeTruncatedNameCellKey === itemNameCellKey;
                                                             const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
+                                                            const originalNameLabel = getOrderLineOriginalNameLabel(item);
 
                                                             return (
                                                                 <td
@@ -11182,6 +11314,11 @@ const OrderForm = () => {
                                                                             >
                                                                                 {item.name}
                                                                             </p>
+                                                                            {originalNameLabel ? (
+                                                                                <p className="order-form-cell-meta truncate font-semibold text-primary/35">
+                                                                                    {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
+                                                                                </p>
+                                                                            ) : null}
                                                                             {item.replaced_from_name && (
                                                                                 <p className="text-[11px] font-medium text-slate-400 mt-0.5 italic line-through truncate" title={`Đổi từ: ${item.replaced_from_name}`}>
                                                                                     {item.replaced_from_name}
@@ -11246,6 +11383,11 @@ const OrderForm = () => {
                                                                     {!isEditingName && isNameTooltipVisible && (
                                                                         <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl pointer-events-none z-50 w-80 text-[12px] font-bold border border-white/10 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
                                                                             <div>{item.name}</div>
+                                                                            {originalNameLabel ? (
+                                                                                <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/70">
+                                                                                    {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
+                                                                                </div>
+                                                                            ) : null}
                                                                             {hasActualOrderProductOverride(item) ? (
                                                                                 <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-rose-200">
                                                                                     {`Thực gửi: ${getOrderItemActualNameLabel(item) || 'Sản phẩm khác'}`}

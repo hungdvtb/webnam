@@ -543,7 +543,6 @@ Route::post('/blog/import-excel', [\App\Http\Controllers\Api\BlogController::cla
         Route::get('/storefront-themes', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'index']);
         Route::post('/storefront-themes', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'store']);
         Route::put('/storefront-themes/{id}', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'update'])->whereNumber('id');
-        Route::post('/storefront-themes/{id}/duplicate', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'duplicate'])->whereNumber('id');
         Route::delete('/storefront-themes/{id}', [\App\Http\Controllers\Api\StorefrontThemeController::class, 'destroy'])->whereNumber('id');
 
         // Menus

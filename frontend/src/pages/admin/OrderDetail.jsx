@@ -9,6 +9,7 @@ import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
+    getOrderItemOriginalName,
     getOrderItemSnapshotName,
     getOrderItemSnapshotSku,
     hasOrderItemSnapshotMismatch,
@@ -221,6 +222,7 @@ const OrderDetail = () => {
                                 {order.items?.map(item => {
                                     const itemName = getOrderItemDisplayName(item);
                                     const itemSku = getOrderItemDisplaySku(item, 'N/A');
+                                    const originalName = getOrderItemOriginalName(item, itemName);
                                     const snapshotName = getOrderItemSnapshotName(item);
                                     const snapshotSku = getOrderItemSnapshotSku(item);
                                     const showSnapshotMeta = hasOrderItemSnapshotMismatch(item);
@@ -235,7 +237,12 @@ const OrderDetail = () => {
                                                 <div className="flex flex-col">
                                                     <span className="font-bold text-primary">{itemName}</span>
                                                     <span className="text-[10px] text-primary/40 uppercase font-ui font-black">SKU: {itemSku}</span>
-                                                    {showSnapshotMeta && snapshotName && (
+                                                    {originalName && (
+                                                        <span className="mt-1 text-[10px] text-primary/45">
+                                                            {`\u0054\u00ean g\u1ed1c: ${originalName}`}
+                                                        </span>
+                                                    )}
+                                                    {showSnapshotMeta && !originalName && snapshotName && (
                                                         <span className="mt-1 text-[10px] text-primary/45">
                                                             Snapshot lúc tạo đơn: {snapshotName}{snapshotSku ? ` / ${snapshotSku}` : ''}
                                                         </span>

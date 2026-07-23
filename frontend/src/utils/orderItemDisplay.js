@@ -30,6 +30,20 @@ export const getOrderItemCurrentSku = (item) => (
     || ''
 );
 
+export const getOrderItemCatalogName = (item) => (
+    normalizeText(item?.catalog_name)
+    || normalizeText(item?.original_name)
+    || getOrderItemCurrentName(item)
+    || ''
+);
+
+export const getOrderItemCatalogSku = (item) => (
+    normalizeText(item?.catalog_sku)
+    || normalizeText(item?.original_sku)
+    || getOrderItemCurrentSku(item)
+    || ''
+);
+
 export const getOrderItemActualSnapshotName = (item) => (
     normalizeText(item?.actual_snapshot_name)
     || normalizeText(item?.actual_product_name_snapshot)
@@ -99,21 +113,43 @@ export const getOrderItemDisplayName = (item, fallback = '') => {
         || (Number(item?.product_id) ? `San pham #${item.product_id}` : 'San pham');
 
     return (
-        getOrderItemCurrentName(item)
-        || normalizeText(item?.display_name)
-        || getOrderItemSnapshotName(item)
+        getOrderItemSnapshotName(item)
         || normalizeText(item?.name)
+        || normalizeText(item?.display_name)
+        || getOrderItemCurrentName(item)
         || resolvedFallback
     );
 };
 
 export const getOrderItemDisplaySku = (item, fallback = '') => (
-    getOrderItemCurrentSku(item)
-    || normalizeText(item?.display_sku)
-    || getOrderItemSnapshotSku(item)
+    getOrderItemSnapshotSku(item)
     || normalizeText(item?.sku)
+    || normalizeText(item?.display_sku)
+    || getOrderItemCurrentSku(item)
     || normalizeText(fallback)
 );
+
+export const getOrderItemOriginalName = (item, displayName = '') => {
+    const catalogName = getOrderItemCatalogName(item);
+    const resolvedDisplayName = normalizeText(displayName) || getOrderItemDisplayName(item, '');
+
+    if (!catalogName || !resolvedDisplayName || compareIdentity(catalogName, resolvedDisplayName)) {
+        return '';
+    }
+
+    return catalogName;
+};
+
+export const getOrderItemOriginalSku = (item, displaySku = '') => {
+    const catalogSku = getOrderItemCatalogSku(item);
+    const resolvedDisplaySku = normalizeText(displaySku) || getOrderItemDisplaySku(item, '');
+
+    if (!catalogSku || !resolvedDisplaySku || compareIdentity(catalogSku, resolvedDisplaySku)) {
+        return '';
+    }
+
+    return catalogSku;
+};
 
 export const hasOrderItemSnapshotMismatch = (item) => {
     if (typeof item?.has_product_snapshot_mismatch === 'boolean') {

@@ -252,10 +252,10 @@ class SalesProductReportService
 
         return $baseQuery
             ->selectRaw($effectiveProductIdExpression . ' AS product_id')
-            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS product_name_snapshot')
-            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS product_sku_snapshot')
-            ->selectRaw('COALESCE(products.name, ' . $effectiveProductNameSnapshotExpression . ') AS product_name')
-            ->selectRaw('COALESCE(products.sku, ' . $effectiveProductSkuSnapshotExpression . ') AS product_sku')
+            ->selectRaw('MIN(' . $effectiveProductNameSnapshotExpression . ') AS product_name_snapshot')
+            ->selectRaw('MIN(' . $effectiveProductSkuSnapshotExpression . ') AS product_sku_snapshot')
+            ->selectRaw('COALESCE(products.name, MIN(' . $effectiveProductNameSnapshotExpression . ')) AS product_name')
+            ->selectRaw('COALESCE(products.sku, MIN(' . $effectiveProductSkuSnapshotExpression . ')) AS product_sku')
             ->selectRaw('products.type AS product_type')
             ->selectRaw('products.category_id AS category_id')
             ->selectRaw("COALESCE(categories.name, 'Chưa phân loại') AS category_name")
@@ -270,8 +270,6 @@ class SalesProductReportService
                 'categories.name'
             )
             ->groupByRaw($effectiveProductIdExpression)
-            ->groupByRaw($effectiveProductNameSnapshotExpression)
-            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->orderByDesc('total_quantity')
             ->orderBy('product_name');
     }
@@ -298,15 +296,13 @@ class SalesProductReportService
 
         return $baseQuery
             ->selectRaw($effectiveProductIdExpression . ' AS product_id')
-            ->selectRaw($effectiveProductNameSnapshotExpression . ' AS product_name_snapshot')
-            ->selectRaw($effectiveProductSkuSnapshotExpression . ' AS product_sku_snapshot')
+            ->selectRaw('MIN(' . $effectiveProductNameSnapshotExpression . ') AS product_name_snapshot')
+            ->selectRaw('MIN(' . $effectiveProductSkuSnapshotExpression . ') AS product_sku_snapshot')
             ->selectRaw('DATE(orders.created_at) AS report_date')
             ->selectRaw('SUM(order_items.quantity) AS total_quantity')
             ->selectRaw("ROUND(SUM({$netRevenueExpression}), 2) AS total_net_revenue")
             ->selectRaw('ROUND(SUM(order_items.cost_total), 2) AS total_cost_amount')
             ->groupByRaw($effectiveProductIdExpression)
-            ->groupByRaw($effectiveProductNameSnapshotExpression)
-            ->groupByRaw($effectiveProductSkuSnapshotExpression)
             ->groupByRaw('DATE(orders.created_at)')
             ->orderBy('report_date');
     }

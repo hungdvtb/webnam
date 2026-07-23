@@ -1,0 +1,13 @@
+{
+  "name": "Giao diện số 2",
+  "code": "giao-dien-so-2",
+  "folder": "giao-dien-so-2",
+  "purpose": "Mẫu giao diện số 2 cho sản phẩm bundle, được copy từ giao diện bundle hiện tại để chỉnh thiết kế riêng.",
+  "product_type": "bundle",
+  "entry": "ProductDetailPageTheme.js",
+  "product_detail_entries": {
+    "simple": "SimpleProductDetailPageTheme.js",
+    "configurable": "ConfigurableProductDetailPageTheme.js",
+    "bundle": "BundleProductDetailPageTheme.js"
+  }
+}

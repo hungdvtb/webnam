@@ -35,6 +35,10 @@ const TYPE_LABELS = PRODUCT_TYPE_META;
 const PRODUCT_DETAIL_PATH = '/product';
 const PRODUCT_MANAGEMENT_PERSISTENT_STATE_KEY = 'product_management_persistent_state';
 const PRODUCT_MANAGEMENT_WORKING_STATE_KEY = 'product_management_working_state';
+const PRODUCT_PREVIEW_THEME_OPTIONS = [
+    { value: '', label: 'Giao diện 1' },
+    { value: 'giao-dien-so-2', label: 'Giao diện 2' },
+];
 const quantityFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 });
 
 function normalizeQuantityDraft(value) {
@@ -182,7 +186,33 @@ function normalizeDomainValue(value) {
         .replace(/\/+$/, '');
 }
 
-function buildProductPageUrl(product, domains = []) {
+function appendProductPreviewTheme(url, themeCode = '') {
+    const rawUrl = String(url || '').trim();
+    const normalizedThemeCode = String(themeCode || '').trim();
+
+    if (!rawUrl || !normalizedThemeCode) {
+        return rawUrl;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawUrl)) {
+        try {
+            const nextUrl = new URL(rawUrl);
+            nextUrl.searchParams.set('theme', normalizedThemeCode);
+            return nextUrl.toString();
+        } catch {
+            // Fall through to string append for malformed but still usable URLs.
+        }
+    }
+
+    const hashIndex = rawUrl.indexOf('#');
+    const pathAndQuery = hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+    const hash = hashIndex >= 0 ? rawUrl.slice(hashIndex) : '';
+    const separator = pathAndQuery.includes('?') ? '&' : '?';
+
+    return `${pathAndQuery}${separator}theme=${encodeURIComponent(normalizedThemeCode)}${hash}`;
+}
+
+function buildProductPageUrl(product, domains = [], themeCode = '') {
     const slug = String(product?.slug || '').trim();
     const identifier = slug || String(product?.id || '').trim();
     if (!identifier) {
@@ -224,16 +254,16 @@ function buildProductPageUrl(product, domains = []) {
     try {
         if (baseUrl) {
             const url = new URL(path, `${baseUrl}/`).toString();
-            return appendPublicSiteContext(url, { siteCode, publicHost: domain });
+            return appendProductPreviewTheme(appendPublicSiteContext(url, { siteCode, publicHost: domain }), themeCode);
         }
     } catch (error) {
         if (baseUrl) {
             const url = `${baseUrl.replace(/\/+$/, '')}${path}`;
-            return appendPublicSiteContext(url, { siteCode, publicHost: domain });
+            return appendProductPreviewTheme(appendPublicSiteContext(url, { siteCode, publicHost: domain }), themeCode);
         }
     }
 
-    return path;
+    return appendProductPreviewTheme(path, themeCode);
 }
 
 const DEFAULT_COLUMNS = [
@@ -252,7 +282,7 @@ const DEFAULT_COLUMNS = [
     { id: 'status', label: 'Bán', minWidth: '60px', align: 'center' },
     { id: 'seo_status', label: 'Mô tả SEO', minWidth: '100px', align: 'center', sortable: false },
     { id: 'actions', label: 'Thao tác', minWidth: '100px', align: 'right', fixed: true },
-    { id: 'product_link', label: 'Link SP', minWidth: '150px' },
+    { id: 'product_link', label: 'Link SP', minWidth: '240px' },
     { id: 'google_merchant', label: 'Google Merchant', minWidth: '140px', align: 'center', sortable: false },
 ];
 
@@ -1284,6 +1314,7 @@ const ProductList = () => {
     const [suppliers, setSuppliers] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
     const [domains, setDomains] = useState([]);
+    const [productLinkPreviewThemes, setProductLinkPreviewThemes] = useState({});
     const [profitCenters, setProfitCenters] = useState([]);
     const [allAttributes, setAllAttributes] = useState([]);
     const profitCenterById = useMemo(
@@ -4291,10 +4322,10 @@ const ProductList = () => {
         setTimeout(() => setCopiedText(null), 2000);
     };
 
-    const handleOpenProductLink = (product, e) => {
+    const handleOpenProductLink = (product, e, themeCode = '') => {
         if (e) e.stopPropagation();
 
-        const productLink = buildProductPageUrl(product, domains);
+        const productLink = buildProductPageUrl(product, domains, themeCode);
         if (!productLink) {
             setNotification({ type: 'error', message: 'San pham nay chua co link de mo.' });
             setTimeout(() => setNotification(null), 2000);
@@ -6520,25 +6551,54 @@ const ProductList = () => {
                                                 );
 
                                                 if (col.id === 'product_link') {
-                                                    const productLink = buildProductPageUrl(p, domains);
+                                                    const productLinkThemeKey = String(p.id ?? p.slug ?? p.sku ?? '');
+                                                    const selectedPreviewTheme = productLinkPreviewThemes[productLinkThemeKey] || '';
+                                                    const productLink = buildProductPageUrl(p, domains, selectedPreviewTheme);
                                                     const hasProductLink = Boolean(productLink);
 
                                                     return (
                                                         <td key={col.id} style={cellStyle} className="px-3 py-2 border border-primary/20">
-                                                            <button
-                                                                type="button"
-                                                                onClick={(e) => handleOpenProductLink(p, e)}
-                                                                disabled={!hasProductLink}
-                                                                title={productLink || 'San pham chua co link hop le'}
-                                                                className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-[11px] font-black transition-all ${
-                                                                    hasProductLink
-                                                                        ? 'border-primary/20 bg-primary/[0.04] text-primary hover:bg-primary/[0.08]'
-                                                                        : 'cursor-not-allowed border-primary/10 bg-primary/[0.02] text-primary/35'
-                                                                }`}
-                                                            >
-                                                                <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-                                                                <span>{hasProductLink ? 'Mo trang' : 'Chua co link'}</span>
-                                                            </button>
+                                                            <div className="inline-flex items-center gap-1.5">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={(e) => handleOpenProductLink(p, e, selectedPreviewTheme)}
+                                                                    disabled={!hasProductLink}
+                                                                    title={productLink || 'San pham chua co link hop le'}
+                                                                    className={`inline-flex h-8 items-center gap-1.5 rounded-sm border px-2.5 text-[11px] font-black transition-all ${
+                                                                        hasProductLink
+                                                                            ? 'border-primary/20 bg-primary/[0.04] text-primary hover:bg-primary/[0.08]'
+                                                                            : 'cursor-not-allowed border-primary/10 bg-primary/[0.02] text-primary/35'
+                                                                    }`}
+                                                                >
+                                                                    <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                                                                    <span>{hasProductLink ? 'Mo trang' : 'Chua co link'}</span>
+                                                                </button>
+                                                                <select
+                                                                    value={selectedPreviewTheme}
+                                                                    disabled={!hasProductLink}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onChange={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const nextTheme = e.target.value;
+                                                                        setProductLinkPreviewThemes((prev) => ({
+                                                                            ...prev,
+                                                                            [productLinkThemeKey]: nextTheme,
+                                                                        }));
+                                                                    }}
+                                                                    className={`h-8 rounded-sm border px-2 text-[11px] font-black outline-none transition-all ${
+                                                                        hasProductLink
+                                                                            ? 'border-primary/15 bg-white text-primary hover:border-primary/30'
+                                                                            : 'cursor-not-allowed border-primary/10 bg-primary/[0.02] text-primary/35'
+                                                                    }`}
+                                                                    title="Chọn giao diện để mở thử"
+                                                                >
+                                                                    {PRODUCT_PREVIEW_THEME_OPTIONS.map((option) => (
+                                                                        <option key={option.value || 'default'} value={option.value}>
+                                                                            {option.label}
+                                                                        </option>
+                                                                    ))}
+                                                                </select>
+                                                            </div>
                                                         </td>
                                                     );
                                                 }

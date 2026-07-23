@@ -170,6 +170,36 @@ const getAdminImageDisplayName = (image, index = 0) => {
 const PRODUCT_IMAGE_TOKEN_EXISTING_PREFIX = 'existing:';
 const PRODUCT_IMAGE_TOKEN_NEW_PREFIX = 'new:';
 const IMAGE_PREVIEW_DOUBLE_CLICK_DELAY = 320;
+const PRODUCT_PREVIEW_THEME_OPTIONS = [
+    { value: '', label: 'Giao diện 1' },
+    { value: 'giao-dien-so-2', label: 'Giao diện 2' },
+];
+
+function appendProductPreviewTheme(url, themeCode = '') {
+    const rawUrl = String(url || '').trim();
+    const normalizedThemeCode = String(themeCode || '').trim();
+
+    if (!rawUrl || !normalizedThemeCode) {
+        return rawUrl;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawUrl)) {
+        try {
+            const nextUrl = new URL(rawUrl);
+            nextUrl.searchParams.set('theme', normalizedThemeCode);
+            return nextUrl.toString();
+        } catch {
+            // Fall through to string append for malformed but still usable URLs.
+        }
+    }
+
+    const hashIndex = rawUrl.indexOf('#');
+    const pathAndQuery = hashIndex >= 0 ? rawUrl.slice(0, hashIndex) : rawUrl;
+    const hash = hashIndex >= 0 ? rawUrl.slice(hashIndex) : '';
+    const separator = pathAndQuery.includes('?') ? '&' : '?';
+
+    return `${pathAndQuery}${separator}theme=${encodeURIComponent(normalizedThemeCode)}${hash}`;
+}
 
 const buildProductImageSubmissionPayload = (items = []) => {
     const order = [];
@@ -2339,6 +2369,7 @@ const ProductForm = () => {
     const [isSearchingBlog, setIsSearchingBlog] = useState({}); // { index: loading }
     const [blogResults, setBlogResults] = useState({}); // { index: results }
     const [domains, setDomains] = useState([]);
+    const [productPreviewTheme, setProductPreviewTheme] = useState('');
     const [stores, setStores] = useState([]);
     const duplicateDraftDefaultsRef = useRef(null);
     const legacyBundleVariantRepairNoticeShownRef = useRef(false);
@@ -7731,6 +7762,10 @@ const ProductForm = () => {
         }
     }, [domains, previewSlug, productMeta.account, selectedDomain]);
 
+    const previewProductLink = useMemo(() => (
+        appendProductPreviewTheme(baseProductLink, productPreviewTheme)
+    ), [baseProductLink, productPreviewTheme]);
+
     const hasValidProductLink = Boolean(baseProductLink);
 
     const buildTrackingLink = useCallback((url, source) => {
@@ -7843,7 +7878,7 @@ const ProductForm = () => {
     }, [showToast]);
 
     const handleCopyLink = () => {
-        copyTextToClipboard(baseProductLink, 'Đã sao chép link hiển thị của sản phẩm!');
+        copyTextToClipboard(previewProductLink, 'Đã sao chép link hiển thị của sản phẩm!');
     };
 
     const handleOpenProductPage = useCallback(() => {
@@ -7852,8 +7887,8 @@ const ProductForm = () => {
             return;
         }
 
-        window.open(baseProductLink, '_blank', 'noopener,noreferrer');
-    }, [baseProductLink, hasValidProductLink, showToast]);
+        window.open(previewProductLink, '_blank', 'noopener,noreferrer');
+    }, [hasValidProductLink, previewProductLink, showToast]);
 
     return (
         <div className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full overflow-hidden">
@@ -7927,6 +7962,23 @@ const ProductForm = () => {
                                                 {hasValidProductLink ? 'Mở trang' : 'Chưa có link'}
                                             </span>
                                         </button>
+                                        <select
+                                            value={productPreviewTheme}
+                                            disabled={!hasValidProductLink}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={(e) => {
+                                                e.stopPropagation();
+                                                setProductPreviewTheme(e.target.value);
+                                            }}
+                                            className={`h-6 rounded-full border px-2 text-[9px] font-black uppercase tracking-wider outline-none transition-all ${hasValidProductLink ? 'border-primary/10 bg-white text-primary hover:border-primary/30' : 'cursor-not-allowed border-stone/10 bg-stone/5 text-stone/35'}`}
+                                            title="Chọn giao diện để mở thử"
+                                        >
+                                            {PRODUCT_PREVIEW_THEME_OPTIONS.map((option) => (
+                                                <option key={option.value || 'default'} value={option.value}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <button
                                             type="button"
                                             onClick={(e) => {

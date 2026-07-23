@@ -1165,7 +1165,6 @@ export const cmsApi = {
         getAll: (params) => api.get('/storefront-themes', params ? { params } : {}),
         store: (data) => api.post('/storefront-themes', data),
         update: (id, data) => api.put(`/storefront-themes/${id}`, data),
-        duplicate: (id, data) => api.post(`/storefront-themes/${id}/duplicate`, data),
         destroy: (id) => api.delete(`/storefront-themes/${id}`),
     }
 };

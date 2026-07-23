@@ -42,6 +42,65 @@ const escapeHtml = (value) =>
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 
+const normalizeText = (value) => {
+    const normalized = String(value ?? '').trim();
+
+    return normalized !== '' ? normalized : '';
+};
+
+const sameTextIdentity = (left, right) => normalizeText(left) === normalizeText(right);
+
+const getPrintItemSnapshotName = (item = {}) => (
+    normalizeText(item.snapshot_name)
+    || normalizeText(item.product_name_snapshot)
+    || ''
+);
+
+const getPrintItemSnapshotSku = (item = {}) => (
+    normalizeText(item.snapshot_sku)
+    || normalizeText(item.product_sku_snapshot)
+    || ''
+);
+
+const getPrintItemCurrentName = (item = {}) => (
+    normalizeText(item.current_product_name)
+    || normalizeText(item.product?.name)
+    || ''
+);
+
+const getPrintItemCurrentSku = (item = {}) => (
+    normalizeText(item.current_product_sku)
+    || normalizeText(item.product?.sku)
+    || ''
+);
+
+const getPrintItemName = (item = {}) => (
+    getPrintItemSnapshotName(item)
+    || normalizeText(item.name)
+    || normalizeText(item.display_name)
+    || getPrintItemCurrentName(item)
+    || '-'
+);
+
+const getPrintItemSku = (item = {}) => (
+    getPrintItemSnapshotSku(item)
+    || normalizeText(item.sku)
+    || normalizeText(item.display_sku)
+    || getPrintItemCurrentSku(item)
+    || ''
+);
+
+const getPrintItemOriginalName = (item = {}, displayName = '') => {
+    const currentName = getPrintItemCurrentName(item);
+    const resolvedDisplayName = normalizeText(displayName) || getPrintItemName(item);
+
+    if (!currentName || !resolvedDisplayName || sameTextIdentity(currentName, resolvedDisplayName)) {
+        return '';
+    }
+
+    return currentName;
+};
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const withTimeout = (promise, ms) =>
@@ -58,8 +117,9 @@ const getOrderItems = (order = {}) =>
         const unitName = String(item?.unit_name ?? item?.unit?.name ?? item?.product?.unit?.name ?? '').trim();
 
         return {
-            name: item?.name || '-',
-            sku: item?.sku || '',
+            name: getPrintItemName(item),
+            original_name: getPrintItemOriginalName(item, getPrintItemName(item)),
+            sku: getPrintItemSku(item),
             unit_name: unitName,
             quantity,
             unit_price: unitPrice,
@@ -197,6 +257,7 @@ const renderOrderRows = (items = [], startIndex = 0, measurement = false) => {
             <td class="col-name">
                 <div class="product-cell">
                     <div class="product-name"><span class="product-text">${escapeHtml(item.name || '-')}</span></div>
+                    ${item.original_name ? `<div class="product-original"><span class="product-original-text">T&#234;n g&#7889;c: ${escapeHtml(item.original_name)}</span></div>` : ''}
                     ${item.sku ? `<div class="product-sku"><span class="product-sku-text">SKU: ${escapeHtml(item.sku)}</span></div>` : ''}
                 </div>
             </td>
@@ -748,6 +809,14 @@ const getOrderPrintStyles = () => `
         display: block;
         line-height: 1.16;
         transform: translateY(-0.04em);
+    }
+
+    .product-original {
+        color: #64748b;
+        font-size: 8.2px;
+        font-weight: 700;
+        line-height: 1.14;
+        overflow-wrap: anywhere;
     }
 
     .product-sku {

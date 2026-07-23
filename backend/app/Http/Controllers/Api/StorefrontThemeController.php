@@ -6,8 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\StorefrontTheme;
 use App\Services\AccountDataScopeService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -23,7 +21,6 @@ class StorefrontThemeController extends Controller
         $accountId = $this->accountDataScopeService->catalogAccountIdForRequest($request);
 
         $themes = StorefrontTheme::query()
-            ->with('clonedFrom:id,name,code')
             ->where(function ($query) use ($accountId) {
                 $query->whereNull('account_id');
 
@@ -78,7 +75,7 @@ class StorefrontThemeController extends Controller
             $this->clearOtherDefaults($theme);
         }
 
-        return response()->json($theme->fresh('clonedFrom:id,name,code'), 201);
+        return response()->json($theme->fresh(), 201);
     }
 
     public function update(Request $request, int $id)
@@ -115,44 +112,7 @@ class StorefrontThemeController extends Controller
             $this->clearOtherDefaults($theme);
         }
 
-        return response()->json($theme->fresh('clonedFrom:id,name,code'));
-    }
-
-    public function duplicate(Request $request, int $id)
-    {
-        $source = StorefrontTheme::query()->findOrFail($id);
-        $accountId = $this->accountDataScopeService->catalogAccountIdForRequest($request);
-
-        $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'code' => ['nullable', 'string', 'max:120', Rule::unique('storefront_themes', 'code')],
-            'preview_image' => ['nullable', 'string', 'max:1000'],
-            'description' => ['nullable', 'string', 'max:4000'],
-            'product_type' => ['nullable', 'string', Rule::in(['simple', 'configurable', 'bundle'])],
-            'copy_source_files' => ['nullable', 'boolean'],
-        ]);
-
-        $code = $this->normalizeUniqueCode($validated['code'] ?? $validated['name']);
-        $theme = StorefrontTheme::create([
-            'account_id' => $accountId,
-            'name' => $validated['name'],
-            'code' => $code,
-            'folder' => $code,
-            'preview_image' => $validated['preview_image'] ?? $source->preview_image,
-            'description' => $validated['description'] ?? ('Nhân bản từ ' . $source->name),
-            'product_type' => $this->normalizeProductType($validated['product_type'] ?? $source->product_type ?? null),
-            'cloned_from_id' => $source->id,
-            'status' => true,
-            'is_default' => false,
-            'sort_order' => $this->nextSortOrder($accountId),
-        ]);
-
-        $fileCopy = $this->copyThemeSourceFolder($source->folder ?: $source->code, $theme);
-
-        return response()->json([
-            'theme' => $theme->fresh('clonedFrom:id,name,code'),
-            'source_copy' => $fileCopy,
-        ], 201);
+        return response()->json($theme->fresh());
     }
 
     public function destroy(int $id)
@@ -220,73 +180,5 @@ class StorefrontThemeController extends Controller
             ->whereKeyNot($theme->id)
             ->where('is_default', true)
             ->update(['is_default' => false]);
-    }
-
-    private function copyThemeSourceFolder(string $sourceFolder, StorefrontTheme $targetTheme): array
-    {
-        $sourcePath = base_path('../webgom/src/themes/storefront/' . $this->normalizeFolder($sourceFolder));
-        $targetPath = base_path('../webgom/src/themes/storefront/' . $this->normalizeFolder($targetTheme->folder));
-
-        if (!File::isDirectory($sourcePath)) {
-            return [
-                'copied' => false,
-                'reason' => 'source_missing',
-                'source_path' => $sourcePath,
-                'target_path' => $targetPath,
-            ];
-        }
-
-        if (File::exists($targetPath)) {
-            return [
-                'copied' => false,
-                'reason' => 'target_exists',
-                'source_path' => $sourcePath,
-                'target_path' => $targetPath,
-            ];
-        }
-
-        if (!Schema::hasTable('storefront_themes')) {
-            return [
-                'copied' => false,
-                'reason' => 'themes_table_missing',
-                'source_path' => $sourcePath,
-                'target_path' => $targetPath,
-            ];
-        }
-
-        try {
-            File::copyDirectory($sourcePath, $targetPath);
-            File::put(
-                $targetPath . DIRECTORY_SEPARATOR . 'theme.json',
-                json_encode([
-                    'name' => $targetTheme->name,
-                    'code' => $targetTheme->code,
-                    'folder' => $targetTheme->folder,
-                    'cloned_from' => $targetTheme->clonedFrom?->code,
-                    'purpose' => $targetTheme->description,
-                    'product_type' => $targetTheme->product_type ?: 'simple',
-                    'entry' => 'ProductDetailPageTheme.js',
-                    'product_detail_entries' => [
-                        'simple' => 'SimpleProductDetailPageTheme.js',
-                        'configurable' => 'ConfigurableProductDetailPageTheme.js',
-                        'bundle' => 'BundleProductDetailPageTheme.js',
-                    ],
-                ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL
-            );
-        } catch (\Throwable $exception) {
-            return [
-                'copied' => false,
-                'reason' => 'copy_failed',
-                'message' => $exception->getMessage(),
-                'source_path' => $sourcePath,
-                'target_path' => $targetPath,
-            ];
-        }
-
-        return [
-            'copied' => true,
-            'source_path' => $sourcePath,
-            'target_path' => $targetPath,
-        ];
     }
 }

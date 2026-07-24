@@ -781,6 +781,32 @@ const normalizeProductSearchText = (value) => String(value ?? '')
     .trim()
     .replace(/\s+/g, ' ');
 const compactProductSearchText = (value) => normalizeProductSearchText(value).replace(/\s+/g, '');
+const PRODUCT_PLACEHOLDER_COMPACT_NAMES = new Set(['sanpham', 'sanphambundle']);
+const isPlaceholderProductName = (value, productId = 0) => {
+    const compactValue = compactProductSearchText(value);
+    if (!compactValue) return true;
+
+    const normalizedProductId = Number(productId) || 0;
+    return PRODUCT_PLACEHOLDER_COMPACT_NAMES.has(compactValue)
+        || (normalizedProductId > 0 && compactValue === `sanpham${normalizedProductId}`);
+};
+const resolveCatalogProductName = (product, productId = 0) => {
+    const candidates = [
+        product?.display_name,
+        product?.name,
+        product?.current_product_name,
+        product?.product?.name,
+    ];
+
+    for (const candidate of candidates) {
+        const normalizedCandidate = normalizeCanvasText(candidate);
+        if (normalizedCandidate && !isPlaceholderProductName(normalizedCandidate, productId)) {
+            return normalizedCandidate;
+        }
+    }
+
+    return '';
+};
 const splitCompactProductSearchTokens = (value) => Array.from(new Set(
     (compactProductSearchText(value).match(/[a-z]+|\d+/g) || [])
         .map((token) => token.trim())
@@ -1045,12 +1071,7 @@ const getProductQuickSetupEntryKey = (entry) => {
         }
 
         const parentProductId = Number(entry?.bundle_parent_id ?? entry?.target_product_id ?? entry?.product_id ?? 0) || 0;
-        const optionKey = normalizeCanvasText(
-            entry?.bundle_option_key
-            || entry?.key
-            || entry?.option_key
-            || resolveBundleOptionKey(entry)
-        );
+        const optionKey = resolveBundleOptionKey(entry);
 
         return parentProductId > 0 && optionKey
             ? `${SEARCH_ENTRY_BUNDLE_OPTION}-${parentProductId}-${optionKey}`
@@ -1138,6 +1159,9 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                     || normalizeCanvasText(item?.name)
                 )
                 : String(item?.display_name ?? item?.name ?? '').trim();
+            const bundleOptionUid = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+                ? normalizeCanvasText(item?.bundle_option_uid || item?.uid || item?.option_uid)
+                : '';
 
             return {
                 id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : productId,
@@ -1162,6 +1186,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 ...(entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? {
                     bundle_parent_id: bundleParentId,
                     bundle_parent_name: bundleParentName,
+                    bundle_option_uid: bundleOptionUid,
                     bundle_option_key: normalizeCanvasText(item?.bundle_option_key || resolveBundleOptionKey(item)),
                     bundle_option_title: bundleOptionTitle,
                     raw_bundle_option_title: normalizeCanvasText(item?.raw_bundle_option_title || item?.option_title),
@@ -2092,6 +2117,53 @@ const normalizeProductPickerEntry = (product) => {
 const isBundleOptionPickerEntry = (entry) => (
     String(entry?.entry_kind || '').trim() === SEARCH_ENTRY_BUNDLE_OPTION
 );
+const getBundleItemProductId = (bundleItem) => Number(
+    bundleItem?.product_id
+    ?? bundleItem?.target_product_id
+    ?? bundleItem?.variant_id
+    ?? bundleItem?.id
+    ?? 0
+) || 0;
+const mergeLatestProductSnapshotIntoBundleItem = (bundleItem, latest) => {
+    if (!latest || typeof latest !== 'object') {
+        return bundleItem;
+    }
+
+    const productId = getBundleItemProductId(bundleItem);
+    const latestName = resolveCatalogProductName(latest, productId);
+    const currentName = normalizeCanvasText(bundleItem?.name);
+    const currentDisplayName = normalizeCanvasText(bundleItem?.display_name || bundleItem?.name);
+    const shouldHydrateName = latestName && (
+        isPlaceholderProductName(currentName, productId)
+        || isPlaceholderProductName(currentDisplayName, productId)
+    );
+    const latestSku = normalizeCanvasText(latest?.display_sku || latest?.sku);
+    const currentSku = normalizeCanvasText(bundleItem?.sku);
+    const shouldHydrateSku = latestSku && (!currentSku || currentSku === 'N/A');
+
+    return {
+        ...bundleItem,
+        ...(shouldHydrateName ? {
+            name: latestName,
+            display_name: latestName,
+        } : {}),
+        ...(shouldHydrateSku ? {
+            sku: latestSku,
+            display_sku: latestSku,
+        } : {}),
+        unit_name: resolveOrderUnitLabel(latest, bundleItem),
+        cost_price: resolveProductCostPrice(latest, bundleItem?.cost_price),
+        expected_cost: parseMoneyNumber(latest?.expected_cost, parseMoneyNumber(bundleItem?.expected_cost)),
+        main_image: normalizeCanvasText(latest?.main_image || latest?.primary_image?.url || bundleItem?.main_image),
+        ...resolveInventorySnapshot(latest, bundleItem),
+    };
+};
+const mergeLatestProductSnapshotsIntoBundleItems = (bundleItems = [], latestMap = new Map()) => (
+    (Array.isArray(bundleItems) ? bundleItems : []).map((bundleItem) => {
+        const latest = latestMap.get(getBundleItemProductId(bundleItem));
+        return mergeLatestProductSnapshotIntoBundleItem(bundleItem, latest);
+    })
+);
 const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
     const normalizedEntry = normalizeProductPickerEntry(entry);
     if (!latest || typeof latest !== 'object') {
@@ -2114,11 +2186,24 @@ const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
             price: normalizedEntry?.price,
             expected_cost: normalizedEntry?.expected_cost,
             cost_price: normalizedEntry?.cost_price,
-            bundle_items: normalizedEntry?.bundle_items,
+            bundle_items: Array.isArray(latest?.bundle_items) && latest.bundle_items.length > 0
+                ? latest.bundle_items
+                : normalizedEntry?.bundle_items,
         });
     }
 
     return normalizeProductPickerEntry({ ...normalizedEntry, ...latest });
+};
+const mergeLatestBundleItemsIntoPickerEntry = (entry, latestMap) => {
+    const normalizedEntry = normalizeProductPickerEntry(entry);
+    if (!isBundleOptionPickerEntry(normalizedEntry) || !Array.isArray(normalizedEntry?.bundle_items)) {
+        return normalizedEntry;
+    }
+
+    return normalizeProductPickerEntry({
+        ...normalizedEntry,
+        bundle_items: mergeLatestProductSnapshotsIntoBundleItems(normalizedEntry.bundle_items, latestMap),
+    });
 };
 const calculateItemsCostTotal = (items = []) => items.reduce(
     (sum, item) => sum + calculateRoundedImportCostLineTotal(item?.cost_price, parseMoneyNumber(item?.quantity, 0) || 0),
@@ -2357,7 +2442,20 @@ const resolveBundleOptionTitle = (bundleOption) => normalizeCanvasText(
     || 'Mặc định'
 );
 const resolveBundleOptionKey = (bundleOption) => {
-    const explicitKey = normalizeCanvasText(bundleOption?.key);
+    const explicitUid = normalizeCanvasText(
+        bundleOption?.bundle_option_uid
+        || bundleOption?.uid
+        || bundleOption?.option_uid
+    );
+    if (explicitUid) {
+        return explicitUid.startsWith('uid:') ? explicitUid : `uid:${explicitUid}`;
+    }
+
+    const explicitKey = normalizeCanvasText(
+        bundleOption?.bundle_option_key
+        || bundleOption?.key
+        || bundleOption?.option_key
+    );
     if (explicitKey) {
         return explicitKey;
     }
@@ -2547,6 +2645,7 @@ const buildOrderItemMergeKey = (item) => {
     return [
         Number(item?.product_id) || 0,
         normalizeProductSearchText(options?.bundle_parent_id),
+        normalizeProductSearchText(options?.bundle_option_uid),
         normalizeProductSearchText(options?.bundle_option_key),
         normalizeProductSearchText(options?.bundle_option_title),
         normalizeProductSearchText(options?.variant_parent_id),
@@ -2636,17 +2735,23 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         const bundleParentName = normalizeCanvasText(entry?.bundle_parent_name || entry?.parent_product_name || entry?.name);
         const bundleOptionTitle = resolveBundleOptionTitle(entry);
         const bundleOptionKey = normalizeCanvasText(entry?.bundle_option_key || resolveBundleOptionKey(entry));
+        const bundleOptionUid = normalizeCanvasText(entry?.bundle_option_uid || entry?.uid || entry?.option_uid);
 
         const bundleItems = Array.isArray(entry?.bundle_items) ? entry.bundle_items : [];
 
         return bundleItems
             .map((bundleItem) => {
+                const productId = getBundleItemProductId(bundleItem);
                 const quantity = Math.max(1, Number(bundleItem?.quantity) || 1);
                 const unitPrice = Number(bundleItem?.price ?? 0) || 0;
+                const bundleItemRawName = normalizeCanvasText(bundleItem?.display_name || bundleItem?.name);
+                const bundleItemName = isPlaceholderProductName(bundleItemRawName, productId)
+                    ? ''
+                    : bundleItemRawName;
 
                 return createOrderLineItem({
-                    product_id: Number(bundleItem?.product_id ?? bundleItem?.target_product_id ?? bundleItem?.id) || 0,
-                name: normalizeCanvasText(bundleItem?.display_name || bundleItem?.name) || 'Sản phẩm bundle',
+                    product_id: productId,
+                    name: bundleItemName || (productId ? `Sản phẩm #${productId}` : 'Sản phẩm bundle'),
                     sku: normalizeCanvasText(bundleItem?.display_sku || bundleItem?.sku),
                     unit_name: resolveOrderUnitLabel(bundleItem),
                     quantity,
@@ -2662,6 +2767,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                     options: {
                         bundle_parent_id: bundleParentId || undefined,
                         bundle_parent_name: bundleParentName,
+                        bundle_option_uid: bundleOptionUid || undefined,
                         bundle_option_key: bundleOptionKey,
                         bundle_option_title: bundleOptionTitle,
                         bundle_option_post_id: Number(entry?.option_post_id) || undefined,
@@ -2891,6 +2997,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
         (Array.isArray(product?.bundle_options) ? product.bundle_options : []).forEach((bundleOption) => {
             const bundleOptionTitle = resolveBundleOptionTitle(bundleOption);
             const bundleOptionKey = resolveBundleOptionKey(bundleOption);
+            const bundleOptionUid = normalizeCanvasText(bundleOption?.bundle_option_uid || bundleOption?.uid || bundleOption?.option_uid);
             const bundleItems = (Array.isArray(bundleOption?.items) ? bundleOption.items : [])
                 .map((bundleItem) => ({
                     base_product_id: Number(bundleItem?.base_product_id) || undefined,
@@ -2937,6 +3044,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 target_product_id: baseEntry.id,
                 bundle_parent_id: baseEntry.id,
                 bundle_parent_name: baseEntry.name,
+                bundle_option_uid: bundleOptionUid,
                 bundle_option_key: bundleOptionKey,
                 bundle_option_title: bundleOptionTitle,
                 raw_bundle_option_title: normalizeCanvasText(bundleOption?.raw_option_title || bundleOption?.option_title),
@@ -3001,6 +3109,9 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
         const rawBundleOptionTitle = isBundleOptionEntry
             ? normalizeCanvasText(item?.raw_bundle_option_title || item?.option_title)
             : '';
+        const bundleOptionUid = isBundleOptionEntry
+            ? normalizeCanvasText(item?.bundle_option_uid || item?.uid || item?.option_uid)
+            : '';
         const bundleTitle = isBundleOptionEntry
             ? normalizeCanvasText(item?.bundle_title || item?.bundle_config_title)
             : '';
@@ -3055,6 +3166,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             ...(isBundleOptionEntry ? {
                 bundle_parent_id: bundleParentId,
                 bundle_parent_name: bundleParentName || baseName,
+                bundle_option_uid: bundleOptionUid,
                 bundle_option_key: normalizeCanvasText(item?.bundle_option_key || resolveBundleOptionKey(item)),
                 bundle_option_title: bundleOptionTitle,
                 raw_bundle_option_title: rawBundleOptionTitle,
@@ -4214,6 +4326,8 @@ const OrderForm = () => {
     const actualProductSectionRef = useRef(null);
     const orderItemNameRefs = useRef(new Map());
     const profitCenterManualOverrideRef = useRef(false);
+    const lineItemSelectionAnchorRef = useRef('');
+    const lineItemSelectionDragRef = useRef(null);
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -4453,7 +4567,10 @@ const OrderForm = () => {
                         ?? product?.bundle_parent_id
                         ?? product?.id
                     ));
-                    return mergeLatestProductSnapshotIntoPickerEntry(product, latest);
+                    return mergeLatestBundleItemsIntoPickerEntry(
+                        mergeLatestProductSnapshotIntoPickerEntry(product, latest),
+                        latestMap
+                    );
                 });
 
                 cacheRef.current.set(key, nextEntries);
@@ -4472,7 +4589,10 @@ const OrderForm = () => {
                     ?? product?.bundle_parent_id
                     ?? product?.id
                 ));
-                return mergeLatestProductSnapshotIntoPickerEntry(product, latest);
+                return mergeLatestBundleItemsIntoPickerEntry(
+                    mergeLatestProductSnapshotIntoPickerEntry(product, latest),
+                    latestMap
+                );
             })
         ));
 
@@ -4487,15 +4607,27 @@ const OrderForm = () => {
                             (Array.isArray(items) ? items : []).map((item) => {
                                 const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
                                 const isBundleOptionEntry = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                const mergedBundleItems = isBundleOptionEntry
+                                    ? mergeLatestProductSnapshotsIntoBundleItems(item?.bundle_items, latestMap)
+                                    : item?.bundle_items;
+                                const hasBundleItemsChanged = isBundleOptionEntry
+                                    && JSON.stringify(item?.bundle_items || []) !== JSON.stringify(mergedBundleItems || []);
                                 const latest = latestMap.get(Number(
                                     item?.target_product_id
                                     ?? item?.product_id
                                     ?? item?.bundle_parent_id
                                     ?? item?.id
                                 ));
-                                if (!latest) return item;
+                                if (!latest && !hasBundleItemsChanged) return item;
 
                                 hasChanged = true;
+
+                                if (!latest) {
+                                    return {
+                                        ...item,
+                                        bundle_items: mergedBundleItems,
+                                    };
+                                }
 
                                 return {
                                     ...item,
@@ -4518,6 +4650,9 @@ const OrderForm = () => {
                                     ...resolveInventorySnapshot(latest, item),
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
                                     type: latest.type ?? item?.type ?? '',
+                                    ...(isBundleOptionEntry ? {
+                                        bundle_items: mergedBundleItems,
+                                    } : {}),
                                 };
                             }),
                         ])
@@ -4614,9 +4749,35 @@ const OrderForm = () => {
                 const nextCostPrice = shouldHydrateCostPrice
                     ? resolveProductCostPrice(latest, currentCostPrice)
                     : item.cost_price;
+                const latestProductId = Number(latest?.product_id ?? latest?.id ?? 0) || 0;
+                const itemProductId = Number(item?.product_id ?? 0) || 0;
+                const latestName = latestProductId === itemProductId
+                    ? resolveLatestOrderItemName(item, latest)
+                    : '';
+                const shouldHydrateName = latestName
+                    && !isPlaceholderProductName(latestName, itemProductId)
+                    && isPlaceholderProductName(item?.name, itemProductId)
+                    && !getOrderLineOriginalNameLabel(item);
+                const latestSku = latestProductId === itemProductId
+                    ? normalizeCanvasText(latest?.display_sku || latest?.sku)
+                    : '';
+                const currentSku = normalizeCanvasText(item?.sku);
+                const shouldHydrateSku = latestSku && (!currentSku || currentSku === 'N/A');
 
                 return {
                     ...item,
+                    ...(shouldHydrateName ? {
+                        name: latestName,
+                        snapshot_name: isPlaceholderProductName(item?.snapshot_name, itemProductId)
+                            ? latestName
+                            : item?.snapshot_name,
+                        original_name: latestName,
+                    } : {}),
+                    ...(shouldHydrateSku ? {
+                        sku: latestSku,
+                        snapshot_sku: latestSku,
+                        original_sku: latestSku,
+                    } : {}),
                     unit_name: resolveOrderUnitLabel(latest, item),
                     cost_price: nextCostPrice,
                     base_cost_price: shouldHydrateCostPrice
@@ -6086,24 +6247,184 @@ const OrderForm = () => {
         }
     }, [showModal, showTransientNotification]);
 
-    const toggleLineItemSelection = useCallback((lineId) => {
+    const getLineItemSelectionRangeIds = useCallback((startLineId, endLineId) => {
+        const lineIds = formData.items
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean);
+        const startIndex = lineIds.indexOf(normalizeCanvasText(startLineId));
+        const endIndex = lineIds.indexOf(normalizeCanvasText(endLineId));
+
+        if (startIndex === -1 || endIndex === -1) {
+            return [];
+        }
+
+        const fromIndex = Math.min(startIndex, endIndex);
+        const toIndex = Math.max(startIndex, endIndex);
+        return lineIds.slice(fromIndex, toIndex + 1);
+    }, [formData.items]);
+
+    const applyLineItemSelectionPatch = useCallback((lineIds, shouldSelect) => {
+        const normalizedLineIds = (Array.isArray(lineIds) ? lineIds : [lineIds])
+            .map((lineId) => normalizeCanvasText(lineId))
+            .filter(Boolean);
+
+        if (normalizedLineIds.length === 0) return;
+
         setSelectedLineItemIds((prev) => {
             const next = new Set(prev);
-            if (next.has(lineId)) {
-                next.delete(lineId);
-            } else {
-                next.add(lineId);
-            }
+            normalizedLineIds.forEach((lineId) => {
+                if (shouldSelect) {
+                    next.add(lineId);
+                } else {
+                    next.delete(lineId);
+                }
+            });
             return next;
         });
     }, []);
 
-    const toggleAllLineItemSelection = useCallback(() => {
+    const handleLineItemSelectionClick = useCallback((event, lineId) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) return;
+
+        if (event?.shiftKey && lineItemSelectionAnchorRef.current) {
+            const rangeIds = getLineItemSelectionRangeIds(lineItemSelectionAnchorRef.current, normalizedLineId);
+            if (rangeIds.length > 0) {
+                setSelectedLineItemIds((prev) => {
+                    const shouldSelectRange = rangeIds.some((rangeLineId) => !prev.has(rangeLineId));
+                    const next = new Set(prev);
+                    rangeIds.forEach((rangeLineId) => {
+                        if (shouldSelectRange) {
+                            next.add(rangeLineId);
+                        } else {
+                            next.delete(rangeLineId);
+                        }
+                    });
+                    return next;
+                });
+                setSelectedOrderLineId(normalizedLineId);
+                return;
+            }
+        }
+
+        lineItemSelectionAnchorRef.current = normalizedLineId;
+        setSelectedOrderLineId(normalizedLineId);
         setSelectedLineItemIds((prev) => {
-            if (prev.size === formData.items.length) {
+            const next = new Set(prev);
+            if (next.has(normalizedLineId)) {
+                next.delete(normalizedLineId);
+            } else {
+                next.add(normalizedLineId);
+            }
+            return next;
+        });
+    }, [getLineItemSelectionRangeIds]);
+
+    const handleLineItemSelectionPointerDown = useCallback((event, lineId) => {
+        if (event?.button !== undefined && event.button !== 0) return;
+
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) return;
+
+        if (event?.shiftKey) {
+            lineItemSelectionDragRef.current = null;
+            handleLineItemSelectionClick(event, normalizedLineId);
+            return;
+        }
+
+        const shouldSelect = !selectedLineItemIds.has(normalizedLineId);
+        lineItemSelectionAnchorRef.current = normalizedLineId;
+        lineItemSelectionDragRef.current = {
+            shouldSelect,
+            lastLineId: normalizedLineId,
+            visitedLineIds: new Set([normalizedLineId]),
+        };
+        setSelectedOrderLineId(normalizedLineId);
+        applyLineItemSelectionPatch(normalizedLineId, shouldSelect);
+    }, [applyLineItemSelectionPatch, handleLineItemSelectionClick, selectedLineItemIds]);
+
+    const handleLineItemSelectionDragEnter = useCallback((lineId) => {
+        const dragState = lineItemSelectionDragRef.current;
+        if (!dragState) return;
+
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) return;
+
+        const rangeIds = getLineItemSelectionRangeIds(dragState.lastLineId, normalizedLineId);
+        const nextLineIds = rangeIds.length > 0 ? rangeIds : [normalizedLineId];
+        const unvisitedLineIds = nextLineIds.filter((rangeLineId) => !dragState.visitedLineIds.has(rangeLineId));
+
+        if (unvisitedLineIds.length === 0) {
+            dragState.lastLineId = normalizedLineId;
+            return;
+        }
+
+        unvisitedLineIds.forEach((rangeLineId) => dragState.visitedLineIds.add(rangeLineId));
+        dragState.lastLineId = normalizedLineId;
+        setSelectedOrderLineId(normalizedLineId);
+        applyLineItemSelectionPatch(unvisitedLineIds, dragState.shouldSelect);
+    }, [applyLineItemSelectionPatch, getLineItemSelectionRangeIds]);
+
+    useEffect(() => {
+        const finishLineItemSelectionDrag = () => {
+            lineItemSelectionDragRef.current = null;
+        };
+
+        window.addEventListener('pointerup', finishLineItemSelectionDrag);
+        window.addEventListener('pointercancel', finishLineItemSelectionDrag);
+        return () => {
+            window.removeEventListener('pointerup', finishLineItemSelectionDrag);
+            window.removeEventListener('pointercancel', finishLineItemSelectionDrag);
+        };
+    }, []);
+
+    useEffect(() => {
+        const validLineIds = new Set(
+            formData.items
+                .map((item) => normalizeCanvasText(item?.line_id))
+                .filter(Boolean)
+        );
+
+        setSelectedLineItemIds((prev) => {
+            let changed = false;
+            const next = new Set();
+            prev.forEach((lineId) => {
+                if (validLineIds.has(lineId)) {
+                    next.add(lineId);
+                } else {
+                    changed = true;
+                }
+            });
+            return changed ? next : prev;
+        });
+
+        if (lineItemSelectionAnchorRef.current && !validLineIds.has(lineItemSelectionAnchorRef.current)) {
+            lineItemSelectionAnchorRef.current = '';
+        }
+    }, [formData.items]);
+
+    const toggleAllLineItemSelection = useCallback(() => {
+        const allLineIds = formData.items
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean);
+
+        setSelectedLineItemIds((prev) => {
+            const areAllCurrentLineItemsSelected = allLineIds.length > 0
+                && allLineIds.every((lineId) => prev.has(lineId));
+
+            if (areAllCurrentLineItemsSelected) {
+                lineItemSelectionAnchorRef.current = '';
                 return new Set();
             }
-            return new Set(formData.items.map((item) => item.line_id));
+
+            lineItemSelectionAnchorRef.current = allLineIds[0] || '';
+            return new Set(allLineIds);
         });
     }, [formData.items]);
 
@@ -6163,11 +6484,74 @@ const OrderForm = () => {
     }, [buildOrderItemsFromSearchEntry, showTransientNotification]);
 
     const selectedOrderLineItems = useMemo(
-        () => formData.items.filter((item) => selectedLineItemIds.has(item.line_id)),
+        () => formData.items.filter((item) => selectedLineItemIds.has(normalizeCanvasText(item?.line_id))),
         [formData.items, selectedLineItemIds]
     );
     const isAllLineItemsSelected = formData.items.length > 0 && selectedOrderLineItems.length === formData.items.length;
     const hasAnyLineItemSelected = selectedOrderLineItems.length > 0;
+
+    const handleRemoveSelectedLineItems = useCallback((event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        const selectedIds = new Set(
+            selectedOrderLineItems
+                .map((item) => normalizeCanvasText(item?.line_id))
+                .filter(Boolean)
+        );
+        const selectedCount = selectedIds.size;
+
+        if (selectedCount === 0) {
+            showTransientNotification('error', 'Chưa chọn sản phẩm nào để xóa.');
+            return;
+        }
+
+        showModal({
+            title: `Xóa ${selectedCount} sản phẩm đã chọn?`,
+            content: `Thao tác này sẽ xóa ${selectedCount} dòng sản phẩm đang được tick khỏi đơn.<br/>Bạn sẽ không thể khôi phục tự động sau khi xác nhận.`,
+            type: 'warning',
+            actionText: 'Xóa đã chọn',
+            onAction: () => {
+                closeOrderAiReplacePicker();
+                closeActualProductPicker();
+                setShowOrderAiInputReviewModal(false);
+                if (selectedCount >= formData.items.length) {
+                    setShowActualProductSection(false);
+                }
+                setSelectedOrderLineId((prev) => (
+                    selectedIds.has(normalizeCanvasText(prev)) ? '' : prev
+                ));
+                setEditingOrderLineName((prev) => (
+                    selectedIds.has(normalizeCanvasText(prev.lineId))
+                        ? { lineId: '', value: '' }
+                        : prev
+                ));
+                setFormData((prev) => {
+                    const nextItems = applySequentialOrderLineSortOrder(
+                        prev.items.filter((item) => !selectedIds.has(normalizeCanvasText(item?.line_id)))
+                    );
+
+                    return {
+                        ...prev,
+                        items: nextItems,
+                        cost_total: calculateItemsCostTotal(nextItems),
+                    };
+                });
+                setSelectedLineItemIds(new Set());
+                lineItemSelectionAnchorRef.current = '';
+                lineItemSelectionDragRef.current = null;
+                showTransientNotification('success', `Đã xóa ${selectedCount} sản phẩm đã chọn.`);
+            },
+        });
+    }, [
+        closeActualProductPicker,
+        closeOrderAiReplacePicker,
+        formData.items.length,
+        selectedOrderLineItems,
+        showModal,
+        showTransientNotification,
+    ]);
+
     const priceMultiplierTargetItems = useMemo(
         () => (
             selectedOrderLineItems.length > 0
@@ -6839,6 +7223,7 @@ const OrderForm = () => {
                 ...(entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? {
                     bundle_parent_id: Number(product?.bundle_parent_id ?? targetProductId) || targetProductId,
                     bundle_parent_name: product.bundle_parent_name ?? product.parent_product_name ?? product.name ?? '',
+                    bundle_option_uid: product.bundle_option_uid ?? product.uid ?? product.option_uid ?? '',
                     bundle_option_key: product.bundle_option_key ?? resolveBundleOptionKey(product),
                     bundle_option_title: product.bundle_option_title ?? resolveBundleOptionTitle(product),
                     raw_bundle_option_title: product.raw_bundle_option_title ?? product.option_title ?? '',
@@ -8227,16 +8612,30 @@ const OrderForm = () => {
     }, [editingOrderLineName.lineId, editingOrderLineName.value, showTransientNotification]);
 
     const removeItem = React.useCallback((lineId) => {
+        const normalizedLineId = normalizeCanvasText(lineId);
+        if (lineItemSelectionAnchorRef.current === normalizedLineId) {
+            lineItemSelectionAnchorRef.current = '';
+        }
+        lineItemSelectionDragRef.current = null;
         setSelectedOrderLineId((prev) => (
-            normalizeCanvasText(prev) === normalizeCanvasText(lineId) ? '' : prev
+            normalizeCanvasText(prev) === normalizedLineId ? '' : prev
         ));
         setEditingOrderLineName((prev) => (
-            normalizeCanvasText(prev.lineId) === normalizeCanvasText(lineId)
+            normalizeCanvasText(prev.lineId) === normalizedLineId
                 ? { lineId: '', value: '' }
                 : prev
         ));
+        setSelectedLineItemIds((prev) => {
+            if (!prev.has(normalizedLineId)) {
+                return prev;
+            }
+
+            const next = new Set(prev);
+            next.delete(normalizedLineId);
+            return next;
+        });
         setFormData(prev => {
-            const newItems = applySequentialOrderLineSortOrder(prev.items.filter(item => item.line_id !== lineId));
+            const newItems = applySequentialOrderLineSortOrder(prev.items.filter(item => normalizeCanvasText(item?.line_id) !== normalizedLineId));
             const costTotal = calculateItemsCostTotal(newItems);
             return {
                 ...prev,
@@ -8263,6 +8662,9 @@ const OrderForm = () => {
                 setShowOrderAiInputReviewModal(false);
                 setOrderAiLastRun(null);
                 setSelectedOrderLineId('');
+                setSelectedLineItemIds(new Set());
+                lineItemSelectionAnchorRef.current = '';
+                lineItemSelectionDragRef.current = null;
                 setFormData((prev) => ({
                     ...prev,
                     items: [],
@@ -10792,7 +11194,7 @@ const OrderForm = () => {
                                             <div className="flex items-start gap-2">
                                                 <div
                                                     className="relative flex-none size-12 rounded bg-primary/[0.05] overflow-hidden group cursor-pointer border border-primary/10"
-                                                    onClick={(e) => { e.stopPropagation(); toggleLineItemSelection(item.line_id); }}
+                                                    onClick={(event) => handleLineItemSelectionClick(event, item.line_id)}
                                                 >
                                                     <ProductThumb
                                                         src={item.main_image}
@@ -10802,10 +11204,10 @@ const OrderForm = () => {
                                                             </div>
                                                         )}
                                                     />
-                                                    <div className={`absolute inset-0 flex items-center justify-center bg-black/10 transition-opacity ${selectedLineItemIds.has(item.line_id) ? 'opacity-100' : 'opacity-0'}`}>
+                                                    <div className={`absolute inset-0 flex items-center justify-center bg-black/10 transition-opacity ${selectedLineItemIds.has(normalizeCanvasText(item?.line_id)) ? 'opacity-100' : 'opacity-0'}`}>
                                                         <input
                                                             type="checkbox"
-                                                            checked={selectedLineItemIds.has(item.line_id)}
+                                                            checked={selectedLineItemIds.has(normalizeCanvasText(item?.line_id))}
                                                             onChange={() => {}}
                                                             className="size-4 rounded border-white text-primary focus:ring-primary/30 cursor-pointer pointer-events-none"
                                                         />
@@ -11160,19 +11562,33 @@ const OrderForm = () => {
                                                                             >
                                                                                 <span className="material-symbols-outlined text-[18px]">percent</span>
                                                                             </motion.button>
+                                                                            <motion.button
+                                                                                initial={{ opacity: 0, scale: 0.5 }}
+                                                                                animate={{ opacity: 1, scale: 1 }}
+                                                                                exit={{ opacity: 0, scale: 0.5 }}
+                                                                                type="button"
+                                                                                onClick={handleRemoveSelectedLineItems}
+                                                                                onMouseDown={(event) => event.stopPropagation()}
+                                                                                className="order-form-header-action-icon flex items-center justify-center rounded-sm text-rose-700 transition-all hover:bg-rose-50 hover:text-brick"
+                                                                                title="Xóa các mục đã chọn"
+                                                                            >
+                                                                                <span className="material-symbols-outlined text-[18px]">delete_outline</span>
+                                                                            </motion.button>
                                                                             </>
                                                                         )}
                                                                     </AnimatePresence>
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={handleRemoveAllItems}
-                                                                        onMouseDown={(event) => event.stopPropagation()}
-                                                                        disabled={formData.items.length === 0}
-                                                                        className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
-                                                                        title="Xóa toàn bộ sản phẩm trong đơn"
-                                                                    >
-                                                                        <span className="order-form-action-icon material-symbols-outlined">delete_sweep</span>
-                                                                    </button>
+                                                                    {!hasAnyLineItemSelected && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={handleRemoveAllItems}
+                                                                            onMouseDown={(event) => event.stopPropagation()}
+                                                                            disabled={formData.items.length === 0}
+                                                                            className="order-form-action-button inline-flex items-center justify-center rounded-sm text-primary/30 transition-all hover:bg-rose-50 hover:text-brick disabled:cursor-not-allowed disabled:opacity-20 disabled:hover:bg-transparent disabled:hover:text-primary/30"
+                                                                            title="Xóa toàn bộ sản phẩm trong đơn"
+                                                                        >
+                                                                            <span className="order-form-action-icon material-symbols-outlined">delete_sweep</span>
+                                                                        </button>
+                                                                    )}
                                                                 </div>
                                                             ) : colId === 'selection' ? (
                                                                 <div className="flex items-center justify-center">
@@ -11204,6 +11620,7 @@ const OrderForm = () => {
                                                 value={item}
                                                 as="tr"
                                                 onClick={() => handleSelectOrderLine(item.line_id)}
+                                                onPointerEnter={() => handleLineItemSelectionDragEnter(item.line_id)}
                                                 className={`transition-colors group cursor-grab active:cursor-grabbing active:border-primary/20 ${hasActualOrderProductOverride(item) ? 'bg-rose-50/60 hover:bg-rose-50/80' : isPendingOrderAiItem(item) ? 'bg-amber-50/50 hover:bg-amber-50/70' : isOrderAiItem(item) ? 'bg-sky-50/40 hover:bg-sky-50/60' : 'bg-white hover:bg-primary/[0.01]'} ${normalizeCanvasText(selectedOrderLineId) === normalizeCanvasText(item.line_id) ? 'ring-2 ring-inset ring-primary/15' : ''}`}
                                             >
                                                 <td className="order-form-cell order-form-cell-tight border border-primary/10 bg-primary/5 text-center">
@@ -11213,12 +11630,25 @@ const OrderForm = () => {
                                                     switch (colId) {
                                                         case 'selection':
                                                             return (
-                                                                <td key={colId} className="order-form-cell order-form-cell-tight text-center border border-primary/10">
+                                                                <td
+                                                                    key={colId}
+                                                                    className="order-form-cell order-form-cell-tight select-none cursor-pointer text-center border border-primary/10"
+                                                                    onPointerDown={(event) => handleLineItemSelectionPointerDown(event, item.line_id)}
+                                                                >
                                                                     <input
                                                                         type="checkbox"
-                                                                        checked={selectedLineItemIds.has(item.line_id)}
-                                                                        onChange={() => toggleLineItemSelection(item.line_id)}
-                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        checked={selectedLineItemIds.has(normalizeCanvasText(item?.line_id))}
+                                                                        readOnly
+                                                                        onClick={(event) => {
+                                                                            event.preventDefault();
+                                                                            event.stopPropagation();
+                                                                        }}
+                                                                        onKeyDown={(event) => {
+                                                                            if (event.key === ' ' || event.key === 'Enter') {
+                                                                                handleLineItemSelectionClick(event, item.line_id);
+                                                                            }
+                                                                        }}
+                                                                        aria-label={`Chọn dòng sản phẩm ${index + 1}`}
                                                                         className="size-4 rounded border-primary/20 text-primary focus:ring-primary/30 cursor-pointer"
                                                                     />
                                                                 </td>
@@ -11543,7 +11973,7 @@ const OrderForm = () => {
                             </div>
 
                             <div className="flex items-center justify-between gap-4 px-4 py-5 border-t border-primary/10 bg-white">
-                                <div className="flex min-w-0 items-center gap-3">
+                                <div className="flex min-w-0 flex-wrap items-center gap-3">
                                     <button
                                         type="button"
                                         onClick={handleToggleActualProductSection}
@@ -11570,6 +12000,20 @@ const OrderForm = () => {
                                             </span>
                                         ) : null}
                                     </button>
+                                    {hasAnyLineItemSelected ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleRemoveSelectedLineItems}
+                                            className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-white px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
+                                            data-screenshot-hide="true"
+                                        >
+                                            <span className="material-symbols-outlined text-[16px]">delete_outline</span>
+                                            Xóa đã chọn
+                                            <span className="rounded-full bg-rose-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                                {selectedOrderLineItems.length}
+                                            </span>
+                                        </button>
+                                    ) : null}
                                     {showActualProductSection ? (
                                         <div className="hidden text-[12px] font-semibold text-primary/45 lg:block">
                                             Đã bật chế độ gửi sản phẩm khác. Chọn dòng trong panel để xử lý nhanh.

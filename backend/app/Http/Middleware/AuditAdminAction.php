@@ -37,6 +37,10 @@ class AuditAdminAction
 
         $path = preg_replace('#^api/#', '', trim($request->path(), '/'));
 
+        if ($path === 'products/refresh-order-items') {
+            return false;
+        }
+
         return (bool) preg_match(
             '#^(users|accounts|products|product-images|categories|attributes|menus|orders|shipments|customers|leads|lead-|inventory|stock-|warehouses|blog|reports|finance|payroll|banners|site-|shipping-|carrier-|order-statuses|quote-templates)(/|$)#',
             $path

@@ -4682,7 +4682,8 @@ const OrderForm = () => {
                 );
                 const latestName = resolveLatestOrderItemName({ ...item, options: mergedOptions }, latest);
                 const latestSku = normalizeCanvasText(latest.display_sku || latest.sku) || item.sku;
-                const hasCustomDisplayName = Boolean(getOrderLineOriginalNameLabel(item));
+                const hasPlaceholderDisplayName = isPlaceholderProductName(item?.name, Number(item?.product_id) || 0);
+                const hasCustomDisplayName = Boolean(getOrderLineOriginalNameLabel(item)) && !hasPlaceholderDisplayName;
                 const nextName = hasCustomDisplayName ? item.name : latestName;
                 const nextSnapshotName = hasCustomDisplayName
                     ? (item.snapshot_name || item.name)
@@ -4757,7 +4758,7 @@ const OrderForm = () => {
                 const shouldHydrateName = latestName
                     && !isPlaceholderProductName(latestName, itemProductId)
                     && isPlaceholderProductName(item?.name, itemProductId)
-                    && !getOrderLineOriginalNameLabel(item);
+                    && !hasActualOrderProductOverride(item);
                 const latestSku = latestProductId === itemProductId
                     ? normalizeCanvasText(latest?.display_sku || latest?.sku)
                     : '';

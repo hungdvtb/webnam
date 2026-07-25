@@ -699,6 +699,27 @@ const sortQuoteTemplates = (templates = []) => [...(Array.isArray(templates) ? t
 
 const normalizeCanvasText = (value) => String(value ?? '').normalize('NFC').trim();
 const getOrderLineOriginalNameLabel = (item) => getOrderItemOriginalName(item, item?.name || '');
+const getOrderLineDisplayNameLabel = (item, fallback = 'Sản phẩm') => {
+    const productId = Number(item?.product_id) || 0;
+    const candidates = [
+        item?.name,
+        item?.snapshot_name,
+        item?.product_name_snapshot,
+        item?.display_name,
+        item?.original_name,
+        getOrderItemCurrentName(item),
+        item?.product?.name,
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizeCanvasText(candidate);
+        if (normalized && !isPlaceholderProductName(normalized, productId)) {
+            return normalized;
+        }
+    }
+
+    return normalizeCanvasText(fallback) || 'Sản phẩm';
+};
 const appendUrlVersion = (url, version) => {
     const normalizedUrl = String(url ?? '').trim();
     const normalizedVersion = String(version ?? '').trim();
@@ -2560,13 +2581,30 @@ const createOrderLineItem = (payload = {}) => {
         available_to_sell,
     });
     const normalizedAiMeta = normalizeOrderAiItemMeta(ai_meta);
-    const resolvedName = resolveOrderLineItemDisplayName({ name, options: normalizedOptions });
+    const normalizedProductId = Number(product_id) || 0;
+    const submittedName = resolveOrderLineItemDisplayName({ name, options: normalizedOptions });
+    const catalogFallbackName = resolveOrderLineItemDisplayName({
+        name: snapshot_name
+            ?? original_name
+            ?? payload.catalog_name
+            ?? payload.current_product_name
+            ?? payload.product?.name
+            ?? payload.display_name,
+        options: normalizedOptions,
+        fallbackName: '',
+    });
+    const resolvedName = isPlaceholderProductName(submittedName, normalizedProductId)
+        ? (catalogFallbackName || submittedName)
+        : submittedName;
     const resolvedSku = normalizeCanvasText(sku) || 'N/A';
-    const resolvedSnapshotName = resolveOrderLineItemDisplayName({
+    const rawSnapshotName = resolveOrderLineItemDisplayName({
         name: snapshot_name ?? name,
         options: normalizedOptions,
         fallbackName: resolvedName,
     });
+    const resolvedSnapshotName = isPlaceholderProductName(rawSnapshotName, normalizedProductId)
+        ? (catalogFallbackName || resolvedName)
+        : rawSnapshotName;
     const resolvedSnapshotSku = normalizeCanvasText(snapshot_sku ?? sku) || resolvedSku;
     const resolvedOriginalName = resolveOrderLineItemDisplayName({
         name: original_name ?? payload.catalog_name ?? payload.current_product_name ?? payload.product?.name ?? resolvedName,
@@ -11712,6 +11750,7 @@ const OrderForm = () => {
                                                             const isNameTooltipVisible = activeTruncatedNameCellKey === itemNameCellKey;
                                                             const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
                                                             const originalNameLabel = getOrderLineOriginalNameLabel(item);
+                                                            const displayNameLabel = getOrderLineDisplayNameLabel(item);
 
                                                             return (
                                                                 <td
@@ -11770,7 +11809,7 @@ const OrderForm = () => {
                                                                                 ref={(node) => setOrderItemNameRef(itemNameCellKey, node)}
                                                                                 className={`${hasActualOrderProductOverride(item) ? 'text-rose-700' : 'text-primary'} font-bold leading-tight truncate`}
                                                                             >
-                                                                                {item.name}
+                                                                                {displayNameLabel}
                                                                             </p>
                                                                             {originalNameLabel ? (
                                                                                 <p className="order-form-cell-meta truncate font-semibold text-primary/35">
@@ -11824,11 +11863,11 @@ const OrderForm = () => {
                                                                             >
                                                                                 <span className="order-form-cell-copy-icon material-symbols-outlined">edit</span>
                                                                             </button>
-                                                                        {item.name && (
+                                                                        {displayNameLabel && (
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(e) => e.stopPropagation()}
-                                                                                onClick={(e) => handleCopyCellValue(item.name, 'tên sản phẩm', e, nameCopyId)}
+                                                                                onClick={(e) => handleCopyCellValue(displayNameLabel, 'tên sản phẩm', e, nameCopyId)}
                                                                                 className={`${copiedText === nameCopyId ? 'text-green-600' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-primary p-0.5 rounded transition-all shrink-0`}
                                                                                 title="Sao chép tên SP"
                                                                             >
@@ -11840,7 +11879,7 @@ const OrderForm = () => {
                                                                     )}
                                                                     {!isEditingName && isNameTooltipVisible && (
                                                                         <div className={`absolute left-4 bg-slate-900 text-white p-3 rounded shadow-2xl pointer-events-none z-50 w-80 text-[12px] font-bold border border-white/10 leading-relaxed ${index === 0 ? 'top-full mt-2 origin-top-left' : 'bottom-full mb-2 origin-bottom-left'}`}>
-                                                                            <div>{item.name}</div>
+                                                                            <div>{displayNameLabel}</div>
                                                                             {originalNameLabel ? (
                                                                                 <div className="mt-2 border-t border-white/15 pt-2 text-[11px] font-medium text-white/70">
                                                                                     {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}

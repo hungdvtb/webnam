@@ -2639,6 +2639,23 @@ const getOrderItemEffectiveInventoryName = (item) => (
         ? getOrderItemActualNameLabel(item) || item?.name || ''
         : item?.name || ''
 );
+const resolveSubmittedOrderItemName = (item, productId = 0) => {
+    const normalizedProductId = Number(productId) || Number(item?.product_id) || 0;
+    const candidates = [
+        item?.snapshot_name,
+        item?.name,
+        item?.original_name,
+    ];
+
+    for (const candidate of candidates) {
+        const normalized = normalizeCanvasText(candidate);
+        if (normalized && !isPlaceholderProductName(normalized, normalizedProductId)) {
+            return normalized;
+        }
+    }
+
+    return '';
+};
 const buildOrderItemMergeKey = (item) => {
     const options = item?.options || {};
 
@@ -8273,25 +8290,35 @@ const OrderForm = () => {
             : [];
 
         const normalizedItems = (Array.isArray(formData.items) ? formData.items : [])
-            .map((item, index) => ({
-                product_id: Number(item.product_id) || 0,
-                actual_product_id: hasActualOrderProductOverride(item) ? (Number(item.actual_product_id) || 0) : undefined,
-                sort_order: index + 1,
-                quantity: Math.max(0, Number(item.quantity) || 0),
-                price: Math.max(0, Number(item.price) || 0),
-                cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
-                name: item.snapshot_name || item.name || '',
-                sku: item.snapshot_sku || item.sku || '',
-                actual_name: hasActualOrderProductOverride(item)
-                    ? (item.actual_snapshot_name || item.actual_name || '')
-                    : undefined,
-                actual_sku: hasActualOrderProductOverride(item)
-                    ? (item.actual_snapshot_sku || item.actual_sku || '')
-                    : undefined,
-                options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
-                    ? item.options
-                    : undefined,
-            }))
+            .map((item, index) => {
+                const productId = Number(item.product_id) || 0;
+                const actualProductId = Number(item.actual_product_id) || 0;
+
+                return {
+                    product_id: productId,
+                    actual_product_id: hasActualOrderProductOverride(item) ? actualProductId : undefined,
+                    sort_order: index + 1,
+                    quantity: Math.max(0, Number(item.quantity) || 0),
+                    price: Math.max(0, Number(item.price) || 0),
+                    cost_price: resolveRoundedImportCostValue(item.cost_price, 0),
+                    name: resolveSubmittedOrderItemName(item, productId),
+                    sku: item.snapshot_sku || item.sku || '',
+                    actual_name: hasActualOrderProductOverride(item)
+                        ? resolveSubmittedOrderItemName({
+                            snapshot_name: item.actual_snapshot_name,
+                            name: item.actual_name,
+                            original_name: item.actual_original_name,
+                            product_id: actualProductId,
+                        }, actualProductId)
+                        : undefined,
+                    actual_sku: hasActualOrderProductOverride(item)
+                        ? (item.actual_snapshot_sku || item.actual_sku || '')
+                        : undefined,
+                    options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
+                        ? item.options
+                        : undefined,
+                };
+            })
             .filter((item) => item.product_id && item.quantity > 0);
 
         const submittedDiscount = resolveSignedMoneyInputCommitValue(

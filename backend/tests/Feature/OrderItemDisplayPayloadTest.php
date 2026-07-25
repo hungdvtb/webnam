@@ -8,14 +8,14 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
 use App\Models\User;
-use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class OrderItemDisplayPayloadTest extends TestCase
 {
-    use DatabaseTransactions;
+    use RefreshDatabase;
 
     public function test_order_list_prefers_current_product_identity_but_keeps_snapshot_fields(): void
     {
@@ -48,6 +48,32 @@ class OrderItemDisplayPayloadTest extends TestCase
         $this->assertTrue((bool) data_get($row, 'items.0.has_product_snapshot_mismatch'));
         $this->assertSame('Bo am tra moi', data_get($row, 'items.0.product.name'));
         $this->assertSame('AM-TRA-MOI', data_get($row, 'items.0.product.sku'));
+    }
+
+    public function test_order_list_hydrates_placeholder_snapshot_names_from_product(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Dia cau men ran sen',
+            'sku' => 'DIA-CAU-RAN-SEN',
+        ]);
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'product_name_snapshot' => 'San pham #' . $product->id,
+            'product_sku_snapshot' => 'N/A',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?order_kind=draft&per_page=100')
+            ->assertOk();
+
+        $row = collect($response->json('data'))
+            ->firstWhere('id', $order->id);
+
+        $this->assertNotNull($row);
+        $this->assertSame($product->name, data_get($row, 'items.0.snapshot_name'));
+        $this->assertSame($product->name, data_get($row, 'items.0.display_name'));
+        $this->assertSame($product->name, data_get($row, 'items.0.product.name'));
     }
 
     public function test_print_data_keeps_snapshot_identity_for_history_documents(): void

@@ -18,6 +18,7 @@ use App\Models\Supplier;
 use App\Models\SupplierProductPrice;
 use App\Services\AccountDataScopeService;
 use App\Support\ImportCostRounding;
+use App\Support\OrderProductSnapshot;
 use App\Support\InventoryQuantity;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
@@ -441,13 +442,13 @@ class InventoryService
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
                 'actual_product_id' => $actualProduct?->id,
-                'product_name_snapshot' => filled($item['name'] ?? null) ? (string) $item['name'] : $product->name,
+                'product_name_snapshot' => OrderProductSnapshot::submittedNameOrCatalog($item['name'] ?? null, $product),
                 'actual_product_name_snapshot' => $actualProduct
-                    ? (filled($item['actual_name'] ?? null) ? (string) $item['actual_name'] : $actualProduct->name)
+                    ? OrderProductSnapshot::submittedNameOrCatalog($item['actual_name'] ?? null, $actualProduct)
                     : null,
-                'product_sku_snapshot' => filled($item['sku'] ?? null) ? (string) $item['sku'] : $product->sku,
+                'product_sku_snapshot' => OrderProductSnapshot::submittedSkuOrCatalog($item['sku'] ?? null, $product),
                 'actual_product_sku_snapshot' => $actualProduct
-                    ? (filled($item['actual_sku'] ?? null) ? (string) $item['actual_sku'] : $actualProduct->sku)
+                    ? OrderProductSnapshot::submittedSkuOrCatalog($item['actual_sku'] ?? null, $actualProduct)
                     : null,
                 'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,

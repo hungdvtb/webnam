@@ -4,11 +4,38 @@ const normalizeText = (value) => {
     return normalized !== '' ? normalized : '';
 };
 
+const normalizeSearchText = (value) => normalizeText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+const compactSearchText = (value) => normalizeSearchText(value).replace(/\s+/g, '');
+
+const isPlaceholderProductName = (value, productId = 0) => {
+    const compactValue = compactSearchText(value);
+    if (!compactValue) return true;
+
+    const normalizedProductId = Number(productId) || 0;
+    return compactValue === 'sanpham'
+        || compactValue === 'sanphambundle'
+        || (normalizedProductId > 0 && compactValue === `sanpham${normalizedProductId}`);
+};
+
+const normalizeProductName = (value, productId = 0) => {
+    const normalized = normalizeText(value);
+
+    return normalized && !isPlaceholderProductName(normalized, productId) ? normalized : '';
+};
+
 const compareIdentity = (left, right) => normalizeText(left) === normalizeText(right);
 
 export const getOrderItemSnapshotName = (item) => (
-    normalizeText(item?.snapshot_name)
-    || normalizeText(item?.product_name_snapshot)
+    normalizeProductName(item?.snapshot_name, Number(item?.product_id) || 0)
+    || normalizeProductName(item?.product_name_snapshot, Number(item?.product_id) || 0)
     || ''
 );
 
@@ -45,8 +72,8 @@ export const getOrderItemCatalogSku = (item) => (
 );
 
 export const getOrderItemActualSnapshotName = (item) => (
-    normalizeText(item?.actual_snapshot_name)
-    || normalizeText(item?.actual_product_name_snapshot)
+    normalizeProductName(item?.actual_snapshot_name, Number(item?.actual_product_id) || 0)
+    || normalizeProductName(item?.actual_product_name_snapshot, Number(item?.actual_product_id) || 0)
     || ''
 );
 
@@ -88,7 +115,7 @@ export const getOrderItemActualDisplayName = (item, fallback = '') => {
         || (Number(item?.actual_product_id) ? `San pham #${item.actual_product_id}` : '');
 
     return (
-        normalizeText(item?.actual_display_name)
+        normalizeProductName(item?.actual_display_name, Number(item?.actual_product_id) || 0)
         || getOrderItemCurrentActualName(item)
         || getOrderItemActualSnapshotName(item)
         || resolvedFallback
@@ -114,8 +141,8 @@ export const getOrderItemDisplayName = (item, fallback = '') => {
 
     return (
         getOrderItemSnapshotName(item)
-        || normalizeText(item?.name)
-        || normalizeText(item?.display_name)
+        || normalizeProductName(item?.name, Number(item?.product_id) || 0)
+        || normalizeProductName(item?.display_name, Number(item?.product_id) || 0)
         || getOrderItemCurrentName(item)
         || resolvedFallback
     );

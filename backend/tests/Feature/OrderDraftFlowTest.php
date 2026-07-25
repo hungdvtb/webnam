@@ -92,6 +92,64 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(3, (int) $order->items()->first()->quantity);
     }
 
+    public function test_order_item_snapshots_ignore_placeholder_names_when_saving(): void
+    {
+        [$account] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Dia cau men ran sen',
+            'sku' => 'DIA-CAU-RAN-SEN',
+            'price' => 150000,
+            'cost_price' => 80000,
+        ]);
+        $this->createInventoryBatch($account, $product, 10, 80000, 'placeholder-name');
+
+        $draftResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', [
+                'order_kind' => Order::KIND_DRAFT,
+                'customer_name' => 'Khach draft placeholder',
+                'customer_phone' => '0912345678',
+                'shipping_address' => '',
+                'source' => 'Website',
+                'items' => [
+                    [
+                        'product_id' => $product->id,
+                        'quantity' => 1,
+                        'price' => 150000,
+                        'name' => 'San pham #' . $product->id,
+                        'sku' => 'N/A',
+                    ],
+                ],
+            ])
+            ->assertCreated();
+
+        $draftItem = Order::query()
+            ->with('items')
+            ->findOrFail((int) $draftResponse->json('id'))
+            ->items
+            ->first();
+
+        $this->assertSame($product->name, $draftItem->product_name_snapshot);
+        $this->assertSame($product->sku, $draftItem->product_sku_snapshot);
+
+        $officialResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders', $this->officialOrderPayload($product, [
+                'name' => 'San pham #' . $product->id,
+                'sku' => 'N/A',
+            ]))
+            ->assertCreated();
+
+        $officialItem = Order::query()
+            ->with('items')
+            ->findOrFail((int) $officialResponse->json('id'))
+            ->items
+            ->first();
+
+        $this->assertSame($product->name, $officialItem->product_name_snapshot);
+        $this->assertSame($product->sku, $officialItem->product_sku_snapshot);
+    }
+
     public function test_save_draft_with_complete_customer_info_stores_official_order(): void
     {
         [$account] = $this->authenticate();

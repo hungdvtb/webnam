@@ -26,6 +26,7 @@ use App\Support\ImportCostRounding;
 use App\Support\InventoryQuantity;
 use App\Support\OrderBootstrapCache;
 use App\Support\OrderCodAdjustmentSystemNote;
+use App\Support\OrderProductSnapshot;
 use App\Support\OrderExchangeRefundSystemNote;
 use App\Support\OrderShippingFeeCalculator;
 use App\Support\OrderStatusCatalog;
@@ -2151,13 +2152,19 @@ class OrderController extends Controller
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
                 'actual_product_id' => $actualProduct?->id,
-                'product_name_snapshot' => $item['name'] ?? $product->name,
+                'product_name_snapshot' => OrderProductSnapshot::submittedNameOrCatalog($item['name'] ?? null, $product),
                 'actual_product_name_snapshot' => $actualProduct
-                    ? ($item['actual_name'] ?? $item['actual_product_name_snapshot'] ?? $actualProduct->name)
+                    ? OrderProductSnapshot::submittedNameOrCatalog(
+                        $item['actual_name'] ?? $item['actual_product_name_snapshot'] ?? null,
+                        $actualProduct
+                    )
                     : null,
-                'product_sku_snapshot' => $item['sku'] ?? $product->sku,
+                'product_sku_snapshot' => OrderProductSnapshot::submittedSkuOrCatalog($item['sku'] ?? null, $product),
                 'actual_product_sku_snapshot' => $actualProduct
-                    ? ($item['actual_sku'] ?? $item['actual_product_sku_snapshot'] ?? $actualProduct->sku)
+                    ? OrderProductSnapshot::submittedSkuOrCatalog(
+                        $item['actual_sku'] ?? $item['actual_product_sku_snapshot'] ?? null,
+                        $actualProduct
+                    )
                     : null,
                 'sort_order' => (int) $item['sort_order'],
                 'quantity' => $quantity,

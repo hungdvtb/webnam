@@ -891,20 +891,24 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
+                        ->withoutGlobalScope('account_id')
                         ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id', 'profit_center_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->withoutGlobalScope('account_id')
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id', 'products.profit_center_id'])
                                 ->with(['unit:id,name']),
                         ]),
                     'actualProduct' => fn ($productQuery) => $productQuery
+                        ->withoutGlobalScope('account_id')
                         ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->withoutGlobalScope('account_id')
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
                                 ->with(['unit:id,name']),
                         ]),
@@ -937,11 +941,13 @@ class OrderController extends Controller
                 ])
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
+                        ->withoutGlobalScope('account_id')
                         ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
                             'parentConfigurable' => fn ($parentQuery) => $parentQuery
+                                ->withoutGlobalScope('account_id')
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
                                 ->with(['unit:id,name']),
                         ]),
@@ -972,9 +978,12 @@ class OrderController extends Controller
                 ->orderBy('id')
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
+                        ->withoutGlobalScope('account_id')
                         ->select(['id', 'name', 'sku', 'inventory_unit_id'])
                         ->with(['unit:id,name']),
-                    'actualProduct:id,name,sku',
+                    'actualProduct' => fn ($productQuery) => $productQuery
+                        ->withoutGlobalScope('account_id')
+                        ->select(['id', 'name', 'sku']),
                 ]),
         ];
     }

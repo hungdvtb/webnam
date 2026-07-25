@@ -2443,10 +2443,18 @@ const resolveOrderLineItemDisplayName = ({ name, options, fallbackName = '' }) =
     const normalizedOptions = normalizeOrderLineOptions(options);
 
     if (normalizedOptions) {
+        const optionParentName = normalizeCanvasText(normalizedOptions?.variant_parent_name);
+        const optionVariantName = normalizeCanvasText(normalizedOptions?.variant_name);
+        const optionLabel = normalizeCanvasText(normalizedOptions?.variant_label);
+
+        if (!optionParentName && !optionVariantName) {
+            return normalizedName || normalizedFallbackName || 'Sản phẩm';
+        }
+
         const variationDisplayName = buildVariationDisplayName(
-            normalizedOptions?.variant_parent_name,
-            normalizeCanvasText(normalizedOptions?.variant_name) || normalizedFallbackName || normalizedName,
-            normalizedOptions?.variant_label
+            optionParentName,
+            optionVariantName || normalizedName || normalizedFallbackName,
+            optionLabel
         );
 
         if (variationDisplayName) {
@@ -4810,9 +4818,12 @@ const OrderForm = () => {
                 const latestName = latestProductId === itemProductId
                     ? resolveLatestOrderItemName(item, latest)
                     : '';
+                const hasPlaceholderName = isPlaceholderProductName(item?.name, itemProductId);
+                const hasPlaceholderSnapshotName = isPlaceholderProductName(item?.snapshot_name, itemProductId);
+                const hasPlaceholderOriginalName = isPlaceholderProductName(item?.original_name, itemProductId);
                 const shouldHydrateName = latestName
                     && !isPlaceholderProductName(latestName, itemProductId)
-                    && isPlaceholderProductName(item?.name, itemProductId)
+                    && (hasPlaceholderName || hasPlaceholderSnapshotName || hasPlaceholderOriginalName)
                     && !hasActualOrderProductOverride(item);
                 const latestSku = latestProductId === itemProductId
                     ? normalizeCanvasText(latest?.display_sku || latest?.sku)
@@ -4823,11 +4834,9 @@ const OrderForm = () => {
                 return {
                     ...item,
                     ...(shouldHydrateName ? {
-                        name: latestName,
-                        snapshot_name: isPlaceholderProductName(item?.snapshot_name, itemProductId)
-                            ? latestName
-                            : item?.snapshot_name,
-                        original_name: latestName,
+                        name: hasPlaceholderName ? latestName : item?.name,
+                        snapshot_name: hasPlaceholderSnapshotName ? latestName : item?.snapshot_name,
+                        original_name: hasPlaceholderOriginalName ? latestName : item?.original_name,
                     } : {}),
                     ...(shouldHydrateSku ? {
                         sku: latestSku,

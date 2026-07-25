@@ -76,6 +76,50 @@ class OrderItemDisplayPayloadTest extends TestCase
         $this->assertSame($product->name, data_get($row, 'items.0.product.name'));
     }
 
+    public function test_order_detail_hydrates_placeholder_snapshot_names_from_product(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Lo hoa men ran M2 35',
+            'sku' => 'LO-HOA-M2-35',
+        ]);
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'product_name_snapshot' => 'San pham #' . $product->id,
+            'product_sku_snapshot' => 'N/A',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson("/api/orders/{$order->id}")
+            ->assertOk();
+
+        $this->assertSame($product->name, data_get($response->json(), 'items.0.snapshot_name'));
+        $this->assertSame($product->name, data_get($response->json(), 'items.0.display_name'));
+        $this->assertSame($product->name, data_get($response->json(), 'items.0.product.name'));
+    }
+
+    public function test_placeholder_snapshot_repair_command_updates_stored_order_item_rows(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'Lo hoa men ran M2 35',
+            'sku' => 'LO-HOA-M2-35',
+        ]);
+        $order = $this->createDraftOrder($account, $user, $product, [
+            'product_name_snapshot' => 'San pham #' . $product->id,
+            'product_sku_snapshot' => 'N/A',
+        ]);
+
+        $this->artisan('orders:repair-placeholder-product-snapshots', [
+            '--account-id' => $account->id,
+        ])->assertExitCode(0);
+
+        $item = $order->items()->firstOrFail();
+
+        $this->assertSame($product->name, $item->product_name_snapshot);
+        $this->assertSame($product->sku, $item->product_sku_snapshot);
+    }
+
     public function test_print_data_keeps_snapshot_identity_for_history_documents(): void
     {
         [$account, $user] = $this->authenticate();

@@ -18,6 +18,7 @@ function deploy_backend() {
     cd $BACKEND_DIR
     composer install --no-dev --optimize-autoloader
     php artisan migrate --force
+    php artisan orders:repair-placeholder-product-snapshots --no-interaction
     php artisan storage:link
     # Reset permissions for storage & cache
     chown -R www-data:www-data storage bootstrap/cache

@@ -20,16 +20,29 @@ const parseCachedAccounts = (value) => {
     }
 };
 
+const persistActiveSiteCode = (accounts, accountId) => {
+    const selectedAccount = accounts.find((account) => String(account.id) === String(accountId));
+    const siteCode = String(selectedAccount?.site_code || '').trim();
+
+    if (siteCode) {
+        localStorage.setItem('activeSiteCode', siteCode);
+        return;
+    }
+
+    localStorage.removeItem('activeSiteCode');
+};
+
 const AccountSelector = ({ reloadOnAutoSelect = true }) => {
     const [accounts, setAccounts] = React.useState([]);
     const [activeId, setActiveId] = React.useState(() => readActiveAccountId() || 'all');
 
-    const commitActiveAccount = React.useCallback(async (nextId, shouldReload = false) => {
+    const commitActiveAccount = React.useCallback(async (nextId, shouldReload = false, accountList = []) => {
         const normalizedId = String(nextId || '').trim();
         if (!normalizedId) {
             return;
         }
 
+        persistActiveSiteCode(accountList, normalizedId);
         localStorage.setItem('activeAccountId', normalizedId);
         setActiveId(normalizedId);
         dispatchActiveAccountChanged(normalizedId);
@@ -47,7 +60,9 @@ const AccountSelector = ({ reloadOnAutoSelect = true }) => {
             setAccounts(parsedAccounts);
             if ((activeId === 'all' || !activeId) && parsedAccounts.length > 0) {
                 const firstId = String(parsedAccounts[0].id || '').trim();
-                void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all');
+                void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all', parsedAccounts);
+            } else {
+                persistActiveSiteCode(parsedAccounts, activeId);
             }
         } else {
             accountApi.getAll().then(res => {
@@ -55,7 +70,9 @@ const AccountSelector = ({ reloadOnAutoSelect = true }) => {
                 setAccounts(res.data);
                 if ((activeId === 'all' || !activeId) && res.data.length > 0) {
                     const firstId = String(res.data[0].id || '').trim();
-                    void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all');
+                    void commitActiveAccount(firstId, reloadOnAutoSelect && activeId === 'all', res.data);
+                } else {
+                    persistActiveSiteCode(res.data, activeId);
                 }
             }).catch(console.error);
         }
@@ -63,7 +80,7 @@ const AccountSelector = ({ reloadOnAutoSelect = true }) => {
 
     const handleAccountChange = async (e) => {
         const newId = e.target.value;
-        await commitActiveAccount(newId, true);
+        await commitActiveAccount(newId, true, accounts);
     };
 
     return (

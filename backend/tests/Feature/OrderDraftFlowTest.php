@@ -212,11 +212,13 @@ class OrderDraftFlowTest extends TestCase
             'sku' => 'AUTO-OFFICIAL-UPD-001',
             'price' => 175000,
         ]);
+        $customItemName = 'San pham update auto official - ten da sua tren don';
 
         $order = $this->createDraftOrder($account, $user, $product, [
             'customer_name' => 'Khach draft thieu dia chi',
             'customer_phone' => '0901111222',
             'shipping_address' => '',
+            'product_name_snapshot' => $customItemName,
         ]);
 
         $response = $this
@@ -235,6 +237,8 @@ class OrderDraftFlowTest extends TestCase
                         'product_id' => $product->id,
                         'quantity' => 1,
                         'price' => 175000,
+                        'name' => $customItemName,
+                        'sku' => $product->sku,
                     ],
                 ],
             ]);
@@ -255,6 +259,7 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(Order::KIND_OFFICIAL, $order->order_kind);
         $this->assertSame('456 Le Loi', $order->shipping_address);
         $this->assertNotNull($order->officialized_at);
+        $this->assertSame($customItemName, $order->items()->firstOrFail()->product_name_snapshot);
     }
 
     public function test_convert_to_draft_keeps_complete_official_order_in_main_orders(): void
@@ -1187,6 +1192,7 @@ class OrderDraftFlowTest extends TestCase
             'cost_price' => 110000,
             'stock_quantity' => 40,
         ]);
+        $customItemName = 'San pham draft moi - ten da sua truoc khi chot';
         $this->createInventoryBatch($account, $originalProduct, 20, 70000, 'draft-convert-old');
         $this->createInventoryBatch($account, $latestProduct, 20, 110000, 'draft-convert-new');
 
@@ -1226,6 +1232,8 @@ class OrderDraftFlowTest extends TestCase
                             'quantity' => 2,
                             'price' => 210000,
                             'cost_price' => 110000,
+                            'name' => $customItemName,
+                            'sku' => $latestProduct->sku,
                         ],
                     ],
                 ]);
@@ -1259,6 +1267,7 @@ class OrderDraftFlowTest extends TestCase
         $this->assertSame(420000.0, (float) $order->total_price);
         $this->assertCount(1, $order->items);
         $this->assertSame($latestProduct->id, (int) $order->items[0]->product_id);
+        $this->assertSame($customItemName, $order->items[0]->product_name_snapshot);
         $this->assertSame(2, (int) $order->items[0]->quantity);
         $this->assertSame(210000.0, (float) $order->items[0]->price);
         $this->assertSame(110000.0, (float) $order->items[0]->cost_price);

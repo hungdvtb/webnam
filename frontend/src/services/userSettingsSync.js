@@ -5,11 +5,14 @@ const RETRY_FLUSH_MS = 1500;
 
 const SYNCED_EXACT_KEYS = new Set([
     'activeAccountId',
-    'activeSiteCode',
     'shipping_notification_settings_v1',
     'order_column_widths',
     'added_cost_price_migrated_form',
     'order_form_product_quick_setup_map_v1',
+]);
+
+const LOCAL_PRIORITY_EXACT_KEYS = new Set([
+    'activeAccountId',
 ]);
 
 const SYNCED_PREFIXES = [
@@ -47,7 +50,24 @@ const createEmptySnapshot = () => ({
     sessionStorage: {},
 });
 
-const normalizeBucket = (bucket) => {
+const shouldSyncKey = (storageName, key) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey || normalizedKey === CACHE_OWNER_KEY) {
+        return false;
+    }
+
+    if (LOCAL_ONLY_EXACT_KEYS.has(normalizedKey)) {
+        return false;
+    }
+
+    if (SYNCED_EXACT_KEYS.has(normalizedKey)) {
+        return true;
+    }
+
+    return SYNCED_PREFIXES.some((prefix) => normalizedKey.startsWith(prefix));
+};
+
+const normalizeBucket = (bucket, storageName = 'localStorage', { filterSyncKeys = false } = {}) => {
     if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) {
         return {};
     }
@@ -58,14 +78,18 @@ const normalizeBucket = (bucket) => {
             return result;
         }
 
+        if (filterSyncKeys && !shouldSyncKey(storageName, normalizedKey)) {
+            return result;
+        }
+
         result[normalizedKey] = String(value ?? '');
         return result;
     }, {});
 };
 
-const normalizeSnapshot = (payload) => ({
-    localStorage: normalizeBucket(payload?.localStorage),
-    sessionStorage: normalizeBucket(payload?.sessionStorage),
+const normalizeSnapshot = (payload, options = {}) => ({
+    localStorage: normalizeBucket(payload?.localStorage, 'localStorage', options),
+    sessionStorage: normalizeBucket(payload?.sessionStorage, 'sessionStorage', options),
 });
 
 const getStorageArea = (storageName) => {
@@ -90,23 +114,6 @@ const resolveStorageName = (storage) => {
     }
 
     return null;
-};
-
-const shouldSyncKey = (storageName, key) => {
-    const normalizedKey = String(key || '').trim();
-    if (!normalizedKey || normalizedKey === CACHE_OWNER_KEY) {
-        return false;
-    }
-
-    if (LOCAL_ONLY_EXACT_KEYS.has(normalizedKey)) {
-        return false;
-    }
-
-    if (SYNCED_EXACT_KEYS.has(normalizedKey)) {
-        return true;
-    }
-
-    return SYNCED_PREFIXES.some((prefix) => normalizedKey.startsWith(prefix));
 };
 
 const withSyncSuspended = (callback) => {
@@ -185,13 +192,22 @@ const mergeServerSnapshot = (serverSnapshot, localSnapshot, allowLocalFallback) 
     const mergedSnapshot = createEmptySnapshot();
 
     STORAGE_AREAS.forEach((storageName) => {
-        const remoteBucket = normalizeBucket(serverSnapshot?.[storageName]);
-        const cacheBucket = allowLocalFallback ? normalizeBucket(localSnapshot?.[storageName]) : {};
+        const remoteBucket = normalizeBucket(serverSnapshot?.[storageName], storageName, { filterSyncKeys: true });
+        const cacheBucket = allowLocalFallback ? normalizeBucket(localSnapshot?.[storageName], storageName) : {};
 
         mergedSnapshot[storageName] = {
             ...cacheBucket,
             ...remoteBucket,
         };
+
+        if (allowLocalFallback) {
+            LOCAL_PRIORITY_EXACT_KEYS.forEach((key) => {
+                const localValue = cacheBucket[key];
+                if (localValue !== undefined && localValue !== '' && localValue !== 'all') {
+                    mergedSnapshot[storageName][key] = localValue;
+                }
+            });
+        }
     });
 
     return mergedSnapshot;
@@ -310,6 +326,20 @@ const flushPendingChanges = async () => {
 
     if (activeSyncState.flushInFlight) {
         activeSyncState.flushQueued = true;
+        const inFlightPromise = activeSyncState.flushPromise;
+        if (inFlightPromise) {
+            try {
+                await inFlightPromise;
+            } catch {
+                // The in-flight flush handles its own retry bookkeeping.
+            }
+        }
+
+        if (activeSyncState?.patchSettings && (activeSyncState.flushQueued || hasPendingChanges(activeSyncState.pendingChanges))) {
+            activeSyncState.flushQueued = false;
+            return flushPendingChanges();
+        }
+
         return;
     }
 
@@ -325,8 +355,10 @@ const flushPendingChanges = async () => {
     }
 
     try {
-        const response = await activeSyncState.patchSettings(patch);
-        activeSyncState.snapshot = normalizeSnapshot(response?.data);
+        const flushPromise = activeSyncState.patchSettings(patch);
+        activeSyncState.flushPromise = flushPromise;
+        const response = await flushPromise;
+        activeSyncState.snapshot = normalizeSnapshot(response?.data, { filterSyncKeys: true });
         activeSyncState.lastError = null;
         writeCacheOwner(activeSyncState.userId);
     } catch (error) {
@@ -336,6 +368,7 @@ const flushPendingChanges = async () => {
         scheduleFlush(RETRY_FLUSH_MS);
     } finally {
         activeSyncState.flushInFlight = false;
+        activeSyncState.flushPromise = null;
 
         if (activeSyncState.flushQueued || hasPendingChanges(activeSyncState.pendingChanges)) {
             activeSyncState.flushQueued = false;
@@ -445,6 +478,7 @@ export const bootstrapUserSettingsSync = async ({ userId, fetchSettings, patchSe
         pendingChanges: createEmptySnapshot(),
         flushTimer: null,
         flushInFlight: false,
+        flushPromise: null,
         flushQueued: false,
         suspendCount: 0,
         lastError: null,
@@ -458,7 +492,7 @@ export const bootstrapUserSettingsSync = async ({ userId, fetchSettings, patchSe
 
     try {
         const response = await fetchSettings();
-        serverSnapshot = normalizeSnapshot(response?.data);
+        serverSnapshot = normalizeSnapshot(response?.data, { filterSyncKeys: true });
     } catch (error) {
         console.error('Unable to fetch user settings from server, using local cache', error);
         bootstrapSource = 'local-cache';

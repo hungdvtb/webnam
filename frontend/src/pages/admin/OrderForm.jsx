@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { orderAiTrainingApi, orderApi, productApi, leadApi, cmsApi } from '../../services/api';
+import api, { accountApi, orderAiTrainingApi, orderApi, productApi, leadApi, cmsApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -58,7 +58,7 @@ import {
     formatRoundedImportCost,
     normalizeRoundedImportCostNumber,
 } from '../../utils/money';
-import { buildOrderAiPickerEntries, buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
+import { buildOrderAiQuickRuleOptions, normalizeOrderAiRules } from '../../utils/orderAiRules';
 import { hasAdminPermission } from '../../utils/adminPermissions';
 import {
     copyProductQuickSetupItemsToNamespace,
@@ -119,6 +119,9 @@ const productQuickFilterAttribute2MapStorageKey = 'order_form_product_quick_filt
 const productQuickFilterStateStorageKey = 'order_form_product_quick_filter_state_v1';
 const productQuickSetupStorageKey = 'order_form_product_quick_setup_map_v1';
 const orderProductQuickModeDefaultSettingKey = 'order_product_quick_mode_default_enabled';
+const PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE = 'attribute';
+const PRODUCT_QUICK_SETUP_MODE_MANUAL = 'manual';
+const PRODUCT_MANUAL_QUICK_SETUP_FALLBACK_KEY = 'manual::default';
 const supportedProductQuickFilterTypes = new Set(['select', 'multiselect']);
 const PRODUCT_QUICK_FILTER_KIND_ATTRIBUTE = 'attribute';
 const PRODUCT_QUICK_FILTER_KIND_BUNDLE_OPTION_TITLE = 'bundle_option_title';
@@ -1102,6 +1105,112 @@ const getProductQuickSetupEntryKey = (entry) => {
     const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.id ?? 0);
     return Number.isFinite(productId) && productId > 0 ? String(productId) : '';
 };
+const normalizeAccountId = (value) => {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null;
+};
+const normalizeAccountRows = (rows = []) => (
+    (Array.isArray(rows) ? rows : [])
+        .map((account) => {
+            const id = normalizeAccountId(account?.id ?? account?.account_id);
+            if (!id) return null;
+
+            return {
+                ...account,
+                id,
+                name: normalizeCanvasText(account?.name || account?.store_name || account?.site_name || `Shop #${id}`),
+            };
+        })
+        .filter(Boolean)
+);
+const getOrderFormActiveAccountId = () => {
+    if (typeof window === 'undefined') return null;
+
+    try {
+        return normalizeAccountId(window.localStorage.getItem('activeAccountId'));
+    } catch (error) {
+        console.error('Unable to read active account id', error);
+        return null;
+    }
+};
+const getCachedOrderFormAccounts = () => {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const raw = window.sessionStorage.getItem('accounts_list');
+        return normalizeAccountRows(raw ? JSON.parse(raw) : []);
+    } catch (error) {
+        console.error('Unable to read cached accounts', error);
+        return [];
+    }
+};
+const resolveProductSourceFields = (source = {}, fallback = {}) => {
+    const rawSource = source && typeof source === 'object' ? source : {};
+    const rawFallback = fallback && typeof fallback === 'object' ? fallback : {};
+    const productSourceAccountId = normalizeAccountId(
+        rawSource.product_source_account_id
+        ?? rawSource.source_account_id
+        ?? rawSource.productSourceAccount?.id
+        ?? rawSource.product_source_account?.id
+        ?? rawFallback.product_source_account_id
+        ?? rawFallback.source_account_id
+        ?? rawFallback.productSourceAccount?.id
+        ?? rawFallback.product_source_account?.id
+        ?? rawSource.account_id
+        ?? rawFallback.account_id
+    );
+    const inventorySourceAccountId = normalizeAccountId(
+        rawSource.inventory_source_account_id
+        ?? rawSource.inventorySourceAccount?.id
+        ?? rawSource.inventory_source_account?.id
+        ?? rawFallback.inventory_source_account_id
+        ?? rawFallback.inventorySourceAccount?.id
+        ?? rawFallback.inventory_source_account?.id
+    );
+    const productCatalogAccountId = normalizeAccountId(
+        rawSource.product_catalog_account_id
+        ?? rawFallback.product_catalog_account_id
+        ?? rawSource.account_id
+        ?? rawFallback.account_id
+    );
+    const sourceAccountName = normalizeCanvasText(
+        rawSource.product_source_account_name
+        || rawSource.source_account_name
+        || rawSource.productSourceAccount?.name
+        || rawSource.product_source_account?.name
+        || rawFallback.product_source_account_name
+        || rawFallback.source_account_name
+        || rawFallback.productSourceAccount?.name
+        || rawFallback.product_source_account?.name
+    );
+
+    return {
+        source_account_id: productSourceAccountId || undefined,
+        product_source_account_id: productSourceAccountId || undefined,
+        inventory_source_account_id: inventorySourceAccountId || undefined,
+        product_catalog_account_id: productCatalogAccountId || undefined,
+        source_account_name: sourceAccountName || undefined,
+        product_source_account_name: sourceAccountName || undefined,
+    };
+};
+const getProductSourceAccountId = (source) => (
+    resolveProductSourceFields(source).product_source_account_id || null
+);
+const getProductSourceDisplayName = (source) => (
+    resolveProductSourceFields(source).product_source_account_name || ''
+);
+const buildProductSourcePayload = (source) => {
+    const sourceFields = resolveProductSourceFields(source);
+    const payload = {};
+
+    ['product_source_account_id', 'inventory_source_account_id', 'source_account_id'].forEach((key) => {
+        if (sourceFields[key]) {
+            payload[key] = sourceFields[key];
+        }
+    });
+
+    return payload;
+};
 const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
     (Array.isArray(items) ? items : [])
         .map((item) => {
@@ -1124,6 +1233,7 @@ const normalizeStoredProductQuickSetupBundleItems = (items = []) => (
                 cost_price: resolveProductCostPrice(item),
                 unit_name: resolveOrderUnitLabel(item),
                 ...resolveInventorySnapshot(item),
+                ...resolveProductSourceFields(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 option_label: normalizeCanvasText(item?.option_label || item?.variant_label),
                 variant_name: normalizeCanvasText(item?.variant_name),
@@ -1198,6 +1308,7 @@ const normalizeStoredProductQuickSetupItems = (items = []) => {
                 cost_price: resolveProductCostPrice(item),
                 unit_name: resolveOrderUnitLabel(item),
                 ...resolveInventorySnapshot(item),
+                ...resolveProductSourceFields(item),
                 main_image: String(item?.main_image ?? '').trim(),
                 type: String(item?.type ?? '').trim(),
                 entry_kind: entryKind,
@@ -2097,10 +2208,12 @@ const normalizeProductPickerEntry = (product) => {
     if (!product || typeof product !== 'object') return product;
 
     const inventorySnapshot = resolveInventorySnapshot(product);
+    const sourceFields = resolveProductSourceFields(product);
 
     return {
         ...product,
         ...inventorySnapshot,
+        ...sourceFields,
         price: resolveMoneyValue(product?.price, 0),
         expected_cost: parseMoneyNumber(product?.expected_cost),
         cost_price: resolveProductCostPrice(product),
@@ -2110,6 +2223,7 @@ const normalizeProductPickerEntry = (product) => {
             ? product.variations.map((variation) => ({
                 ...variation,
                 ...resolveInventorySnapshot(variation),
+                ...resolveProductSourceFields(variation, sourceFields),
                 price: resolveMoneyValue(variation?.price, 0),
                 expected_cost: parseMoneyNumber(variation?.expected_cost),
                 cost_price: resolveProductCostPrice(variation),
@@ -2124,6 +2238,7 @@ const normalizeProductPickerEntry = (product) => {
                     ? bundleOption.items.map((bundleItem) => ({
                         ...bundleItem,
                         ...resolveInventorySnapshot(bundleItem),
+                        ...resolveProductSourceFields(bundleItem, sourceFields),
                         price: resolveMoneyValue(bundleItem?.price, 0),
                         expected_cost: parseMoneyNumber(bundleItem?.expected_cost),
                         cost_price: resolveProductCostPrice(bundleItem),
@@ -2177,6 +2292,7 @@ const mergeLatestProductSnapshotIntoBundleItem = (bundleItem, latest) => {
         expected_cost: parseMoneyNumber(latest?.expected_cost, parseMoneyNumber(bundleItem?.expected_cost)),
         main_image: normalizeCanvasText(latest?.main_image || latest?.primary_image?.url || bundleItem?.main_image),
         ...resolveInventorySnapshot(latest, bundleItem),
+        ...resolveProductSourceFields(latest, bundleItem),
     };
 };
 const mergeLatestProductSnapshotsIntoBundleItems = (bundleItems = [], latestMap = new Map()) => (
@@ -2207,6 +2323,7 @@ const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
             price: normalizedEntry?.price,
             expected_cost: normalizedEntry?.expected_cost,
             cost_price: normalizedEntry?.cost_price,
+            ...resolveProductSourceFields(latest, normalizedEntry),
             bundle_items: Array.isArray(latest?.bundle_items) && latest.bundle_items.length > 0
                 ? latest.bundle_items
                 : normalizedEntry?.bundle_items,
@@ -2437,10 +2554,14 @@ const extractOrderItemOptionsFromProductPayload = (product) => {
         search_entry_kind: entryKind || SEARCH_ENTRY_VARIATION,
     });
 };
-const resolveOrderLineItemDisplayName = ({ name, options, fallbackName = '' }) => {
+const resolveOrderLineItemDisplayName = ({ name, options, fallbackName = '', preferSubmittedName = false }) => {
     const normalizedName = normalizeCanvasText(name);
     const normalizedFallbackName = normalizeCanvasText(fallbackName);
     const normalizedOptions = normalizeOrderLineOptions(options);
+
+    if (preferSubmittedName && normalizedName) {
+        return normalizedName;
+    }
 
     if (normalizedOptions) {
         const optionParentName = normalizeCanvasText(normalizedOptions?.variant_parent_name);
@@ -2590,7 +2711,11 @@ const createOrderLineItem = (payload = {}) => {
     });
     const normalizedAiMeta = normalizeOrderAiItemMeta(ai_meta);
     const normalizedProductId = Number(product_id) || 0;
-    const submittedName = resolveOrderLineItemDisplayName({ name, options: normalizedOptions });
+    const submittedName = resolveOrderLineItemDisplayName({
+        name,
+        options: normalizedOptions,
+        preferSubmittedName: true,
+    });
     const catalogFallbackName = resolveOrderLineItemDisplayName({
         name: snapshot_name
             ?? original_name
@@ -2609,6 +2734,7 @@ const createOrderLineItem = (payload = {}) => {
         name: snapshot_name ?? name,
         options: normalizedOptions,
         fallbackName: resolvedName,
+        preferSubmittedName: true,
     });
     const resolvedSnapshotName = isPlaceholderProductName(rawSnapshotName, normalizedProductId)
         ? (catalogFallbackName || resolvedName)
@@ -2628,14 +2754,17 @@ const createOrderLineItem = (payload = {}) => {
         name: actual_name,
         options: normalizedOptions,
         fallbackName: '',
+        preferSubmittedName: true,
     });
     const resolvedActualSku = normalizeCanvasText(actual_sku) || '';
     const resolvedActualSnapshotName = resolveOrderLineItemDisplayName({
         name: actual_snapshot_name ?? actual_name,
         options: normalizedOptions,
         fallbackName: resolvedActualName,
+        preferSubmittedName: true,
     });
     const resolvedActualSnapshotSku = normalizeCanvasText(actual_snapshot_sku ?? actual_sku) || resolvedActualSku;
+    const sourceFields = resolveProductSourceFields(payload);
 
     return {
         line_id: normalizeCanvasText(line_id) || createOrderLineId('order-item'),
@@ -2664,6 +2793,12 @@ const createOrderLineItem = (payload = {}) => {
         ai_meta: normalizedAiMeta,
         category_id: Number(category_id) || undefined,
         profit_center_id: Number(profit_center_id) || null,
+        source_account_id: sourceFields.source_account_id,
+        product_source_account_id: sourceFields.product_source_account_id,
+        inventory_source_account_id: sourceFields.inventory_source_account_id,
+        product_catalog_account_id: sourceFields.product_catalog_account_id,
+        source_account_name: sourceFields.source_account_name,
+        product_source_account_name: sourceFields.product_source_account_name,
         parent_product_id: Number(payload.parent_product_id ?? normalizedOptions?.variant_parent_id) || undefined,
         product_attributes: product_attributes ? { ...product_attributes } : undefined,
         main_image: String(main_image || payload.primary_image?.url || payload.image_url || '').trim(),
@@ -2707,6 +2842,8 @@ const buildOrderItemMergeKey = (item) => {
 
     return [
         Number(item?.product_id) || 0,
+        normalizeProductSearchText(item?.product_source_account_id || item?.source_account_id),
+        normalizeProductSearchText(item?.inventory_source_account_id),
         normalizeProductSearchText(options?.bundle_parent_id),
         normalizeProductSearchText(options?.bundle_option_uid),
         normalizeProductSearchText(options?.bundle_option_key),
@@ -2769,6 +2906,7 @@ const appendOrderItemsWithMergeResult = (currentItems = [], additions = [], { in
                 computed_stock: mergedInventorySnapshot.computed_stock,
                 pending_export_quantity: mergedInventorySnapshot.pending_export_quantity,
                 available_to_sell: mergedInventorySnapshot.available_to_sell,
+                ...resolveProductSourceFields(normalizedAddition, existingItem),
                 options: mergedOptions,
                 ai_meta: mergeOrderAiItemMeta(existingItem.ai_meta, normalizedAddition.ai_meta),
             };
@@ -2823,6 +2961,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
                     computed_stock: bundleItem?.computed_stock,
                     pending_export_quantity: bundleItem?.pending_export_quantity,
                     available_to_sell: bundleItem?.available_to_sell,
+                    ...resolveProductSourceFields(bundleItem, entry),
                     category_id: bundleItem?.category_id,
                     profit_center_id: bundleItem?.profit_center_id,
                     product_attributes: bundleItem?.attributes_map || bundleItem?.product_attributes,
@@ -2871,6 +3010,7 @@ const buildOrderItemsFromSearchEntry = (entry) => {
         computed_stock: entry?.computed_stock,
         pending_export_quantity: entry?.pending_export_quantity,
         available_to_sell: entry?.available_to_sell,
+        ...resolveProductSourceFields(entry),
         category_id: entry?.category_id,
         profit_center_id: entry?.profit_center_id,
         product_attributes: entry?.attributes_map || entry?.product_attributes,
@@ -2964,6 +3104,8 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             : (normalizeCanvasText(product?.display_name) || baseName);
         const baseSku = normalizeCanvasText(product?.sku);
         const baseDisplaySku = normalizeCanvasText(product?.display_sku) || baseSku;
+        const baseSourceFields = resolveProductSourceFields(product);
+        const baseServerSearchMatch = Boolean(product?.server_search_match || product?.__server_search_match);
         const baseEntry = {
             entry_id: `${isDirectVariationEntry ? 'variation' : 'product'}-${productId}`,
             entry_kind: isDirectVariationEntry ? SEARCH_ENTRY_VARIATION : SEARCH_ENTRY_PRODUCT,
@@ -2981,6 +3123,8 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
             cost_price: resolveProductCostPrice(product),
             unit_name: resolveOrderUnitLabel(product),
             ...resolveInventorySnapshot(product),
+            ...baseSourceFields,
+            server_search_match: baseServerSearchMatch,
             type: normalizeCanvasText(product?.type),
             bundle_title: normalizeCanvasText(product?.bundle_title),
             main_image: getPickerPrimaryImage(product),
@@ -3032,6 +3176,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 target_product_id: variationId,
                 parent_product_id: baseEntry.id,
                 parent_product_name: baseEntry.name,
+                parent_product_sku: baseEntry.sku,
                 name: normalizeCanvasText(variation?.name) || baseEntry.name,
                 display_name: normalizeCanvasText(variation?.display_name) || buildVariationDisplayName(baseEntry.name, variation?.name, optionLabel),
                 sku: normalizeCanvasText(variation?.sku),
@@ -3042,12 +3187,17 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 cost_price: resolveProductCostPrice(variation),
                 unit_name: resolveOrderUnitLabel(variation, product),
                 ...resolveInventorySnapshot(variation),
+                ...resolveProductSourceFields(variation, baseSourceFields),
+                server_search_match: Boolean(variation?.server_search_match || variation?.__server_search_match || baseServerSearchMatch),
                 type: normalizeCanvasText(variation?.type || 'simple'),
                 main_image: getPickerPrimaryImage(variation) || baseEntry.main_image,
                 attribute_values: getPickerAttributeValues(variation),
                 parent_attribute_values: baseEntry.attribute_values,
                 search_keywords: [
                     baseEntry.name,
+                    baseEntry.display_name,
+                    baseEntry.sku,
+                    baseEntry.display_sku,
                     normalizeCanvasText(variation?.display_name),
                     normalizeCanvasText(variation?.name),
                     normalizeCanvasText(variation?.sku),
@@ -3075,6 +3225,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                     cost_price: resolveProductCostPrice(bundleItem),
                     unit_name: resolveOrderUnitLabel(bundleItem, product),
                     ...resolveInventorySnapshot(bundleItem),
+                    ...resolveProductSourceFields(bundleItem, baseSourceFields),
                     main_image: getPickerPrimaryImage(bundleItem),
                     attribute_values: getPickerAttributeValues(bundleItem),
                     option_label: normalizeCanvasText(bundleItem?.option_label || bundleItem?.variant_label || buildAttributeValueSummary(bundleItem)),
@@ -3123,6 +3274,7 @@ const buildProductSearchEntries = (products = [], { includeNested = false } = {}
                 price: optionPrice,
                 expected_cost: optionCostTotal,
                 cost_price: optionCostTotal,
+                ...baseSourceFields,
                 bundle_option_total_price: optionTotalPrice,
                 bundle_option_discounted_price: optionPrice,
                 type: baseEntry.type,
@@ -3221,6 +3373,7 @@ const buildStoredQuickSetupSearchEntries = (items = []) => {
             cost_price: resolveProductCostPrice(item),
             unit_name: resolveOrderUnitLabel(item),
             ...resolveInventorySnapshot(item),
+            ...resolveProductSourceFields(item),
             type: normalizeCanvasText(item?.type),
             main_image: getPickerPrimaryImage(item),
             parent_product_id: Number.isFinite(parentProductId) && parentProductId > 0 ? parentProductId : null,
@@ -3276,7 +3429,7 @@ const buildProductQuickSetupRefreshTargets = (items = []) => {
         if (!entryKey || productId <= 0 || seenEntryKeys.has(entryKey)) return;
 
         seenEntryKeys.add(entryKey);
-        targets.push({ entryKey, productId });
+        targets.push({ entryKey, productId, ...buildProductSourcePayload(item) });
     });
 
     return targets;
@@ -3706,11 +3859,19 @@ const ProductThumb = ({ src, fallback = null, imageClassName = 'size-full object
     );
 };
 
-const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false }) => {
+const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, isAlreadyInOrder = false, activeAccountId = null }) => {
     const nameRef = useRef(null);
     const [hasTruncation, setHasTruncation] = useState(false);
     const [isHovered, setIsHovered] = useState(false);
     const displayName = product?.display_name || product?.name || '---';
+    const productSourceAccountId = getProductSourceAccountId(product);
+    const productSourceName = getProductSourceDisplayName(product);
+    const shouldShowSourceBadge = Boolean(
+        productSourceName
+        && productSourceAccountId
+        && normalizeAccountId(activeAccountId)
+        && productSourceAccountId !== normalizeAccountId(activeAccountId)
+    );
     const quickFilterValues = useMemo(
         () => getProductQuickFilterDisplayValues(product, quickFilterAttribute),
         [product, quickFilterAttribute]
@@ -3803,6 +3964,14 @@ const ProductSearchOption = ({ product, onSelect, quickFilterAttribute = null, i
                             {quickFilterValues.length > 2 && (
                                 <span className="text-[10px] font-bold text-primary/35">+{quickFilterValues.length - 2}</span>
                             )}
+                        </div>
+                    )}
+                    {shouldShowSourceBadge && (
+                        <div className="mt-1">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-bold text-sky-700">
+                                <span className="material-symbols-outlined text-[11px]">storefront</span>
+                                <span>{`\u004e\u0067\u0075\u1ed3\u006e: ${productSourceName}`}</span>
+                            </span>
                         </div>
                     )}
                     {isAlreadyInOrder && (
@@ -4275,6 +4444,10 @@ const OrderForm = () => {
     ));
     const orderKindMeta = getOrderKindMeta(orderKind);
     const [products, setProducts] = useState([]);
+    const [activeAccountId] = useState(() => getOrderFormActiveAccountId());
+    const [productSourceAccounts, setProductSourceAccounts] = useState(() => getCachedOrderFormAccounts());
+    const [enabledCrossSellAccountIds, setEnabledCrossSellAccountIds] = useState([]);
+    const [showCrossSellSourceDropdown, setShowCrossSellSourceDropdown] = useState(false);
     const [attributes, setAttributes] = useState([]);
     const [orderStatuses, setOrderStatuses] = useState([]);
     const [profitCenters, setProfitCenters] = useState([]);
@@ -4322,6 +4495,8 @@ const OrderForm = () => {
     const [productQuickModeEnabled, setProductQuickModeEnabled] = useState(() => initialProductQuickFilterState.quickModeEnabled);
     const [productQuickModeDefaultEnabled, setProductQuickModeDefaultEnabled] = useState(true);
     const [showProductQuickSetupPanel, setShowProductQuickSetupPanel] = useState(false);
+    const [productQuickSetupMode, setProductQuickSetupMode] = useState(PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE);
+    const [manualProductQuickModeEnabled, setManualProductQuickModeEnabled] = useState(false);
     const [productQuickSetupSearchTerm, setProductQuickSetupSearchTerm] = useState('');
     const [debouncedProductQuickSetupSearchTerm, setDebouncedProductQuickSetupSearchTerm] = useState('');
     const [productQuickSetupProducts, setProductQuickSetupProducts] = useState([]);
@@ -4362,6 +4537,8 @@ const OrderForm = () => {
     const copyNotificationTimeoutRef = useRef(null);
     const productSearchContainerRef = useRef(null);
     const productSearchInputRef = useRef(null);
+    const crossSellSourceDropdownRef = useRef(null);
+    const manualQuickSetupDropdownRef = useRef(null);
     const mobileProductSearchToggleButtonRef = useRef(null);
     const mobileProductSearchHistoryStateActiveRef = useRef(false);
     const ignoreNextMobileProductSearchPopRef = useRef(false);
@@ -4401,11 +4578,151 @@ const OrderForm = () => {
     );
 
     const productQuickSetupNamespace = resolveProductQuickSetupNamespace(user);
+    const crossSellSourceAccounts = useMemo(() => {
+        const currentAccountId = normalizeAccountId(activeAccountId);
+
+        return productSourceAccounts.filter((account) => {
+            const accountId = normalizeAccountId(account?.id);
+            if (!accountId) return false;
+            return !currentAccountId || accountId !== currentAccountId;
+        });
+    }, [activeAccountId, productSourceAccounts]);
+    const enabledCrossSellSourceParam = useMemo(() => (
+        enabledCrossSellAccountIds
+            .map(normalizeAccountId)
+            .filter(Boolean)
+            .join(',')
+    ), [enabledCrossSellAccountIds]);
+    const enabledCrossSellAccountIdSet = useMemo(() => new Set(
+        enabledCrossSellAccountIds.map(normalizeAccountId).filter(Boolean)
+    ), [enabledCrossSellAccountIds]);
+    const hasEnabledCrossSellSources = enabledCrossSellAccountIdSet.size > 0;
+    const selectedCrossSellSourceAccounts = useMemo(() => (
+        crossSellSourceAccounts.filter((account) => enabledCrossSellAccountIdSet.has(normalizeAccountId(account?.id)))
+    ), [crossSellSourceAccounts, enabledCrossSellAccountIdSet]);
+    const visibleProductSourceAccountIds = useMemo(() => new Set([
+        normalizeAccountId(activeAccountId),
+        ...enabledCrossSellAccountIds.map(normalizeAccountId),
+    ].filter(Boolean)), [activeAccountId, enabledCrossSellAccountIds]);
+    const isProductSearchEntrySourceEnabled = useCallback((entry) => {
+        const sourceAccountId = getProductSourceAccountId(entry);
+        return !sourceAccountId || visibleProductSourceAccountIds.size === 0 || visibleProductSourceAccountIds.has(sourceAccountId);
+    }, [visibleProductSourceAccountIds]);
+    const appendCrossSellSourceParams = useCallback((params = {}) => {
+        if (enabledCrossSellSourceParam) {
+            params.source_account_ids = enabledCrossSellSourceParam;
+        }
+
+        return params;
+    }, [enabledCrossSellSourceParam]);
+    const buildSourceAwareOrderAiPickerEntries = useCallback((rows = []) => (
+        buildProductSearchEntries(rows, { includeNested: true })
+            .filter((entry) => canAddSearchEntry([], entry))
+    ), []);
+    const toggleCrossSellAccount = useCallback((accountId) => {
+        const normalizedAccountId = normalizeAccountId(accountId);
+        if (!normalizedAccountId) return;
+
+        setEnabledCrossSellAccountIds((prev) => {
+            const currentIds = prev.map(normalizeAccountId).filter(Boolean);
+            return currentIds.includes(normalizedAccountId)
+                ? currentIds.filter((id) => id !== normalizedAccountId)
+                : [...currentIds, normalizedAccountId];
+        });
+        productSearchCacheRef.current.clear();
+        productQuickFilterScopeCacheRef.current.clear();
+        productQuickSetupCacheRef.current.clear();
+        setProductQuickFilterScopeKey('');
+        setShowProductQuickSetupPanel(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, []);
+    const toggleCrossSellSourceDropdown = useCallback((event) => {
+        event?.stopPropagation?.();
+        setShowCrossSellSourceDropdown((prev) => !prev);
+        if (productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL) {
+            setShowProductQuickSetupPanel(false);
+        }
+    }, [productQuickSetupMode]);
+
+    useEffect(() => {
+        if (!showCrossSellSourceDropdown) return undefined;
+
+        const handlePointerDownOutsideSourceDropdown = (event) => {
+            const container = crossSellSourceDropdownRef.current;
+            const target = event.target;
+
+            if (!container || !target || container.contains(target)) {
+                return;
+            }
+
+            setShowCrossSellSourceDropdown(false);
+        };
+
+        document.addEventListener('pointerdown', handlePointerDownOutsideSourceDropdown, true);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDownOutsideSourceDropdown, true);
+        };
+    }, [showCrossSellSourceDropdown]);
 
     const flushProductQuickSettingsNow = useCallback(() => {
         flushUserSettingsSync().catch((error) => {
             console.error('Unable to flush product quick filter settings', error);
         });
+    }, []);
+
+    useEffect(() => {
+        if (!showProductQuickSetupPanel || productQuickSetupMode !== PRODUCT_QUICK_SETUP_MODE_MANUAL) return undefined;
+
+        const handlePointerDownOutsideManualQuickSetup = (event) => {
+            const container = manualQuickSetupDropdownRef.current;
+            const target = event.target;
+
+            if (!container || !target || container.contains(target)) {
+                return;
+            }
+
+            setShowProductQuickSetupPanel(false);
+            flushProductQuickSettingsNow();
+        };
+
+        document.addEventListener('pointerdown', handlePointerDownOutsideManualQuickSetup, true);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDownOutsideManualQuickSetup, true);
+        };
+    }, [flushProductQuickSettingsNow, productQuickSetupMode, showProductQuickSetupPanel]);
+
+    useEffect(() => {
+        let isDisposed = false;
+
+        const cachedAccounts = getCachedOrderFormAccounts();
+        if (cachedAccounts.length > 0) {
+            setProductSourceAccounts(cachedAccounts);
+        }
+
+        accountApi.getAll()
+            .then((response) => {
+                if (isDisposed) return;
+                const nextAccounts = normalizeAccountRows(response.data || []);
+                setProductSourceAccounts(nextAccounts);
+
+                if (typeof window !== 'undefined') {
+                    try {
+                        window.sessionStorage.setItem('accounts_list', JSON.stringify(response.data || []));
+                    } catch (error) {
+                        console.error('Unable to cache accounts for cross sell search', error);
+                    }
+                }
+            })
+            .catch((error) => {
+                if (!isDisposed) {
+                    console.error('Unable to load accounts for cross sell search', error);
+                }
+            });
+
+        return () => {
+            isDisposed = true;
+        };
     }, []);
 
     useEffect(() => {
@@ -4586,6 +4903,34 @@ const OrderForm = () => {
             activeProductQuickSetupLookup.items
         );
     }, [activeProductQuickSetupKey, activeProductQuickSetupLookup]);
+    const manualProductQuickSetupLabel = useMemo(() => (
+        normalizeCanvasText(searchTerm) || 'DS chung'
+    ), [searchTerm]);
+    const manualProductQuickSetupKey = useMemo(() => {
+        const normalizedSearchKey = normalizeProductSearchText(searchTerm);
+
+        return normalizedSearchKey
+            ? `manual::search::${normalizedSearchKey}`
+            : PRODUCT_MANUAL_QUICK_SETUP_FALLBACK_KEY;
+    }, [searchTerm]);
+    const manualProductQuickSetupLookup = useMemo(() => (
+        findProductQuickSetupItems(
+            productQuickSetupStore,
+            productQuickSetupNamespace,
+            manualProductQuickSetupKey
+        )
+    ), [manualProductQuickSetupKey, productQuickSetupNamespace, productQuickSetupStore]);
+    const manualProductQuickSetupItems = useMemo(() => (
+        normalizeStoredProductQuickSetupItems(manualProductQuickSetupLookup.items)
+    ), [manualProductQuickSetupLookup]);
+    const currentProductQuickSetupKey = productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL
+        ? manualProductQuickSetupKey
+        : activeProductQuickSetupKey;
+    const currentProductQuickSetupItems = productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL
+        ? manualProductQuickSetupItems
+        : activeProductQuickSetupItems;
+    const isManualProductQuickModeToggleDisabled = manualProductQuickSetupItems.length === 0;
+    const isManualProductQuickModeActive = manualProductQuickModeEnabled && manualProductQuickSetupItems.length > 0;
     const activeProductQuickSetupRefreshKey = useMemo(
         () => JSON.stringify(buildProductQuickSetupRefreshTargets(activeProductQuickSetupItems)),
         [activeProductQuickSetupItems]
@@ -4711,6 +5056,7 @@ const OrderForm = () => {
                                         : resolveProductCostPrice({ ...item, ...latest }),
                                     unit_name: resolveOrderUnitLabel(latest, item),
                                     ...resolveInventorySnapshot(latest, item),
+                                    ...resolveProductSourceFields(latest, item),
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
                                     type: latest.type ?? item?.type ?? '',
                                     ...(isBundleOptionEntry ? {
@@ -4765,6 +5111,7 @@ const OrderForm = () => {
                     cost_price: resolveProductCostPrice(latest, item.cost_price),
                     options: mergedOptions,
                     ...resolveInventorySnapshot(latest, item),
+                    ...resolveProductSourceFields(latest, item),
                 };
             });
 
@@ -4849,6 +5196,7 @@ const OrderForm = () => {
                         ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
                         : item.base_cost_price,
                     ...resolveInventorySnapshot(latest, item),
+                    ...resolveProductSourceFields(latest, item),
                 };
             });
 
@@ -4881,6 +5229,7 @@ const OrderForm = () => {
                         product_id: productId,
                         sku: getOrderItemEffectiveInventorySku(item),
                         name: getOrderItemEffectiveInventoryName(item),
+                        ...buildProductSourcePayload(item),
                     }];
                 })
                 .filter(Boolean)
@@ -5136,12 +5485,20 @@ const OrderForm = () => {
         setDiscountInputValue(formatSignedMoneyInputValue(formData.discount));
     }, [formData.discount]);
     const selectedQuickSetupEntryKeys = useMemo(
-        () => new Set(activeProductQuickSetupItems.map(getProductQuickSetupEntryKey).filter(Boolean)),
-        [activeProductQuickSetupItems]
+        () => new Set(currentProductQuickSetupItems.map(getProductQuickSetupEntryKey).filter(Boolean)),
+        [currentProductQuickSetupItems]
     );
     const visibleProductQuickSetupProducts = useMemo(() => {
-        return mergeProductQuickSetupEntries(productQuickSetupProducts, activeProductQuickSetupItems);
-    }, [activeProductQuickSetupItems, productQuickSetupProducts]);
+        return mergeProductQuickSetupEntries(productQuickSetupProducts, currentProductQuickSetupItems);
+    }, [currentProductQuickSetupItems, productQuickSetupProducts]);
+    const getCrossSellSourceBadgeLabel = useCallback((item) => {
+        const sourceAccountId = getProductSourceAccountId(item);
+        if (!sourceAccountId || !normalizeAccountId(activeAccountId) || sourceAccountId === normalizeAccountId(activeAccountId)) {
+            return '';
+        }
+
+        return getProductSourceDisplayName(item) || `Shop #${sourceAccountId}`;
+    }, [activeAccountId]);
     const syncOrderFormTableViewportWidth = useCallback(() => {
         const viewportNode = orderFormTableViewportRef.current;
         if (!viewportNode) return;
@@ -6080,6 +6437,7 @@ const OrderForm = () => {
             actual_snapshot_name: '',
             actual_snapshot_sku: '',
             cost_price: resolveRoundedImportCostValue(currentLine.base_cost_price, currentLine.cost_price),
+            inventory_source_account_id: currentLine.product_source_account_id || currentLine.source_account_id || currentLine.inventory_source_account_id,
         });
 
         setFormData((prev) => {
@@ -6132,6 +6490,10 @@ const OrderForm = () => {
             computed_stock: replacement.computed_stock,
             pending_export_quantity: replacement.pending_export_quantity,
             available_to_sell: replacement.available_to_sell,
+            inventory_source_account_id: replacement.inventory_source_account_id
+                || replacement.product_source_account_id
+                || replacement.source_account_id
+                || currentLine.inventory_source_account_id,
         });
 
         setFormData((prev) => {
@@ -6786,10 +7148,10 @@ const OrderForm = () => {
         setOrderAiManualSearchLoading(true);
 
         const timerId = window.setTimeout(() => {
-            productApi.getAll({ picker: 1, per_page: 20, search: orderAiManualSearchTerm.trim() })
+            productApi.getAll(appendCrossSellSourceParams({ picker: 1, per_page: 20, search: orderAiManualSearchTerm.trim() }))
                 .then((response) => {
                     if (cancelled) return;
-                    setOrderAiManualSearchResults(buildOrderAiPickerEntries(response.data?.data || []));
+                    setOrderAiManualSearchResults(buildSourceAwareOrderAiPickerEntries(response.data?.data || []));
                 })
                 .catch((error) => {
                     if (cancelled) return;
@@ -6807,7 +7169,7 @@ const OrderForm = () => {
             cancelled = true;
             window.clearTimeout(timerId);
         };
-    }, [orderAiManualPickerLineId, orderAiManualSearchTerm]);
+    }, [appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries, orderAiManualPickerLineId, orderAiManualSearchTerm]);
 
     useEffect(() => {
         if (!orderAiReplaceLineId || orderAiReplaceSearchTerm.trim().length < 2) {
@@ -6820,10 +7182,10 @@ const OrderForm = () => {
         setOrderAiReplaceLoading(true);
 
         const timerId = window.setTimeout(() => {
-            productApi.getAll({ picker: 1, per_page: 40, search: orderAiReplaceSearchTerm.trim() })
+            productApi.getAll(appendCrossSellSourceParams({ picker: 1, per_page: 40, search: orderAiReplaceSearchTerm.trim() }))
                 .then((response) => {
                     if (cancelled) return;
-                    setOrderAiReplaceResults(buildOrderAiPickerEntries(response.data?.data || []));
+                    setOrderAiReplaceResults(buildSourceAwareOrderAiPickerEntries(response.data?.data || []));
                 })
                 .catch((error) => {
                     if (cancelled) return;
@@ -6841,7 +7203,7 @@ const OrderForm = () => {
             cancelled = true;
             window.clearTimeout(timerId);
         };
-    }, [orderAiReplaceLineId, orderAiReplaceSearchTerm]);
+    }, [appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries, orderAiReplaceLineId, orderAiReplaceSearchTerm]);
     useEffect(() => {
         if (!actualProductPickerLineId || actualProductPickerSearchTerm.trim().length < 2) {
             setActualProductPickerResults([]);
@@ -6853,10 +7215,10 @@ const OrderForm = () => {
         setActualProductPickerLoading(true);
 
         const timerId = window.setTimeout(() => {
-            productApi.getAll({ picker: 1, per_page: 20, search: actualProductPickerSearchTerm.trim() })
+            productApi.getAll(appendCrossSellSourceParams({ picker: 1, per_page: 20, search: actualProductPickerSearchTerm.trim() }))
                 .then((response) => {
                     if (cancelled) return;
-                    setActualProductPickerResults(buildOrderAiPickerEntries(response.data?.data || []));
+                    setActualProductPickerResults(buildSourceAwareOrderAiPickerEntries(response.data?.data || []));
                 })
                 .catch((error) => {
                     if (cancelled) return;
@@ -6874,7 +7236,7 @@ const OrderForm = () => {
             cancelled = true;
             window.clearTimeout(timerId);
         };
-    }, [actualProductPickerLineId, actualProductPickerSearchTerm]);
+    }, [actualProductPickerLineId, actualProductPickerSearchTerm, appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries]);
 
     const persistOrderFormColumnLayout = useCallback(({
         order = columnOrder,
@@ -7035,6 +7397,7 @@ const OrderForm = () => {
             appendProductQuickFilterParams(params, activeFilterAttribute, activeFilterValues);
             appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
         }
+        appendCrossSellSourceParams(params);
 
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
@@ -7058,7 +7421,10 @@ const OrderForm = () => {
             if (controller.signal.aborted || productSearchRequestKeyRef.current !== cacheKey) return;
 
             const nextProducts = Array.isArray(prodRes.data.data)
-                ? prodRes.data.data.map((product) => normalizeProductPickerEntry(product))
+                ? prodRes.data.data.map((product) => ({
+                    ...normalizeProductPickerEntry(product),
+                    server_search_match: normalizeCanvasText(term) !== '',
+                }))
                 : [];
             if (shouldUseProductSearchCache) {
                 productSearchCacheRef.current.set(cacheKey, nextProducts);
@@ -7075,6 +7441,7 @@ const OrderForm = () => {
     }, [
         activeProductQuickFilterAttribute,
         activeProductQuickFilterAttribute2,
+        appendCrossSellSourceParams,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
     ]);
@@ -7178,8 +7545,8 @@ const OrderForm = () => {
         }
     }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled]);
 
-    const saveActiveProductQuickSetupItems = useCallback((items) => {
-        if (!activeProductQuickSetupKey) return;
+    const saveCurrentProductQuickSetupItems = useCallback((items) => {
+        if (!currentProductQuickSetupKey || !productQuickSetupNamespace) return;
 
         const normalizedItems = normalizeStoredProductQuickSetupItems(items);
 
@@ -7188,12 +7555,12 @@ const OrderForm = () => {
             const nextNamespaceStore = { ...(next[productQuickSetupNamespace] || {}) };
 
             if (normalizedItems.length > 0) {
-                nextNamespaceStore[activeProductQuickSetupKey] = normalizedItems;
+                nextNamespaceStore[currentProductQuickSetupKey] = normalizedItems;
                 next[productQuickSetupNamespace] = nextNamespaceStore;
                 return next;
             }
 
-            delete nextNamespaceStore[activeProductQuickSetupKey];
+            delete nextNamespaceStore[currentProductQuickSetupKey];
             if (Object.keys(nextNamespaceStore).length > 0) {
                 next[productQuickSetupNamespace] = nextNamespaceStore;
             } else {
@@ -7202,7 +7569,7 @@ const OrderForm = () => {
 
             return next;
         });
-    }, [activeProductQuickSetupKey, productQuickSetupNamespace]);
+    }, [currentProductQuickSetupKey, productQuickSetupNamespace]);
 
     const syncLatestQuickSetupEntriesIntoActiveStore = useCallback((latestEntries = []) => {
         if (!activeProductQuickSetupKey || !productQuickSetupNamespace) return;
@@ -7264,7 +7631,7 @@ const OrderForm = () => {
         if (!entryKey) return;
 
         const nextItems = normalizeStoredProductQuickSetupItems([
-            ...activeProductQuickSetupItems,
+            ...currentProductQuickSetupItems,
             {
                 id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : targetProductId,
                 entry_id: entryKind === SEARCH_ENTRY_BUNDLE_OPTION ? entryKey : product.entry_id,
@@ -7279,6 +7646,7 @@ const OrderForm = () => {
                 cost_price: resolveProductCostPrice(product),
                 unit_name: resolveOrderUnitLabel(product),
                 ...resolveInventorySnapshot(product),
+                ...resolveProductSourceFields(product),
                 main_image: product.main_image,
                 type: product.type,
                 entry_kind: entryKind,
@@ -7306,18 +7674,24 @@ const OrderForm = () => {
             },
         ]);
 
-        saveActiveProductQuickSetupItems(nextItems);
-        setProductQuickModeEnabled(true);
-    }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
+        saveCurrentProductQuickSetupItems(nextItems);
+        if (productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL) {
+            setProductQuickModeEnabled(false);
+            setManualProductQuickModeEnabled(true);
+        } else {
+            setManualProductQuickModeEnabled(false);
+            setProductQuickModeEnabled(true);
+        }
+    }, [currentProductQuickSetupItems, productQuickSetupMode, saveCurrentProductQuickSetupItems]);
 
     const handleRemoveProductFromQuickSetup = useCallback((entryKey) => {
         const normalizedEntryKey = String(entryKey ?? '').trim();
         if (!normalizedEntryKey) return;
 
-        saveActiveProductQuickSetupItems(
-            activeProductQuickSetupItems.filter((item) => getProductQuickSetupEntryKey(item) !== normalizedEntryKey)
+        saveCurrentProductQuickSetupItems(
+            currentProductQuickSetupItems.filter((item) => getProductQuickSetupEntryKey(item) !== normalizedEntryKey)
         );
-    }, [activeProductQuickSetupItems, saveActiveProductQuickSetupItems]);
+    }, [currentProductQuickSetupItems, saveCurrentProductQuickSetupItems]);
 
     const handleToggleProductQuickSetupSelection = useCallback((product, entryKey, isSelected) => {
         captureProductQuickSetupViewport();
@@ -7333,10 +7707,13 @@ const OrderForm = () => {
     const toggleProductQuickMode = useCallback(() => {
         if (isProductQuickModeToggleDisabled) return;
 
+        if (!productQuickModeEnabled) {
+            setManualProductQuickModeEnabled(false);
+        }
         setProductQuickModeEnabled((prev) => !prev);
         setShowSearchDropdown(true);
         setShowSearchHistory(false);
-    }, [isProductQuickModeToggleDisabled]);
+    }, [isProductQuickModeToggleDisabled, productQuickModeEnabled]);
 
     const disableProductQuickMode = useCallback((event) => {
         event?.stopPropagation?.();
@@ -7351,16 +7728,53 @@ const OrderForm = () => {
         if (showProductQuickSetupPanel) {
             flushProductQuickSettingsNow();
         }
+        setProductQuickSetupMode(PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE);
         setShowProductQuickSetupPanel((prev) => !prev);
         setShowSearchDropdown(false);
         setShowSearchHistory(false);
     }, [flushProductQuickSettingsNow, showProductQuickSetupPanel]);
+
+    const toggleManualProductQuickSetupPanel = useCallback((event) => {
+        event?.stopPropagation?.();
+        if (showProductQuickSetupPanel) {
+            flushProductQuickSettingsNow();
+        }
+        setProductQuickSetupMode(PRODUCT_QUICK_SETUP_MODE_MANUAL);
+        setShowProductQuickSetupPanel((prev) => (
+            productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL ? !prev : true
+        ));
+        setProductQuickSetupSearchTerm((currentTerm) => (
+            normalizeCanvasText(currentTerm) || normalizeCanvasText(searchTerm)
+        ));
+        setShowCrossSellSourceDropdown(false);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+    }, [flushProductQuickSettingsNow, productQuickSetupMode, searchTerm, showProductQuickSetupPanel]);
 
     const saveAndCloseProductQuickSetupPanel = useCallback((event) => {
         event?.stopPropagation?.();
         setShowProductQuickSetupPanel(false);
         flushProductQuickSettingsNow();
     }, [flushProductQuickSettingsNow]);
+
+    const toggleManualProductQuickMode = useCallback((event) => {
+        event?.stopPropagation?.();
+        if (isManualProductQuickModeToggleDisabled) return;
+
+        if (!manualProductQuickModeEnabled) {
+            setProductQuickModeEnabled(false);
+        }
+        setManualProductQuickModeEnabled((prev) => !prev);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, [isManualProductQuickModeToggleDisabled, manualProductQuickModeEnabled]);
+
+    const disableManualProductQuickMode = useCallback((event) => {
+        event?.stopPropagation?.();
+        setManualProductQuickModeEnabled(false);
+        setShowSearchDropdown(true);
+        setShowSearchHistory(false);
+    }, []);
 
     const fetchProductQuickFilterScopeProducts = useCallback(async () => {
         const activeFilterAttribute = activeProductQuickFilterAttribute;
@@ -7376,6 +7790,7 @@ const OrderForm = () => {
             picker: 1,
         };
         appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
+        appendCrossSellSourceParams(params);
 
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
@@ -7421,13 +7836,15 @@ const OrderForm = () => {
     }, [
         activeProductQuickFilterAttribute,
         activeProductQuickFilterScopeKey,
+        appendCrossSellSourceParams,
         normalizedProductQuickFilterValues,
     ]);
 
     const fetchProductQuickSetupProducts = useCallback(async (term = '') => {
+        const isManualQuickSetup = productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL;
         const activeFilterAttribute = activeProductQuickFilterAttribute;
         const activeFilterValue = normalizedProductQuickFilterValues[0];
-        if (!activeFilterAttribute || !activeFilterValue) {
+        if (!isManualQuickSetup && (!activeFilterAttribute || !activeFilterValue)) {
             setProductQuickSetupProducts([]);
             setProductQuickSetupLoading(false);
             return;
@@ -7436,10 +7853,15 @@ const OrderForm = () => {
         const params = {
             per_page: 200,
             picker: 1,
-            quick_filter_enabled: 1,
+            quick_filter_enabled: isManualQuickSetup ? 0 : 1,
         };
-        appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
-        appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+        if (isManualQuickSetup) {
+            params.fast_picker = 1;
+        } else {
+            appendProductQuickFilterParams(params, activeFilterAttribute, [activeFilterValue]);
+            appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+        }
+        appendCrossSellSourceParams(params);
 
         if (term) {
             params.search = term;
@@ -7449,7 +7871,12 @@ const OrderForm = () => {
         const activeAccountId = typeof window === 'undefined'
             ? 'default'
             : (window.localStorage.getItem('activeAccountId') || 'default');
-        const cacheKey = JSON.stringify({ quick_setup: true, account_id: activeAccountId, ...params });
+        const cacheKey = JSON.stringify({
+            quick_setup: true,
+            quick_setup_mode: productQuickSetupMode,
+            account_id: activeAccountId,
+            ...params,
+        });
         productQuickSetupAbortRef.current?.abort();
 
         const cachedProducts = productQuickSetupCacheRef.current.get(cacheKey);
@@ -7513,8 +7940,10 @@ const OrderForm = () => {
     }, [
         activeProductQuickFilterAttribute,
         activeProductQuickFilterAttribute2,
+        appendCrossSellSourceParams,
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
+        productQuickSetupMode,
     ]);
 
     useEffect(() => {
@@ -7537,6 +7966,11 @@ const OrderForm = () => {
                 .map((target) => Number(target?.productId) || 0)
                 .filter((productId) => productId > 0)
         ));
+        const selectedSourceAccountIds = Array.from(new Set(
+            (Array.isArray(refreshTargets) ? refreshTargets : [])
+                .map((target) => normalizeAccountId(target?.product_source_account_id ?? target?.source_account_id))
+                .filter(Boolean)
+        ));
         const activeEntryKeys = new Set(
             (Array.isArray(refreshTargets) ? refreshTargets : [])
                 .map((target) => normalizeCanvasText(target?.entryKey))
@@ -7553,14 +7987,23 @@ const OrderForm = () => {
 
         const refreshQuickSetupEntries = async () => {
             try {
-                const response = await productApi.getAll({
+                const sourceAccountIds = Array.from(new Set([
+                    ...enabledCrossSellAccountIds.map(normalizeAccountId),
+                    ...selectedSourceAccountIds,
+                ].filter(Boolean)));
+                const params = {
                     picker: 1,
                     fast_picker: 1,
                     quick_filter_enabled: 0,
                     allow_variants: 1,
                     selected_ids: selectedProductIds.join(','),
                     per_page: Math.min(Math.max(selectedProductIds.length, 1), 200),
-                }, controller.signal);
+                };
+                if (sourceAccountIds.length > 0) {
+                    params.source_account_ids = sourceAccountIds.join(',');
+                }
+
+                const response = await productApi.getAll(params, controller.signal);
                 if (controller.signal.aborted) return;
 
                 const latestEntries = Array.isArray(response.data.data)
@@ -7588,6 +8031,7 @@ const OrderForm = () => {
         };
     }, [
         activeProductQuickSetupRefreshKey,
+        enabledCrossSellAccountIds,
         isProductQuickModeActive,
         syncLatestQuickSetupEntriesIntoActiveStore,
     ]);
@@ -7607,22 +8051,34 @@ const OrderForm = () => {
         return entryMap;
     }, [productQuickSetupLatestEntries]);
     const quickModeSearchEntries = useMemo(() => {
-        if (latestQuickModeEntryMap.size === 0) {
-            return storedQuickModeSearchEntries;
-        }
-
-        return storedQuickModeSearchEntries.map((entry) => {
+        const entries = latestQuickModeEntryMap.size === 0
+            ? storedQuickModeSearchEntries
+            : storedQuickModeSearchEntries.map((entry) => {
             const latestEntry = latestQuickModeEntryMap.get(getProductQuickSetupEntryKey(entry));
             return latestEntry || entry;
         });
-    }, [latestQuickModeEntryMap, storedQuickModeSearchEntries]);
-    const shouldRankInactiveProductQuickFilters = !isProductQuickModeActive && activeProductQuickFilterRankCriteria.length > 0;
+
+        return entries.filter(isProductSearchEntrySourceEnabled);
+    }, [isProductSearchEntrySourceEnabled, latestQuickModeEntryMap, storedQuickModeSearchEntries]);
+    const manualQuickModeSearchEntries = useMemo(() => (
+        buildStoredQuickSetupSearchEntries(manualProductQuickSetupItems)
+            .filter(isProductSearchEntrySourceEnabled)
+    ), [isProductSearchEntrySourceEnabled, manualProductQuickSetupItems]);
+    const shouldRankInactiveProductQuickFilters = !isProductQuickModeActive
+        && !isManualProductQuickModeActive
+        && activeProductQuickFilterRankCriteria.length > 0;
 
     const rankedSearchProducts = useMemo(() => {
         const quickFilterRankCriteria = shouldRankInactiveProductQuickFilters
             ? activeProductQuickFilterRankCriteria
             : [];
-        const searchableEntries = isProductQuickModeActive
+        const shouldUseManualQuickModeEntries = isManualProductQuickModeActive;
+        const shouldUseQuickModeEntries = !shouldUseManualQuickModeEntries
+            && isProductQuickModeActive
+            && !hasEnabledCrossSellSources;
+        const searchableEntries = shouldUseManualQuickModeEntries
+            ? manualQuickModeSearchEntries
+            : shouldUseQuickModeEntries
             ? quickModeSearchEntries
             : buildProductSearchEntries(products, {
                 includeNested: Boolean(searchTerm.trim()),
@@ -7633,7 +8089,7 @@ const OrderForm = () => {
                 __alreadyInOrder: isSearchEntryAlreadyInOrder(formData.items, product),
             }))
             .filter((product) => (
-                isProductQuickModeActive
+                shouldUseManualQuickModeEntries || shouldUseQuickModeEntries
                     ? buildOrderItemsFromSearchEntry(product).length > 0
                     : canAddSearchEntry(formData.items, product)
             ));
@@ -7658,10 +8114,11 @@ const OrderForm = () => {
         return preparedProducts
             .map((product) => {
                 const searchScore = scoreProductSearchResult(product, searchTerm);
+                const serverMatchedSearch = Boolean(product?.server_search_match || product?.__server_search_match);
 
                 return {
                     ...product,
-                    __searchScore: searchScore,
+                    __searchScore: serverMatchedSearch ? Math.max(searchScore, 1) : searchScore,
                     __quickFilterScore: searchScore > 0
                         ? scoreProductQuickFilterPriority(product, quickFilterRankCriteria)
                         : 0,
@@ -7677,7 +8134,10 @@ const OrderForm = () => {
     }, [
         activeProductQuickFilterRankCriteria,
         formData.items,
+        hasEnabledCrossSellSources,
+        isManualProductQuickModeActive,
         isProductQuickModeActive,
+        manualQuickModeSearchEntries,
         products,
         quickModeSearchEntries,
         searchTerm,
@@ -7686,6 +8146,14 @@ const OrderForm = () => {
 
     const productSearchEmptyMessage = useMemo(() => {
         const hasSearchText = searchTerm.trim() !== '';
+
+        if (isManualProductQuickModeActive && hasSearchText) {
+            return 'Kh\u00f4ng c\u00f3 s\u1ea3n ph\u1ea9m trong DS nhanh th\u1ee7 c\u00f4ng kh\u1edbp t\u1eeb kh\u00f3a hi\u1ec7n t\u1ea1i.';
+        }
+
+        if (isManualProductQuickModeActive) {
+            return 'DS nhanh th\u1ee7 c\u00f4ng \u0111ang b\u1eadt nh\u01b0ng ch\u01b0a c\u00f3 s\u1ea3n ph\u1ea9m kh\u1ea3 d\u1ee5ng.';
+        }
 
         if (isProductQuickModeActive && hasSearchText) {
             return 'Không có sản phẩm trong lọc nhanh khớp từ khóa hiện tại.';
@@ -7700,10 +8168,10 @@ const OrderForm = () => {
         }
 
         return 'Không có sản phẩm khả dụng để hiển thị.';
-    }, [isProductQuickModeActive, searchTerm]);
+    }, [isManualProductQuickModeActive, isProductQuickModeActive, searchTerm]);
 
     const shouldShowProductSearchEmptyState = rankedSearchProducts.length === 0
-        && (searchTerm.trim() !== '' || isProductQuickModeActive);
+        && (searchTerm.trim() !== '' || isProductQuickModeActive || isManualProductQuickModeActive);
 
     useEffect(() => {
         const timerId = setTimeout(() => {
@@ -7726,7 +8194,8 @@ const OrderForm = () => {
     }, [productQuickSetupSearchTerm]);
 
     useEffect(() => {
-        if (isProductQuickModeActive) return;
+        if (isManualProductQuickModeActive) return;
+        if (isProductQuickModeActive && !hasEnabledCrossSellSources) return;
 
         if (showSearchDropdown || debouncedSearchTerm.trim() !== '') {
             fetchProducts(debouncedSearchTerm, {
@@ -7736,6 +8205,9 @@ const OrderForm = () => {
     }, [
         fetchProducts,
         debouncedSearchTerm,
+        enabledCrossSellSourceParam,
+        hasEnabledCrossSellSources,
+        isManualProductQuickModeActive,
         isProductQuickModeActive,
         shouldRankInactiveProductQuickFilters,
         showSearchDropdown
@@ -7751,7 +8223,7 @@ const OrderForm = () => {
 
         const shouldFetchScope = Boolean(
             showSearchDropdown
-            || showProductQuickSetupPanel
+            || (showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE)
             || productQuickFilterAttributeId2
             || normalizedProductQuickFilterValues2[0]
         );
@@ -7763,12 +8235,16 @@ const OrderForm = () => {
         hasActiveProductQuickFilter,
         normalizedProductQuickFilterValues2,
         productQuickFilterAttributeId2,
+        productQuickSetupMode,
         showProductQuickSetupPanel,
         showSearchDropdown,
     ]);
 
     useEffect(() => {
-        if (!showProductQuickSetupPanel || !hasActiveProductQuickFilter) {
+        const canUseCurrentQuickSetupPanel = productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL
+            || hasActiveProductQuickFilter;
+
+        if (!showProductQuickSetupPanel || !canUseCurrentQuickSetupPanel) {
             setProductQuickSetupProducts([]);
             setProductQuickSetupLoading(false);
             return;
@@ -7779,6 +8255,7 @@ const OrderForm = () => {
         debouncedProductQuickSetupSearchTerm,
         fetchProductQuickSetupProducts,
         hasActiveProductQuickFilter,
+        productQuickSetupMode,
         showProductQuickSetupPanel,
     ]);
 
@@ -7796,14 +8273,19 @@ const OrderForm = () => {
     useEffect(() => {
         if (!hasActiveProductQuickFilter) {
             lastVisitedProductQuickSetupKeyRef.current = '';
-            setShowProductQuickSetupPanel(false);
+            if (productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE) {
+                setShowProductQuickSetupPanel(false);
+            }
             setProductQuickSetupSearchTerm('');
             setProductQuickSetupProducts([]);
             setProductQuickSetupLoading(false);
             return;
         }
 
-        if (lastVisitedProductQuickSetupKeyRef.current !== activeProductQuickSetupKey) {
+        if (
+            productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE
+            && lastVisitedProductQuickSetupKeyRef.current !== activeProductQuickSetupKey
+        ) {
             lastVisitedProductQuickSetupKeyRef.current = activeProductQuickSetupKey;
             setShowProductQuickSetupPanel(false);
             return;
@@ -7811,13 +8293,21 @@ const OrderForm = () => {
     }, [
         activeProductQuickSetupKey,
         hasActiveProductQuickFilter,
+        productQuickSetupMode,
     ]);
 
     useEffect(() => {
+        if (productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL) {
+            setProductQuickSetupSearchTerm(normalizeCanvasText(searchTerm));
+            setProductQuickSetupProducts([]);
+            setProductQuickSetupLoading(false);
+            return;
+        }
+
         setProductQuickSetupSearchTerm('');
         setProductQuickSetupProducts([]);
         setProductQuickSetupLoading(false);
-    }, [activeProductQuickSetupKey]);
+    }, [currentProductQuickSetupKey, productQuickSetupMode, searchTerm]);
 
     useEffect(() => {
         if (activeProductQuickSetupItems.length === 0) return;
@@ -7831,6 +8321,7 @@ const OrderForm = () => {
                         product_id: item.product_id,
                         sku: item.sku,
                         name: item.name,
+                        ...buildProductSourcePayload(item),
                     }))
                 });
 
@@ -7996,6 +8487,7 @@ const OrderForm = () => {
                 options: item.options || {},
                 category_id: item.product?.category_id,
                 profit_center_id: item.product?.profit_center_id || item.product?.parent_configurable?.profit_center_id,
+                ...resolveProductSourceFields(item),
                 parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
                 product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
             })) || [];
@@ -8005,6 +8497,7 @@ const OrderForm = () => {
                     name: getOrderItemDisplayName(item, fallbackName),
                     options: item.options || {},
                     fallbackName,
+                    preferSubmittedName: Boolean(getOrderItemSnapshotName(item)),
                 });
                 const displaySku = getOrderItemDisplaySku(item, 'N/A');
                 const originalName = resolveOrderLineItemDisplayName({
@@ -8017,6 +8510,7 @@ const OrderForm = () => {
                     name: getOrderItemSnapshotName(item) || displayName,
                     options: item.options || {},
                     fallbackName: displayName,
+                    preferSubmittedName: Boolean(getOrderItemSnapshotName(item)),
                 });
                 const snapshotSku = getOrderItemSnapshotSku(item) || displaySku;
 
@@ -8054,6 +8548,7 @@ const OrderForm = () => {
                     options: item.options || {},
                     category_id: item.product?.category_id,
                     profit_center_id: item.product?.profit_center_id || item.product?.parent_configurable?.profit_center_id,
+                    ...resolveProductSourceFields(item),
                     parent_product_id: Number(item.options?.variant_parent_id ?? item.product?.parent_id) || undefined,
                     product_attributes: item.product?.attributes_map || item.product?.product_attributes || buildProductAttributesMap(item.product),
                     main_image: item.product?.main_image || item.main_image || '',
@@ -8206,6 +8701,7 @@ const OrderForm = () => {
                 pending_export_quantity: item.pending_export_quantity,
                 available_to_sell: item.available_to_sell,
                 category_id: item.category_id || item.product?.category_id,
+                ...resolveProductSourceFields(item),
                 options: item.options || {},
                 main_image: item.main_image || item.product_image || '',
                 notes: item.notes || '',
@@ -8361,6 +8857,7 @@ const OrderForm = () => {
                     actual_sku: hasActualOrderProductOverride(item)
                         ? (item.actual_snapshot_sku || item.actual_sku || '')
                         : undefined,
+                    ...buildProductSourcePayload(item),
                     options: item.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
                         ? item.options
                         : undefined,
@@ -8561,6 +9058,7 @@ const OrderForm = () => {
                     product_id: targetProductId,
                     sku: product?.display_sku || product?.sku || '',
                     name: product?.display_name || product?.name || '',
+                    ...buildProductSourcePayload(product),
                 }]
             });
 
@@ -9520,6 +10018,7 @@ const OrderForm = () => {
                     product_id: item.product_id,
                     sku: item.sku,
                     name: item.name,
+                    ...buildProductSourcePayload(item),
                 }))
             });
 
@@ -9809,6 +10308,299 @@ const OrderForm = () => {
         </div>
     ) : null;
 
+    const renderCrossSellSourceToggles = useCallback(({ mobile = false, fill = false } = {}) => {
+        if (crossSellSourceAccounts.length === 0) return null;
+
+        const selectedCount = selectedCrossSellSourceAccounts.length;
+        const summaryLabel = selectedCount === 0
+            ? '\u004e\u0067\u0075\u1ed3\u006e \u0053\u0050'
+            : selectedCount === 1
+                ? selectedCrossSellSourceAccounts[0].name
+                : `${selectedCount} \u006e\u0067\u0075\u1ed3\u006e \u0053\u0050`;
+        const statusLabel = selectedCount === 0
+            ? '\u0043\u0068\u1ec9 \u0073\u0068\u006f\u0070 \u0068\u0069\u1ec7\u006e \u0074\u1ea1\u0069'
+            : selectedCount === 1
+                ? '\u0110\u0061\u006e\u0067 \u0078\u0065\u006d \u0074\u0068\u00eam 1 \u0073\u0068\u006f\u0070'
+                : `\u0110\u0061\u006e\u0067 \u0078\u0065\u006d \u0074\u0068\u00eam ${selectedCount} \u0073\u0068\u006f\u0070`;
+        const buttonClassName = [
+            'relative inline-flex h-10 min-w-0 items-center justify-between gap-2 border px-3 text-left shadow-sm transition-all',
+            fill || mobile ? 'w-full' : 'w-auto max-w-full',
+            mobile ? 'rounded-[14px]' : 'rounded-sm',
+            selectedCount > 0
+                ? 'border-sky-300 bg-sky-50 text-sky-800 hover:border-sky-400 hover:bg-white'
+                : 'border-primary/10 bg-primary/5 text-primary/65 hover:border-primary/25 hover:bg-white hover:text-primary',
+        ].join(' ');
+
+        return (
+            <div ref={crossSellSourceDropdownRef} className={`relative min-w-0 ${fill || mobile ? 'w-full' : 'max-w-full'}`}>
+                <button
+                    type="button"
+                    onClick={toggleCrossSellSourceDropdown}
+                    className={buttonClassName}
+                    title={statusLabel}
+                >
+                    <span className="flex min-w-0 items-center gap-2">
+                        <span className="material-symbols-outlined shrink-0 text-[17px]">storefront</span>
+                        <span className="min-w-0">
+                            <span className="block truncate text-[12px] font-black leading-none">{summaryLabel}</span>
+                            <span className="mt-1 block truncate text-[10px] font-semibold leading-none opacity-60">{statusLabel}</span>
+                        </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                        {selectedCount > 0 && (
+                            <span className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-sky-600 px-1.5 text-[10px] font-black leading-[18px] text-white">
+                                {selectedCount}
+                            </span>
+                        )}
+                        <span className={`material-symbols-outlined text-[16px] transition-transform ${showCrossSellSourceDropdown ? 'rotate-180' : ''}`}>expand_more</span>
+                    </span>
+                </button>
+
+                {showCrossSellSourceDropdown && (
+                    <div className={`absolute top-full z-[180] mt-2 w-[320px] max-w-[calc(100vw-48px)] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)] ${mobile ? 'left-0' : 'right-0'}`}>
+                        <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-2">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                        {'\u0058\u0065\u006d \u0073\u1ea3\u006e \u0070\u0068\u1ea9\u006d \u0073\u0068\u006f\u0070 \u006b\u0068\u00e1\u0063'}
+                                    </div>
+                                    <div className="mt-1 truncate text-[11px] font-semibold text-primary/45">{statusLabel}</div>
+                                </div>
+                                {selectedCount > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            setEnabledCrossSellAccountIds([]);
+                                            productSearchCacheRef.current.clear();
+                                            productQuickFilterScopeCacheRef.current.clear();
+                                            productQuickSetupCacheRef.current.clear();
+                                        }}
+                                        className="shrink-0 text-[10px] font-bold uppercase tracking-[0.12em] text-primary/35 transition-colors hover:text-brick"
+                                    >
+                                        {'\u0054\u1eaft\u0074'}
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="custom-scrollbar max-h-[240px] overflow-y-auto p-2">
+                            {crossSellSourceAccounts.map((account) => {
+                                const accountId = normalizeAccountId(account?.id);
+                                const isEnabled = enabledCrossSellAccountIdSet.has(accountId);
+
+                                return (
+                                    <button
+                                        key={`cross-source-${accountId}`}
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            toggleCrossSellAccount(accountId);
+                                        }}
+                                        className={`mb-1 flex w-full items-center gap-2 rounded-sm border px-3 py-2 text-left transition-all last:mb-0 ${isEnabled ? 'border-sky-200 bg-sky-50 text-sky-800' : 'border-transparent bg-white text-primary/70 hover:border-primary/10 hover:bg-primary/[0.03] hover:text-primary'}`}
+                                    >
+                                        <span className={`material-symbols-outlined shrink-0 text-[18px] ${isEnabled ? 'text-sky-600' : 'text-primary/35'}`}>
+                                            {isEnabled ? 'check_box' : 'check_box_outline_blank'}
+                                        </span>
+                                        <span className="min-w-0 flex-1">
+                                            <span className="block truncate text-[12px] font-bold">{account.name}</span>
+                                            <span className="mt-0.5 block text-[10px] font-semibold opacity-55">
+                                                {isEnabled ? '\u0110\u0061\u006e\u0067 \u0062\u1ead\u0074 \u0074\u00ec\u006d \u0073\u1ea3\u006e \u0070\u0068\u1ea9\u006d' : '\u0042\u1ea5\u006d \u0111\u1ec3 \u0078\u0065\u006d \u0073\u1ea3\u006e \u0070\u0068\u1ea9\u006d'}
+                                            </span>
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }, [
+        crossSellSourceAccounts,
+        enabledCrossSellAccountIdSet,
+        selectedCrossSellSourceAccounts,
+        showCrossSellSourceDropdown,
+        toggleCrossSellAccount,
+        toggleCrossSellSourceDropdown,
+    ]);
+
+    const renderManualQuickSetupControl = ({ mobile = false } = {}) => {
+        const isOpen = showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_MANUAL;
+        const savedCount = manualProductQuickSetupItems.length;
+        const statusLabel = isManualProductQuickModeActive
+            ? '\u0110ang l\u1ecdc DS n\u00e0y'
+            : savedCount > 0
+                ? `${savedCount} SP \u0111\u00e3 l\u01b0u`
+                : 'Khai b\u00e1o DS';
+        const contextLabel = normalizeCanvasText(manualProductQuickSetupLabel);
+
+        return (
+            <div ref={manualQuickSetupDropdownRef} className={`relative min-w-0 ${mobile ? 'w-full' : 'w-[170px] shrink-0'}`}>
+                <button
+                    type="button"
+                    onClick={toggleManualProductQuickSetupPanel}
+                    className={`inline-flex h-10 w-full min-w-0 items-center justify-between gap-2 border px-3 text-left shadow-sm transition-all ${mobile ? 'rounded-[14px]' : 'rounded-sm'} ${isManualProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-white' : 'border-primary/10 bg-primary/5 text-primary/65 hover:border-primary/25 hover:bg-white hover:text-primary'}`}
+                    title="L\u1ecdc nhanh th\u1ee7 c\u00f4ng"
+                >
+                    <span className="flex min-w-0 items-center gap-2">
+                        <span className="material-symbols-outlined shrink-0 text-[17px]">bolt</span>
+                        <span className="min-w-0">
+                            <span className="block truncate text-[12px] font-black leading-none">{'L\u1ecdc nhanh'}</span>
+                            <span className="mt-1 block truncate text-[10px] font-semibold leading-none opacity-60">{statusLabel}</span>
+                        </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                        {savedCount > 0 && (
+                            <span className={`inline-flex min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-black leading-[18px] text-white ${isManualProductQuickModeActive ? 'bg-green-600' : 'bg-primary/70'}`}>
+                                {savedCount}
+                            </span>
+                        )}
+                        <span className={`material-symbols-outlined text-[16px] transition-transform ${isOpen ? 'rotate-180' : ''}`}>expand_more</span>
+                    </span>
+                </button>
+
+                {isOpen && (
+                    <div className={`absolute top-full z-[185] mt-2 w-[420px] max-w-[calc(100vw-48px)] overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_18px_45px_rgba(15,23,42,0.18)] ${mobile ? 'left-0' : 'right-0'}`}>
+                        <div className="border-b border-primary/10 bg-primary/[0.02] px-3 py-2">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                                        {'DS nhanh th\u1ee7 c\u00f4ng'}
+                                    </div>
+                                    <div className="mt-1 truncate text-[11px] font-semibold text-primary/45">
+                                        {contextLabel ? `Theo t\u1eeb kh\u00f3a: ${contextLabel}` : 'D\u00f9ng khi ch\u01b0a c\u00f3 b\u1ed9 l\u1ecdc thu\u1ed9c t\u00ednh'}
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={toggleManualProductQuickMode}
+                                    disabled={isManualProductQuickModeToggleDisabled}
+                                    className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isManualProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                                >
+                                    {isManualProductQuickModeActive ? '\u0110ang b\u1eadt' : '\u0110ang t\u1eaft'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div className="flex h-9 min-w-[180px] flex-1 items-center rounded-sm border border-primary/10 bg-white px-3 shadow-sm">
+                                    <span className="material-symbols-outlined mr-2 text-[15px] text-primary/35">search</span>
+                                    <input
+                                        ref={productQuickSetupSearchInputRef}
+                                        type="text"
+                                        value={productQuickSetupSearchTerm}
+                                        onChange={(event) => setProductQuickSetupSearchTerm(event.target.value)}
+                                        placeholder={contextLabel ? `T\u00ecm SP cho ${contextLabel}...` : 'T\u00ecm SP \u0111\u1ec3 th\u00eam v\u00e0o DS nhanh...'}
+                                        className="w-full bg-transparent text-[12px] font-semibold text-[#0F172A] placeholder:text-primary/25 focus:outline-none"
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={saveAndCloseProductQuickSetupPanel}
+                                    className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">save</span>
+                                    {'L\u01b0u'}
+                                </button>
+                            </div>
+                            <div className="mt-2 text-[10px] font-semibold text-primary/40">
+                                {savedCount > 0
+                                    ? `\u0110ang l\u01b0u ${savedCount} s\u1ea3n ph\u1ea9m trong DS nhanh n\u00e0y.`
+                                    : 'Ch\u1ecdn s\u1ea3n ph\u1ea9m hay d\u00f9ng \u0111\u1ec3 l\u1ea7n sau b\u1eadt L\u1ecdc nhanh l\u00e0 hi\u1ec7n ri\u00eang DS n\u00e0y.'}
+                            </div>
+                            {productQuickSetupLoading && (
+                                <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-primary/10 bg-primary/[0.03] px-2.5 py-1 text-[10px] font-bold text-primary/45">
+                                    <span className="material-symbols-outlined animate-refresh-spin text-[12px]">refresh</span>
+                                    {'\u0110ang t\u1ea3i s\u1ea3n ph\u1ea9m...'}
+                                </div>
+                            )}
+                            <div ref={productQuickSetupListRef} className="custom-scrollbar mt-3 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+                                {visibleProductQuickSetupProducts.length > 0 ? visibleProductQuickSetupProducts.map((product) => {
+                                    const targetProductId = Number(product?.target_product_id ?? product?.product_id ?? product?.id);
+                                    const setupEntryKey = getProductQuickSetupEntryKey(product);
+                                    const entryKind = String(product?.entry_kind || SEARCH_ENTRY_PRODUCT);
+                                    const isVariation = entryKind === SEARCH_ENTRY_VARIATION;
+                                    const isBundleOption = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                    const isSelected = selectedQuickSetupEntryKeys.has(setupEntryKey);
+
+                                    return (
+                                        <button
+                                            key={`manual-setup-product-${setupEntryKey || targetProductId}`}
+                                            type="button"
+                                            onMouseDown={(event) => event.preventDefault()}
+                                            onClick={() => handleToggleProductQuickSetupSelection(product, setupEntryKey, isSelected)}
+                                            className={`w-full rounded-sm border px-3 py-2 text-left transition-all ${isSelected ? 'border-green-200 bg-green-50 text-green-700' : 'border-primary/10 bg-white text-primary hover:border-primary/25 hover:bg-white'}`}
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-[12px] font-semibold text-[#0F172A]">
+                                                        {product.display_name || product.name || '---'}
+                                                    </div>
+                                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-primary/45">
+                                                        {(product.display_sku || product.sku) && (
+                                                            <span>{product.display_sku || product.sku}</span>
+                                                        )}
+                                                        {isVariation && product.option_label && (
+                                                            <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                {product.option_label}
+                                                            </span>
+                                                        )}
+                                                        {isBundleOption && product.bundle_option_title && (
+                                                            <span className="inline-flex items-center rounded-full border border-primary/10 bg-primary/[0.04] px-2 py-0.5 text-[10px] font-bold text-primary/65">
+                                                                Bundle: {product.bundle_option_title}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="shrink-0 text-right">
+                                                    <div className="text-[11px] font-black text-blue-600">
+                                                        {quoteCurrencyFormatter.format(Number(product.price || 0))}{'\u0111'}
+                                                    </div>
+                                                    <div className="mt-1 text-[10px] font-black uppercase tracking-[0.12em]">
+                                                        {isSelected ? '\u0110\u00e3 ch\u1ecdn' : 'Th\u00eam'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </button>
+                                    );
+                                }) : (
+                                    <div className="rounded-sm border border-dashed border-primary/10 bg-white px-3 py-6 text-center text-[11px] italic text-primary/35">
+                                        {'Kh\u00f4ng c\u00f3 s\u1ea3n ph\u1ea9m ph\u00f9 h\u1ee3p v\u1edbi t\u1eeb kh\u00f3a hi\u1ec7n t\u1ea1i.'}
+                                    </div>
+                                )}
+                            </div>
+                            {isManualProductQuickModeActive && (
+                                <button
+                                    type="button"
+                                    onClick={disableManualProductQuickMode}
+                                    className="mt-3 inline-flex h-8 items-center gap-1 rounded-sm border border-brick/15 bg-white px-3 text-[10px] font-black uppercase tracking-[0.12em] text-brick/70 transition-all hover:border-brick/30 hover:text-brick"
+                                >
+                                    <span className="material-symbols-outlined text-[13px]">close</span>
+                                    {'T\u1eaft l\u1ecdc nhanh'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderProductSourceQuickControls = ({ mobile = false, fill = false } = {}) => {
+        const sourceControl = renderCrossSellSourceToggles({ mobile, fill: true });
+
+        return (
+            <div className={`flex min-w-0 items-center gap-2 ${fill || mobile ? 'w-full' : 'max-w-full'}`}>
+                {sourceControl && (
+                    <div className="min-w-0 flex-1">
+                        {sourceControl}
+                    </div>
+                )}
+                {renderManualQuickSetupControl({ mobile })}
+            </div>
+        );
+    };
+
     const renderProductSearchToolbar = ({ mobile = false } = {}) => {
         const searchBoxClassName = mobile
             ? 'flex min-h-[46px] w-full items-center rounded-[14px] border border-primary/10 bg-white px-3 shadow-sm transition-all focus-within:border-primary/30 focus-within:bg-white'
@@ -10053,6 +10845,8 @@ const OrderForm = () => {
                     </div>
                 )}
 
+                {renderProductSourceQuickControls({ mobile, fill: true })}
+
                 <OrderAiSearchPanel
                     show={showOrderAiPanel}
                     fileInputRef={orderAiFileInputRef}
@@ -10154,7 +10948,7 @@ const OrderForm = () => {
                                 </div>
                             </div>
 
-                            {showProductQuickSetupPanel && !mobile && (
+                            {showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE && !mobile && (
                                 <div className={`absolute left-0 top-full mt-2 w-full overflow-hidden border border-primary/10 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.18)] ${mobile ? 'z-[170] rounded-[18px]' : 'z-[115] rounded-sm'}`}>
                                     <div className="px-3 py-3">
                                         <div className="flex flex-wrap items-center gap-2">
@@ -10407,6 +11201,7 @@ const OrderForm = () => {
                                 onSelect={addProductById}
                                 quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                 isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
+                                activeAccountId={activeAccountId}
                             />
                         ))}
                         {shouldShowProductSearchEmptyState && (
@@ -10727,7 +11522,7 @@ const OrderForm = () => {
                                                         </div>
                                                     </div>
 
-                                                    {showProductQuickSetupPanel && (
+                                                    {showProductQuickSetupPanel && productQuickSetupMode === PRODUCT_QUICK_SETUP_MODE_ATTRIBUTE && (
                                                         <div className="absolute left-0 top-full z-[115] mt-2 w-full overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.18)]">
                                                             <div className="px-3 py-3">
                                                                 <div className="flex flex-wrap items-center gap-2">
@@ -10980,6 +11775,7 @@ const OrderForm = () => {
                                                         onSelect={addProductById}
                                                         quickFilterAttribute={isProductQuickModeActive ? activeProductQuickFilterAttribute : null}
                                                         isAlreadyInOrder={Boolean(p.__alreadyInOrder)}
+                                                        activeAccountId={activeAccountId}
                                                     />
                                                 ))}
                                                 {shouldShowProductSearchEmptyState && (
@@ -10989,9 +11785,12 @@ const OrderForm = () => {
                                         )}
                                     </div>
 
-                                    {/* Scrollable Product Chips - Strictly Single Row */}
-                                    <div className="flex w-full min-w-0 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden custom-scrollbar rounded-sm border border-primary/10 bg-primary/5 px-2 pb-1 h-[42px]">
-                                        {formData.items.map((item, index) => (
+                                    {/* Source picker + selected product chips */}
+                                    <div className="relative z-[105] flex w-full min-w-0 items-center gap-2">
+                                        {renderProductSourceQuickControls({ fill: formData.items.length === 0 })}
+                                        {formData.items.length > 0 && (
+                                            <div className="custom-scrollbar flex h-[42px] min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-x-auto overflow-y-hidden rounded-sm border border-primary/10 bg-primary/5 px-2 pb-1">
+                                                {formData.items.map((item, index) => (
                                             <div
                                                 key={item.line_id || `${item.product_id}-${index}`}
                                                 onClick={() => handleSelectOrderLine(item.line_id)}
@@ -11022,9 +11821,11 @@ const OrderForm = () => {
                                                     <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-t-[4px] border-t-slate-800"></div>
                                                 </div>
                                             </div>
-                                        ))}
-                                        {/* Small spacer to ensure last item is visible */}
-                                        <div className="w-4 shrink-0 h-full"></div>
+                                                ))}
+                                                {/* Small spacer to ensure last item is visible */}
+                                                <div className="w-4 shrink-0 h-full"></div>
+                                            </div>
+                                        )}
                                     </div>
                                     {shouldShowOrderAiSummary && (
                                         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-sm border border-sky-200 bg-sky-50 px-4 py-3">
@@ -11251,6 +12052,7 @@ const OrderForm = () => {
                                     const hasActualOverride = hasActualOrderProductOverride(item);
                                     const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
                                     const originalNameLabel = getOrderLineOriginalNameLabel(item);
+                                    const sourceBadgeLabel = getCrossSellSourceBadgeLabel(item);
 
                                     return (
                                         <div
@@ -11350,6 +12152,12 @@ const OrderForm = () => {
                                                             {originalNameLabel ? (
                                                                 <div className="mt-1 truncate text-[11px] font-semibold leading-[1.35] text-primary/40">
                                                                     {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
+                                                                </div>
+                                                            ) : null}
+                                                            {sourceBadgeLabel ? (
+                                                                <div className="mt-1 inline-flex max-w-full items-center gap-1 rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[11px] font-semibold leading-none text-sky-700">
+                                                                    <span className="material-symbols-outlined text-[12px]">storefront</span>
+                                                                    <span className="truncate">{`\u004e\u0067\u0075\u1ed3\u006e: ${sourceBadgeLabel}`}</span>
                                                                 </div>
                                                             ) : null}
                                                             {hasActualOverride ? (
@@ -11760,6 +12568,7 @@ const OrderForm = () => {
                                                             const isEditingName = normalizeCanvasText(editingOrderLineName.lineId) === normalizeCanvasText(item.line_id);
                                                             const originalNameLabel = getOrderLineOriginalNameLabel(item);
                                                             const displayNameLabel = getOrderLineDisplayNameLabel(item);
+                                                            const sourceBadgeLabel = getCrossSellSourceBadgeLabel(item);
 
                                                             return (
                                                                 <td
@@ -11824,6 +12633,12 @@ const OrderForm = () => {
                                                                                 <p className="order-form-cell-meta truncate font-semibold text-primary/35">
                                                                                     {`\u0054\u00ean g\u1ed1c: ${originalNameLabel}`}
                                                                                 </p>
+                                                                            ) : null}
+                                                                            {sourceBadgeLabel ? (
+                                                                                <div className="order-form-cell-meta inline-flex max-w-full items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-semibold text-sky-700">
+                                                                                    <span className="material-symbols-outlined text-[12px]">storefront</span>
+                                                                                    <span className="truncate">{`\u004e\u0067\u0075\u1ed3\u006e: ${sourceBadgeLabel}`}</span>
+                                                                                </div>
                                                                             ) : null}
                                                                             {item.replaced_from_name && (
                                                                                 <p className="text-[11px] font-medium text-slate-400 mt-0.5 italic line-through truncate" title={`Đổi từ: ${item.replaced_from_name}`}>

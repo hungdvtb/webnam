@@ -8,6 +8,7 @@ use App\Models\Order;
 use App\Models\OrderAttributeValue;
 use App\Models\ProfitCenter;
 use App\Models\User;
+use App\Support\OrderStatusCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -78,6 +79,69 @@ class OrderBulkUpdateAndProfitManagerFilterTest extends TestCase
         $this->assertDatabaseMissing('order_attribute_values', [
             'order_id' => $order->id,
             'attribute_id' => $attribute->id,
+        ]);
+    }
+
+    public function test_bulk_update_changes_statuses_and_logs_each_changed_order_in_the_active_account(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $otherAccount = $this->createAccount('other-status');
+        $user->accounts()->attach($otherAccount->id, ['role' => 'owner']);
+
+        $firstOrder = $this->createOrder($account, $user, 'OR-BULK-STATUS-A', null, [
+            'status' => OrderStatusCatalog::SHIPPING_CODE,
+        ]);
+        $secondOrder = $this->createOrder($account, $user, 'OR-BULK-STATUS-B', null, [
+            'status' => OrderStatusCatalog::SHIPPING_CODE,
+        ]);
+        $alreadyPrintedOrder = $this->createOrder($account, $user, 'OR-BULK-STATUS-C', null, [
+            'status' => OrderStatusCatalog::PRINTED_CODE,
+        ]);
+        $otherAccountOrder = $this->createOrder($otherAccount, $user, 'OR-BULK-STATUS-OTHER', null, [
+            'status' => OrderStatusCatalog::SHIPPING_CODE,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/bulk-update', [
+                'ids' => [
+                    $firstOrder->id,
+                    $secondOrder->id,
+                    $alreadyPrintedOrder->id,
+                    $otherAccountOrder->id,
+                ],
+                'status' => OrderStatusCatalog::PRINTED_CODE,
+                'allow_shipping_override' => true,
+            ]);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('updated_count', 3)
+            ->assertJsonPath('status_changed_count', 2)
+            ->assertJsonPath('status_unchanged_count', 1);
+
+        $this->assertSame(OrderStatusCatalog::PRINTED_CODE, (string) $firstOrder->fresh()->status);
+        $this->assertSame(OrderStatusCatalog::PRINTED_CODE, (string) $secondOrder->fresh()->status);
+        $this->assertSame(OrderStatusCatalog::PRINTED_CODE, (string) $alreadyPrintedOrder->fresh()->status);
+        $this->assertSame(OrderStatusCatalog::SHIPPING_CODE, (string) $otherAccountOrder->fresh()->status);
+
+        foreach ([$firstOrder, $secondOrder] as $order) {
+            $this->assertDatabaseHas('order_status_logs', [
+                'order_id' => $order->id,
+                'from_status' => OrderStatusCatalog::SHIPPING_CODE,
+                'to_status' => OrderStatusCatalog::PRINTED_CODE,
+                'source' => 'manual',
+                'changed_by' => $user->id,
+            ]);
+        }
+
+        $this->assertDatabaseMissing('order_status_logs', [
+            'order_id' => $alreadyPrintedOrder->id,
+            'to_status' => OrderStatusCatalog::PRINTED_CODE,
+        ]);
+        $this->assertDatabaseMissing('order_status_logs', [
+            'order_id' => $otherAccountOrder->id,
+            'to_status' => OrderStatusCatalog::PRINTED_CODE,
         ]);
     }
 
@@ -169,9 +233,9 @@ class OrderBulkUpdateAndProfitManagerFilterTest extends TestCase
         ]);
     }
 
-    private function createOrder(Account $account, User $user, string $number, ?int $profitCenterId = null): Order
+    private function createOrder(Account $account, User $user, string $number, ?int $profitCenterId = null, array $overrides = []): Order
     {
-        return Order::query()->create([
+        return Order::query()->create(array_merge([
             'account_id' => $account->id,
             'user_id' => $user->id,
             'order_number' => $number,
@@ -187,7 +251,7 @@ class OrderBulkUpdateAndProfitManagerFilterTest extends TestCase
             'cost_total' => 80000,
             'profit_total' => 40000,
             'profit_center_id' => $profitCenterId,
-        ]);
+        ], $overrides));
     }
 
     private function headers(Account $account): array

@@ -164,6 +164,74 @@ class OrderQuickDispatchOutsideDeliveryTest extends TestCase
         $this->assertSame('shipngoai101', (string) $secondOrder->fresh()->shipping_tracking_code);
     }
 
+    public function test_order_list_filters_unpaid_outside_delivery_orders_until_completed(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $product = $this->createProduct($account, [
+            'name' => 'San pham loc ship ngoai chua tra',
+            'sku' => 'OUTSIDE-UNPAID-FILTER-001',
+            'price' => 150000,
+        ]);
+
+        $unpaidOutsideOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR-OUTSIDE-UNPAID-0001',
+            'status' => 'shipping',
+            'shipping_carrier_code' => 'outside_delivery',
+            'shipping_tracking_code' => 'shipngoai200',
+            'external_delivery_meta' => [
+                'delivery_type' => 'xe_om',
+                'shipping_cost' => 25000,
+            ],
+            'total_price' => 300000,
+        ]);
+        $legacyOutsideOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR-OUTSIDE-UNPAID-0002',
+            'status' => 'shipping',
+            'shipping_carrier_code' => null,
+            'external_delivery_meta' => [
+                'delivery_type' => 'tu_giao',
+                'shipping_cost' => 15000,
+            ],
+            'total_price' => 120000,
+        ]);
+        $completedOutsideOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR-OUTSIDE-PAID-0001',
+            'status' => 'completed',
+            'shipping_carrier_code' => 'outside_delivery',
+            'external_delivery_meta' => [
+                'delivery_type' => 'xe_khach',
+                'shipping_cost' => 20000,
+            ],
+            'total_price' => 450000,
+        ]);
+        $normalShippingOrder = $this->createOfficialOrder($account, $user, $product, [
+            'order_number' => 'OR-NORMAL-SHIPPING-0001',
+            'status' => 'shipping',
+            'shipping_carrier_code' => 'viettel_post',
+            'total_price' => 500000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders?per_page=100&outside_delivery_unpaid=1&sort_by=order_number&sort_order=asc');
+
+        $response->assertOk();
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertContains($unpaidOutsideOrder->id, $returnedIds);
+        $this->assertContains($legacyOutsideOrder->id, $returnedIds);
+        $this->assertNotContains($completedOutsideOrder->id, $returnedIds);
+        $this->assertNotContains($normalShippingOrder->id, $returnedIds);
+        $this->assertSame(2, (int) $response->json('summary.order_count'));
+        $this->assertSame(420000.0, (float) $response->json('summary.total_price'));
+        $this->assertSame(2, (int) $response->json('outside_delivery_unpaid_summary.order_count'));
+        $this->assertSame(420000.0, (float) $response->json('outside_delivery_unpaid_summary.total_price'));
+    }
+
     public function test_cancel_dispatch_clears_outside_delivery_marker_without_shipments(): void
     {
         [$account, $user] = $this->authenticate();

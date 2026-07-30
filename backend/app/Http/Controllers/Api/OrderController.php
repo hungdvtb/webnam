@@ -30,6 +30,7 @@ use App\Support\OrderProductSnapshot;
 use App\Support\OrderExchangeRefundSystemNote;
 use App\Support\OrderShippingFeeCalculator;
 use App\Support\OrderStatusCatalog;
+use App\Services\AccountDataScopeService;
 use App\Services\Inventory\InventoryService;
 use App\Services\OrderInventorySlipService;
 use App\Services\RepeatCustomerPhoneService;
@@ -129,6 +130,14 @@ class OrderController extends Controller
         'khac' => 'Khác',
     ];
 
+    private const OUTSIDE_DELIVERY_UNPAID_EXCLUDED_STATUSES = [
+        OrderStatusCatalog::COMPLETED_CODE,
+        OrderStatusCatalog::PENDING_RETURN_CODE,
+        OrderStatusCatalog::RETURNED_CODE,
+        OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+        'cancelled',
+    ];
+
     private const DEFAULT_MANUAL_ORDER_SOURCE = 'FB';
     private const UNKNOWN_ORDER_SOURCE = 'Chua ro';
     private const ORDER_SOURCE_ALIASES = [
@@ -174,6 +183,7 @@ class OrderController extends Controller
         protected RepeatCustomerPhoneService $repeatCustomerPhoneService,
         protected OrderInventorySlipService $orderInventorySlipService,
         protected ShipmentStatusSyncService $shipmentStatusSyncService,
+        protected AccountDataScopeService $accountDataScopeService,
     ) {
     }
 
@@ -875,6 +885,8 @@ class OrderController extends Controller
                     'account_id',
                     'product_id',
                     'actual_product_id',
+                    'product_source_account_id',
+                    'inventory_source_account_id',
                     'product_name_snapshot',
                     'actual_product_name_snapshot',
                     'product_sku_snapshot',
@@ -892,7 +904,7 @@ class OrderController extends Controller
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id', 'profit_center_id'])
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id', 'profit_center_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
@@ -903,7 +915,7 @@ class OrderController extends Controller
                         ]),
                     'actualProduct' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'category_id', 'cost_price', 'expected_cost', 'inventory_unit_id'])
                         ->with([
                             'attributeValues:id,product_id,attribute_id,value',
                             'unit:id,name',
@@ -912,6 +924,8 @@ class OrderController extends Controller
                                 ->select(['products.id', 'products.name', 'products.inventory_unit_id'])
                                 ->with(['unit:id,name']),
                         ]),
+                    'productSourceAccount:id,name',
+                    'inventorySourceAccount:id,name',
                 ]),
             'attributeValues' => fn ($query) => $query
                 ->select(['id', 'order_id', 'attribute_id', 'value'])
@@ -1175,7 +1189,12 @@ class OrderController extends Controller
             'offline_payment_method' => $order->offline_payment_method,
             'status' => $order->status,
             'customer_name' => $order->customer_name,
+            'customer_email' => $order->customer_email,
             'customer_phone' => $order->customer_phone,
+            'shipping_address' => $order->shipping_address,
+            'province' => $order->province,
+            'district' => $order->district,
+            'ward' => $order->ward,
             'notes' => $order->notes,
             'source' => $this->normalizeOrderSourceValue($order->source),
             'total_price' => (float) $order->total_price,
@@ -1523,6 +1542,34 @@ class OrderController extends Controller
                 ->where("{$table}.order_kind", self::ORDER_KIND_OFFICIAL)
                 ->orWhereNull("{$table}.order_kind")
                 ->orWhere("{$table}.order_kind", '');
+        });
+    }
+
+    private function applyOutsideDeliveryUnpaidFilter($query, string $table = 'orders'): void
+    {
+        $hasCarrierCode = $this->orderTableHasColumn('shipping_carrier_code');
+        $hasExternalMeta = $this->orderTableHasColumn('external_delivery_meta');
+
+        if (!$hasCarrierCode && !$hasExternalMeta) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $query->where(function ($outsideDeliveryQuery) use ($table, $hasCarrierCode, $hasExternalMeta) {
+            if ($hasCarrierCode) {
+                $outsideDeliveryQuery->where("{$table}.shipping_carrier_code", self::OUTSIDE_DELIVERY_CARRIER_CODE);
+            }
+
+            if ($hasExternalMeta) {
+                $method = $hasCarrierCode ? 'orWhereNotNull' : 'whereNotNull';
+                $outsideDeliveryQuery->{$method}("{$table}.external_delivery_meta");
+            }
+        });
+
+        $query->where(function ($statusQuery) use ($table) {
+            $statusQuery
+                ->whereNull("{$table}.status")
+                ->orWhereNotIn("{$table}.status", self::OUTSIDE_DELIVERY_UNPAID_EXCLUDED_STATUSES);
         });
     }
 
@@ -2127,7 +2174,7 @@ class OrderController extends Controller
             ->all();
         $requestedProductIds = array_values(array_unique(array_merge($productIds, $actualProductIds)));
 
-        $products = Product::query()
+        $products = Product::withoutGlobalScope('account_id')
             ->whereIn('id', $requestedProductIds)
             ->get()
             ->keyBy('id');
@@ -2137,6 +2184,8 @@ class OrderController extends Controller
                 'items' => 'Có sản phẩm không tồn tại hoặc không thuộc cửa hàng hiện tại.',
             ]);
         }
+
+        $this->ensureProductsAccessibleForOrder($products->values(), $order);
 
         $createdItems = [];
 
@@ -2156,11 +2205,14 @@ class OrderController extends Controller
                 : ImportCostRounding::roundUnitCost($item['cost_price'] ?? $product->cost_price ?? $product->expected_cost ?? 0);
             $costTotal = ImportCostRounding::lineTotal($costPrice, $quantity);
             $profitTotal = round(($price * $quantity) - $costTotal, 2);
+            $sourceAccounts = $this->resolveOrderItemSourceAccounts($order, $product, $actualProduct ?: $product, $item);
 
             $createdItems[] = $order->items()->create([
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
                 'actual_product_id' => $actualProduct?->id,
+                'product_source_account_id' => $sourceAccounts['product_source_account_id'],
+                'inventory_source_account_id' => $sourceAccounts['inventory_source_account_id'],
                 'product_name_snapshot' => OrderProductSnapshot::submittedNameOrCatalog($item['name'] ?? null, $product),
                 'actual_product_name_snapshot' => $actualProduct
                     ? OrderProductSnapshot::submittedNameOrCatalog(
@@ -2191,6 +2243,124 @@ class OrderController extends Controller
             'cost_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->cost_total), 2),
             'profit_total' => round(collect($createdItems)->sum(fn ($row) => (float) $row->profit_total), 2),
         ];
+    }
+
+    private function normalizeAccountId(mixed $value): ?int
+    {
+        if ($value === null || $value === '' || $value === 'all') {
+            return null;
+        }
+
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $accountId = (int) $value;
+
+        return $accountId > 0 ? $accountId : null;
+    }
+
+    private function catalogAccountIdForOrder(Order $order): int
+    {
+        $orderAccountId = (int) ($order->account_id ?? 0);
+
+        return (int) ($this->accountDataScopeService->catalogAccountId($orderAccountId) ?? $orderAccountId);
+    }
+
+    private function inventoryAccountIdForOrder(Order $order): int
+    {
+        $orderAccountId = (int) ($order->account_id ?? 0);
+
+        return (int) ($this->accountDataScopeService->inventoryAccountId($orderAccountId) ?? $orderAccountId);
+    }
+
+    private function resolveSourceAccountForCatalog(Order $order, int $catalogAccountId, mixed $preferredSourceAccountId = null): int
+    {
+        $preferredAccountId = $this->normalizeAccountId($preferredSourceAccountId);
+        if (
+            $preferredAccountId !== null
+            && (int) ($this->accountDataScopeService->catalogAccountId($preferredAccountId) ?? $preferredAccountId) === $catalogAccountId
+        ) {
+            return $preferredAccountId;
+        }
+
+        $orderAccountId = (int) ($order->account_id ?? 0);
+        if (
+            $orderAccountId > 0
+            && (int) ($this->accountDataScopeService->catalogAccountId($orderAccountId) ?? $orderAccountId) === $catalogAccountId
+        ) {
+            return $orderAccountId;
+        }
+
+        return $catalogAccountId;
+    }
+
+    private function resolveOrderItemSourceAccounts(Order $order, Product $product, ?Product $inventoryProduct = null, array|object $source = []): array
+    {
+        $inventoryProduct ??= $product;
+        $orderCatalogAccountId = $this->catalogAccountIdForOrder($order);
+        $productCatalogAccountId = (int) ($product->account_id ?: $orderCatalogAccountId);
+        $inventoryProductCatalogAccountId = (int) ($inventoryProduct->account_id ?: $productCatalogAccountId);
+        $preferredProductSourceAccountId = is_array($source)
+            ? ($source['product_source_account_id'] ?? $source['source_account_id'] ?? null)
+            : ($source->product_source_account_id ?? null);
+
+        $productSourceAccountId = $this->resolveSourceAccountForCatalog(
+            $order,
+            $productCatalogAccountId,
+            $preferredProductSourceAccountId
+        );
+        $inventorySourceAnchorAccountId = $this->resolveSourceAccountForCatalog(
+            $order,
+            $inventoryProductCatalogAccountId,
+            $preferredProductSourceAccountId
+        );
+        $inventorySourceAccountId = (int) (
+            $this->accountDataScopeService->inventoryAccountId($inventorySourceAnchorAccountId)
+            ?? $inventorySourceAnchorAccountId
+        );
+
+        return [
+            'product_source_account_id' => $productSourceAccountId > 0 ? $productSourceAccountId : null,
+            'inventory_source_account_id' => $inventorySourceAccountId > 0 ? $inventorySourceAccountId : $this->inventoryAccountIdForOrder($order),
+        ];
+    }
+
+    private function accessibleCatalogAccountIdsForOrder(Order $order): array
+    {
+        $user = Auth::user();
+        if ($user && !empty($user->is_admin)) {
+            return [];
+        }
+
+        $accountIds = [(int) ($order->account_id ?? 0)];
+
+        if ($user) {
+            $accountIds = array_merge(
+                $accountIds,
+                $user->accounts()->pluck('accounts.id')->map(fn ($id) => (int) $id)->all()
+            );
+        }
+
+        return $this->accountDataScopeService->resolveScopedAccountIds($accountIds, AccountDataScopeService::SCOPE_CATALOG);
+    }
+
+    private function ensureProductsAccessibleForOrder(Collection $products, Order $order): void
+    {
+        $allowedCatalogAccountIds = $this->accessibleCatalogAccountIdsForOrder($order);
+        if (empty($allowedCatalogAccountIds)) {
+            return;
+        }
+
+        $invalidProducts = $products
+            ->filter(fn (Product $product) => !in_array((int) $product->account_id, $allowedCatalogAccountIds, true))
+            ->values();
+
+        if ($invalidProducts->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Co san pham khong thuoc cac cua hang ban duoc phep ban cheo.',
+            ]);
+        }
     }
 
     private function syncOrderItems(Order $order, array $rawItems, string $orderKind, bool $preferSubmittedCostPrice = false): array
@@ -2839,8 +3009,13 @@ class OrderController extends Controller
                 $rawItems = $original->items->map(function (OrderItem $item) {
                     return [
                         'product_id' => $item->product_id,
+                        'actual_product_id' => $item->actual_product_id,
+                        'product_source_account_id' => $item->product_source_account_id,
+                        'inventory_source_account_id' => $item->inventory_source_account_id,
                         'name' => $item->product_name_snapshot,
                         'sku' => $item->product_sku_snapshot,
+                        'actual_name' => $item->actual_product_name_snapshot,
+                        'actual_sku' => $item->actual_product_sku_snapshot,
                         'sort_order' => (int) ($item->sort_order ?? 0),
                         'quantity' => $item->quantity,
                         'price' => $item->price,
@@ -3549,6 +3724,10 @@ class OrderController extends Controller
             $this->applyRequestedOrderTypeFilter($query, $requestedOrderTypes);
         }
 
+        if ($request->boolean('outside_delivery_unpaid')) {
+            $this->applyOutsideDeliveryUnpaidFilter($query);
+        }
+
         if ($request->filled('order_ids')) {
             $orderIds = collect(
                 is_array($request->input('order_ids'))
@@ -3850,6 +4029,20 @@ class OrderController extends Controller
             self::ORDER_KIND_TEMPLATE => (int) ($baseCounts[self::ORDER_KIND_TEMPLATE] ?? 0),
             self::ORDER_KIND_DRAFT => (int) ($baseCounts[self::ORDER_KIND_DRAFT] ?? 0),
             'trash' => (int) Order::onlyTrashed()->where('account_id', $accountId)->count(),
+        ];
+    }
+
+    private function loadOutsideDeliveryUnpaidSummary(int $accountId): array
+    {
+        $query = Order::query()
+            ->where('account_id', $accountId);
+
+        $this->applyManagedOrderScope($query);
+        $this->applyOutsideDeliveryUnpaidFilter($query);
+
+        return [
+            'order_count' => (int) (clone $query)->count(),
+            'total_price' => round((float) (clone $query)->sum('total_price'), 2),
         ];
     }
 
@@ -4405,6 +4598,7 @@ class OrderController extends Controller
                     'order_attributes' => $this->loadOrderAttributes('order'),
                     'connected_carriers' => $this->loadConnectedCarriers($accountId),
                     'order_kind_counts' => $this->loadOrderKindCounts($accountId),
+                    'outside_delivery_unpaid_summary' => $this->loadOutsideDeliveryUnpaidSummary($accountId),
                     'profit_centers' => $this->loadOrderProfitCenters($accountId),
                 ];
             }
@@ -4505,6 +4699,7 @@ class OrderController extends Controller
 
         $response = $paginator->toArray();
         $response['order_kind_counts'] = $this->loadOrderKindCounts($accountId);
+        $response['outside_delivery_unpaid_summary'] = $this->loadOutsideDeliveryUnpaidSummary($accountId);
         $response['summary'] = $summary;
 
         return response()->json($response);
@@ -5364,7 +5559,7 @@ class OrderController extends Controller
     {
         $validator = \Illuminate\Support\Facades\Validator::make($request->all(), [
             'order_number' => 'sometimes|string|max:255',
-            'customer_name' => 'sometimes|string|max:255',
+            'customer_name' => 'sometimes|nullable|string|max:255',
             'customer_email' => 'nullable|max:255',
             'customer_phone' => 'nullable|string|max:20',
             'shipping_address' => 'nullable|string',
@@ -5940,6 +6135,8 @@ class OrderController extends Controller
         $request->validate([
             'ids' => 'required|array|min:1|max:500',
             'ids.*' => 'required|integer|distinct',
+            'status' => 'sometimes|required|string|max:50',
+            'allow_shipping_override' => 'nullable|boolean',
             'profit_center_id' => 'nullable|integer',
             'custom_attributes' => 'nullable|array',
         ]);
@@ -5970,6 +6167,26 @@ class OrderController extends Controller
         $data = $request->only([
             'status', 'notes', 'source', 'type', 'shipment_status'
         ]);
+        $hasStatusUpdate = array_key_exists('status', $data);
+        $statusChangedCount = 0;
+        $statusUnchangedCount = 0;
+
+        if ($hasStatusUpdate) {
+            $data['status'] = trim((string) $data['status']);
+            OrderStatusCatalog::ensureDefaultSystemStatuses($accountId);
+
+            $statusExists = OrderStatus::query()
+                ->where('account_id', $accountId)
+                ->where('code', $data['status'])
+                ->exists();
+
+            if (!$statusExists) {
+                return response()->json([
+                    'message' => "Trạng thái '{$data['status']}' không hợp lệ cho hệ thống của bạn.",
+                ], 422);
+            }
+        }
+
         if (array_key_exists('source', $data)) {
             $data['source'] = $this->normalizeOrderSourceValue($data['source']);
         }
@@ -5999,9 +6216,107 @@ class OrderController extends Controller
             }
         }
 
-        DB::transaction(function () use ($ids, $data, $customAttributes) {
-            if (!empty($data)) {
-                Order::query()->whereIn('id', $ids)->update($data);
+        $ordersForStatusUpdate = collect();
+        if ($hasStatusUpdate) {
+            $ordersForStatusUpdate = $this->scopedOrderQuery($request)
+                ->whereIn('id', $ids)
+                ->with(['activeShipment'])
+                ->get();
+
+            $unsupportedOrder = $ordersForStatusUpdate->first(
+                fn (Order $order) => !$this->shouldManageInventory((string) $order->order_kind)
+            );
+
+            if ($unsupportedOrder) {
+                return response()->json([
+                    'message' => 'Đơn mẫu và đơn nháp không hỗ trợ cập nhật trạng thái giao hàng.',
+                ], 422);
+            }
+        }
+
+        DB::transaction(function () use ($ids, $data, $customAttributes, $hasStatusUpdate, $ordersForStatusUpdate, $request, &$statusChangedCount, &$statusUnchangedCount) {
+            $bulkColumnData = $data;
+            unset($bulkColumnData['status']);
+
+            if (!empty($bulkColumnData)) {
+                Order::query()->whereIn('id', $ids)->update($bulkColumnData);
+            }
+
+            if ($hasStatusUpdate) {
+                $newStatus = (string) $data['status'];
+                $shippingLockedStatuses = [
+                    'shipping',
+                    'completed',
+                    'pending_return',
+                    'returned',
+                    OrderStatusCatalog::EXCHANGE_COMPLETED_CODE,
+                    OrderStatusCatalog::PARTIAL_DELIVERY_CODE,
+                ];
+                $allowShippingOverride = $request->boolean('allow_shipping_override');
+
+                foreach ($ordersForStatusUpdate as $order) {
+                    $oldStatus = (string) $order->status;
+
+                    if ($newStatus === $oldStatus) {
+                        $statusUnchangedCount++;
+                        continue;
+                    }
+
+                    if (in_array($newStatus, $shippingLockedStatuses, true) && $order->activeShipment) {
+                        $syncService = app(ShipmentStatusSyncService::class);
+                        $canEdit = $syncService->canManuallyEditOrderShipping($order);
+
+                        if (!$allowShippingOverride && !$canEdit['allowed']) {
+                            throw ValidationException::withMessages([
+                                'status' => $canEdit['reason'] ?? 'Trạng thái vận đơn đang khóa cập nhật thủ công.',
+                            ]);
+                        }
+
+                        if ($allowShippingOverride) {
+                            $targetShipmentStatus = app(CarrierStatusMapper::class)->inferShipmentStatusFromOrderStatus(
+                                $newStatus,
+                                $order->account_id
+                            );
+
+                            if ($targetShipmentStatus !== null) {
+                                $shipmentResult = $syncService->updateShipmentStatus(
+                                    $order->activeShipment,
+                                    $targetShipmentStatus,
+                                    'manual',
+                                    auth()->id(),
+                                    $request->reason ?? 'Cập nhật hàng loạt từ bảng quản lý đơn hàng',
+                                    null,
+                                    (bool) (auth()->user()?->is_admin ?? false)
+                                );
+
+                                if (!($shipmentResult['success'] ?? false)) {
+                                    throw ValidationException::withMessages([
+                                        'status' => $shipmentResult['message'] ?? 'Không thể đồng bộ trạng thái vận đơn.',
+                                    ]);
+                                }
+
+                                $order->refresh();
+
+                                if ((string) $order->status === $newStatus) {
+                                    $statusChangedCount++;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    \App\Models\OrderStatusLog::create([
+                        'order_id' => $order->id,
+                        'from_status' => $oldStatus,
+                        'to_status' => $newStatus,
+                        'source' => 'manual',
+                        'changed_by' => auth()->id(),
+                        'reason' => $request->reason ?? 'Cập nhật hàng loạt từ danh sách',
+                    ]);
+
+                    $order->update(['status' => $newStatus]);
+                    $statusChangedCount++;
+                }
             }
 
             if (!empty($customAttributes)) {
@@ -6027,6 +6342,8 @@ class OrderController extends Controller
         return response()->json([
             'message' => 'Cập nhật hàng loạt thành công.',
             'updated_count' => count($ids),
+            'status_changed_count' => $statusChangedCount,
+            'status_unchanged_count' => $statusUnchangedCount,
         ]);
     }
 

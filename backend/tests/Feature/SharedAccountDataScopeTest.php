@@ -7,6 +7,7 @@ use App\Models\InventoryBatch;
 use App\Models\InventoryBatchAllocation;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\User;
 use App\Services\Inventory\InventoryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
@@ -46,6 +47,7 @@ class SharedAccountDataScopeTest extends TestCase
             'sales_channel' => Order::SALES_CHANNEL_ONLINE,
             'status' => 'new',
             'customer_name' => 'Shared Inventory Customer',
+            'shipping_address' => 'Test shipping address',
             'total_price' => 0,
         ]);
 
@@ -63,6 +65,60 @@ class SharedAccountDataScopeTest extends TestCase
         $this->assertSame((int) $sourceAccount->id, (int) $allocation->account_id);
         $this->assertSame((int) $linkedAccount->id, (int) $orderItem->account_id);
         $this->assertSame(3.0, (float) $batch->fresh()->remaining_quantity);
+    }
+
+    public function test_cross_sell_order_keeps_item_on_order_account_and_allocates_source_inventory(): void
+    {
+        $sourceAccount = Account::query()->create([
+            'name' => 'Dong ' . Str::upper(Str::random(4)),
+            'subdomain' => 'dong-' . Str::lower(Str::random(8)),
+            'status' => true,
+        ]);
+        $orderAccount = Account::query()->create([
+            'name' => 'Su ' . Str::upper(Str::random(4)),
+            'subdomain' => 'su-' . Str::lower(Str::random(8)),
+            'status' => true,
+        ]);
+
+        $this->actingAs(User::factory()->create(['is_admin' => true]));
+
+        $product = $this->createProduct($sourceAccount, [
+            'price' => 100000,
+            'expected_cost' => 60000,
+            'cost_price' => 60000,
+        ]);
+        $batch = $this->createBatch($sourceAccount, $product, 5);
+        $order = Order::query()->create([
+            'account_id' => $orderAccount->id,
+            'order_number' => 'ORD-' . Str::upper(Str::random(6)),
+            'order_kind' => Order::KIND_OFFICIAL,
+            'order_type' => Order::TYPE_STANDARD,
+            'sales_channel' => Order::SALES_CHANNEL_ONLINE,
+            'status' => 'new',
+            'customer_name' => 'Cross Sell Customer',
+            'shipping_address' => 'Test shipping address',
+            'total_price' => 0,
+        ]);
+
+        $summary = app(InventoryService::class)->attachInventoryToOrder($order, [[
+            'product_id' => $product->id,
+            'product_source_account_id' => $sourceAccount->id,
+            'inventory_source_account_id' => $sourceAccount->id,
+            'quantity' => 2,
+            'price' => 100000,
+        ]]);
+
+        $allocation = InventoryBatchAllocation::withoutGlobalScopes()->firstOrFail();
+        $orderItem = $order->items()->firstOrFail();
+
+        $this->assertSame((int) $orderAccount->id, (int) $orderItem->account_id);
+        $this->assertSame((int) $sourceAccount->id, (int) $orderItem->product_source_account_id);
+        $this->assertSame((int) $sourceAccount->id, (int) $orderItem->inventory_source_account_id);
+        $this->assertSame((int) $sourceAccount->id, (int) $allocation->account_id);
+        $this->assertSame(3.0, (float) $batch->fresh()->remaining_quantity);
+        $this->assertSame(200000.0, (float) $summary['total_price']);
+        $this->assertSame(120000.0, (float) $summary['cost_total']);
+        $this->assertSame(80000.0, (float) $summary['profit_total']);
     }
 
     private function createAccountSet(): array

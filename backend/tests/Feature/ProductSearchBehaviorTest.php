@@ -189,6 +189,44 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.id', $parent->id);
     }
 
+    public function test_picker_search_matches_compact_alpha_sku_fragments(): void
+    {
+        $account = $this->authenticate();
+
+        $skuOnlyMatch = $this->createProduct($account, [
+            'name' => 'Bo bat cung hoa mat troi kich thuoc 40cm men RAN',
+            'sku' => 'MR70-BOMATTROIMENRAN-40CM',
+        ]);
+
+        $nameMatch = $this->createProduct($account, [
+            'name' => 'Bo mat troi men lam kem khay go',
+            'sku' => 'ML80-MAT-TROI-LAM',
+        ]);
+
+        $this->createProduct($account, [
+            'name' => 'Bo bat cung hoa sen men RAN',
+            'sku' => 'MR70-HOA-SEN-40CM',
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?picker=1&search=bomattroi&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('total', 2);
+
+        $returnedIds = collect($response->json('data'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        $this->assertEqualsCanonicalizing(
+            [$skuOnlyMatch->id, $nameMatch->id],
+            $returnedIds
+        );
+    }
+
     public function test_picker_search_returns_every_active_variant_for_matching_configurable_product(): void
     {
         $account = $this->authenticate();
@@ -246,6 +284,57 @@ class ProductSearchBehaviorTest extends TestCase
             'MR70-BATTRASAM-RAN-SEN',
             'MR70-BATTRASAM-RAN-CUONTHU',
         ], $variationSkus);
+    }
+
+    public function test_picker_source_account_search_uses_bearer_user_access_on_public_product_route(): void
+    {
+        $activeAccount = Account::query()->create([
+            'name' => 'Gom Su Dai Thanh',
+            'domain' => 'gom-' . Str::lower(Str::random(6)) . '.local',
+            'subdomain' => 'gom-' . Str::lower(Str::random(6)),
+            'status' => true,
+        ]);
+        $sourceAccount = Account::query()->create([
+            'name' => 'Dong Dai Thanh',
+            'domain' => 'dong-' . Str::lower(Str::random(6)) . '.local',
+            'subdomain' => 'dong-' . Str::lower(Str::random(6)),
+            'status' => true,
+        ]);
+
+        $user = User::query()->create([
+            'name' => 'Sales',
+            'email' => 'sales-' . Str::lower(Str::random(6)) . '@example.com',
+            'password' => 'password',
+            'is_admin' => false,
+        ]);
+        $user->accounts()->attach($activeAccount->id, ['role' => 'staff']);
+        $user->accounts()->attach($sourceAccount->id, ['role' => 'staff']);
+
+        $parent = $this->createProduct($sourceAccount, [
+            'name' => 'Dinh dong vang',
+            'sku' => 'DINHDONGVANG',
+            'type' => 'configurable',
+        ]);
+        $variation = $this->createProduct($sourceAccount, [
+            'name' => 'Dinh dong vang 45cm',
+            'sku' => 'DINH45-VANG',
+        ]);
+        $this->attachVariation($parent, $variation);
+
+        $token = $user->createToken('product-source-picker-test')->plainTextToken;
+
+        $response = $this
+            ->withHeaders($this->headers($activeAccount) + [
+                'Authorization' => 'Bearer ' . $token,
+            ])
+            ->getJson('/api/products?picker=1&fast_picker=1&search=DINHDONGVANG&source_account_ids=' . $sourceAccount->id . '&per_page=20');
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $parent->id)
+            ->assertJsonPath('data.0.account_id', $sourceAccount->id)
+            ->assertJsonPath('data.0.source_account_id', $sourceAccount->id)
+            ->assertJsonPath('data.0.variations.0.id', $variation->id);
     }
 
     public function test_name_search_uses_name_matching_instead_of_sku_token_matching(): void

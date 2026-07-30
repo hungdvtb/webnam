@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\GenerateProductReviewsForProductJob;
 use App\Jobs\SyncGoogleMerchantProductJob;
+use App\Models\Account;
 use App\Models\Attribute;
 use App\Models\AttributeOption;
 use App\Models\Category;
@@ -198,6 +199,153 @@ class ProductController extends Controller
     private function inventoryOrderAccountIds(Request $request): array
     {
         return $this->accountDataScopeService->accountIdsSharingInventoryScopeForRequest($request);
+    }
+
+    private function normalizeAccountIdList(mixed $value): array
+    {
+        if ($value === null || $value === '') {
+            return [];
+        }
+
+        $values = is_array($value) ? $value : explode(',', (string) $value);
+
+        return collect($values)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function accessibleRawAccountIds(Request $request): array
+    {
+        $user = $this->requestUserForAccountAccess($request);
+
+        if ($user && !empty($user->is_admin)) {
+            return Account::query()
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+        }
+
+        if ($user) {
+            return $user->accounts()
+                ->pluck('accounts.id')
+                ->map(fn ($id) => (int) $id)
+                ->all();
+        }
+
+        $activeAccountId = $this->accountDataScopeService->rawActiveAccountId($request);
+
+        return $activeAccountId ? [(int) $activeAccountId] : [];
+    }
+
+    private function requestUserForAccountAccess(Request $request)
+    {
+        $user = $request->user();
+        if ($user) {
+            return $user;
+        }
+
+        if (!$request->bearerToken()) {
+            return null;
+        }
+
+        try {
+            return auth('sanctum')->user();
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private function resolveSourceContextsForAccountIds(Request $request, iterable $sourceAccountIds, bool $includeActiveAccount = true): Collection
+    {
+        $activeAccountId = $this->accountDataScopeService->rawActiveAccountId($request);
+        $candidateAccountIds = collect($includeActiveAccount ? [$activeAccountId] : [])
+            ->merge($sourceAccountIds)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter(fn ($id) => $id > 0)
+            ->unique()
+            ->values();
+
+        if ($candidateAccountIds->isEmpty()) {
+            return collect();
+        }
+
+        $accessibleAccountIds = $this->accessibleRawAccountIds($request);
+        if (!empty($accessibleAccountIds)) {
+            $candidateAccountIds = $candidateAccountIds
+                ->filter(fn (int $accountId) => in_array($accountId, $accessibleAccountIds, true))
+                ->values();
+        }
+
+        if ($candidateAccountIds->isEmpty()) {
+            return collect();
+        }
+
+        $accounts = Account::query()
+            ->whereIn('id', $candidateAccountIds->all())
+            ->get(['id', 'name'])
+            ->keyBy('id');
+
+        return $candidateAccountIds
+            ->map(function (int $accountId) use ($accounts) {
+                $account = $accounts->get($accountId);
+                if (!$account) {
+                    return null;
+                }
+
+                $catalogAccountId = (int) ($this->accountDataScopeService->catalogAccountId($accountId) ?? $accountId);
+                $inventoryAccountId = (int) ($this->accountDataScopeService->inventoryAccountId($accountId) ?? $accountId);
+
+                return [
+                    'account_id' => $accountId,
+                    'name' => (string) $account->name,
+                    'catalog_account_id' => $catalogAccountId,
+                    'inventory_account_id' => $inventoryAccountId,
+                ];
+            })
+            ->filter()
+            ->values();
+    }
+
+    private function resolvePickerSourceContexts(Request $request): Collection
+    {
+        return $this->resolveSourceContextsForAccountIds(
+            $request,
+            $this->normalizeAccountIdList($request->input('source_account_ids'))
+        );
+    }
+
+    private function pickerSourcePayloadForProduct(Product $product, Collection $sourceContexts, mixed $preferredSourceAccountId = null): array
+    {
+        $catalogAccountId = (int) ($product->account_id ?? 0);
+        $preferredSourceAccountId = is_numeric($preferredSourceAccountId) ? (int) $preferredSourceAccountId : 0;
+        $context = $sourceContexts->first(
+            fn (array $sourceContext) => $preferredSourceAccountId > 0
+                && (int) ($sourceContext['account_id'] ?? 0) === $preferredSourceAccountId
+                && (int) ($sourceContext['catalog_account_id'] ?? 0) === $catalogAccountId
+        ) ?: $sourceContexts->first(
+            fn (array $sourceContext) => (int) ($sourceContext['catalog_account_id'] ?? 0) === $catalogAccountId
+        );
+
+        if (!$context) {
+            $context = [
+                'account_id' => $catalogAccountId,
+                'name' => Account::query()->whereKey($catalogAccountId)->value('name'),
+                'catalog_account_id' => $catalogAccountId,
+                'inventory_account_id' => (int) ($this->accountDataScopeService->inventoryAccountId($catalogAccountId) ?? $catalogAccountId),
+            ];
+        }
+
+        return [
+            'source_account_id' => (int) ($context['account_id'] ?? 0) ?: null,
+            'product_source_account_id' => (int) ($context['account_id'] ?? 0) ?: null,
+            'product_catalog_account_id' => $catalogAccountId ?: null,
+            'inventory_source_account_id' => (int) ($context['inventory_account_id'] ?? 0) ?: null,
+            'source_account_name' => $context['name'] ?? null,
+            'product_source_account_name' => $context['name'] ?? null,
+        ];
     }
 
     private function resolveProductProfitCenterIdForRequest(Request $request, mixed $value, string $field = 'profit_center_id'): ?int
@@ -4448,9 +4596,9 @@ class ProductController extends Controller
             ->all();
     }
 
-    protected function attachActualStockSubqueries(Builder $query, Request $request): array
+    protected function attachActualStockSubqueries(Builder $query, Request $request, ?int $inventoryAccountIdOverride = null): array
     {
-        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
+        $accountId = (int) ($inventoryAccountIdOverride ?? $this->inventoryAccountId($request) ?? 0);
 
         // Compute real-time base stock from inventory_batches (same source of truth
         // as InventoryService::refreshProducts). This avoids stale products.stock_quantity
@@ -4477,8 +4625,8 @@ class ProductController extends Controller
             $oversoldReserveSub->where('inventory_batch_allocations.account_id', $accountId);
         }
 
-        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
-        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+        $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request, $inventoryAccountIdOverride);
+        $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request, $inventoryAccountIdOverride);
 
         $query->leftJoinSub($batchStockSub, 'inv_batch_stock', function ($join) {
             $join->on('inv_batch_stock.product_id', '=', 'products.id');
@@ -4512,9 +4660,9 @@ class ProductController extends Controller
         ];
     }
 
-    protected function buildPendingOutboundQuantitySubquery(Request $request)
+    protected function buildPendingOutboundQuantitySubquery(Request $request, ?int $inventoryAccountIdOverride = null)
     {
-        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
+        $accountId = (int) ($inventoryAccountIdOverride ?? $this->inventoryAccountId($request) ?? 0);
         $manualExportScopeSql = "
             CASE
                 WHEN inventory_documents.reference_type = 'order'
@@ -4541,7 +4689,7 @@ class ProductController extends Controller
             $manualExportQtySub->whereNull('inventory_documents.deleted_at');
         }
 
-        $pendingOrderItemsSub = OrderItem::query()
+        $pendingOrderItemsSub = OrderItem::withoutGlobalScope('account_id')
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
@@ -4550,7 +4698,7 @@ class ProductController extends Controller
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
-        $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request);
+        $this->applyPendingOutboundEligibleOrderScope($pendingOrderItemsSub, $request, $inventoryAccountIdOverride);
 
         return DB::query()
             ->fromSub($pendingOrderItemsSub, 'pending_order_items')
@@ -4564,9 +4712,9 @@ class ProductController extends Controller
             ->groupBy('pending_order_items.product_id');
     }
 
-    protected function buildPendingReturnQuantitySubquery(Request $request)
+    protected function buildPendingReturnQuantitySubquery(Request $request, ?int $inventoryAccountIdOverride = null)
     {
-        $pendingReturnItemsSub = OrderItem::query()
+        $pendingReturnItemsSub = OrderItem::withoutGlobalScope('account_id')
             ->join('orders', 'orders.id', '=', 'order_items.order_id')
             ->selectRaw('order_items.order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
@@ -4575,7 +4723,7 @@ class ProductController extends Controller
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
-        $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request);
+        $this->applyPendingReturnEligibleOrderScope($pendingReturnItemsSub, $request, $inventoryAccountIdOverride);
 
         return DB::query()
             ->fromSub($pendingReturnItemsSub, 'pending_return_items')
@@ -4584,11 +4732,26 @@ class ProductController extends Controller
             ->groupBy('pending_return_items.product_id');
     }
 
-    protected function applyPendingOutboundEligibleOrderScope($query, Request $request): void
+    protected function applyPendingOutboundEligibleOrderScope($query, Request $request, ?int $inventoryAccountIdOverride = null): void
     {
-        $accountIds = $this->inventoryOrderAccountIds($request);
+        $inventoryAccountId = (int) ($inventoryAccountIdOverride ?? $this->inventoryAccountId($request) ?? 0);
+        $accountIds = $inventoryAccountIdOverride !== null
+            ? $this->accountDataScopeService->accountIdsSharingInventoryScope($inventoryAccountId)
+            : $this->inventoryOrderAccountIds($request);
 
-        if (!empty($accountIds)) {
+        if ($inventoryAccountId > 0 && Schema::hasColumn('order_items', 'inventory_source_account_id')) {
+            $query->where(function ($builder) use ($inventoryAccountId, $accountIds) {
+                $builder->where('order_items.inventory_source_account_id', $inventoryAccountId);
+
+                if (!empty($accountIds)) {
+                    $builder->orWhere(function ($legacyBuilder) use ($accountIds) {
+                        $legacyBuilder
+                            ->whereNull('order_items.inventory_source_account_id')
+                            ->whereIn('orders.account_id', $accountIds);
+                    });
+                }
+            });
+        } elseif (!empty($accountIds)) {
             $query->whereIn('orders.account_id', $accountIds);
         }
 
@@ -4626,11 +4789,26 @@ class ProductController extends Controller
             });
     }
 
-    protected function applyPendingReturnEligibleOrderScope($query, Request $request): void
+    protected function applyPendingReturnEligibleOrderScope($query, Request $request, ?int $inventoryAccountIdOverride = null): void
     {
-        $accountIds = $this->inventoryOrderAccountIds($request);
+        $inventoryAccountId = (int) ($inventoryAccountIdOverride ?? $this->inventoryAccountId($request) ?? 0);
+        $accountIds = $inventoryAccountIdOverride !== null
+            ? $this->accountDataScopeService->accountIdsSharingInventoryScope($inventoryAccountId)
+            : $this->inventoryOrderAccountIds($request);
 
-        if (!empty($accountIds)) {
+        if ($inventoryAccountId > 0 && Schema::hasColumn('order_items', 'inventory_source_account_id')) {
+            $query->where(function ($builder) use ($inventoryAccountId, $accountIds) {
+                $builder->where('order_items.inventory_source_account_id', $inventoryAccountId);
+
+                if (!empty($accountIds)) {
+                    $builder->orWhere(function ($legacyBuilder) use ($accountIds) {
+                        $legacyBuilder
+                            ->whereNull('order_items.inventory_source_account_id')
+                            ->whereIn('orders.account_id', $accountIds);
+                    });
+                }
+            });
+        } elseif (!empty($accountIds)) {
             $query->whereIn('orders.account_id', $accountIds);
         }
 
@@ -4721,7 +4899,7 @@ class ProductController extends Controller
             ->all();
     }
 
-    protected function buildInventorySnapshotMap(Request $request, array $productIds): array
+    protected function buildInventorySnapshotMap(Request $request, array $productIds, array $inventorySourceAccountByProductId = []): array
     {
         $normalizedIds = collect($productIds)
             ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
@@ -4733,29 +4911,73 @@ class ProductController extends Controller
             return [];
         }
 
-        $stockQuery = Product::withTrashed()
-            ->select(['products.id'])
-            ->whereIn('products.id', $normalizedIds->all());
+        $products = Product::withTrashed()
+            ->withoutGlobalScope('account_id')
+            ->select(['products.id', 'products.account_id'])
+            ->whereIn('products.id', $normalizedIds->all())
+            ->get();
+        $currentRawAccountId = $this->accountDataScopeService->rawActiveAccountId($request);
+        $currentCatalogAccountId = $currentRawAccountId
+            ? (int) ($this->accountDataScopeService->catalogAccountId($currentRawAccountId) ?? $currentRawAccountId)
+            : (int) ($this->catalogAccountId($request) ?? 0);
+        $currentInventoryAccountId = $currentRawAccountId
+            ? (int) ($this->accountDataScopeService->inventoryAccountId($currentRawAccountId) ?? $currentRawAccountId)
+            : (int) ($this->inventoryAccountId($request) ?? 0);
+        $inventoryAccountGroups = $products
+            ->groupBy(function (Product $product) use ($inventorySourceAccountByProductId, $currentCatalogAccountId, $currentInventoryAccountId) {
+                $productId = (int) $product->id;
+                $providedInventoryAccountId = (int) ($inventorySourceAccountByProductId[$productId] ?? 0);
+                if ($providedInventoryAccountId > 0) {
+                    return $providedInventoryAccountId;
+                }
 
-        $stockContext = $this->attachActualStockSubqueries($stockQuery, $request);
+                $productCatalogAccountId = (int) ($product->account_id ?? 0);
+                if ($productCatalogAccountId > 0 && $currentCatalogAccountId > 0 && $productCatalogAccountId === $currentCatalogAccountId) {
+                    return $currentInventoryAccountId;
+                }
 
-        return $stockQuery
-            ->selectRaw($stockContext['base_stock_sql'] . ' AS computed_stock')
-            ->selectRaw($stockContext['pending_export_sql'] . ' AS pending_export_quantity')
-            ->get()
-            ->mapWithKeys(function (Product $product) {
-                $computedStock = InventoryQuantity::normalize($product->computed_stock ?? 0);
-                $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
-                // available_to_sell is allowed to be negative (pre-sales / back-orders)
-                $availableToSell = $computedStock - $pendingExportQuantity;
+                return (int) ($this->accountDataScopeService->inventoryAccountId($productCatalogAccountId) ?? $productCatalogAccountId);
+            });
+        $snapshotMap = [];
 
-                return [(int) $product->id => [
-                    'computed_stock' => $computedStock,
-                    'pending_export_quantity' => $pendingExportQuantity,
-                    'available_to_sell' => $availableToSell,
-                ]];
-            })
-            ->all();
+        foreach ($inventoryAccountGroups as $inventoryAccountId => $sourceProducts) {
+            $sourceProductIds = $sourceProducts
+                ->pluck('id')
+                ->map(fn ($id) => (int) $id)
+                ->filter()
+                ->values()
+                ->all();
+
+            if (empty($sourceProductIds)) {
+                continue;
+            }
+
+            $stockQuery = Product::withTrashed()
+                ->withoutGlobalScope('account_id')
+                ->select(['products.id'])
+                ->whereIn('products.id', $sourceProductIds);
+
+            $stockContext = $this->attachActualStockSubqueries($stockQuery, $request, (int) $inventoryAccountId);
+
+            $stockQuery
+                ->selectRaw($stockContext['base_stock_sql'] . ' AS computed_stock')
+                ->selectRaw($stockContext['pending_export_sql'] . ' AS pending_export_quantity')
+                ->get()
+                ->each(function (Product $product) use (&$snapshotMap) {
+                    $computedStock = InventoryQuantity::normalize($product->computed_stock ?? 0);
+                    $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
+                    // available_to_sell is allowed to be negative (pre-sales / back-orders)
+                    $availableToSell = $computedStock - $pendingExportQuantity;
+
+                    $snapshotMap[(int) $product->id] = [
+                        'computed_stock' => $computedStock,
+                        'pending_export_quantity' => $pendingExportQuantity,
+                        'available_to_sell' => $availableToSell,
+                    ];
+                });
+        }
+
+        return $snapshotMap;
     }
 
     protected function resolveInventorySnapshotPayload(array $snapshotMap, int $productId): array
@@ -5329,18 +5551,32 @@ class ProductController extends Controller
         Builder $query,
         string $nameContainsLike,
         ?string $compactNameContainsLike = null,
-        bool $includeVariationMatches = true
+        bool $includeVariationMatches = true,
+        bool $includeCompactSkuMatches = false
     ): void
     {
         $nameExpr = $this->normalizedWordsExpression('products.name');
         $compactNameExpr = $this->compactSearchExpression('products.name');
+        $compactSkuExpr = $includeCompactSkuMatches && $compactNameContainsLike !== null
+            ? $this->compactSearchExpression('products.sku')
+            : null;
 
         $query
-            ->where(function (Builder $directQuery) use ($nameExpr, $compactNameExpr, $nameContainsLike, $compactNameContainsLike) {
+            ->where(function (Builder $directQuery) use (
+                $nameExpr,
+                $compactNameExpr,
+                $compactSkuExpr,
+                $nameContainsLike,
+                $compactNameContainsLike
+            ) {
                 $directQuery->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
 
                 if ($compactNameContainsLike !== null) {
                     $directQuery->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                }
+
+                if ($compactSkuExpr !== null) {
+                    $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
                 }
             })
             ->orWhereHas('attributeValues', function (Builder $attributeValueQuery) use ($nameContainsLike) {
@@ -5349,16 +5585,33 @@ class ProductController extends Controller
 
         if ($includeVariationMatches) {
             $query
-                ->orWhereHas('variations', function (Builder $variationQuery) use ($nameContainsLike, $compactNameContainsLike) {
+                ->orWhereHas('variations', function (Builder $variationQuery) use (
+                    $nameContainsLike,
+                    $compactNameContainsLike,
+                    $includeCompactSkuMatches
+                ) {
                     $variationNameExpr = $this->normalizedWordsExpression('name');
                     $variationCompactNameExpr = $this->compactSearchExpression('name');
+                    $variationCompactSkuExpr = $includeCompactSkuMatches && $compactNameContainsLike !== null
+                        ? $this->compactSearchExpression('sku')
+                        : null;
 
                     $variationQuery->where('status', true)
-                        ->where(function (Builder $directVariationQuery) use ($variationNameExpr, $variationCompactNameExpr, $nameContainsLike, $compactNameContainsLike) {
+                        ->where(function (Builder $directVariationQuery) use (
+                            $variationNameExpr,
+                            $variationCompactNameExpr,
+                            $variationCompactSkuExpr,
+                            $nameContainsLike,
+                            $compactNameContainsLike
+                        ) {
                             $directVariationQuery->whereRaw("{$variationNameExpr} LIKE ? ESCAPE '\\'", [$nameContainsLike]);
 
                             if ($compactNameContainsLike !== null) {
                                 $directVariationQuery->orWhereRaw("{$variationCompactNameExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
+                            }
+
+                            if ($variationCompactSkuExpr !== null) {
+                                $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactNameContainsLike]);
                             }
                         });
                 })
@@ -5485,6 +5738,9 @@ class ProductController extends Controller
         $compactNameExact = $compactName !== '' ? $compactName : null;
         $compactNamePrefixLike = $compactName !== '' ? $this->escapeLike($compactName) . '%' : null;
         $compactNameContainsLike = $compactName !== '' ? '%' . $this->escapeLike($compactName) . '%' : null;
+        $includeCompactSkuMatches = $compactNameContainsLike !== null
+            && strlen($compactName) >= 3
+            && preg_match('/\s/u', trim($rawSearch)) !== 1;
         $nameTokens = $this->extractNameSearchTokens($normalizedName, $compactName);
         $isCompactCompositeSearch = !preg_match('/\s/u', trim($rawSearch)) && count($nameTokens) > 1;
         $tokenLikes = array_map(
@@ -5528,18 +5784,46 @@ class ProductController extends Controller
             $phraseRankingBindings[] = $compactNameContainsLike;
         }
 
+        if ($includeCompactSkuMatches) {
+            $compactSkuExpr = $this->compactSearchExpression('products.sku');
+            $phraseRankingParts[] = "CASE WHEN {$compactSkuExpr} LIKE ? ESCAPE '\\' THEN 1450 ELSE 0 END";
+            $phraseRankingBindings[] = $compactNameContainsLike;
+        }
+
         $phraseRankingSql = '(' . implode(' + ', $phraseRankingParts) . ')';
 
         $hasPhraseMatch = (clone $query)
-            ->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike, $includeVariationMatches) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike, $includeVariationMatches);
+            ->where(function (Builder $searchQuery) use (
+                $nameContainsLike,
+                $compactNameContainsLike,
+                $includeVariationMatches,
+                $includeCompactSkuMatches
+            ) {
+                $this->applyProductNamePhraseConstraint(
+                    $searchQuery,
+                    $nameContainsLike,
+                    $compactNameContainsLike,
+                    $includeVariationMatches,
+                    $includeCompactSkuMatches
+                );
             })
             ->exists();
 
         if ($hasPhraseMatch || empty($tokenLikes)) {
             $query->selectRaw("{$phraseRankingSql} AS search_score", $phraseRankingBindings);
-            $query->where(function (Builder $searchQuery) use ($nameContainsLike, $compactNameContainsLike, $includeVariationMatches) {
-                $this->applyProductNamePhraseConstraint($searchQuery, $nameContainsLike, $compactNameContainsLike, $includeVariationMatches);
+            $query->where(function (Builder $searchQuery) use (
+                $nameContainsLike,
+                $compactNameContainsLike,
+                $includeVariationMatches,
+                $includeCompactSkuMatches
+            ) {
+                $this->applyProductNamePhraseConstraint(
+                    $searchQuery,
+                    $nameContainsLike,
+                    $compactNameContainsLike,
+                    $includeVariationMatches,
+                    $includeCompactSkuMatches
+                );
             });
 
             return [$phraseRankingSql, $phraseRankingBindings];
@@ -6854,7 +7138,8 @@ class ProductController extends Controller
         Collection $products,
         $pickerAttributeFilters,
         ?array $bundleOptionSearch = null,
-        array $bundleOptionMatchedProductIds = []
+        array $bundleOptionMatchedProductIds = [],
+        array $sourceCatalogAccountIds = []
     ): void {
         if ($products->isEmpty()) {
             return;
@@ -6868,15 +7153,21 @@ class ProductController extends Controller
             ->all();
 
         $products->load([
-            'bundleItems' => function ($bundleQuery) use ($bundleOptionSearch, $matchedProductIds) {
+            'bundleItems' => function ($bundleQuery) use ($bundleOptionSearch, $matchedProductIds, $sourceCatalogAccountIds) {
+                $bundleQuery->withoutGlobalScope('account_id');
+                if (!empty($sourceCatalogAccountIds)) {
+                    $bundleQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                }
                 $bundleQuery->select([
                     'products.id',
+                    'products.account_id',
                     'products.sku',
                     'products.name',
                     'products.price',
                     'products.cost_price',
                     'products.expected_cost',
                     'products.type',
+                    'products.category_id',
                     'products.inventory_unit_id',
                     'products.profit_center_id',
                 ]);
@@ -6898,7 +7189,7 @@ class ProductController extends Controller
         ]);
     }
 
-    protected function loadPickerBundleSelectedVariantMap(Collection $products, $pickerAttributeFilters): Collection
+    protected function loadPickerBundleSelectedVariantMap(Collection $products, $pickerAttributeFilters, array $sourceCatalogAccountIds = []): Collection
     {
         $variantIds = $products
             ->flatMap(function (Product $product) {
@@ -6919,9 +7210,10 @@ class ProductController extends Controller
             return collect();
         }
 
-        $variantQuery = Product::query()
+        $variantQuery = Product::withoutGlobalScope('account_id')
             ->select([
                 'products.id',
+                'products.account_id',
                 'products.sku',
                 'products.name',
                 'products.price',
@@ -6934,6 +7226,10 @@ class ProductController extends Controller
             ])
             ->whereIn('products.id', $variantIds->all())
             ->where('products.status', true);
+
+        if (!empty($sourceCatalogAccountIds)) {
+            $variantQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+        }
 
         $this->applyVariationAttributeFilters($variantQuery, $pickerAttributeFilters);
 
@@ -7016,13 +7312,14 @@ class ProductController extends Controller
         return $parentName;
     }
 
-    protected function pickerBundleOptions(Product $product, ?Collection $selectedVariantMap = null): array
+    protected function pickerBundleOptions(Product $product, ?Collection $selectedVariantMap = null, ?Collection $sourceContexts = null): array
     {
         if ($product->type !== 'bundle' || !$product->relationLoaded('bundleItems')) {
             return [];
         }
 
         $selectedVariantMap ??= collect();
+        $sourceContexts ??= collect();
 
         return $product->bundleItems
             ->groupBy(function (Product $bundleItem) {
@@ -7042,7 +7339,7 @@ class ProductController extends Controller
                     ? 'post:' . $optionPostId
                     : 'title:' . Str::lower($optionTitle);
             })
-            ->map(function ($items, string $groupKey) use ($selectedVariantMap) {
+            ->map(function ($items, string $groupKey) use ($selectedVariantMap, $sourceContexts) {
                 /** @var Product|null $firstItem */
                 $firstItem = $items->first();
                 if (!$firstItem) {
@@ -7060,7 +7357,7 @@ class ProductController extends Controller
 
                 $optionStatus = $this->normalizeBundleOptionStatus($firstItem->pivot?->bundle_option_status ?? null);
 
-                $resolvedItems = $items->map(function (Product $bundleItem) use ($selectedVariantMap) {
+                $resolvedItems = $items->map(function (Product $bundleItem) use ($selectedVariantMap, $sourceContexts) {
                     $selectedVariantId = filled($bundleItem->pivot?->variant_id ?? null)
                         ? (int) $bundleItem->pivot->variant_id
                         : null;
@@ -7069,10 +7366,13 @@ class ProductController extends Controller
                         : null;
                     $resolvedProduct = $selectedVariant ?: $bundleItem;
 
+                    $sourcePayload = $this->pickerSourcePayloadForProduct($resolvedProduct, $sourceContexts);
+
                     return [
                         'base_product_id' => (int) $bundleItem->id,
                         'product_id' => (int) $resolvedProduct->id,
                         'variant_id' => $selectedVariant?->id ? (int) $selectedVariant->id : null,
+                        'account_id' => (int) ($resolvedProduct->account_id ?? 0),
                         'name' => $resolvedProduct->name,
                         'sku' => $resolvedProduct->sku,
                         'display_name' => $resolvedProduct->name,
@@ -7099,7 +7399,7 @@ class ProductController extends Controller
                         'attribute_values' => $this->pickerAttributePayload($resolvedProduct),
                         'option_label' => $this->pickerAttributeSummary($resolvedProduct),
                         'variant_name' => $selectedVariant?->name,
-                    ];
+                    ] + $sourcePayload;
                 })->values();
                 $subtotal = (float) $resolvedItems->sum(fn (array $item) => ((float) $item['price']) * ((int) $item['quantity']));
 
@@ -7130,8 +7430,17 @@ class ProductController extends Controller
     {
         $quickFiltersEnabled = $this->productQuickFiltersEnabled($request);
         $parentOnly = $request->boolean('parent_only') || $request->boolean('top_level_only');
-        $query = Product::query()->select([
+        $sourceContexts = $this->resolvePickerSourceContexts($request);
+        $sourceCatalogAccountIds = $sourceContexts
+            ->pluck('catalog_account_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $query = ($sourceContexts->isNotEmpty() ? Product::withoutGlobalScope('account_id') : Product::query())->select([
             'products.id',
+            'products.account_id',
             'products.sku',
             'products.name',
             'products.price',
@@ -7144,6 +7453,10 @@ class ProductController extends Controller
             'products.inventory_unit_id',
             'products.profit_center_id',
         ]);
+
+        if (!empty($sourceCatalogAccountIds)) {
+            $query->whereIn('products.account_id', $sourceCatalogAccountIds);
+        }
 
         $searchRankingSql = null;
         $searchRankingBindings = [];
@@ -7216,9 +7529,15 @@ class ProductController extends Controller
             'images:id,product_id,media_asset_id,image_url,is_primary,sort_order',
             'attributeValues:id,product_id,attribute_id,value',
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
-                ->select('products.id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id')
+                ->withoutGlobalScope('account_id')
+                ->when(!empty($sourceCatalogAccountIds), fn ($query) => $query->whereIn('products.account_id', $sourceCatalogAccountIds))
+                ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id')
                 ->with(['unit:id,name']),
-            'variations' => function ($variationQuery) use ($pickerAttributeFilters) {
+            'variations' => function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
+                $variationQuery->withoutGlobalScope('account_id');
+                if (!empty($sourceCatalogAccountIds)) {
+                    $variationQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
+                }
                 $variationQuery->where('products.status', true);
                 $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
             },
@@ -7257,19 +7576,22 @@ class ProductController extends Controller
             $pageProducts,
             $pickerAttributeFilters,
             $bundleOptionSearch,
-            $bundleOptionMatchedProductIds
+            $bundleOptionMatchedProductIds,
+            $sourceCatalogAccountIds
         );
         $this->appendBundleOptionPostMetaToProducts($pageProducts);
-        $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $pickerAttributeFilters);
+        $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap($pageProducts, $pickerAttributeFilters, $sourceCatalogAccountIds);
 
-        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap) {
+        $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts) {
             $parentProduct = $product->parentConfigurable->first();
             $attributeSummary = $this->pickerAttributeSummary($product);
             $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
             $displayName = trim($displayName) !== '' ? $displayName : $product->name;
+            $sourcePayload = $this->pickerSourcePayloadForProduct($product, $sourceContexts);
 
             return [
                 'id' => (int) $product->id,
+                'account_id' => (int) ($product->account_id ?? 0),
                 'slug' => $product->slug,
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
@@ -7300,15 +7622,17 @@ class ProductController extends Controller
                 'has_variations' => $product->variations->isNotEmpty(),
                 'variation_count' => $product->variations->count(),
                 'variations' => $product->variations
-                    ->map(function (Product $variation) use ($product) {
+                    ->map(function (Product $variation) use ($product, $sourceContexts) {
                         $variationAttributeSummary = $this->pickerAttributeSummary($variation);
                         $variationDisplayName = $this->buildOrderItemDisplayName($variation, $product);
                         $variationDisplayName = trim((string) $variationDisplayName) !== ''
                             ? $variationDisplayName
                             : trim((string) $product->name . ' - ' . ($variationAttributeSummary ?: $variation->name));
+                        $variationSourcePayload = $this->pickerSourcePayloadForProduct($variation, $sourceContexts);
 
                         return [
                             'id' => (int) $variation->id,
+                            'account_id' => (int) ($variation->account_id ?? 0),
                             'slug' => $variation->slug,
                             'sku' => $variation->sku,
                             'display_sku' => $variation->sku,
@@ -7336,13 +7660,42 @@ class ProductController extends Controller
                                 ?: $this->pickerPrimaryImage($product),
                             'attribute_values' => $this->pickerAttributePayload($variation),
                             'attribute_summary' => $variationAttributeSummary,
-                        ];
+                        ] + $variationSourcePayload;
                     })
                     ->values()
                     ->all(),
-                'bundle_options' => $this->pickerBundleOptions($product, $selectedBundleVariantMap),
-            ];
+                'bundle_options' => $this->pickerBundleOptions($product, $selectedBundleVariantMap, $sourceContexts),
+            ] + $sourcePayload;
         });
+
+        $inventorySourceAccountByProductId = $pickerPayload
+            ->flatMap(function (array $product) {
+                $rows = [[
+                    'product_id' => (int) ($product['id'] ?? 0),
+                    'inventory_source_account_id' => (int) ($product['inventory_source_account_id'] ?? 0),
+                ]];
+
+                foreach (($product['variations'] ?? []) as $variation) {
+                    $rows[] = [
+                        'product_id' => (int) ($variation['id'] ?? 0),
+                        'inventory_source_account_id' => (int) ($variation['inventory_source_account_id'] ?? 0),
+                    ];
+                }
+
+                foreach (($product['bundle_options'] ?? []) as $bundleOption) {
+                    foreach (($bundleOption['items'] ?? []) as $bundleItem) {
+                        $rows[] = [
+                            'product_id' => (int) ($bundleItem['product_id'] ?? $bundleItem['id'] ?? 0),
+                            'inventory_source_account_id' => (int) ($bundleItem['inventory_source_account_id'] ?? 0),
+                        ];
+                    }
+                }
+
+                return $rows;
+            })
+            ->filter(fn (array $row) => $row['product_id'] > 0 && $row['inventory_source_account_id'] > 0)
+            ->mapWithKeys(fn (array $row) => [$row['product_id'] => $row['inventory_source_account_id']])
+            ->all();
 
         $inventorySnapshotMap = $this->buildInventorySnapshotMap(
             $request,
@@ -7357,7 +7710,8 @@ class ProductController extends Controller
 
                     return array_merge([(int) ($product['id'] ?? 0)], $variationIds, $bundleItemIds);
                 })
-                ->all()
+                ->all(),
+            $inventorySourceAccountByProductId
         );
 
         $paginated->setCollection(
@@ -10975,6 +11329,9 @@ class ProductController extends Controller
         $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
+            'items.*.product_source_account_id' => 'nullable|integer',
+            'items.*.source_account_id' => 'nullable|integer',
+            'items.*.inventory_source_account_id' => 'nullable|integer',
             'items.*.sku' => 'nullable|string|max:120',
             'items.*.name' => 'nullable|string|max:255',
         ]);
@@ -10983,6 +11340,8 @@ class ProductController extends Controller
             ->map(function (array $item) {
                 return [
                     'product_id' => (int) $item['product_id'],
+                    'product_source_account_id' => (int) ($item['product_source_account_id'] ?? $item['source_account_id'] ?? 0),
+                    'inventory_source_account_id' => (int) ($item['inventory_source_account_id'] ?? 0),
                     'sku' => trim((string) ($item['sku'] ?? '')),
                     'name' => trim((string) ($item['name'] ?? '')),
                 ];
@@ -10991,22 +11350,54 @@ class ProductController extends Controller
             ->unique('product_id')
             ->values();
 
+        $sourceContexts = $this->resolveSourceContextsForAccountIds(
+            $request,
+            $requestedItems->pluck('product_source_account_id')->filter()->all()
+        );
+
         $products = Product::withTrashed()
-            ->select(['id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id'])
+            ->withoutGlobalScope('account_id')
+            ->select(['id', 'account_id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id'])
             ->with([
                 'unit:id,name',
                 'attributeValues:id,product_id,attribute_id,value',
                 'parentConfigurable' => fn ($query) => $query
+                    ->withoutGlobalScope('account_id')
                     ->withTrashed()
-                    ->select('products.id', 'products.name', 'products.inventory_unit_id')
+                    ->select('products.id', 'products.account_id', 'products.name', 'products.inventory_unit_id')
                     ->with(['unit:id,name']),
             ])
             ->whereIn('id', $requestedItems->pluck('product_id')->all())
             ->get()
             ->keyBy('id');
+
+        $inventorySourceAccountByProductId = $requestedItems
+            ->filter(fn (array $item) => (int) ($item['inventory_source_account_id'] ?? 0) > 0)
+            ->mapWithKeys(fn (array $item) => [(int) $item['product_id'] => (int) $item['inventory_source_account_id']])
+            ->all();
+
+        foreach ($requestedItems as $requestedItem) {
+            $product = $products->get((int) $requestedItem['product_id']);
+            if (!$product) {
+                continue;
+            }
+
+            $sourcePayload = $this->pickerSourcePayloadForProduct(
+                $product,
+                $sourceContexts,
+                $requestedItem['product_source_account_id'] ?? null
+            );
+            $inventorySourceAccountByProductId[(int) $requestedItem['product_id']] = (int) (
+                $inventorySourceAccountByProductId[(int) $requestedItem['product_id']]
+                ?? $sourcePayload['inventory_source_account_id']
+                ?? 0
+            );
+        }
+
         $inventorySnapshotMap = $this->buildInventorySnapshotMap(
             $request,
-            $requestedItems->pluck('product_id')->all()
+            $requestedItems->pluck('product_id')->all(),
+            $inventorySourceAccountByProductId
         );
 
         $items = [];
@@ -11031,9 +11422,15 @@ class ProductController extends Controller
             $parentProduct = $product->parentConfigurable->first();
             $optionLabel = $parentProduct ? $this->pickerAttributeSummary($product) : '';
             $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
+            $sourcePayload = $this->pickerSourcePayloadForProduct(
+                $product,
+                $sourceContexts,
+                $requestedItem['product_source_account_id'] ?? null
+            );
 
             $items[] = [
                 'product_id' => (int) $product->id,
+                'account_id' => (int) ($product->account_id ?? 0),
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
                 'name' => $product->name,
@@ -11052,7 +11449,7 @@ class ProductController extends Controller
                 'cost_price' => (float) ($product->cost_price ?? $product->expected_cost ?? 0),
                 'status' => (bool) $product->status,
                 'deleted' => $product->trashed(),
-            ] + $this->resolveInventorySnapshotPayload($inventorySnapshotMap, (int) $product->id);
+            ] + $sourcePayload + $this->resolveInventorySnapshotPayload($inventorySnapshotMap, (int) $product->id);
 
             if ($product->trashed()) {
                 $issues[] = [

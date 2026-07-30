@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { financeApi } from '../../services/api';
 
 const formatCurrency = (val) => {
@@ -30,9 +30,33 @@ const formatDateString = (dateStr) => {
 };
 
 const GOODS_DEBT_TYPE = 'goods_debt';
+const NEW_GOODS_DEBT_SUBJECT_VALUE = '__new_goods_debt_subject__';
 
 const isGoodsDebtTransaction = (tx) => {
     return tx.type === 'borrow' && (tx.is_goods_debt || (!tx.fin_transaction_id && !tx.fin_account_id));
+};
+
+const createEmptyTransactionForm = () => ({
+    id: null,
+    transaction_date: getCurrentDateTime(),
+    type: 'borrow',
+    amount: '',
+    note: '',
+    fin_account_id: '',
+    debt_subject_id: '',
+    new_subject_name: ''
+});
+
+const toDateTimeInputValue = (dateStr) => {
+    if (!dateStr) return getCurrentDateTime();
+
+    return dateStr.replace(' ', 'T').slice(0, 16);
+};
+
+const toApiDateTimeValue = (dateStr) => {
+    const normalized = (dateStr || getCurrentDateTime()).replace('T', ' ');
+
+    return normalized.length === 16 ? `${normalized}:00` : normalized;
 };
 
 export default function DebtManagement() {
@@ -51,14 +75,7 @@ export default function DebtManagement() {
     const [statsModalOpen, setStatsModalOpen] = useState(false);
 
     // Quick Transaction Input
-    const [newTx, setNewTx] = useState({
-        id: null,
-        transaction_date: getCurrentDateTime(),
-        type: 'borrow', // borrow, goods_debt, pay_principal, pay_interest
-        amount: '',
-        note: '',
-        fin_account_id: ''
-    });
+    const [newTx, setNewTx] = useState(createEmptyTransactionForm);
     const [saving, setSaving] = useState(false);
 
     const loadSubjects = useCallback(async () => {
@@ -132,33 +149,74 @@ export default function DebtManagement() {
         }
     };
 
+    const resetTransactionForm = () => {
+        setNewTx(createEmptyTransactionForm());
+    };
+
+    const handleEditTransaction = (tx) => {
+        const isGoodsDebt = isGoodsDebtTransaction(tx);
+
+        setNewTx({
+            id: tx.id,
+            transaction_date: toDateTimeInputValue(tx.transaction_date),
+            type: isGoodsDebt ? GOODS_DEBT_TYPE : tx.type,
+            amount: Math.round(Number(tx.amount) || 0).toString(),
+            note: tx.note || '',
+            fin_account_id: isGoodsDebt ? '' : (tx.fin_account_id || ''),
+            debt_subject_id: isGoodsDebt ? String(tx.debt_subject_id || activeSubjectId || '') : '',
+            new_subject_name: ''
+        });
+    };
+
     const handleSaveTransaction = async () => {
-        if (!activeSubjectId) return;
         if (!newTx.amount) return alert('Vui lòng nhập số tiền');
         const isGoodsDebt = newTx.type === GOODS_DEBT_TYPE;
+        const isCreatingGoodsDebtSubject = isGoodsDebt && newTx.debt_subject_id === NEW_GOODS_DEBT_SUBJECT_VALUE;
+        let targetSubjectId = activeSubjectId;
+
+        if (isGoodsDebt) {
+            if (!newTx.debt_subject_id) return alert('Vui lòng chọn xưởng/chủ nợ cho khoản nợ tiền hàng');
+
+            if (isCreatingGoodsDebtSubject) {
+                if (!newTx.new_subject_name.trim()) return alert('Vui lòng nhập tên xưởng/chủ nợ mới');
+            } else {
+                targetSubjectId = Number(newTx.debt_subject_id);
+            }
+        }
+
+        if (!isCreatingGoodsDebtSubject && !targetSubjectId) return alert('Vui lòng chọn chủ nợ trước khi lưu giao dịch');
         if (!isGoodsDebt && !newTx.fin_account_id) return alert('Vui lòng chọn tài khoản (Tiền mặt/Ngân hàng) để đồng bộ dòng tiền');
         setSaving(true);
         try {
+            if (isCreatingGoodsDebtSubject) {
+                const subjectRes = await financeApi.saveDebtSubject({
+                    name: newTx.new_subject_name.trim(),
+                    interest_rate_percent: 0,
+                    initial_debt: 0
+                });
+
+                targetSubjectId = subjectRes.data.data.id;
+            }
+
             const payload = {
-                ...newTx,
+                id: newTx.id,
+                amount: newTx.amount,
+                note: newTx.note,
                 type: isGoodsDebt ? 'borrow' : newTx.type,
                 skip_finance_transaction: isGoodsDebt,
                 fin_account_id: isGoodsDebt ? null : newTx.fin_account_id,
-                debt_subject_id: activeSubjectId,
-                transaction_date: newTx.transaction_date.replace('T', ' ') + ':00'
+                debt_subject_id: targetSubjectId,
+                transaction_date: toApiDateTimeValue(newTx.transaction_date)
             };
             const res = await financeApi.saveDebtTransaction(payload);
             if (res.data.status === 'success') {
-                setNewTx({
-                    id: null,
-                    transaction_date: getCurrentDateTime(),
-                    type: 'borrow',
-                    amount: '',
-                    note: '',
-                    fin_account_id: ''
-                });
-                loadTransactions();
-                loadSubjects(); // Update summary
+                resetTransactionForm();
+                if (targetSubjectId !== activeSubjectId) {
+                    setActiveSubjectId(targetSubjectId);
+                } else {
+                    loadTransactions();
+                }
+                loadSubjects();
             }
         } catch (e) {
             alert(e.response?.data?.message || 'Lỗi khi lưu giao dịch');
@@ -171,6 +229,7 @@ export default function DebtManagement() {
         if (!window.confirm('Xóa giao dịch này?')) return;
         try {
             await financeApi.deleteDebtTransaction(id);
+            if (newTx.id === id) resetTransactionForm();
             loadTransactions();
             loadSubjects();
         } catch (e) {
@@ -179,6 +238,13 @@ export default function DebtManagement() {
     };
 
     const activeSubject = subjects.find(s => s.id === activeSubjectId);
+    const isEditingTransaction = Boolean(newTx.id);
+    const isGoodsDebtForm = newTx.type === GOODS_DEBT_TYPE;
+    const isNewGoodsDebtSubject = newTx.debt_subject_id === NEW_GOODS_DEBT_SUBJECT_VALUE;
+    const canSaveTransaction = !saving
+        && Boolean(newTx.amount)
+        && (isGoodsDebtForm || Boolean(newTx.fin_account_id))
+        && (!isGoodsDebtForm || (Boolean(newTx.debt_subject_id) && (!isNewGoodsDebtSubject || Boolean(newTx.new_subject_name.trim()))));
 
     return (
         <div className="p-4 md:p-6 bg-[#f8f9fa] min-h-screen font-sans">
@@ -206,7 +272,7 @@ export default function DebtManagement() {
                         className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg shadow-md shadow-red-100 flex items-center gap-2 transition-all text-[13px] font-bold"
                     >
                         <span className="material-symbols-outlined text-[18px]">person_add</span>
-                        Thêm chủ nợ
+                        Thêm chủ nợ/xưởng
                     </button>
                 </div>
             </div>
@@ -271,7 +337,7 @@ export default function DebtManagement() {
                             </div>
                         ))}
                         {subjects.length === 0 && (
-                            <div className="text-[13px] text-gray-400 italic py-4">Bấm "Thêm chủ nợ" để quản lý các nguồn vay.</div>
+                            <div className="text-[13px] text-gray-400 italic py-4">Bấm "Thêm chủ nợ/xưởng" để quản lý các nguồn vay.</div>
                         )}
                     </div>
                 </div>
@@ -302,7 +368,7 @@ export default function DebtManagement() {
                                     <th className="py-3 px-4 text-[13px] font-bold text-blue-700 border-b border-r border-gray-200 w-36 text-right">Trả Gốc</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-green-700 border-b border-r border-gray-200 w-36 text-right">Trả Lãi</th>
                                     <th className="py-3 px-4 text-[13px] font-bold text-gray-800 border-b w-40 text-right bg-gray-200/50">Dư Nợ Còn Lại</th>
-                                    <th className="py-3 px-2 text-[13px] font-bold text-gray-600 border-b w-16 text-center">Xóa</th>
+                                    <th className="py-3 px-2 text-[13px] font-bold text-gray-600 border-b w-24 text-center">Sửa/Xóa</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
@@ -322,7 +388,13 @@ export default function DebtManagement() {
                                             value={newTx.type}
                                             onChange={e => {
                                                 const type = e.target.value;
-                                                setNewTx({...newTx, type, fin_account_id: type === GOODS_DEBT_TYPE ? '' : newTx.fin_account_id});
+                                                setNewTx({
+                                                    ...newTx,
+                                                    type,
+                                                    fin_account_id: type === GOODS_DEBT_TYPE ? '' : newTx.fin_account_id,
+                                                    debt_subject_id: type === GOODS_DEBT_TYPE ? newTx.debt_subject_id : '',
+                                                    new_subject_name: type === GOODS_DEBT_TYPE ? newTx.new_subject_name : ''
+                                                });
                                             }}
                                         >
                                             <option value="borrow">Vay tiền vào quỹ (+)</option>
@@ -331,9 +403,34 @@ export default function DebtManagement() {
                                             <option value="pay_interest">Trả tiền lãi (0)</option>
                                         </select>
                                         {newTx.type === GOODS_DEBT_TYPE ? (
-                                            <div className="w-full border-b border-dashed border-amber-300 text-[11px] p-0 italic font-medium text-amber-700">
-                                                Không vào tiền mặt/ngân hàng
-                                            </div>
+                                            <>
+                                                <select
+                                                    className={`w-full bg-transparent border-b border-dashed focus:ring-0 text-[11px] p-0 pr-4 italic font-medium ${!newTx.debt_subject_id ? 'border-red-300 text-red-400' : 'border-amber-300 text-amber-700'}`}
+                                                    value={newTx.debt_subject_id}
+                                                    onChange={e => setNewTx({
+                                                        ...newTx,
+                                                        debt_subject_id: e.target.value,
+                                                        new_subject_name: e.target.value === NEW_GOODS_DEBT_SUBJECT_VALUE ? newTx.new_subject_name : ''
+                                                    })}
+                                                >
+                                                    <option value="">-- CHỌN XƯỞNG / CHỦ NỢ --</option>
+                                                    {subjects.map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
+                                                    <option value={NEW_GOODS_DEBT_SUBJECT_VALUE}>+ Thêm xưởng mới</option>
+                                                </select>
+                                                {newTx.debt_subject_id === NEW_GOODS_DEBT_SUBJECT_VALUE ? (
+                                                    <input
+                                                        type="text"
+                                                        className="w-full bg-transparent border-b border-dashed border-amber-300 focus:ring-0 text-[11px] p-0 italic font-medium text-amber-700"
+                                                        placeholder="Tên xưởng / chủ nợ mới..."
+                                                        value={newTx.new_subject_name}
+                                                        onChange={e => setNewTx({...newTx, new_subject_name: e.target.value})}
+                                                    />
+                                                ) : (
+                                                    <div className="w-full border-b border-dashed border-amber-300 text-[11px] p-0 italic font-medium text-amber-700">
+                                                        Không vào tiền mặt/ngân hàng
+                                                    </div>
+                                                )}
+                                            </>
                                         ) : (
                                             <select
                                                 className={`w-full bg-transparent border-b border-dashed focus:ring-0 text-[11px] p-0 pr-4 italic font-medium ${!newTx.fin_account_id ? 'border-red-300 text-red-400' : 'border-gray-200 text-gray-500'}`}
@@ -405,13 +502,25 @@ export default function DebtManagement() {
                                     </td>
                                     <td className="p-1 px-4 text-right bg-gray-100/30 text-[12px] text-gray-400 italic font-medium">Auto...</td>
                                     <td className="p-1 text-center bg-gray-100/20">
-                                        <button
-                                            onClick={handleSaveTransaction}
-                                            disabled={saving || !newTx.amount}
-                                            className="size-8 rounded-lg bg-red-600 text-white flex items-center justify-center hover:bg-red-700 disabled:opacity-30 transition-all mx-auto shadow-sm"
-                                        >
-                                            {saving ? <div className="animate-spin size-4 border-2 border-white border-t-transparent rounded-full"></div> : <span className="material-symbols-outlined text-[18px]">add</span>}
-                                        </button>
+                                        <div className="flex items-center justify-center gap-1">
+                                            {isEditingTransaction && (
+                                                <button
+                                                    onClick={resetTransactionForm}
+                                                    className="size-8 rounded-lg bg-white text-gray-500 border border-gray-200 flex items-center justify-center hover:bg-gray-50 hover:text-gray-800 transition-all shadow-sm"
+                                                    title="Hủy sửa"
+                                                >
+                                                    <span className="material-symbols-outlined text-[18px]">close</span>
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={handleSaveTransaction}
+                                                disabled={!canSaveTransaction}
+                                                className={`size-8 rounded-lg text-white flex items-center justify-center disabled:opacity-30 transition-all shadow-sm ${isEditingTransaction ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700'}`}
+                                                title={isEditingTransaction ? 'Cập nhật giao dịch' : 'Thêm giao dịch'}
+                                            >
+                                                {saving ? <div className="animate-spin size-4 border-2 border-white border-t-transparent rounded-full"></div> : <span className="material-symbols-outlined text-[18px]">{isEditingTransaction ? 'save' : 'add'}</span>}
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
 
@@ -446,12 +555,22 @@ export default function DebtManagement() {
                                                 {formatCurrency(tx.running_balance)}
                                             </td>
                                             <td className="py-3 px-1 text-center">
-                                                <button
-                                                    onClick={() => handleDeleteTransaction(tx.id)}
-                                                    className="size-7 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all mx-auto"
-                                                >
-                                                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                                                </button>
+                                                <div className="flex items-center justify-center gap-1 opacity-70 group-hover:opacity-100 transition-all">
+                                                    <button
+                                                        onClick={() => handleEditTransaction(tx)}
+                                                        className="size-7 flex items-center justify-center rounded-full text-gray-300 hover:text-blue-500 hover:bg-blue-50 transition-all"
+                                                        title="Sửa giao dịch"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">edit</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteTransaction(tx.id)}
+                                                        className="size-7 flex items-center justify-center rounded-full text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
+                                                        title="Xóa giao dịch"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[18px]">delete</span>
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))
@@ -467,16 +586,16 @@ export default function DebtManagement() {
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all translate-y-0 scale-100">
                         <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                            <h3 className="font-bold text-[15px] text-gray-800 uppercase tracking-tight">{editingSubject.id ? 'Sửa thông tin chủ nợ' : 'Khai báo chủ nợ / nguồn vay mới'}</h3>
+                            <h3 className="font-bold text-[15px] text-gray-800 uppercase tracking-tight">{editingSubject.id ? 'Sửa thông tin chủ nợ/xưởng' : 'Khai báo chủ nợ/xưởng mới'}</h3>
                             <button onClick={() => setSubjectModalOpen(false)} className="text-gray-400 hover:text-gray-900 transition-colors"><span className="material-symbols-outlined text-[20px]">close</span></button>
                         </div>
                         <div className="p-6 space-y-4">
                             <div>
-                                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Tên Chủ Nợ / Nguồn Vay</label>
+                                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Tên Chủ Nợ / Xưởng</label>
                                 <input
                                     type="text"
                                     className="w-full border-gray-200 rounded-lg focus:ring-red-500 focus:border-red-500 text-[13px] py-2.5"
-                                    placeholder="VD: Anh Nam, Ngân hàng ACB..."
+                                    placeholder="VD: Hương, Xưởng A Nghĩa, Xưởng Hiếu Khuyên..."
                                     value={editingSubject.name}
                                     onChange={e => setEditingSubject({...editingSubject, name: e.target.value})}
                                 />

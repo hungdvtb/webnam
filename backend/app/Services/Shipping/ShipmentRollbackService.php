@@ -141,7 +141,7 @@ class ShipmentRollbackService
 
             $automaticExportDocuments = $this->loadAutomaticExportDocuments($lockedOrder, $activeShipments);
             foreach ($automaticExportDocuments as $document) {
-                $this->inventoryService->deleteDocument($document);
+                $this->inventoryService->forceDeleteDocument($document);
             }
 
             foreach ($activeShipments as $shipment) {

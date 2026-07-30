@@ -649,6 +649,7 @@ class OrderInventorySlipService
                 'reference_type' => 'order',
                 'reference_id' => (int) $order->id,
                 'notes' => $payload['notes'] ?? null,
+                'meta' => is_array($payload['meta'] ?? null) ? $payload['meta'] : null,
                 'created_by' => $userId,
             ]);
 

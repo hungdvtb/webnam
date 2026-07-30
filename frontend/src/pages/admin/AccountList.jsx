@@ -3,6 +3,23 @@ import { accountApi, cmsApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { flushUserSettingsSync } from '../../services/userSettingsSync';
 
+const persistActiveAccountContext = (account) => {
+    const accountId = String(account?.id || '').trim();
+    if (!accountId) {
+        return;
+    }
+
+    const siteCode = String(account?.site_code || '').trim();
+    localStorage.setItem('activeAccountId', accountId);
+
+    if (siteCode) {
+        localStorage.setItem('activeSiteCode', siteCode);
+        return;
+    }
+
+    localStorage.removeItem('activeSiteCode');
+};
+
 const AccountList = () => {
     const { user } = useAuth();
     const [accounts, setAccounts] = useState([]);
@@ -199,14 +216,14 @@ const AccountList = () => {
                 await accountApi.update(acc.id, payload);
                 sessionStorage.removeItem('accounts_list');
                 fetchAccounts();
-            } catch (error) {
+            } catch {
                 alert("Không thể cập nhật trạng thái cửa hàng.");
             }
         }
     };
 
-    const handleAccess = async (id) => {
-        localStorage.setItem('activeAccountId', id);
+    const handleAccess = async (account) => {
+        persistActiveAccountContext(account);
         await flushUserSettingsSync();
         window.location.href = '/admin';
     };
@@ -509,7 +526,7 @@ const AccountList = () => {
                                 </div>
 
                                 <div className="mt-6 flex items-center justify-between gap-2 border-t border-stone/5 pt-4">
-                                    <button onClick={() => handleAccess(acc.id)} className="flex-1 h-8 bg-gold text-white hover:bg-primary transition-all flex items-center justify-center gap-1.5 rounded-sm shadow-sm text-[10px] font-black uppercase tracking-widest active:scale-95">
+                                    <button onClick={() => handleAccess(acc)} className="flex-1 h-8 bg-gold text-white hover:bg-primary transition-all flex items-center justify-center gap-1.5 rounded-sm shadow-sm text-[10px] font-black uppercase tracking-widest active:scale-95">
                                         <span className="material-symbols-outlined text-[14px]">login</span>
                                         Truy cập
                                     </button>

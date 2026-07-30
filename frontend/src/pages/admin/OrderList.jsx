@@ -742,6 +742,7 @@ const CANCEL_DISPATCH_STATUS_LABELS = {
 };
 const QUICK_DISPATCH_MODE_MANUAL = 'manual_shipment';
 const QUICK_DISPATCH_MODE_OUTSIDE = 'outside_delivery';
+const OUTSIDE_DELIVERY_UNPAID_FILTER_KEY = 'outside_delivery_unpaid';
 const OUTSIDE_DELIVERY_TYPE_OPTIONS = [
     { value: 'xe_om', label: 'Xe ôm' },
     { value: 'xe_khach', label: 'Xe khách' },
@@ -861,6 +862,7 @@ const createDefaultOrderFilters = (search = '', orderIds = []) => ({
     return_slip_state: '',
     shipping_dispatched_from: '',
     shipping_dispatched_to: '',
+    [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: false,
     attributes: {},
     order_ids: parseOrderIdList(orderIds),
 });
@@ -928,6 +930,7 @@ const normalizeStoredOrderFilters = (value, fallbackSearch = '', orderIds = []) 
         return_slip_state: String(value.return_slip_state || ''),
         shipping_dispatched_from: String(value.shipping_dispatched_from || ''),
         shipping_dispatched_to: String(value.shipping_dispatched_to || ''),
+        [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: Boolean(value[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]),
         attributes: normalizeOrderListAttributeFilters(value.attributes),
         order_ids: orderIds.length ? parseOrderIdList(orderIds) : parseOrderIdList(value.order_ids),
     };
@@ -1057,6 +1060,11 @@ const removeOrderListFilterValue = (sourceFilters, key, value = null) => {
 
     if (key === 'order_ids') {
         nextFilters.order_ids = [];
+        return nextFilters;
+    }
+
+    if (key === OUTSIDE_DELIVERY_UNPAID_FILTER_KEY) {
+        nextFilters[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY] = false;
         return nextFilters;
     }
 
@@ -1305,6 +1313,7 @@ const buildOrderListRequestParams = ({
     sortConfig,
     page = 1,
     perPage = 20,
+    isMainView = true,
     isDraftView = false,
     isTrashView = false,
     scopedOrderIds = null,
@@ -1336,6 +1345,10 @@ const buildOrderListRequestParams = ({
 
     if (isDraftView) {
         params.order_kind = DRAFT_ORDER_KIND;
+    }
+
+    if (isMainView && filters?.[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]) {
+        params[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY] = 1;
     }
 
     if (searchTerms.length) {
@@ -2686,6 +2699,7 @@ const OrderList = () => {
     const [profitCenters, setProfitCenters] = useState([]);
     const [orders, setOrders] = useState([]);
     const [orderSummary, setOrderSummary] = useState(() => createEmptyOrderListSummary());
+    const [outsideDeliveryUnpaidSummary, setOutsideDeliveryUnpaidSummary] = useState(() => createEmptyOrderListSummary());
     const [allAttributes, setAllAttributes] = useState([]);
     const [tableColumns, setTableColumns] = useState(() => ORDER_TABLE_COLUMNS);
     const permittedTableColumns = useMemo(
@@ -2909,6 +2923,8 @@ const OrderList = () => {
     const isMainView = currentView === 'main';
     const isReturnFollowupView = currentView === RETURN_FOLLOWUP_VIEW;
     const isReturnWorkbenchView = currentView === RETURN_WORKBENCH_VIEW;
+    const isOutsideDeliveryUnpaidFilterActive = isMainView && Boolean(filters[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]);
+    const outsideDeliveryUnpaidCount = Number(outsideDeliveryUnpaidSummary.order_count || 0);
     const canQuickSelect = (isMainView || isReturnWorkbenchView) && !routeOrderIdsKey;
     const canCreateBatchReturn = isMainView || isReturnWorkbenchView;
     const currentViewMeta = LIST_VIEW_META[currentView] || LIST_VIEW_META.main;
@@ -3222,6 +3238,7 @@ const OrderList = () => {
             setAllAttributes(nextAttributes);
             setConnectedCarriers(nextCarriers);
             setProfitCenters(nextProfitCenters);
+            setOutsideDeliveryUnpaidSummary(normalizeOrderListSummary(bootstrap.outside_delivery_unpaid_summary));
 
             const attrColumns = nextAttributes.map(attr => ({
                 id: `attr_${attr.id}`,
@@ -3300,6 +3317,7 @@ const OrderList = () => {
                 sortConfig: currentSort,
                 page: nextPage,
                 perPage: normalizedPerPage,
+                isMainView,
                 isDraftView,
                 isTrashView,
                 scopedOrderIds,
@@ -3310,6 +3328,7 @@ const OrderList = () => {
             if (controller.signal.aborted) return;
             setOrders(response.data.data);
             setOrderSummary(normalizeOrderListSummary(response.data.summary, response.data.total));
+            setOutsideDeliveryUnpaidSummary(normalizeOrderListSummary(response.data.outside_delivery_unpaid_summary));
             setPagination({ current_page: response.data.current_page, last_page: response.data.last_page, total: response.data.total, per_page: response.data.per_page });
             setHasLoadedOrdersOnce(true);
         } catch (error) {
@@ -3322,7 +3341,34 @@ const OrderList = () => {
                 setLoading(false);
             }
         }
-    }, [filters, isActiveAccountReady, isDraftView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+    }, [filters, isActiveAccountReady, isDraftView, isMainView, isReturnFollowupView, isReturnWorkbenchView, isTrashView, pagination.per_page, returnWorkbenchIds, sortConfig]);
+
+    const handleOutsideDeliveryUnpaidToggle = useCallback(() => {
+        const nextActive = !isOutsideDeliveryUnpaidFilterActive;
+        const nextFilters = {
+            ...filters,
+            [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: nextActive,
+            order_ids: [],
+        };
+
+        setFilters(nextFilters);
+        setTempFilters((current) => (current ? {
+            ...current,
+            [OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]: nextActive,
+            order_ids: [],
+        } : current));
+        setSelectedIds([]);
+        setShowSelectedOnly(false);
+        setQuickSelectResult(null);
+
+        if (!isMainView) {
+            setCurrentView('main');
+            navigate(buildOrderListUrl('main'));
+            return;
+        }
+
+        fetchOrders(1, nextFilters);
+    }, [fetchOrders, filters, isMainView, isOutsideDeliveryUnpaidFilterActive, navigate, setSelectedIds, setShowSelectedOnly]);
 
     const handleBatchReturnSaved = useCallback(async (payload) => {
         closeBatchReturnModal();
@@ -3586,6 +3632,7 @@ const OrderList = () => {
                 && !prev.profit_manager_id
                 && !prev.shipping_carrier_code && !prev.export_slip_state && !prev.return_slip_state
                 && !prev.shipping_dispatched_from && !prev.shipping_dispatched_to
+                && !prev[OUTSIDE_DELIVERY_UNPAID_FILTER_KEY]
                 && Object.keys(prev.attributes || {}).length === 0
                 ? prev
                 : nextFilters
@@ -4705,6 +4752,47 @@ const OrderList = () => {
         }
     }, []);
 
+    const handleBulkStatusUpdate = useCallback(async (nextStatusValue) => {
+        const nextStatus = String(nextStatusValue || '').trim();
+        const ids = [...selectedIdsRef.current];
+
+        if (!ids.length || !nextStatus) {
+            return;
+        }
+
+        const statusName = statusMap.get(String(nextStatus))?.name || nextStatus;
+
+        try {
+            setLoading(true);
+            const response = await orderApi.bulkUpdate({
+                ids,
+                status: nextStatus,
+                allow_shipping_override: true,
+                reason: 'Cập nhật hàng loạt từ bảng quản lý đơn hàng',
+            });
+            const changedCount = Number(response?.data?.status_changed_count ?? ids.length);
+            const unchangedCount = Number(response?.data?.status_unchanged_count ?? 0);
+            const successMessage = changedCount > 0
+                ? `Đã đổi trạng thái ${changedCount} đơn sang "${statusName}"${unchangedCount > 0 ? `, ${unchangedCount} đơn đã ở trạng thái này` : ''}.`
+                : `${unchangedCount || ids.length} đơn đã ở trạng thái "${statusName}".`;
+
+            setOrders((currentOrders) => currentOrders.map((item) => (
+                ids.includes(item.id) ? { ...item, status: nextStatus } : item
+            )));
+            setSelectedIds([]);
+            setShowSelectedOnly(false);
+            setNotification({ type: 'success', message: successMessage });
+            await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
+        } catch (error) {
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể đổi trạng thái đơn hàng loạt.',
+            });
+        } finally {
+            setLoading(false);
+        }
+    }, [fetchOrders, filters, pagination.current_page, pagination.per_page, setSelectedIds, setShowSelectedOnly, sortConfig, statusMap]);
+
     const handleBulkProfitCenterUpdate = useCallback(async (nextProfitCenterValue) => {
         const ids = [...selectedIdsRef.current];
         if (!ids.length || !nextProfitCenterValue) {
@@ -4869,6 +4957,7 @@ const OrderList = () => {
         if (filters.order_type?.length) c++;
         if (filters.profit_manager_id) c++;
         if (filters.shipping_carrier_code) c++;
+        if (isOutsideDeliveryUnpaidFilterActive) c++;
         INVENTORY_SLIP_FILTERS.forEach(({ key }) => {
             if (filters[key]) c++;
         });
@@ -4938,7 +5027,7 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-5 gap-2 lg:hidden">
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:hidden">
                         <button type="button" onClick={() => navigateToListView('main')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isMainView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">receipt_long</span>
                             Đơn
@@ -4946,6 +5035,15 @@ const OrderList = () => {
                         <button type="button" onClick={() => navigateToListView('draft')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isDraftView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                             Nháp
+                        </button>
+                        <button type="button" onClick={handleOutsideDeliveryUnpaidToggle} title="Ship ngoài chưa trả" className={`relative inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isOutsideDeliveryUnpaidFilterActive ? 'border-orange-500 bg-orange-500 text-white shadow-sm' : 'border-orange-200 bg-white text-orange-600 hover:bg-orange-50'}`}>
+                            <span className="material-symbols-outlined text-[18px]">local_shipping</span>
+                            Ship nợ
+                            {outsideDeliveryUnpaidCount > 0 && (
+                                <span className={`absolute right-1.5 top-1.5 min-w-[18px] rounded-full px-1 py-0.5 text-[9px] font-black ${isOutsideDeliveryUnpaidFilterActive ? 'bg-white text-orange-600' : 'bg-brick text-white'}`}>
+                                    {outsideDeliveryUnpaidCount > 99 ? '99+' : outsideDeliveryUnpaidCount}
+                                </span>
+                            )}
                         </button>
                         <button type="button" onClick={() => navigateToListView('trash')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isTrashView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">delete</span>
@@ -5028,6 +5126,14 @@ const OrderList = () => {
                         <div className="flex items-center gap-1 rounded-sm border border-primary/10 bg-[#FCFEFF] p-1">
                             <button type="button" onClick={() => navigateToListView('draft')} title="Đơn nháp" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isDraftView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">draft_orders</span>
+                            </button>
+                            <button type="button" onClick={handleOutsideDeliveryUnpaidToggle} title="Ship ngoài chưa trả" className={`relative h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isOutsideDeliveryUnpaidFilterActive ? 'bg-orange-500 text-white shadow-sm' : 'text-orange-600 hover:bg-orange-50'}`}>
+                                <span className="material-symbols-outlined text-[18px]">local_shipping</span>
+                                {outsideDeliveryUnpaidCount > 0 && (
+                                    <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${isOutsideDeliveryUnpaidFilterActive ? 'bg-white text-orange-600' : 'bg-brick text-white'}`}>
+                                        {outsideDeliveryUnpaidCount > 99 ? '99+' : outsideDeliveryUnpaidCount}
+                                    </span>
+                                )}
                             </button>
                             <button type="button" onClick={() => navigateToListView('trash')} title="Thùng rác" className={`h-9 w-9 rounded-sm flex items-center justify-center transition-all ${isTrashView ? 'bg-primary text-white shadow-sm' : 'text-primary/60 hover:bg-primary/5'}`}>
                                 <span className="material-symbols-outlined text-[18px]">delete</span>
@@ -5302,6 +5408,25 @@ const OrderList = () => {
                                     <span className="material-symbols-outlined text-[16px]">edit_attributes</span>
                                     Thuộc tính
                                 </button>
+                                {isMainView && (
+                                    <select
+                                        defaultValue=""
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={(event) => {
+                                            const nextStatus = event.target.value;
+                                            event.target.value = '';
+                                            handleBulkStatusUpdate(nextStatus);
+                                        }}
+                                        disabled={loading || orderStatuses.length === 0}
+                                        className="h-9 max-w-[148px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+                                        title="Đổi trạng thái cho đơn đã chọn"
+                                    >
+                                        <option value="">Đổi trạng thái</option>
+                                        {orderStatuses.map((status) => (
+                                            <option key={status.id || status.code} value={status.code}>{status.name}</option>
+                                        ))}
+                                    </select>
+                                )}
                                 <select
                                     defaultValue=""
                                     onClick={(event) => event.stopPropagation()}
@@ -5822,6 +5947,18 @@ const OrderList = () => {
                                     <span className="text-[11px] text-emerald-700/70">Báo cáo tháng:</span>
                                     <span className="text-[13px] font-bold text-emerald-900">{routeReportScope.scope_label}</span>
                                     <button onClick={handleReset} className="text-emerald-700/60 hover:text-brick">
+                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                    </button>
+                                </div>
+                            )}
+                            {isOutsideDeliveryUnpaidFilterActive && (
+                                <div className="bg-white border border-orange-300 px-2 py-1 rounded-sm flex items-center gap-2 shadow-sm">
+                                    <span className="material-symbols-outlined text-[15px] text-orange-600">local_shipping</span>
+                                    <span className="text-[11px] text-orange-700/75">Ship ngoài chưa trả:</span>
+                                    <span className="text-[13px] font-bold text-orange-700">{formatNumber(orderSummary.order_count)} đơn</span>
+                                    <span className="text-[11px] font-bold text-orange-500">|</span>
+                                    <span className="text-[13px] font-black text-brick">{formatMoney(orderSummary.total_price)}</span>
+                                    <button onClick={() => removeFilter(OUTSIDE_DELIVERY_UNPAID_FILTER_KEY)} className="text-orange-700/50 hover:text-brick">
                                         <span className="material-symbols-outlined text-[14px]">close</span>
                                     </button>
                                 </div>
@@ -6697,6 +6834,23 @@ const OrderList = () => {
                                 <span className="material-symbols-outlined text-[17px]">edit_attributes</span>
                                 Thuộc tính
                             </button>
+                            {isMainView && (
+                                <select
+                                    defaultValue=""
+                                    onChange={(event) => {
+                                        const nextStatus = event.target.value;
+                                        event.target.value = '';
+                                        handleBulkStatusUpdate(nextStatus);
+                                    }}
+                                    disabled={loading || orderStatuses.length === 0}
+                                    className="h-11 min-w-0 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.05em] text-primary outline-none disabled:opacity-45"
+                                >
+                                    <option value="">Đổi trạng thái</option>
+                                    {orderStatuses.map((status) => (
+                                        <option key={status.id || status.code} value={status.code}>{status.name}</option>
+                                    ))}
+                                </select>
+                            )}
                             <select
                                 defaultValue=""
                                 onChange={(event) => {

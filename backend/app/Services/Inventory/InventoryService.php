@@ -22,6 +22,7 @@ use App\Support\OrderProductSnapshot;
 use App\Support\InventoryQuantity;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -402,7 +403,7 @@ class InventoryService
         $productIds = $normalizedItems->pluck('product_id')->map(fn ($id) => (int) $id)->unique()->values()->all();
         $actualProductIds = $normalizedItems->pluck('actual_product_id')->map(fn ($id) => (int) $id)->filter()->unique()->values()->all();
         $requestedProductIds = array_values(array_unique(array_merge($productIds, $actualProductIds)));
-        $products = Product::query()
+        $products = Product::withoutGlobalScope('account_id')
             ->whereIn('id', $requestedProductIds)
             ->lockForUpdate()
             ->get()
@@ -414,7 +415,8 @@ class InventoryService
             ]);
         }
 
-        $inventoryAccountId = $this->inventoryAccountIdForOrder($order);
+        $this->ensureProductsAccessibleForOrder($products->values(), $order);
+
         $createdItems = [];
         $touchedProductIds = [];
 
@@ -423,6 +425,8 @@ class InventoryService
             $actualProductId = (int) ($item['actual_product_id'] ?? 0);
             $actualProduct = $actualProductId > 0 ? $products->get($actualProductId) : null;
             $inventoryProduct = $actualProduct ?: $product;
+            $sourceAccounts = $this->resolveOrderItemSourceAccounts($order, $product, $inventoryProduct, $item);
+            $inventoryAccountId = $sourceAccounts['inventory_source_account_id'];
             $quantity = InventoryQuantity::normalize($item['quantity']);
             $sellingPrice = round((float) ($item['price'] ?? $product->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($inventoryAccountId, $inventoryProduct, $quantity);
@@ -442,6 +446,8 @@ class InventoryService
                 'account_id' => $order->account_id,
                 'product_id' => $product->id,
                 'actual_product_id' => $actualProduct?->id,
+                'product_source_account_id' => $sourceAccounts['product_source_account_id'],
+                'inventory_source_account_id' => $sourceAccounts['inventory_source_account_id'],
                 'product_name_snapshot' => OrderProductSnapshot::submittedNameOrCatalog($item['name'] ?? null, $product),
                 'actual_product_name_snapshot' => $actualProduct
                     ? OrderProductSnapshot::submittedNameOrCatalog($item['actual_name'] ?? null, $actualProduct)
@@ -505,14 +511,18 @@ class InventoryService
             $this->releaseOrderInventory($order);
         }
 
-        $productIds = $items->map(fn ($item) => (int) ($item->actual_product_id ?: $item->product_id))
+        $productIds = $items
+            ->flatMap(fn ($item) => [
+                (int) ($item->product_id ?? 0),
+                (int) ($item->actual_product_id ?? 0),
+            ])
             ->map(fn ($id) => (int) $id)
             ->filter()
             ->unique()
             ->values()
             ->all();
 
-        $products = Product::query()
+        $products = Product::withoutGlobalScope('account_id')
             ->whereIn('id', $productIds)
             ->lockForUpdate()
             ->get()
@@ -524,14 +534,18 @@ class InventoryService
             ]);
         }
 
-        $inventoryAccountId = $this->inventoryAccountIdForOrder($order);
+        $this->ensureProductsAccessibleForOrder($products->values(), $order);
+
         $touchedProductIds = [];
         $totalPrice = 0;
         $costTotal = 0;
         $profitTotal = 0;
 
         foreach ($items as $item) {
+            $orderedProduct = $products->get((int) $item->product_id);
             $product = $products->get((int) ($item->actual_product_id ?: $item->product_id));
+            $sourceAccounts = $this->resolveOrderItemSourceAccounts($order, $orderedProduct ?: $product, $product, $item);
+            $inventoryAccountId = $sourceAccounts['inventory_source_account_id'];
             $quantity = InventoryQuantity::normalize($item->quantity);
             $sellingPrice = round((float) ($item->price ?? 0), 2);
             $allocation = $this->allocateOrderSellableBatches($inventoryAccountId, $product, $quantity);
@@ -546,6 +560,8 @@ class InventoryService
             $lineProfit = round($lineTotalPrice - $roundedCostTotal, 2);
 
             $item->forceFill([
+                'product_source_account_id' => $sourceAccounts['product_source_account_id'],
+                'inventory_source_account_id' => $sourceAccounts['inventory_source_account_id'],
                 'cost_price' => $reportedUnitCost,
                 'cost_total' => $roundedCostTotal,
                 'profit_total' => $lineProfit,
@@ -625,6 +641,117 @@ class InventoryService
         return (int) ($this->accountDataScopeService->inventoryAccountId($orderAccountId) ?? $orderAccountId);
     }
 
+    private function catalogAccountIdForOrder(Order $order): int
+    {
+        $orderAccountId = (int) ($order->account_id ?? 0);
+
+        return (int) ($this->accountDataScopeService->catalogAccountId($orderAccountId) ?? $orderAccountId);
+    }
+
+    private function normalizeAccountId(mixed $value): ?int
+    {
+        if ($value === null || $value === '' || $value === 'all') {
+            return null;
+        }
+
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $accountId = (int) $value;
+
+        return $accountId > 0 ? $accountId : null;
+    }
+
+    private function resolveSourceAccountForCatalog(Order $order, int $catalogAccountId, mixed $preferredSourceAccountId = null): int
+    {
+        $preferredAccountId = $this->normalizeAccountId($preferredSourceAccountId);
+        if (
+            $preferredAccountId !== null
+            && (int) ($this->accountDataScopeService->catalogAccountId($preferredAccountId) ?? $preferredAccountId) === $catalogAccountId
+        ) {
+            return $preferredAccountId;
+        }
+
+        $orderAccountId = (int) ($order->account_id ?? 0);
+        if (
+            $orderAccountId > 0
+            && (int) ($this->accountDataScopeService->catalogAccountId($orderAccountId) ?? $orderAccountId) === $catalogAccountId
+        ) {
+            return $orderAccountId;
+        }
+
+        return $catalogAccountId;
+    }
+
+    private function resolveOrderItemSourceAccounts(Order $order, Product $product, ?Product $inventoryProduct = null, array|object $source = []): array
+    {
+        $inventoryProduct ??= $product;
+        $orderCatalogAccountId = $this->catalogAccountIdForOrder($order);
+        $productCatalogAccountId = (int) ($product->account_id ?: $orderCatalogAccountId);
+        $inventoryProductCatalogAccountId = (int) ($inventoryProduct->account_id ?: $productCatalogAccountId);
+        $preferredProductSourceAccountId = is_array($source)
+            ? ($source['product_source_account_id'] ?? $source['source_account_id'] ?? null)
+            : ($source->product_source_account_id ?? null);
+
+        $productSourceAccountId = $this->resolveSourceAccountForCatalog(
+            $order,
+            $productCatalogAccountId,
+            $preferredProductSourceAccountId
+        );
+        $inventorySourceAnchorAccountId = $this->resolveSourceAccountForCatalog(
+            $order,
+            $inventoryProductCatalogAccountId,
+            $preferredProductSourceAccountId
+        );
+        $inventorySourceAccountId = (int) (
+            $this->accountDataScopeService->inventoryAccountId($inventorySourceAnchorAccountId)
+            ?? $inventorySourceAnchorAccountId
+        );
+
+        return [
+            'product_source_account_id' => $productSourceAccountId > 0 ? $productSourceAccountId : null,
+            'inventory_source_account_id' => $inventorySourceAccountId > 0 ? $inventorySourceAccountId : $this->inventoryAccountIdForOrder($order),
+        ];
+    }
+
+    private function accessibleCatalogAccountIdsForOrder(Order $order): array
+    {
+        $user = Auth::user();
+        if ($user && !empty($user->is_admin)) {
+            return [];
+        }
+
+        $accountIds = [(int) ($order->account_id ?? 0)];
+
+        if ($user) {
+            $accountIds = array_merge(
+                $accountIds,
+                $user->accounts()->pluck('accounts.id')->map(fn ($id) => (int) $id)->all()
+            );
+        }
+
+        return $this->accountDataScopeService->resolveScopedAccountIds($accountIds, AccountDataScopeService::SCOPE_CATALOG);
+    }
+
+    private function ensureProductsAccessibleForOrder(Collection $products, Order $order): void
+    {
+        $allowedCatalogAccountIds = $this->accessibleCatalogAccountIdsForOrder($order);
+        if (empty($allowedCatalogAccountIds)) {
+            return;
+        }
+
+        $invalidProducts = $products
+            ->filter(fn (Product $product) => !in_array((int) $product->account_id, $allowedCatalogAccountIds, true))
+            ->values();
+
+        if ($invalidProducts->isNotEmpty()) {
+            throw ValidationException::withMessages([
+                'items' => 'Co san pham khong thuoc cac cua hang ban duoc phep ban cheo.',
+            ]);
+        }
+    }
+
     public function refreshProducts(array $productIds): void
     {
         $uniqueProductIds = collect($productIds)
@@ -637,7 +764,7 @@ class InventoryService
             return;
         }
 
-        $batches = InventoryBatch::query()
+        $batches = InventoryBatch::withoutGlobalScopes()
             ->whereIn('product_id', $uniqueProductIds->all())
             ->where('remaining_quantity', '>', 0)
             ->where(function ($query) {
@@ -650,7 +777,7 @@ class InventoryService
             ->get()
             ->groupBy('product_id');
 
-        $oversoldReservedByProduct = InventoryBatchAllocation::query()
+        $oversoldReservedByProduct = InventoryBatchAllocation::withoutGlobalScopes()
             ->selectRaw('inventory_batch_allocations.product_id, COALESCE(SUM(inventory_batch_allocations.quantity), 0) AS total_reserved')
             ->join('inventory_batches', 'inventory_batches.id', '=', 'inventory_batch_allocations.inventory_batch_id')
             ->whereIn('inventory_batch_allocations.product_id', $uniqueProductIds->all())
@@ -658,7 +785,7 @@ class InventoryService
             ->groupBy('inventory_batch_allocations.product_id')
             ->pluck('total_reserved', 'inventory_batch_allocations.product_id');
 
-        Product::query()
+        Product::withoutGlobalScope('account_id')
             ->whereIn('id', $uniqueProductIds->all())
             ->lockForUpdate()
             ->get()

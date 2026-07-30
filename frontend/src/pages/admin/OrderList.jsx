@@ -4968,6 +4968,53 @@ const OrderList = () => {
     };
 
     const { listTitle, emptyTitle, emptyDescription, selectedLabel, createTitle } = currentViewMeta;
+    const renderOrderSearch = (containerClassName = 'flex-1 relative', placeholder = 'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm') => (
+        <div className={containerClassName} ref={searchContainerRef}>
+            <MultiKeywordSearchInput
+                keywords={filters.search_terms}
+                draftValue={filters.search_input}
+                placeholder={placeholder}
+                onFocus={() => setShowSearchHistory(true)}
+                onChange={({ keywords, draftValue }) => {
+                    setFilters((prev) => ({
+                        ...prev,
+                        search_terms: keywords,
+                        search_input: draftValue,
+                    }));
+                }}
+            />
+            {showSearchHistory && searchHistory.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
+                    <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
+                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
+                        {searchHistory.map((h, i) => (
+                            <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters((prev) => ({ ...prev, search_terms: parseKeywordTokens(h), search_input: '' })); setShowSearchHistory(false); }}>
+                                <div className="flex items-center gap-2 overflow-hidden"><span className="material-symbols-outlined text-[16px] text-primary/30">history</span><span className="text-[13px] text-[#0F172A] truncate font-medium">{h}</span></div>
+                                <button onClick={(e) => { e.stopPropagation(); const updated = searchHistory.filter(x => x !== h); setSearchHistory(updated); localStorage.setItem('order_search_history', JSON.stringify(updated)); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5"><span className="material-symbols-outlined text-[14px]">close</span></button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+    const renderBulkIconSelect = ({ title, icon, disabled = false, onChange, children }) => (
+        <div className="relative h-9 w-9 shrink-0" title={title}>
+            <div className={`pointer-events-none absolute inset-0 flex items-center justify-center rounded-sm border transition-all ${disabled ? 'border-primary/10 bg-white text-primary/30' : 'border-primary/15 bg-white text-primary shadow-sm'}`}>
+                <span className="material-symbols-outlined text-[18px]">{icon}</span>
+            </div>
+            <select
+                defaultValue=""
+                onClick={(event) => event.stopPropagation()}
+                onChange={onChange}
+                disabled={disabled}
+                aria-label={title}
+                className="absolute inset-0 h-9 w-9 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+            >
+                {children}
+            </select>
+        </div>
+    );
 
     return (
         <div className="absolute inset-0 z-10 flex h-full w-full flex-col bg-[#fcfcfa] p-3 pb-24 animate-fade-in lg:p-6 lg:pb-6">
@@ -5397,113 +5444,82 @@ const OrderList = () => {
                         )}
 
                         {selectedIds.length > 0 && (
-                            <div className="flex items-center gap-1 ml-1 pl-2 border-l border-primary/10">
-                                <button
-                                    type="button"
-                                    onClick={() => setBulkAttributeOpen(true)}
-                                    disabled={loading || allAttributes.length === 0}
-                                    className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary transition-all hover:border-primary/30 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-50"
-                                    title="Cập nhật thuộc tính cho đơn đã chọn"
-                                >
-                                    <span className="material-symbols-outlined text-[16px]">edit_attributes</span>
-                                    Thuộc tính
-                                </button>
+                            <div className="flex shrink-0 items-center gap-1 ml-1 pl-2 border-l border-primary/10">
+                                <div className="inline-flex h-9 shrink-0 items-center overflow-hidden rounded-sm border border-primary/15 bg-primary/[0.03]">
+                                    <button
+                                        type="button"
+                                        onClick={handleToggleSelectedOnly}
+                                        className={`h-full px-2 text-[11px] font-bold whitespace-nowrap transition-colors ${showSelectedOnly ? 'text-primary' : 'text-primary/45 hover:text-primary'}`}
+                                        title={showSelectedOnly ? 'Tắt chế độ chỉ xem đơn đã chọn' : 'Chỉ hiển thị các đơn đang chọn'}
+                                        aria-pressed={showSelectedOnly}
+                                    >
+                                        {selectedIds.length} ĐH
+                                    </button>
+                                    <button onClick={handleClearSelectedOrders} className="flex h-full w-8 items-center justify-center border-l border-primary/10 text-primary/35 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
+                                </div>
+                                {renderOrderSearch('relative w-[360px] shrink-0 xl:w-[420px] 2xl:w-[480px]', 'Tìm tên SP, mã SP')}
                                 {isMainView && (
-                                    <select
-                                        defaultValue=""
-                                        onClick={(event) => event.stopPropagation()}
-                                        onChange={(event) => {
+                                    renderBulkIconSelect({
+                                        title: 'Đổi trạng thái cho đơn đã chọn',
+                                        icon: 'published_with_changes',
+                                        disabled: loading || orderStatuses.length === 0,
+                                        onChange: (event) => {
                                             const nextStatus = event.target.value;
                                             event.target.value = '';
                                             handleBulkStatusUpdate(nextStatus);
-                                        }}
-                                        disabled={loading || orderStatuses.length === 0}
-                                        className="h-9 max-w-[148px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
-                                        title="Đổi trạng thái cho đơn đã chọn"
-                                    >
-                                        <option value="">Đổi trạng thái</option>
-                                        {orderStatuses.map((status) => (
-                                            <option key={status.id || status.code} value={status.code}>{status.name}</option>
-                                        ))}
-                                    </select>
+                                        },
+                                        children: (
+                                            <>
+                                                <option value="">Đổi trạng thái</option>
+                                                {orderStatuses.map((status) => (
+                                                    <option key={status.id || status.code} value={status.code}>{status.name}</option>
+                                                ))}
+                                            </>
+                                        ),
+                                    })
                                 )}
-                                <select
-                                    defaultValue=""
-                                    onClick={(event) => event.stopPropagation()}
-                                    onChange={(event) => {
+                                {renderBulkIconSelect({
+                                    title: 'Đổi nguồn cho đơn đã chọn',
+                                    icon: 'source',
+                                    disabled: loading,
+                                    onChange: (event) => {
                                         const nextSource = event.target.value;
                                         event.target.value = '';
                                         handleBulkSourceUpdate(nextSource);
-                                    }}
-                                    disabled={loading}
-                                    className="h-9 max-w-[132px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
-                                    title="Đổi nguồn cho đơn đã chọn"
-                                >
-                                    <option value="">Đổi nguồn</option>
-                                    {ORDER_SOURCE_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                </select>
-                                <select
-                                    defaultValue=""
-                                    onClick={(event) => event.stopPropagation()}
-                                    onChange={(event) => {
+                                    },
+                                    children: (
+                                        <>
+                                            <option value="">Đổi nguồn</option>
+                                            {ORDER_SOURCE_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                            ))}
+                                        </>
+                                    ),
+                                })}
+                                {renderBulkIconSelect({
+                                    title: 'Đổi người quản lý cho đơn đã chọn',
+                                    icon: 'manage_accounts',
+                                    disabled: loading,
+                                    onChange: (event) => {
                                         const nextProfitCenter = event.target.value;
                                         event.target.value = '';
                                         handleBulkProfitCenterUpdate(nextProfitCenter);
-                                    }}
-                                    disabled={loading}
-                                    className="h-9 max-w-[168px] rounded-sm border border-primary/15 bg-white px-2 text-[11px] font-black text-primary outline-none transition-all hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
-                                    title="Đổi người quản lý cho đơn đã chọn"
-                                >
-                                    <option value="">Đổi quản lý</option>
-                                    <option value="__clear__">Chưa gắn quản lý</option>
-                                    {profitCenters.map((center) => (
-                                        <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
-                                    ))}
-                                </select>
-                                <button
-                                    type="button"
-                                    onClick={handleToggleSelectedOnly}
-                                    className={`bg-transparent p-0 text-[11px] font-bold whitespace-nowrap transition-colors ${showSelectedOnly ? 'text-primary' : 'text-primary/40 hover:text-primary'}`}
-                                    title={showSelectedOnly ? 'Tắt chế độ chỉ xem đơn đã chọn' : 'Chỉ hiển thị các đơn đang chọn'}
-                                    aria-pressed={showSelectedOnly}
-                                >
-                                    {selectedIds.length} {selectedLabel}
-                                </button>
-                                <button onClick={handleClearSelectedOrders} className="p-1 text-primary/40 hover:text-brick" title="Hủy chọn"><span className="material-symbols-outlined text-[16px]">close</span></button>
+                                    },
+                                    children: (
+                                        <>
+                                            <option value="">Đổi quản lý</option>
+                                            <option value="__clear__">Chưa gắn quản lý</option>
+                                            {profitCenters.map((center) => (
+                                                <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
+                                            ))}
+                                        </>
+                                    ),
+                                })}
                             </div>
                         )}
                     </div>
 
-                        <div className="flex-1 relative" ref={searchContainerRef}>
-                            <MultiKeywordSearchInput
-                                keywords={filters.search_terms}
-                                draftValue={filters.search_input}
-                                placeholder="Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn... Enter hoặc dấu phẩy để thêm"
-                                onFocus={() => setShowSearchHistory(true)}
-                                onChange={({ keywords, draftValue }) => {
-                                    setFilters((prev) => ({
-                                        ...prev,
-                                        search_terms: keywords,
-                                        search_input: draftValue,
-                                    }));
-                                }}
-                            />
-                            {showSearchHistory && searchHistory.length > 0 && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-primary/20 shadow-2xl z-[60] rounded-sm py-2 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-200">
-                                    <div className="flex justify-between items-center px-3 mb-2 border-b border-primary/10 pb-1"><span className="text-[10px] font-bold text-primary/40 uppercase tracking-widest">Tìm kiếm gần đây</span><button onClick={(e) => { e.stopPropagation(); setSearchHistory([]); localStorage.removeItem('order_search_history'); }} className="text-[10px] text-brick hover:underline font-bold">Xóa tất cả</button></div>
-                                    <div className="max-h-56 overflow-y-auto custom-scrollbar">
-                                        {searchHistory.map((h, i) => (
-                                            <div key={i} className="group flex items-center justify-between px-3 py-1.5 hover:bg-primary/5 cursor-pointer transition-colors" onClick={() => { setFilters((prev) => ({ ...prev, search_terms: parseKeywordTokens(h), search_input: '' })); setShowSearchHistory(false); }}>
-                                                <div className="flex items-center gap-2 overflow-hidden"><span className="material-symbols-outlined text-[16px] text-primary/30">history</span><span className="text-[13px] text-[#0F172A] truncate font-medium">{h}</span></div>
-                                                <button onClick={(e) => { e.stopPropagation(); const updated = searchHistory.filter(x => x !== h); setSearchHistory(updated); localStorage.setItem('order_search_history', JSON.stringify(updated)); }} className="opacity-0 group-hover:opacity-100 p-1 hover:text-brick transition-all rounded-full hover:bg-primary/5"><span className="material-symbols-outlined text-[14px]">close</span></button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
+                    {selectedIds.length === 0 && renderOrderSearch()}
                 </div>
             </div>
 

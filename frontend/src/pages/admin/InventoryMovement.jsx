@@ -1348,6 +1348,14 @@ const createDocumentForm = (tabKey, data = null) => ({
         : [createLine()],
 });
 
+const createStockAdjustmentModalState = () => ({
+    open: false,
+    mode: 'adjustment',
+    document_date: todayValue,
+    notes: '',
+    items: [],
+});
+
 const getDocumentLineQuantityValue = (tabKey, item) => {
     if (tabKey === 'adjustments') {
         return parseSignedWholeNumberInput(item.quantity) ?? 0;
@@ -1808,6 +1816,7 @@ const isCompletedImportStatus = (status) => {
 };
 
 const productColumns = [
+    { id: 'select', label: '', minWidth: 46, align: 'center', draggable: false, sortable: false },
     { id: 'product', label: 'Sản phẩm', minWidth: 300 },
     { id: 'total_imported', label: 'Tổng nhập', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL đã về từ các phiếu nhập.', headerRender: () => renderTwoLineHeader('Tổng', 'nhập') },
     { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL từ các phiếu xuất kho.', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
@@ -1821,7 +1830,7 @@ const productColumns = [
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Có thể bán x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
-    { id: 'actions', label: 'Thao tác', minWidth: 88, align: 'center' },
+    { id: 'actions', label: 'Thao tác', minWidth: 96, align: 'center' },
 ];
 
 const supplierColumns = [
@@ -3515,7 +3524,7 @@ const InventoryMovement = () => {
         returns: false, damaged: false, adjustments: false, lots: false, trash: false, saving: false,
         supplierModal: false, supplierPriceModal: false, importModal: false, documentModal: false,
         importStatuses: false, importStatusModal: false, invoiceAnalysis: false, importPriceRefresh: false,
-        importInvoiceModal: false, importInvoiceUpload: false,
+        importInvoiceModal: false, importInvoiceUpload: false, stockAdjustment: false,
     });
 
     const [openPanels, setOpenPanels] = useState({
@@ -3577,6 +3586,7 @@ const InventoryMovement = () => {
     const [expandedComparisons, setExpandedComparisons] = useState({});
     const [selectedPriceIds, setSelectedPriceIds] = useState({});
     const [selectedSlipIds, setSelectedSlipIds] = useState(() => createEmptySlipSelection());
+    const [selectedProductRowsById, setSelectedProductRowsById] = useState({});
     const [priceDrafts, setPriceDrafts] = useState({});
     const [codeDrafts, setCodeDrafts] = useState({});
     const [savingPriceIds, setSavingPriceIds] = useState({});
@@ -3613,6 +3623,7 @@ const InventoryMovement = () => {
     const [importDetailTableSettingsOpen, setImportDetailTableSettingsOpen] = useState(false);
     const [importStatusModal, setImportStatusModal] = useState({ open: false, form: createImportStatusForm() });
     const [documentModal, setDocumentModal] = useState({ open: false, tabKey: 'returns', form: createDocumentForm('returns') });
+    const [stockAdjustmentModal, setStockAdjustmentModal] = useState(() => createStockAdjustmentModalState());
     const [batchReturnModal, setBatchReturnModal] = useState({ open: false, documentId: null });
     const [exportModal, setExportModal] = useState({ open: false, form: createExportForm() });
     const [dailyOutboundDrawer, setDailyOutboundDrawer] = useState({ open: false, product: null });
@@ -3690,6 +3701,163 @@ const InventoryMovement = () => {
             showToast({ type: 'error', message: `Không thể sao chép ${label}.` });
         }
     };
+    const visibleProductRows = useMemo(
+        () => (products || []).filter((row) => Number(row?.id || 0) > 0),
+        [products]
+    );
+    const selectedProductRows = useMemo(
+        () => Object.values(selectedProductRowsById).filter(Boolean),
+        [selectedProductRowsById]
+    );
+    const productPageSelectionState = useMemo(() => {
+        const total = visibleProductRows.length;
+        const selectedCount = visibleProductRows.filter((row) => Boolean(selectedProductRowsById[String(row.id)])).length;
+
+        return {
+            total,
+            selectedCount,
+            checked: total > 0 && selectedCount === total,
+            indeterminate: selectedCount > 0 && selectedCount < total,
+        };
+    }, [selectedProductRowsById, visibleProductRows]);
+
+    const buildStockAdjustmentLine = (row) => {
+        const currentQuantity = Number(row?.computed_stock ?? row?.stock_quantity ?? 0);
+
+        return {
+            key: `${row?.id || 'product'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            product_id: Number(row?.id || row?.product_id || 0),
+            sku: row?.sku || '',
+            name: row?.name || '',
+            unit_name: row?.unit_name || '',
+            current_quantity: currentQuantity,
+            actual_quantity: normalizeQuantityDraft(Math.max(currentQuantity, 0)),
+            display_cost: row?.display_cost ?? row?.current_cost ?? row?.expected_cost ?? null,
+        };
+    };
+
+    const setProductRowSelected = (row, checked) => {
+        if (!row?.id) return;
+        const key = String(row.id);
+
+        setSelectedProductRowsById((prev) => {
+            if (checked) {
+                return { ...prev, [key]: row };
+            }
+
+            const next = { ...prev };
+            delete next[key];
+            return next;
+        });
+    };
+
+    const setVisibleProductsSelected = (checked) => {
+        setSelectedProductRowsById((prev) => {
+            const next = { ...prev };
+            visibleProductRows.forEach((row) => {
+                const key = String(row.id);
+                if (checked) {
+                    next[key] = row;
+                } else {
+                    delete next[key];
+                }
+            });
+
+            return next;
+        });
+    };
+
+    const closeStockAdjustmentModal = () => {
+        setStockAdjustmentModal(createStockAdjustmentModalState());
+    };
+
+    const openStockAdjustmentModal = (rows = selectedProductRows) => {
+        const normalizedRows = (rows || []).filter((row) => Number(row?.id || row?.product_id || 0) > 0);
+        if (!normalizedRows.length) {
+            showToast({ type: 'warning', message: 'Vui lòng chọn ít nhất một sản phẩm để điều chỉnh tồn kho.' });
+            return;
+        }
+
+        setStockAdjustmentModal({
+            open: true,
+            mode: 'adjustment',
+            document_date: todayValue,
+            notes: '',
+            items: normalizedRows.map(buildStockAdjustmentLine),
+        });
+    };
+
+    const updateStockAdjustmentLine = (index, field, value) => {
+        setStockAdjustmentModal((prev) => ({
+            ...prev,
+            items: prev.items.map((item, itemIndex) => (
+                itemIndex === index ? { ...item, [field]: value } : item
+            )),
+        }));
+    };
+
+    const removeStockAdjustmentLine = (index) => {
+        setStockAdjustmentModal((prev) => ({
+            ...prev,
+            items: prev.items.filter((_, itemIndex) => itemIndex !== index),
+        }));
+    };
+
+    const saveStockAdjustment = async () => {
+        const items = stockAdjustmentModal.items
+            .map((item) => {
+                const actualText = String(item.actual_quantity ?? '').trim();
+                const actualQuantity = parseQuantityDraft(actualText, Number.NaN);
+
+                return {
+                    product_id: Number(item.product_id || 0),
+                    actual_quantity: actualQuantity,
+                };
+            })
+            .filter((item) => item.product_id > 0);
+
+        const hasInvalidQuantity = items.length !== stockAdjustmentModal.items.length
+            || items.some((item) => !Number.isFinite(item.actual_quantity) || item.actual_quantity < 0);
+
+        if (!items.length) {
+            showToast({ type: 'warning', message: 'Danh sách điều chỉnh cần ít nhất một sản phẩm.' });
+            return;
+        }
+        if (hasInvalidQuantity) {
+            showToast({ type: 'warning', message: 'Vui lòng nhập số lượng thực tế hợp lệ cho tất cả sản phẩm.' });
+            return;
+        }
+
+        setFlag('stockAdjustment', true);
+        try {
+            const response = await inventoryApi.adjustStockCount({
+                mode: stockAdjustmentModal.mode || 'adjustment',
+                document_date: stockAdjustmentModal.document_date || todayValue,
+                notes: stockAdjustmentModal.notes || '',
+                items,
+            });
+            const createdNumbers = (response.data?.created || [])
+                .map((row) => row.number)
+                .filter(Boolean)
+                .join(', ');
+            const message = createdNumbers
+                ? `${response.data?.message || 'Đã tạo phiếu điều chỉnh tồn kho.'} (${createdNumbers})`
+                : (response.data?.message || 'Tồn kho đã khớp, không tạo phiếu.');
+
+            showToast({ type: 'success', message });
+            closeStockAdjustmentModal();
+            setSelectedProductRowsById({});
+            fetchProducts(productPagination.current_page || 1);
+            fetchImports(importPagination.current_page || 1);
+            fetchDocuments('adjustment', adjustmentPagination.current_page || 1);
+            fetchLots(lotPagination.current_page || 1);
+        } catch (error) {
+            fail(error, 'Không thể tạo phiếu điều chỉnh tồn kho.');
+        } finally {
+            setFlag('stockAdjustment', false);
+        }
+    };
+
     const pageState = (setter, response) => setter({
         current_page: response.data.current_page,
         last_page: response.data.last_page,
@@ -6798,6 +6966,17 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     }, [adjustmentPagination.total, adjustments, damagedData, damagedPagination.total, exportPagination.total, exportsData, importPagination.total, imports, lotPagination.total, lots, returnPagination.total, returnsData, trashItems, trashPagination.total]);
 
     const productCell = (row, columnId) => {
+        if (columnId === 'select') {
+            return (
+                <input
+                    type="checkbox"
+                    checked={Boolean(selectedProductRowsById[String(row.id)])}
+                    onChange={(event) => setProductRowSelected(row, event.target.checked)}
+                    className={checkboxClass}
+                    title="Chọn sản phẩm để điều chỉnh tồn kho"
+                />
+            );
+        }
         if (columnId === 'product') {
             const stockMeta = getProductStockAlertMeta(row);
             const skuValue = String(row.sku || '').trim();
@@ -6892,7 +7071,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             if (row.current_cost == null && row.expected_cost == null) return '-';
             return formatCurrency(row.inventory_value);
         }
-        if (columnId === 'actions') return <div className="flex items-center justify-center gap-2"><button type="button" onClick={() => navigate(`/admin/products/edit/${row.id}`)} className={ghostButton}>Sửa</button><button type="button" onClick={() => removeProduct(row.id)} className={dangerButton}>Xóa</button></div>;
+        if (columnId === 'actions') return (
+            <div className="flex items-center justify-center gap-2">
+                <button type="button" onClick={() => openStockAdjustmentModal([row])} className={ghostButton}>Điều chỉnh</button>
+            </div>
+        );
         return typeof row[columnId] === 'number' ? formatNumber(row[columnId]) : (row[columnId] || '-');
     };
 
@@ -7680,6 +7863,26 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         </div>
     );
 
+    const productListColumns = useMemo(
+        () => productColumns.map((column) => (
+            column.id === 'select'
+                ? {
+                    ...column,
+                    headerRender: () => (
+                        <IndeterminateCheckbox
+                            checked={productPageSelectionState.checked}
+                            indeterminate={productPageSelectionState.indeterminate}
+                            onChange={(event) => setVisibleProductsSelected(event.target.checked)}
+                            disabled={productPageSelectionState.total === 0}
+                            title="Chọn tất cả sản phẩm trên trang hiện tại"
+                        />
+                    ),
+                }
+                : column
+        )),
+        [productPageSelectionState]
+    );
+
     const refreshProductsTable = () => fetchProducts(
         productPagination.current_page || 1,
         pageSizes.products,
@@ -7700,7 +7903,24 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') },
                     { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') },
                 ]}
-                actions={<button type="button" onClick={() => navigate('/admin/products/new')} className={primaryButton}>Tạo sản phẩm</button>}
+                actions={(
+                    <div className="flex items-center gap-2">
+                        {selectedProductRows.length ? (
+                            <button type="button" onClick={() => setSelectedProductRowsById({})} className={ghostButton}>
+                                Bỏ chọn {formatNumber(selectedProductRows.length)}
+                            </button>
+                        ) : null}
+                        <button
+                            type="button"
+                            onClick={() => openStockAdjustmentModal()}
+                            className={primaryButton}
+                            disabled={!selectedProductRows.length}
+                            title={selectedProductRows.length ? 'Điều chỉnh tồn kho các sản phẩm đã chọn' : 'Hãy chọn ít nhất một sản phẩm'}
+                        >
+                            Điều chỉnh tồn kho
+                        </button>
+                    </div>
+                )}
             />
             {openPanels.products.filters ? (
                 <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}>
@@ -7740,8 +7960,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             ) : null}
             {openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}
             <InventoryTable
-                storageKey={`inventory_products_table_stock_v3_${inventoryTableStorageVersion}`}
-                columns={productColumns}
+                storageKey={`inventory_products_table_stock_v4_${inventoryTableStorageVersion}`}
+                columns={productListColumns}
                 rows={products}
                 renderCell={productCell}
                 loading={loading.products}
@@ -8185,6 +8405,27 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     );
     const exportLineTotal = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) * Number(item.unit_cost || 0) : 0), 0), [exportModal.form.items]);
     const exportTotalQuantity = useMemo(() => exportModal.form.items.reduce((sum, item) => sum + (Number(item.product_id || 0) > 0 ? Number(item.quantity || 0) : 0), 0), [exportModal.form.items]);
+    const stockAdjustmentPreviewRows = useMemo(
+        () => stockAdjustmentModal.items.map((item) => {
+            const actualQuantity = parseQuantityDraft(item.actual_quantity, Number(item.current_quantity || 0));
+            const differenceQuantity = actualQuantity - Number(item.current_quantity || 0);
+
+            return {
+                ...item,
+                actualQuantity,
+                differenceQuantity,
+            };
+        }),
+        [stockAdjustmentModal.items]
+    );
+    const stockAdjustmentChangedCount = useMemo(
+        () => stockAdjustmentPreviewRows.filter((item) => Math.abs(Number(item.differenceQuantity || 0)) >= 0.0005).length,
+        [stockAdjustmentPreviewRows]
+    );
+    const stockAdjustmentTotalDifference = useMemo(
+        () => stockAdjustmentPreviewRows.reduce((sum, item) => sum + Number(item.differenceQuantity || 0), 0),
+        [stockAdjustmentPreviewRows]
+    );
     const exportInvoiceMeta = exportModal.form.invoice_meta;
     const exportInvoiceStatusSummary = useMemo(
         () => getExportInvoiceStatusMeta(exportModal.form.invoice_meta, exportModal.form.customer_name),
@@ -8197,6 +8438,130 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             {activeTab === 'products' ? productsTabContent : null}
             {activeTab === 'suppliers' ? suppliersTabContent : null}
             {activeTab === 'supplierPrices' ? supplierPricesTabContent : null}
+            <ModalShell
+                open={stockAdjustmentModal.open}
+                title="Điều chỉnh tồn kho"
+                onClose={closeStockAdjustmentModal}
+                maxWidth="max-w-6xl"
+                footer={(
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-[13px] font-black text-primary">
+                            Dòng lệch: {formatNumber(stockAdjustmentChangedCount)} • Tổng chênh lệch: {formatSignedNumber(stockAdjustmentTotalDifference)}
+                        </div>
+                        <div className="flex gap-2">
+                            <button type="button" onClick={closeStockAdjustmentModal} className={ghostButton}>Hủy</button>
+                            <button
+                                type="button"
+                                onClick={saveStockAdjustment}
+                                className={primaryButton}
+                                disabled={loading.stockAdjustment || stockAdjustmentModal.items.length === 0}
+                            >
+                                {loading.stockAdjustment ? 'Đang tạo phiếu' : 'Tạo phiếu tự động'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+            >
+                <div className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-[180px,260px,minmax(0,1fr)]">
+                        <div>
+                            <div className={importFieldLabelClass}>Ngày</div>
+                            <input
+                                type="date"
+                                value={stockAdjustmentModal.document_date}
+                                onChange={(event) => setStockAdjustmentModal((prev) => ({ ...prev, document_date: event.target.value }))}
+                                className={`w-full ${inputClass}`}
+                            />
+                        </div>
+                        <div>
+                            <div className={importFieldLabelClass}>Kiểu điều chỉnh</div>
+                            <div className="grid grid-cols-2 overflow-hidden rounded-sm border border-primary/15 bg-white">
+                                {[
+                                    { value: 'adjustment', label: 'Phiếu điều chỉnh' },
+                                    { value: 'import', label: 'Phiếu nhập' },
+                                ].map((option) => (
+                                    <label
+                                        key={option.value}
+                                        className={`flex h-10 cursor-pointer items-center justify-center border-r border-primary/10 px-3 text-[12px] font-black last:border-r-0 ${stockAdjustmentModal.mode === option.value ? 'bg-primary text-white' : 'text-primary hover:bg-primary/[0.04]'}`}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="stock_adjustment_mode"
+                                            value={option.value}
+                                            checked={stockAdjustmentModal.mode === option.value}
+                                            onChange={(event) => setStockAdjustmentModal((prev) => ({ ...prev, mode: event.target.value }))}
+                                            className="sr-only"
+                                        />
+                                        {option.label}
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <div className={importFieldLabelClass}>Ghi chú thêm</div>
+                            <input
+                                value={stockAdjustmentModal.notes}
+                                onChange={(event) => setStockAdjustmentModal((prev) => ({ ...prev, notes: event.target.value }))}
+                                placeholder="Không bắt buộc"
+                                className={`w-full ${inputClass}`}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-sm border border-primary/10">
+                        <div className="max-h-[56vh] overflow-auto">
+                            <table className="w-full min-w-[920px] border-collapse">
+                                <thead className="sticky top-0 z-10 bg-[#f6f9fc]">
+                                    <tr>
+                                        {['Sản phẩm', 'Tồn hệ thống', 'Số lượng thực tế', 'Chênh lệch', 'Giá vốn', 'Xóa'].map((label) => (
+                                            <th key={label} className="border-b border-r border-primary/10 px-3 py-2.5 text-center text-[12px] font-bold text-primary last:border-r-0">{label}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {stockAdjustmentPreviewRows.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="px-4 py-8 text-center text-[13px] text-primary/55">Chưa có sản phẩm.</td>
+                                        </tr>
+                                    ) : null}
+                                    {stockAdjustmentPreviewRows.map((item, index) => {
+                                        const diff = Number(item.differenceQuantity || 0);
+                                        const diffClass = diff > 0 ? 'text-emerald-700' : diff < 0 ? 'text-rose-700' : 'text-primary/45';
+
+                                        return (
+                                            <tr key={item.key}>
+                                                <td className="border-b border-r border-primary/10 px-3 py-2 align-middle">
+                                                    <CellText primary={item.name || '-'} secondary={item.sku || '-'} />
+                                                </td>
+                                                <td className="border-b border-r border-primary/10 px-3 py-2 text-right text-[13px] font-black text-primary">
+                                                    {formatNumber(item.current_quantity || 0)}
+                                                </td>
+                                                <td className="border-b border-r border-primary/10 px-3 py-2">
+                                                    <input
+                                                        value={item.actual_quantity}
+                                                        onChange={(event) => updateStockAdjustmentLine(index, 'actual_quantity', normalizeQuantityDraft(event.target.value))}
+                                                        inputMode="decimal"
+                                                        className={`w-full text-right ${inputClass}`}
+                                                    />
+                                                </td>
+                                                <td className={`border-b border-r border-primary/10 px-3 py-2 text-right text-[13px] font-black ${diffClass}`}>
+                                                    {formatSignedNumber(diff)}
+                                                </td>
+                                                <td className="border-b border-r border-primary/10 px-3 py-2 text-right text-[13px] font-semibold text-primary/75">
+                                                    {item.display_cost != null ? formatImportCost(item.display_cost) : '-'}
+                                                </td>
+                                                <td className="border-b border-primary/10 px-3 py-2 text-center">
+                                                    <button type="button" onClick={() => removeStockAdjustmentLine(index)} className={dangerButton}>Xóa</button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </ModalShell>
             {false ? (
                 <div className="grid items-start gap-3 xl:grid-cols-[300px,minmax(0,1fr)]">
                     <div className={`${panelClass} self-start`}>

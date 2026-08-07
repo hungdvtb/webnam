@@ -1105,6 +1105,35 @@ const getProductQuickSetupEntryKey = (entry) => {
     const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.id ?? 0);
     return Number.isFinite(productId) && productId > 0 ? String(productId) : '';
 };
+const buildLatestProductSnapshotMap = (items = []) => {
+    const map = new Map();
+
+    (Array.isArray(items) ? items : []).forEach((item) => {
+        const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+        const entryKey = getProductQuickSetupEntryKey(item);
+        const productId = Number(item?.product_id ?? item?.target_product_id ?? item?.id ?? 0) || 0;
+
+        if (entryKind === SEARCH_ENTRY_BUNDLE_OPTION && entryKey) {
+            map.set(entryKey, item);
+            return;
+        }
+
+        if (productId > 0) {
+            map.set(productId, item);
+        }
+    });
+
+    return map;
+};
+const getLatestProductSnapshotForEntry = (entry, latestMap = new Map()) => {
+    const entryKey = getProductQuickSetupEntryKey(entry);
+    if (entryKey && latestMap.has(entryKey)) {
+        return latestMap.get(entryKey);
+    }
+
+    const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.bundle_parent_id ?? entry?.id ?? 0) || 0;
+    return productId > 0 ? latestMap.get(productId) : undefined;
+};
 const normalizeAccountId = (value) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null;
@@ -2288,6 +2317,7 @@ const mergeLatestProductSnapshotIntoBundleItem = (bundleItem, latest) => {
             display_sku: latestSku,
         } : {}),
         unit_name: resolveOrderUnitLabel(latest, bundleItem),
+        price: resolveMoneyValue(latest?.price, bundleItem?.price, 0),
         cost_price: resolveProductCostPrice(latest, bundleItem?.cost_price),
         expected_cost: parseMoneyNumber(latest?.expected_cost, parseMoneyNumber(bundleItem?.expected_cost)),
         main_image: normalizeCanvasText(latest?.main_image || latest?.primary_image?.url || bundleItem?.main_image),
@@ -2309,6 +2339,11 @@ const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
 
     if (isBundleOptionPickerEntry(normalizedEntry)) {
         const inventorySnapshot = resolveInventorySnapshot(latest, normalizedEntry);
+        const latestBundleItems = Array.isArray(latest?.bundle_items) && latest.bundle_items.length > 0
+            ? latest.bundle_items
+            : normalizedEntry?.bundle_items;
+        const bundleOptionPrice = resolveBundleOptionEntryPrice(latest, latestBundleItems);
+        const bundleOptionTotalPrice = calculateBundleItemsSubtotal(latestBundleItems);
 
         return normalizeProductPickerEntry({
             ...normalizedEntry,
@@ -2320,13 +2355,13 @@ const mergeLatestProductSnapshotIntoPickerEntry = (entry, latest) => {
             type: normalizedEntry?.type || latest?.type || '',
             bundle_title: normalizedEntry?.bundle_title || latest?.bundle_title || '',
             bundle_config_title: normalizedEntry?.bundle_config_title || normalizedEntry?.bundle_title || latest?.bundle_title || '',
-            price: normalizedEntry?.price,
-            expected_cost: normalizedEntry?.expected_cost,
-            cost_price: normalizedEntry?.cost_price,
+            price: bundleOptionPrice || normalizedEntry?.price,
+            expected_cost: parseMoneyNumber(latest?.expected_cost, parseMoneyNumber(normalizedEntry?.expected_cost)),
+            cost_price: resolveProductCostPrice(latest, normalizedEntry?.cost_price),
+            bundle_option_total_price: bundleOptionTotalPrice || latest?.bundle_option_total_price || normalizedEntry?.bundle_option_total_price,
+            bundle_option_discounted_price: bundleOptionPrice || latest?.bundle_option_discounted_price || normalizedEntry?.bundle_option_discounted_price,
             ...resolveProductSourceFields(latest, normalizedEntry),
-            bundle_items: Array.isArray(latest?.bundle_items) && latest.bundle_items.length > 0
-                ? latest.bundle_items
-                : normalizedEntry?.bundle_items,
+            bundle_items: latestBundleItems,
         });
     }
 
@@ -2338,9 +2373,16 @@ const mergeLatestBundleItemsIntoPickerEntry = (entry, latestMap) => {
         return normalizedEntry;
     }
 
+    const mergedBundleItems = mergeLatestProductSnapshotsIntoBundleItems(normalizedEntry.bundle_items, latestMap);
+    const bundleOptionPrice = resolveBundleOptionEntryPrice(normalizedEntry, mergedBundleItems);
+    const bundleOptionTotalPrice = calculateBundleItemsSubtotal(mergedBundleItems);
+
     return normalizeProductPickerEntry({
         ...normalizedEntry,
-        bundle_items: mergeLatestProductSnapshotsIntoBundleItems(normalizedEntry.bundle_items, latestMap),
+        price: bundleOptionPrice || normalizedEntry.price,
+        bundle_option_total_price: bundleOptionTotalPrice || normalizedEntry.bundle_option_total_price,
+        bundle_option_discounted_price: bundleOptionPrice || normalizedEntry.bundle_option_discounted_price,
+        bundle_items: mergedBundleItems,
     });
 };
 const calculateItemsCostTotal = (items = []) => items.reduce(
@@ -2820,6 +2862,47 @@ const getOrderItemEffectiveInventoryName = (item) => (
         ? getOrderItemActualNameLabel(item) || item?.name || ''
         : item?.name || ''
 );
+const buildProductRefreshPayload = (item, { useEffectiveInventoryProduct = false } = {}) => {
+    const options = item?.options || {};
+    const productId = useEffectiveInventoryProduct
+        ? getOrderItemEffectiveInventoryProductId(item)
+        : Number(item?.target_product_id ?? item?.product_id ?? item?.id ?? 0) || 0;
+
+    if (!productId) {
+        return null;
+    }
+
+    const entryKind = normalizeCanvasText(
+        item?.entry_kind
+        || options?.search_entry_kind
+        || SEARCH_ENTRY_PRODUCT
+    );
+    const bundleParentId = Number(item?.bundle_parent_id ?? options?.bundle_parent_id ?? 0) || 0;
+    const isBundleContext = entryKind === SEARCH_ENTRY_BUNDLE_OPTION
+        || bundleParentId > 0
+        || normalizeCanvasText(item?.bundle_option_key || options?.bundle_option_key)
+        || normalizeCanvasText(item?.bundle_option_uid || options?.bundle_option_uid)
+        || normalizeCanvasText(item?.bundle_option_title || options?.bundle_option_title);
+
+    const payload = {
+        product_id: productId,
+        sku: useEffectiveInventoryProduct ? getOrderItemEffectiveInventorySku(item) : (item?.display_sku || item?.sku || ''),
+        name: useEffectiveInventoryProduct ? getOrderItemEffectiveInventoryName(item) : (item?.display_name || item?.name || ''),
+        ...buildProductSourcePayload(item),
+    };
+
+    if (isBundleContext) {
+        payload.entry_kind = SEARCH_ENTRY_BUNDLE_OPTION;
+        payload.bundle_parent_id = bundleParentId || Number(item?.target_product_id ?? item?.product_id ?? item?.id ?? 0) || undefined;
+        payload.bundle_option_uid = normalizeCanvasText(item?.bundle_option_uid || options?.bundle_option_uid || item?.uid || item?.option_uid) || undefined;
+        payload.bundle_option_key = normalizeCanvasText(item?.bundle_option_key || options?.bundle_option_key || resolveBundleOptionKey(item)) || undefined;
+        payload.bundle_option_title = normalizeCanvasText(item?.bundle_option_title || options?.bundle_option_title || resolveBundleOptionTitle(item)) || undefined;
+        payload.bundle_option_post_id = Number(item?.option_post_id ?? item?.bundle_option_post_id ?? options?.bundle_option_post_id) || undefined;
+        payload.bundle_item_base_product_id = Number(item?.bundle_item_base_product_id ?? options?.bundle_item_base_product_id ?? item?.base_product_id) || undefined;
+    }
+
+    return payload;
+};
 const resolveSubmittedOrderItemName = (item, productId = 0) => {
     const normalizedProductId = Number(productId) || Number(item?.product_id) || 0;
     const candidates = [
@@ -4969,12 +5052,7 @@ const OrderForm = () => {
         const syncCacheRef = (cacheRef) => {
             cacheRef.current.forEach((entries, key) => {
                 const nextEntries = (Array.isArray(entries) ? entries : []).map((product) => {
-                    const latest = latestMap.get(Number(
-                        product?.target_product_id
-                        ?? product?.product_id
-                        ?? product?.bundle_parent_id
-                        ?? product?.id
-                    ));
+                    const latest = getLatestProductSnapshotForEntry(product, latestMap);
                     return mergeLatestBundleItemsIntoPickerEntry(
                         mergeLatestProductSnapshotIntoPickerEntry(product, latest),
                         latestMap
@@ -4991,12 +5069,7 @@ const OrderForm = () => {
 
         setProductQuickFilterScopeProducts((prev) => (
             (Array.isArray(prev) ? prev : []).map((product) => {
-                const latest = latestMap.get(Number(
-                    product?.target_product_id
-                    ?? product?.product_id
-                    ?? product?.bundle_parent_id
-                    ?? product?.id
-                ));
+                const latest = getLatestProductSnapshotForEntry(product, latestMap);
                 return mergeLatestBundleItemsIntoPickerEntry(
                     mergeLatestProductSnapshotIntoPickerEntry(product, latest),
                     latestMap
@@ -5015,17 +5088,16 @@ const OrderForm = () => {
                             (Array.isArray(items) ? items : []).map((item) => {
                                 const entryKind = String(item?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
                                 const isBundleOptionEntry = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+                                const latest = getLatestProductSnapshotForEntry(item, latestMap);
                                 const mergedBundleItems = isBundleOptionEntry
-                                    ? mergeLatestProductSnapshotsIntoBundleItems(item?.bundle_items, latestMap)
+                                    ? (
+                                        Array.isArray(latest?.bundle_items) && latest.bundle_items.length > 0
+                                            ? latest.bundle_items
+                                            : mergeLatestProductSnapshotsIntoBundleItems(item?.bundle_items, latestMap)
+                                    )
                                     : item?.bundle_items;
                                 const hasBundleItemsChanged = isBundleOptionEntry
                                     && JSON.stringify(item?.bundle_items || []) !== JSON.stringify(mergedBundleItems || []);
-                                const latest = latestMap.get(Number(
-                                    item?.target_product_id
-                                    ?? item?.product_id
-                                    ?? item?.bundle_parent_id
-                                    ?? item?.id
-                                ));
                                 if (!latest && !hasBundleItemsChanged) return item;
 
                                 hasChanged = true;
@@ -5037,6 +5109,13 @@ const OrderForm = () => {
                                     };
                                 }
 
+                                const bundleOptionPrice = isBundleOptionEntry
+                                    ? resolveBundleOptionEntryPrice(latest || item, mergedBundleItems)
+                                    : 0;
+                                const bundleOptionTotalPrice = isBundleOptionEntry
+                                    ? calculateBundleItemsSubtotal(mergedBundleItems)
+                                    : 0;
+
                                 return {
                                     ...item,
                                     sku: isBundleOptionEntry ? (item?.sku ?? '') : (latest.sku ?? item?.sku ?? ''),
@@ -5046,13 +5125,13 @@ const OrderForm = () => {
                                         ? (item?.display_name ?? item?.name ?? '')
                                         : (latest.display_name ?? latest.name ?? item?.display_name ?? item?.name ?? ''),
                                     price: isBundleOptionEntry
-                                        ? (Number(item?.price ?? 0) || 0)
+                                        ? (bundleOptionPrice || Number(item?.price ?? 0) || 0)
                                         : resolveMoneyValue(latest.price, item?.price, 0),
                                     expected_cost: isBundleOptionEntry
-                                        ? parseMoneyNumber(item?.expected_cost)
+                                        ? parseMoneyNumber(latest?.expected_cost, parseMoneyNumber(item?.expected_cost))
                                         : parseMoneyNumber(latest.expected_cost, parseMoneyNumber(item?.expected_cost)),
                                     cost_price: isBundleOptionEntry
-                                        ? resolveProductCostPrice(item)
+                                        ? resolveProductCostPrice(latest, resolveProductCostPrice(item))
                                         : resolveProductCostPrice({ ...item, ...latest }),
                                     unit_name: resolveOrderUnitLabel(latest, item),
                                     ...resolveInventorySnapshot(latest, item),
@@ -5060,6 +5139,8 @@ const OrderForm = () => {
                                     main_image: String(latest.main_image ?? item?.main_image ?? '').trim(),
                                     type: latest.type ?? item?.type ?? '',
                                     ...(isBundleOptionEntry ? {
+                                        bundle_option_total_price: bundleOptionTotalPrice || latest?.bundle_option_total_price || item?.bundle_option_total_price,
+                                        bundle_option_discounted_price: bundleOptionPrice || latest?.bundle_option_discounted_price || item?.bundle_option_discounted_price,
                                         bundle_items: mergedBundleItems,
                                     } : {}),
                                 };
@@ -5073,9 +5154,7 @@ const OrderForm = () => {
         });
     }, []);
     const applyLatestProductsToOrderState = useCallback((refreshedItems = []) => {
-        const refreshedMap = new Map(
-            (Array.isArray(refreshedItems) ? refreshedItems : []).map((item) => [Number(item.product_id), item])
-        );
+        const refreshedMap = buildLatestProductSnapshotMap(refreshedItems);
 
         if (refreshedMap.size === 0) {
             return refreshedMap;
@@ -5143,9 +5222,7 @@ const OrderForm = () => {
         return refreshedMap;
     }, [syncLatestProductsIntoLocalSources]);
     const applyInventorySnapshotToOrderState = useCallback((refreshedItems = []) => {
-        const refreshedMap = new Map(
-            (Array.isArray(refreshedItems) ? refreshedItems : []).map((item) => [Number(item.product_id), item])
-        );
+        const refreshedMap = buildLatestProductSnapshotMap(refreshedItems);
 
         if (refreshedMap.size === 0) {
             return refreshedMap;
@@ -5155,6 +5232,11 @@ const OrderForm = () => {
             const nextItems = prev.items.map((item) => {
                 const latest = refreshedMap.get(getOrderItemEffectiveInventoryProductId(item));
                 if (!latest) return item;
+                const latestPrice = parseMoneyNumber(latest?.price);
+                const shouldHydrateBundlePrice = (
+                    normalizeCanvasText(item?.options?.search_entry_kind) === SEARCH_ENTRY_BUNDLE_OPTION
+                    || Number(item?.options?.bundle_parent_id ?? 0) > 0
+                ) && latestPrice !== null;
                 const currentCostPrice = resolveRoundedImportCostValue(item.cost_price, 0);
                 const shouldHydrateCostPrice = currentCostPrice <= 0 && hasProductCostSnapshot(latest);
                 const nextCostPrice = shouldHydrateCostPrice
@@ -5191,6 +5273,7 @@ const OrderForm = () => {
                         original_sku: latestSku,
                     } : {}),
                     unit_name: resolveOrderUnitLabel(latest, item),
+                    price: shouldHydrateBundlePrice ? latestPrice : item.price,
                     cost_price: nextCostPrice,
                     base_cost_price: shouldHydrateCostPrice
                         ? resolveRoundedImportCostValue(latest.cost_price ?? latest.expected_cost, nextCostPrice)
@@ -5222,15 +5305,23 @@ const OrderForm = () => {
         const normalizedItems = Array.from(new Map(
             (Array.isArray(itemsToRefresh) ? itemsToRefresh : [])
                 .map((item) => {
-                    const productId = getOrderItemEffectiveInventoryProductId(item);
-                    if (!productId) return null;
+                    const payload = buildProductRefreshPayload(item, { useEffectiveInventoryProduct: true });
+                    if (!payload) return null;
 
-                    return [productId, {
-                        product_id: productId,
-                        sku: getOrderItemEffectiveInventorySku(item),
-                        name: getOrderItemEffectiveInventoryName(item),
-                        ...buildProductSourcePayload(item),
-                    }];
+                    const key = payload.entry_kind === SEARCH_ENTRY_BUNDLE_OPTION
+                        ? [
+                            SEARCH_ENTRY_BUNDLE_OPTION,
+                            payload.bundle_parent_id || '',
+                            payload.bundle_option_uid || '',
+                            payload.bundle_option_key || '',
+                            payload.bundle_option_post_id || '',
+                            payload.bundle_option_title || '',
+                            payload.bundle_item_base_product_id || '',
+                            payload.product_id || '',
+                        ].join('::')
+                        : String(payload.product_id || '');
+
+                    return [key, payload];
                 })
                 .filter(Boolean)
         ).values());
@@ -8317,12 +8408,9 @@ const OrderForm = () => {
         const refreshActiveQuickSetupItems = async () => {
             try {
                 const response = await productApi.refreshOrderItems({
-                    items: activeProductQuickSetupItems.map((item) => ({
-                        product_id: item.product_id,
-                        sku: item.sku,
-                        name: item.name,
-                        ...buildProductSourcePayload(item),
-                    }))
+                    items: activeProductQuickSetupItems
+                        .map((item) => buildProductRefreshPayload(item))
+                        .filter(Boolean)
                 });
 
                 if (isDisposed) return;
@@ -8331,7 +8419,7 @@ const OrderForm = () => {
                 if (refreshedItems.length === 0) return;
 
                 syncLatestProductsIntoLocalSources(
-                    new Map(refreshedItems.map((item) => [Number(item.product_id), item]))
+                    buildLatestProductSnapshotMap(refreshedItems)
                 );
             } catch (error) {
                 if (!isDisposed) {
@@ -10014,12 +10102,9 @@ const OrderForm = () => {
 
         try {
             const response = await productApi.refreshOrderItems({
-                items: formData.items.map((item) => ({
-                    product_id: item.product_id,
-                    sku: item.sku,
-                    name: item.name,
-                    ...buildProductSourcePayload(item),
-                }))
+                items: formData.items
+                    .map((item) => buildProductRefreshPayload(item, { useEffectiveInventoryProduct: true }))
+                    .filter(Boolean)
             });
 
             const refreshedItems = Array.isArray(response.data?.items) ? response.data.items : [];

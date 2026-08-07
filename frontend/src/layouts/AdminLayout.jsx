@@ -799,13 +799,13 @@ const AdminLayout = () => {
                     {canAccess('payroll') && (
                         <Link
                             to="/admin/payroll"
-                            aria-label="Công và lương"
-                            title={collapsedTitle('Công và lương')}
+                            aria-label="Quản lí nhân sự"
+                            title={collapsedTitle('Quản lí nhân sự')}
                             className={`group flex items-center rounded-sm p-3 transition-all duration-300 ${location.pathname.startsWith('/admin/payroll') ? 'bg-gold/10 text-gold' : 'text-white hover:bg-white/10'} ${navItemLayoutClass}`}
                         >
-                            <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/payroll') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>event_available</span>
+                            <span className={`material-symbols-outlined w-6 shrink-0 text-center transition-colors ${location.pathname.startsWith('/admin/payroll') ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>groups</span>
                             <SidebarText isExpanded={isSidebarExpanded} className={topLevelLabelClass}>
-                                Công và lương
+                                Quản lí nhân sự
                             </SidebarText>
                         </Link>
                     )}

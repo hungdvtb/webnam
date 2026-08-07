@@ -44,12 +44,18 @@ class FixedCostCategoryManagementTest extends TestCase
                     'name' => 'VPS tháng',
                     'amount' => 350000,
                     'notes' => 'Máy chủ vận hành',
+                    'applied_from' => '2026-04-01',
                 ],
             ],
         ], $this->headers)->assertOk();
 
         $this->assertDatabaseHas('fixed_cost_categories', [
             'name' => 'Chi phí server',
+        ]);
+
+        $this->assertDatabaseHas('fixed_costs', [
+            'name' => 'VPS tháng',
+            'applied_from' => '2026-04-01',
         ]);
 
         $categories = collect($response->json('categories'));

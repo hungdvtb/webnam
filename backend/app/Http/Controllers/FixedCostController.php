@@ -67,6 +67,7 @@ class FixedCostController extends Controller
             'fixed_costs.*.name' => 'required|string|max:180',
             'fixed_costs.*.amount' => 'required|numeric|min:0',
             'fixed_costs.*.notes' => 'nullable|string',
+            'fixed_costs.*.applied_from' => 'nullable|date',
         ]);
 
         $applyDate = Carbon::parse($request->input('apply_date'));
@@ -84,11 +85,16 @@ class FixedCostController extends Controller
                     $categoryNames[] = $normalizedCategory;
                 }
 
+                $itemAppliedFrom = !empty($item['applied_from'])
+                    ? Carbon::parse($item['applied_from'])->toDateString()
+                    : $applyDate->toDateString();
+
                 $payload = [
                     'category' => $normalizedCategory,
                     'name' => trim((string) ($item['name'] ?? '')),
                     'amount' => $item['amount'],
                     'notes' => $item['notes'] ?? '',
+                    'applied_from' => $itemAppliedFrom,
                 ];
 
                 if (!empty($item['id'])) {
@@ -107,14 +113,31 @@ class FixedCostController extends Controller
             FixedCost::query()->whereNotIn('id', $keptIds)->delete();
             $this->syncCategoryCatalog($categoryNames);
 
-            $totalMonthly = (float) FixedCost::query()->sum('amount');
+            $savedCosts = FixedCost::query()
+                ->get(['amount', 'applied_from']);
+            $totalMonthly = (float) $savedCosts->sum('amount');
+            $earliestAppliedFrom = $savedCosts
+                ->pluck('applied_from')
+                ->filter()
+                ->min();
 
-            $current = $applyDate->copy();
+            $current = $earliestAppliedFrom && Carbon::parse($earliestAppliedFrom)->lt($applyDate)
+                ? Carbon::parse($earliestAppliedFrom)
+                : $applyDate->copy();
             $endDate = $applyDate->copy()->addDays(365);
 
             while ($current->lte($endDate)) {
                 $daysInMonth = $current->daysInMonth;
-                $dailyRate = $daysInMonth > 0 ? $totalMonthly / $daysInMonth : 0;
+                $activeMonthly = (float) $savedCosts
+                    ->filter(function (FixedCost $cost) use ($current) {
+                        if (!$cost->applied_from) {
+                            return true;
+                        }
+
+                        return Carbon::parse($cost->applied_from)->lte($current);
+                    })
+                    ->sum('amount');
+                $dailyRate = $daysInMonth > 0 ? $activeMonthly / $daysInMonth : 0;
 
                 FixedCostDailySnapshot::query()->updateOrCreate(
                     ['date' => $current->toDateString()],

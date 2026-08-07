@@ -813,6 +813,7 @@ export const inventoryApi = {
     createProduct: (data) => api.post('/inventory/products', data),
     updateProduct: (id, data) => api.put(`/inventory/products/${id}`, data),
     setImportStar: (id, data) => api.put(`/inventory/products/${id}/import-star`, data),
+    adjustStockCount: (data) => api.post('/inventory/stock-count-adjustments', data),
     getSuppliers: (params) => api.get('/inventory/suppliers', { params }),
     createSupplier: (data) => api.post('/inventory/suppliers', data),
     updateSupplier: (id, data) => api.put(`/inventory/suppliers/${id}`, data),
@@ -1194,6 +1195,8 @@ export const payrollApi = {
     saveShifts: (shifts) => api.put('/payroll/shifts/sheet', { shifts }),
     saveSchedules: (schedules) => api.put('/payroll/schedules/sheet', { schedules }),
     saveAttendance: (attendanceRecords) => api.put('/payroll/attendance/sheet', { attendance_records: attendanceRecords }),
+    saveAdjustments: (adjustments) => api.put('/payroll/adjustments/sheet', { adjustments }),
+    deleteAdjustment: (id) => api.delete(`/payroll/adjustments/${id}`),
     saveUserScopes: (userScopes) => api.put('/payroll/user-scopes/sheet', { user_scopes: userScopes }),
 };
 

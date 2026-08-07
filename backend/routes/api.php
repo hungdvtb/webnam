@@ -178,6 +178,8 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::put('/payroll/shifts/sheet', [PayrollController::class, 'syncShifts']);
     Route::put('/payroll/schedules/sheet', [PayrollController::class, 'syncSchedules']);
     Route::put('/payroll/attendance/sheet', [PayrollController::class, 'syncAttendance']);
+    Route::put('/payroll/adjustments/sheet', [PayrollController::class, 'syncAdjustments']);
+    Route::delete('/payroll/adjustments/{id}', [PayrollController::class, 'deleteAdjustment'])->whereNumber('id');
     Route::put('/payroll/user-scopes/sheet', [PayrollController::class, 'syncUserScopes']);
 
     // Logistics routes
@@ -311,6 +313,7 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/inventory/products', [InventoryController::class, 'storeProduct']);
     Route::put('/inventory/products/{id}', [InventoryController::class, 'updateProduct'])->whereNumber('id');
     Route::put('/inventory/products/{id}/import-star', [InventoryController::class, 'updateInventoryImportStar'])->whereNumber('id');
+    Route::post('/inventory/stock-count-adjustments', [InventoryController::class, 'storeStockCountAdjustment']);
     Route::get('/inventory/suppliers', [InventoryController::class, 'suppliers']);
     Route::post('/inventory/suppliers', [InventoryController::class, 'storeSupplier']);
     Route::put('/inventory/suppliers/{id}', [InventoryController::class, 'updateSupplier'])->whereNumber('id');

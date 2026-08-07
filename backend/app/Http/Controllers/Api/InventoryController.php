@@ -154,9 +154,10 @@ class InventoryController extends Controller
 
     public function products(Request $request)
     {
-        $isPickerMode = $request->boolean('picker') || $request->boolean('quick_lookup') || $request->boolean('without_summary');
+        $isPickerMode = $request->boolean('picker') || $request->boolean('quick_lookup');
+        $withoutSummary = $request->boolean('without_summary');
         $query = $this->buildInventoryProductsQuery($request, $isPickerMode);
-        $summary = $isPickerMode ? null : $this->inventoryProductSummary(clone $query);
+        $summary = ($isPickerMode || $withoutSummary) ? null : $this->inventoryProductSummary(clone $query);
         $withVariants = $request->boolean('with_variants');
         $searchTerm = trim((string) ($request->input('quick_search') ?? $request->input('search') ?? ''));
 
@@ -272,9 +273,14 @@ class InventoryController extends Controller
 
                 return $ids;
             });
+        $exportSlipProductTotals = $isPickerMode ? [] : $this->exportSlipProductTotalsForRequest($request);
         $supplierPriceMap = $this->supplierPriceMap($request, $pageProductIds);
 
-        $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap, $withVariants, $isPickerMode) {
+        $paginated->getCollection()->transform(function (Product $product) use ($supplierPriceMap, $withVariants, $isPickerMode, $exportSlipProductTotals) {
+            if (!$isPickerMode) {
+                $this->applyExportSlipTotalsToInventoryProduct($product, $exportSlipProductTotals);
+            }
+
             return $this->inventoryProductPayload(
                 $product,
                 $supplierPriceMap->get($product->id),
@@ -405,6 +411,196 @@ class InventoryController extends Controller
                 'inventory_import_starred' => (bool) $product->inventory_import_starred,
             ],
         ]);
+    }
+
+    public function storeStockCountAdjustment(Request $request)
+    {
+        $accountId = (int) ($this->inventoryAccountId($request) ?? 0);
+        $validated = $request->validate([
+            'mode' => ['nullable', Rule::in(['adjustment', 'import'])],
+            'document_date' => 'nullable|date',
+            'notes' => 'nullable|string|max:5000',
+            'items' => 'required|array|min:1',
+            'items.*.product_id' => 'required|integer|distinct|exists:products,id',
+            'items.*.actual_quantity' => 'required|numeric|min:0',
+        ]);
+
+        $mode = (string) ($validated['mode'] ?? 'adjustment');
+        $documentDate = Carbon::parse($validated['document_date'] ?? now())->toDateString();
+        $requestNote = trim((string) ($validated['notes'] ?? ''));
+        $inputItems = collect($validated['items']);
+        $productIds = $inputItems
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        $stockRequest = $request->duplicate(['ids' => $productIds->implode(',')], null);
+        $stockRows = $this->buildInventoryProductsQuery($stockRequest)
+            ->get()
+            ->keyBy('id');
+
+        if ($stockRows->count() !== $productIds->count()) {
+            throw ValidationException::withMessages([
+                'items' => ['Có sản phẩm không tồn tại hoặc không thuộc kho hiện tại.'],
+            ]);
+        }
+
+        $lines = $inputItems
+            ->map(function (array $item) use ($stockRows) {
+                $productId = (int) $item['product_id'];
+                $product = $stockRows->get($productId);
+                $currentQuantity = InventoryQuantity::normalize($product?->computed_stock ?? 0);
+                $actualQuantity = InventoryQuantity::normalize($item['actual_quantity'] ?? 0);
+                $differenceQuantity = InventoryQuantity::normalize($actualQuantity - $currentQuantity);
+                $unitCost = round((float) ($product?->display_cost ?? $product?->cost_price ?? $product?->expected_cost ?? 0), 2);
+
+                return [
+                    'product_id' => $productId,
+                    'sku' => (string) ($product?->sku ?? ''),
+                    'name' => (string) ($product?->name ?? ''),
+                    'current_quantity' => $currentQuantity,
+                    'actual_quantity' => $actualQuantity,
+                    'difference_quantity' => $differenceQuantity,
+                    'unit_cost' => $unitCost,
+                ];
+            })
+            ->filter(fn (array $line) => !InventoryQuantity::zero((float) $line['difference_quantity']))
+            ->values();
+
+        if ($lines->isEmpty()) {
+            return response()->json([
+                'message' => 'Tồn kho đã khớp, không tạo phiếu điều chỉnh.',
+                'created' => [],
+                'skipped_count' => $inputItems->count(),
+            ]);
+        }
+
+        $runCode = 'KK-' . now()->format('YmdHis');
+        $baseNote = $mode === 'import'
+            ? "Phiếu tự động tạo từ chức năng điều chỉnh tồn kho ({$runCode}). Người dùng chọn kiểu điều chỉnh bằng phiếu nhập."
+            : "Phiếu tự động tạo từ chức năng điều chỉnh tồn kho ({$runCode}).";
+        $fullNote = $requestNote !== ''
+            ? $baseNote . "\nGhi chú kiểm kho: " . $requestNote
+            : $baseNote;
+        $lineNote = fn (array $line) => sprintf(
+            'Tồn hệ thống: %s. Tồn thực tế: %s. Chênh lệch: %s.',
+            InventoryQuantity::normalize($line['current_quantity']),
+            InventoryQuantity::normalize($line['actual_quantity']),
+            InventoryQuantity::normalize($line['difference_quantity'])
+        );
+
+        $created = [];
+
+        if ($mode === 'adjustment') {
+            $document = $this->inventoryService->createDocument('adjustment', [
+                'document_date' => $documentDate,
+                'notes' => $fullNote,
+                'adjustment_kind' => InventoryDocument::ADJUSTMENT_KIND_STOCK,
+                'adjustment_source' => InventoryDocument::ADJUSTMENT_SOURCE_MANUAL,
+                'meta' => [
+                    'managed_by' => 'stock_count_adjustment',
+                    'run_code' => $runCode,
+                    'selected_mode' => $mode,
+                ],
+                'items' => $lines->map(fn (array $line) => [
+                    'product_id' => $line['product_id'],
+                    'quantity' => $line['difference_quantity'],
+                    'unit_cost' => $line['unit_cost'],
+                    'stock_bucket' => 'sellable',
+                    'notes' => $lineNote($line),
+                    'meta' => [
+                        'stock_count_current_quantity' => $line['current_quantity'],
+                        'stock_count_actual_quantity' => $line['actual_quantity'],
+                        'stock_count_difference_quantity' => $line['difference_quantity'],
+                    ],
+                ])->all(),
+            ], $accountId, auth()->id());
+
+            $created[] = [
+                'type' => 'adjustment',
+                'id' => (int) $document->id,
+                'number' => $document->document_number,
+                'line_count' => $document->items()->count(),
+            ];
+        } else {
+            $positiveLines = $lines
+                ->filter(fn (array $line) => $line['difference_quantity'] > 0)
+                ->values();
+            $negativeLines = $lines
+                ->filter(fn (array $line) => $line['difference_quantity'] < 0)
+                ->values();
+
+            if ($positiveLines->isNotEmpty()) {
+                $completedStatus = $this->completedImportStatusForStockCount($accountId);
+                $import = $this->inventoryService->createImport([
+                    'inventory_import_status_id' => $completedStatus->id,
+                    'status_is_manual' => true,
+                    'import_date' => $documentDate,
+                    'notes' => $fullNote,
+                    'entry_mode' => 'stock_count_adjustment',
+                    'update_supplier_prices' => false,
+                    'items' => $positiveLines->map(fn (array $line) => [
+                        'product_id' => $line['product_id'],
+                        'quantity' => $line['difference_quantity'],
+                        'received_quantity' => $line['difference_quantity'],
+                        'unit_cost' => $line['unit_cost'],
+                        'notes' => $lineNote($line),
+                        'update_supplier_price' => false,
+                    ])->all(),
+                ], $accountId, auth()->id());
+
+                $created[] = [
+                    'type' => 'import',
+                    'id' => (int) $import->id,
+                    'number' => $import->import_number,
+                    'line_count' => $import->items()->count(),
+                ];
+            }
+
+            if ($negativeLines->isNotEmpty()) {
+                $document = $this->inventoryService->createDocument('adjustment', [
+                    'document_date' => $documentDate,
+                    'notes' => $fullNote . "\nCác dòng giảm tồn được tạo bằng phiếu điều chỉnh để không tạo lô nhập âm.",
+                    'adjustment_kind' => InventoryDocument::ADJUSTMENT_KIND_STOCK,
+                    'adjustment_source' => InventoryDocument::ADJUSTMENT_SOURCE_MANUAL,
+                    'meta' => [
+                        'managed_by' => 'stock_count_adjustment',
+                        'run_code' => $runCode,
+                        'selected_mode' => $mode,
+                        'created_for_negative_import_delta' => true,
+                    ],
+                    'items' => $negativeLines->map(fn (array $line) => [
+                        'product_id' => $line['product_id'],
+                        'quantity' => $line['difference_quantity'],
+                        'unit_cost' => $line['unit_cost'],
+                        'stock_bucket' => 'sellable',
+                        'notes' => $lineNote($line),
+                        'meta' => [
+                            'stock_count_current_quantity' => $line['current_quantity'],
+                            'stock_count_actual_quantity' => $line['actual_quantity'],
+                            'stock_count_difference_quantity' => $line['difference_quantity'],
+                        ],
+                    ])->all(),
+                ], $accountId, auth()->id());
+
+                $created[] = [
+                    'type' => 'adjustment',
+                    'id' => (int) $document->id,
+                    'number' => $document->document_number,
+                    'line_count' => $document->items()->count(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'message' => 'Đã tạo phiếu tự động từ chức năng điều chỉnh tồn kho.',
+            'created' => $created,
+            'adjusted_count' => $lines->count(),
+            'skipped_count' => max(0, $inputItems->count() - $lines->count()),
+            'run_code' => $runCode,
+        ], 201);
     }
 
     public function suppliers(Request $request)
@@ -1676,7 +1872,7 @@ class InventoryController extends Controller
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
-            $query->where(function ($builder) use ($search) {
+            $query->where(function ($builder) use ($search, $type) {
                 $this->applyCaseInsensitiveSearch($builder, [
                     'document_number',
                     'notes',
@@ -2256,33 +2452,7 @@ class InventoryController extends Controller
 
     public function exports(Request $request)
     {
-        $query = Order::query()
-            ->select([
-                'id',
-                'order_number',
-                'customer_name',
-                'customer_phone',
-                'shipping_address',
-                'status',
-                'source',
-                'type',
-                'notes',
-                'shipping_carrier_name',
-                'shipping_tracking_code',
-                'shipping_dispatched_at',
-                'created_at',
-            ])
-            ->with([
-                'items:id,order_id,product_id,product_name_snapshot,product_sku_snapshot,quantity,price,cost_total,cost_price',
-            ]);
-
-        $this->orderInventorySlipService->applyExportSlipStateFilter($query, 'created');
-
-        if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
-        }
-
-        $orders = $query->get();
+        $orders = $this->buildExportSlipOrdersQuery($request, true)->get();
         $exportOverviewMap = $this->orderInventorySlipService->buildExportOverviewMap($orders);
         $rows = $orders
             ->map(function (Order $order) use ($exportOverviewMap) {
@@ -2339,6 +2509,80 @@ class InventoryController extends Controller
         */
 
         return response()->json($paginated);
+    }
+
+    private function buildExportSlipOrdersQuery(Request $request, bool $includeListFilters): Builder
+    {
+        $query = Order::query()
+            ->select([
+                'id',
+                'order_number',
+                'customer_name',
+                'customer_phone',
+                'shipping_address',
+                'status',
+                'source',
+                'type',
+                'notes',
+                'account_id',
+                'shipping_carrier_name',
+                'shipping_tracking_code',
+                'shipping_dispatched_at',
+                'created_at',
+            ])
+            ->with([
+                'items:id,order_id,product_id,actual_product_id,product_name_snapshot,actual_product_name_snapshot,product_sku_snapshot,actual_product_sku_snapshot,quantity,price,cost_total,cost_price',
+            ]);
+
+        $this->orderInventorySlipService->applyExportSlipStateFilter($query, 'created');
+
+        $orderAccountIds = $this->inventoryOrderAccountIds($request);
+        if (!empty($orderAccountIds)) {
+            $query->whereIn('orders.account_id', $orderAccountIds);
+        }
+
+        $query->where(function ($builder) {
+            $builder
+                ->where('orders.order_kind', Order::KIND_OFFICIAL)
+                ->orWhereNull('orders.order_kind')
+                ->orWhere('orders.order_kind', '');
+        });
+
+        $this->applyExportInvalidStatusFilter($query, 'orders.status');
+
+        if ($includeListFilters && $request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+
+        return $query;
+    }
+
+    private function exportSlipProductTotalsForRequest(Request $request): array
+    {
+        $orders = $this->buildExportSlipOrdersQuery($request, false)->get();
+
+        return $this->orderInventorySlipService->buildExportProductTotalsMap($orders);
+    }
+
+    private function applyExportSlipTotalsToInventoryProduct(Product $product, array $exportSlipProductTotals): void
+    {
+        $slipTotalExported = InventoryQuantity::normalize($exportSlipProductTotals[(int) $product->id] ?? 0);
+        $totalExported = max(InventoryQuantity::normalize($product->total_exported ?? 0), $slipTotalExported);
+        $totalImported = InventoryQuantity::normalize($product->total_imported ?? 0);
+        $totalReturned = InventoryQuantity::normalize($product->total_returned ?? 0);
+        $totalDamaged = InventoryQuantity::normalize($product->total_damaged ?? 0);
+        $totalAdjusted = InventoryQuantity::normalize($product->total_adjusted ?? 0);
+        $pendingExportQuantity = InventoryQuantity::normalize($product->pending_export_quantity ?? 0);
+        $displayCost = round((float) ($product->display_cost ?? $product->cost_price ?? $product->expected_cost ?? 0), 2);
+        $computedStock = InventoryQuantity::normalize(
+            $totalImported - $totalExported + $totalReturned - $totalDamaged + $totalAdjusted
+        );
+        $actualStock = InventoryQuantity::normalize($computedStock - $pendingExportQuantity);
+
+        $product->setAttribute('total_exported', $totalExported);
+        $product->setAttribute('computed_stock', $computedStock);
+        $product->setAttribute('actual_stock', $actualStock);
+        $product->setAttribute('inventory_value', round($actualStock * $displayCost, 2));
     }
 
     private function transformExportOrderRow(Order $order, array $overview = []): array
@@ -3222,6 +3466,11 @@ class InventoryController extends Controller
             ->selectRaw('shipments.order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(shipment_items.qty), 0) as automatic_export_quantity')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
             ->groupBy('shipments.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
@@ -3237,7 +3486,11 @@ class InventoryController extends Controller
             ->selectRaw('orders.id as order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as automatic_export_quantity')
-            ->whereNotNull('order_items.product_id')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
             ->groupBy('orders.id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
@@ -3382,7 +3635,11 @@ class InventoryController extends Controller
             ->selectRaw('order_items.order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as ordered_quantity')
-            ->whereNotNull('order_items.product_id')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
@@ -3407,7 +3664,11 @@ class InventoryController extends Controller
             ->selectRaw('order_items.order_id')
             ->selectRaw('COALESCE(order_items.actual_product_id, order_items.product_id) AS product_id')
             ->selectRaw('COALESCE(SUM(order_items.quantity), 0) as pending_return_quantity')
-            ->whereNotNull('order_items.product_id')
+            ->where(function ($builder) {
+                $builder
+                    ->whereNotNull('order_items.actual_product_id')
+                    ->orWhereNotNull('order_items.product_id');
+            })
             ->groupBy('order_items.order_id')
             ->groupByRaw('COALESCE(order_items.actual_product_id, order_items.product_id)');
 
@@ -3786,6 +4047,33 @@ class InventoryController extends Controller
                     ->whereMonth('imports.import_date', (int) $monthNumber);
             }
         }
+    }
+
+    private function completedImportStatusForStockCount(int $accountId): InventoryImportStatus
+    {
+        $status = InventoryImportStatus::query()
+            ->where('affects_inventory', true)
+            ->where('is_active', true)
+            ->where(function ($query) use ($accountId) {
+                if ($accountId > 0) {
+                    $query->where('account_id', $accountId);
+                }
+
+                $query->orWhereNull('account_id');
+            })
+            ->orderByRaw('CASE WHEN account_id = ? THEN 0 ELSE 1 END', [$accountId])
+            ->orderByRaw("CASE WHEN code = 'hoan_thanh' THEN 0 ELSE 1 END")
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->first();
+
+        if (!$status) {
+            throw ValidationException::withMessages([
+                'mode' => ['Chưa có trạng thái phiếu nhập nào tác động tồn kho.'],
+            ]);
+        }
+
+        return $status;
     }
 
     private function applyDateRange($query, string $column, Request $request): void

@@ -56,7 +56,7 @@ import DailyProfitReport from './pages/admin/DailyProfitReport';
 import MonthlyProfitReport from './pages/admin/MonthlyProfitReport';
 import ProfitCenterManager from './pages/admin/ProfitCenterManager';
 import RevenueReconciliationReport from './pages/admin/RevenueReconciliationReport';
-import PayrollManagement from './pages/admin/PayrollManagement';
+import HumanResourcesManagement from './pages/admin/HumanResourcesManagement';
 import FloatingContactButtons from './components/FloatingContactButtons';
 
 import { AuthProvider } from './context/AuthContext';
@@ -201,7 +201,7 @@ function App() {
                 <Route path="finance/monthly-profit" element={<MonthlyProfitReport />} />
                 <Route path="finance/profit-centers" element={<ProfitCenterManager />} />
                 <Route path="finance/revenue-reconciliation" element={<RevenueReconciliationReport />} />
-                <Route path="payroll" element={<PayrollManagement />} />
+                <Route path="payroll" element={<HumanResourcesManagement />} />
                 <Route path="finance/*" element={<Navigate to="/admin" replace />} />
                 <Route path="order-status-settings" element={<OrderStatusSettings />} />
                 <Route path="carrier-mappings" element={<Navigate to="/admin/shipping-settings?tab=mapping" replace />} />

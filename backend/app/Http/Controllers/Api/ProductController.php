@@ -4512,7 +4512,19 @@ class ProductController extends Controller
     protected function compactCodeLooseLike(string $compactCode): ?string
     {
         if (!preg_match('/^([a-z]{2,})(\d+)$/', $compactCode, $matches)) {
-            return null;
+            preg_match_all('/[a-z]+|\d+/i', $compactCode, $segmentMatches);
+            $segments = collect($segmentMatches[0] ?? [])
+                ->map(fn ($segment) => trim((string) $segment))
+                ->filter(fn ($segment) => $segment !== '')
+                ->values();
+
+            if ($segments->count() < 2) {
+                return null;
+            }
+
+            return '%' . $segments
+                ->map(fn (string $segment) => $this->escapeLike($segment))
+                ->implode('%') . '%';
         }
 
         return '%' . $this->escapeLike($matches[1]) . '%' . $this->escapeLike($matches[2]) . '%';
@@ -4600,9 +4612,8 @@ class ProductController extends Controller
     {
         $accountId = (int) ($inventoryAccountIdOverride ?? $this->inventoryAccountId($request) ?? 0);
 
-        // Compute real-time base stock from inventory_batches (same source of truth
-        // as InventoryService::refreshProducts). This avoids stale products.stock_quantity
-        // which can diverge when stock is set manually via product import or the edit form.
+        // Order refresh uses the product snapshot as its baseline so manual stock edits
+        // are reflected immediately; detailed inventory reports compute slip history.
         $batchStockSub = DB::table('inventory_batches')
             ->selectRaw('product_id')
             ->selectRaw('COALESCE(SUM(remaining_quantity), 0) AS batch_available')
@@ -4644,8 +4655,7 @@ class ProductController extends Controller
             $join->on('pending_returns.product_id', '=', 'products.id');
         });
 
-        // Base stock = batch available stock minus any oversold reservations
-        $baseStockSql = '(COALESCE(inv_batch_stock.batch_available, 0) - COALESCE(inv_oversold_reserve.oversold_qty, 0))';
+        $baseStockSql = 'COALESCE(products.stock_quantity, 0)';
         $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
         $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
         // available_to_sell = base_stock - pending_export (negative allowed for pre-sales / back-orders)
@@ -5185,7 +5195,7 @@ class ProductController extends Controller
         $nameContainsLike = ($includeNameMatches && $normalizedName !== '')
             ? '%' . $this->escapeLike($normalizedName) . '%'
             : null;
-        if ($hasExactCodeMatch) {
+        if ($hasExactCodeMatch && !$includeNameMatches) {
             $searchRankingParts = [
                 "CASE WHEN {$skuExpr} = ? THEN 5000 ELSE 0 END",
             ];
@@ -7386,8 +7396,8 @@ class ProductController extends Controller
                             : ($bundleItem->inventory_unit_id !== null ? (int) $bundleItem->inventory_unit_id : null),
                         'unit_name' => $resolvedProduct->unit?->name ?? $bundleItem->unit?->name,
                         'quantity' => max(1, (int) ($bundleItem->pivot->quantity ?? 1)),
-                        'price' => (float) ($bundleItem->pivot->price
-                            ?? $resolvedProduct->price
+                        'price' => (float) ($resolvedProduct->price
+                            ?? $bundleItem->pivot->price
                             ?? 0),
                         'expected_cost' => $resolvedProduct->expected_cost !== null ? (float) $resolvedProduct->expected_cost : null,
                         'cost_price' => (float) ($bundleItem->pivot->cost_price
@@ -8149,44 +8159,34 @@ class ProductController extends Controller
                 ->selectRaw("{$variantSortProjection['number_value']} AS sort_numeric_value");
 
             $searchMatches = $directMatchQuery->toBase()->unionAll($variantMatchQuery->toBase());
-            $collapsedMatches = DB::query()
+            $searchMatchRows = DB::query()
                 ->fromSub($searchMatches, 'search_matches')
-                ->leftJoin('product_links as matched_variant_parent_links', function ($join) use ($configurableParentIdsQuery) {
-                    $join->on('matched_variant_parent_links.linked_product_id', '=', 'search_matches.id')
-                        ->where('matched_variant_parent_links.link_type', 'super_link')
-                        // Only collapse to a parent that is still visible in the
-                        // current list scope. If the configurable parent was
-                        // soft-deleted, keep the matching child id so search
-                        // results do not point at an empty row.
-                        ->whereIn('matched_variant_parent_links.product_id', $configurableParentIdsQuery);
-                })
-                ->selectRaw('COALESCE(matched_variant_parent_links.product_id, search_matches.id) AS id')
+                ->selectRaw('search_matches.id AS id')
                 ->selectRaw('search_matches.search_score')
                 ->selectRaw('search_matches.sort_empty_rank')
                 ->selectRaw('search_matches.sort_text_value')
                 ->selectRaw('search_matches.sort_numeric_value');
 
-            $collapsedMatchRows = DB::query()
-                ->fromSub($collapsedMatches, 'collapsed_search_matches')
+            $dedupeMatchRows = DB::query()
+                ->fromSub($searchMatchRows, 'search_match_rows')
                 ->select([
-                    'collapsed_search_matches.id',
-                    'collapsed_search_matches.search_score',
-                    'collapsed_search_matches.sort_empty_rank',
-                    'collapsed_search_matches.sort_text_value',
-                    'collapsed_search_matches.sort_numeric_value',
+                    'search_match_rows.id',
+                    'search_match_rows.search_score',
+                    'search_match_rows.sort_empty_rank',
+                    'search_match_rows.sort_text_value',
+                    'search_match_rows.sort_numeric_value',
                 ]);
 
-            // Collapse variant hits back to their configurable parent before pagination.
-            // The admin table already renders variants inside the expanded parent row,
-            // so keeping child rows at the top level causes duplicate output.
+            // Keep matching variants as renderable rows while still deduplicating
+            // direct and relation matches that point at the same product id.
             if ($directSortProjection['mode'] === 'text') {
-                $collapsedMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY collapsed_search_matches.id ORDER BY collapsed_search_matches.search_score DESC, collapsed_search_matches.sort_empty_rank ASC, collapsed_search_matches.sort_text_value {$order}, collapsed_search_matches.id DESC) AS match_rank");
+                $dedupeMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY search_match_rows.id ORDER BY search_match_rows.search_score DESC, search_match_rows.sort_empty_rank ASC, search_match_rows.sort_text_value {$order}, search_match_rows.id DESC) AS match_rank");
             } else {
-                $collapsedMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY collapsed_search_matches.id ORDER BY collapsed_search_matches.search_score DESC, collapsed_search_matches.sort_numeric_value {$order}, collapsed_search_matches.id DESC) AS match_rank");
+                $dedupeMatchRows->selectRaw("ROW_NUMBER() OVER (PARTITION BY search_match_rows.id ORDER BY search_match_rows.search_score DESC, search_match_rows.sort_numeric_value {$order}, search_match_rows.id DESC) AS match_rank");
             }
 
             $deduplicatedMatches = DB::query()
-                ->fromSub($collapsedMatchRows, 'collapsed_matches')
+                ->fromSub($dedupeMatchRows, 'deduped_search_matches')
                 ->where('match_rank', 1);
 
             $rankedMatches = DB::query()
@@ -11324,40 +11324,282 @@ class ProductController extends Controller
         );
     }
 
+    private function normalizeRefreshBundleOptionUid($value): ?string
+    {
+        $uid = trim((string) $value);
+        if (str_starts_with($uid, 'uid:')) {
+            $uid = substr($uid, 4);
+        }
+
+        return $this->normalizeBundleOptionUid($uid);
+    }
+
+    private function normalizeRefreshBundleOptionText($value): string
+    {
+        return Str::lower(Str::squish((string) $value));
+    }
+
+    private function refreshBundleOptionMatches(array $option, array $requestedItem): bool
+    {
+        $requestedUid = $this->normalizeRefreshBundleOptionUid($requestedItem['bundle_option_uid'] ?? null);
+        $optionUid = $this->normalizeRefreshBundleOptionUid($option['bundle_option_uid'] ?? $option['uid'] ?? null);
+        $optionKey = trim((string) ($option['key'] ?? ''));
+        $requestedKey = trim((string) ($requestedItem['bundle_option_key'] ?? ''));
+
+        if ($requestedUid !== null) {
+            return $optionUid === $requestedUid
+                || $optionKey === 'uid:' . $requestedUid
+                || $optionKey === $requestedUid;
+        }
+
+        if ($requestedKey !== '') {
+            if ($optionKey === $requestedKey) {
+                return true;
+            }
+
+            if ($optionUid !== null && in_array($requestedKey, [$optionUid, 'uid:' . $optionUid], true)) {
+                return true;
+            }
+        }
+
+        $requestedPostId = (int) ($requestedItem['bundle_option_post_id'] ?? 0);
+        if ($requestedPostId > 0 && (int) ($option['option_post_id'] ?? 0) === $requestedPostId) {
+            return true;
+        }
+
+        $requestedTitle = $this->normalizeRefreshBundleOptionText($requestedItem['bundle_option_title'] ?? '');
+        if ($requestedTitle !== '') {
+            return in_array($requestedTitle, [
+                $this->normalizeRefreshBundleOptionText($option['option_title'] ?? ''),
+                $this->normalizeRefreshBundleOptionText($option['option_post_title'] ?? ''),
+                $this->normalizeRefreshBundleOptionText($option['raw_option_title'] ?? ''),
+            ], true);
+        }
+
+        return false;
+    }
+
+    private function findRefreshBundleOption(array $requestedItem, array $bundleOptionsByParentId): ?array
+    {
+        $parentId = (int) ($requestedItem['bundle_parent_id'] ?: $requestedItem['product_id']);
+        $options = $parentId > 0 ? ($bundleOptionsByParentId[$parentId] ?? []) : [];
+
+        if (empty($options)) {
+            return null;
+        }
+
+        foreach ($options as $option) {
+            if ($this->refreshBundleOptionMatches($option, $requestedItem)) {
+                return $option;
+            }
+        }
+
+        return count($options) === 1 ? $options[0] : null;
+    }
+
+    private function appendInventorySnapshotToBundleItems(array $items, array $inventorySnapshotMap): array
+    {
+        return collect($items)
+            ->map(function (array $bundleItem) use ($inventorySnapshotMap) {
+                return array_merge(
+                    $bundleItem,
+                    $this->resolveInventorySnapshotPayload(
+                        $inventorySnapshotMap,
+                        (int) ($bundleItem['product_id'] ?? $bundleItem['id'] ?? 0)
+                    )
+                );
+            })
+            ->values()
+            ->all();
+    }
+
+    private function buildRefreshBundleOptionPickerPayload(
+        Product $parentProduct,
+        array $option,
+        array $requestedItem,
+        array $inventorySnapshotMap,
+        Collection $sourceContexts
+    ): array {
+        $parentId = (int) $parentProduct->id;
+        $items = $this->appendInventorySnapshotToBundleItems((array) ($option['items'] ?? []), $inventorySnapshotMap);
+        $subtotal = collect($items)->sum(
+            fn (array $bundleItem) => ((float) ($bundleItem['price'] ?? 0)) * max(1, (int) ($bundleItem['quantity'] ?? 1))
+        );
+        $costTotal = collect($items)->sum(
+            fn (array $bundleItem) => ((float) ($bundleItem['cost_price'] ?? $bundleItem['expected_cost'] ?? 0)) * max(1, (int) ($bundleItem['quantity'] ?? 1))
+        );
+        $optionPrice = (float) ($option['bundle_option_discounted_price'] ?? $option['subtotal'] ?? $subtotal ?? 0);
+        $entryKey = 'bundle-option-' . $parentId . '-' . trim((string) ($option['key'] ?? 'default'));
+        $sourcePayload = $this->pickerSourcePayloadForProduct(
+            $parentProduct,
+            $sourceContexts,
+            $requestedItem['product_source_account_id'] ?? null
+        );
+
+        return [
+            'id' => $entryKey,
+            'entry_id' => $entryKey,
+            'entry_kind' => 'bundle_option',
+            'product_id' => $parentId,
+            'target_product_id' => $parentId,
+            'account_id' => (int) ($parentProduct->account_id ?? 0),
+            'sku' => $parentProduct->sku,
+            'display_sku' => $parentProduct->sku,
+            'name' => $parentProduct->name,
+            'display_name' => trim((string) $parentProduct->name . ' - ' . (string) ($option['option_title'] ?? '')),
+            'price' => $optionPrice,
+            'expected_cost' => $costTotal,
+            'cost_price' => $costTotal,
+            'status' => (bool) $parentProduct->status,
+            'type' => $parentProduct->type,
+            'bundle_title' => $parentProduct->bundle_title,
+            'bundle_config_title' => $parentProduct->bundle_title,
+            'unit_name' => $parentProduct->unit?->name,
+            'bundle_parent_id' => $parentId,
+            'bundle_parent_name' => $parentProduct->name,
+            'bundle_option_uid' => $option['bundle_option_uid'] ?? $option['uid'] ?? null,
+            'bundle_option_key' => $option['key'] ?? null,
+            'bundle_option_title' => $option['option_title'] ?? null,
+            'raw_bundle_option_title' => $option['raw_option_title'] ?? null,
+            'bundle_option_status' => $option['bundle_option_status'] ?? self::BUNDLE_OPTION_STATUS_VISIBLE,
+            'option_post_id' => $option['option_post_id'] ?? null,
+            'option_post_title' => $option['option_post_title'] ?? null,
+            'bundle_option_total_price' => (float) ($option['bundle_option_total_price'] ?? $subtotal),
+            'bundle_option_discounted_price' => $optionPrice,
+            'bundle_items' => $items,
+            'bundle_item_count' => count($items),
+            'bundle_quantity_total' => collect($items)->sum(fn (array $bundleItem) => (int) ($bundleItem['quantity'] ?? 0)),
+        ] + $sourcePayload + $this->resolveInventorySnapshotPayload($inventorySnapshotMap, $parentId);
+    }
+
+    private function buildRefreshBundleLinePayload(
+        array $requestedItem,
+        Product $parentProduct,
+        array $option,
+        array $inventorySnapshotMap
+    ): ?array {
+        $requestedProductId = (int) $requestedItem['product_id'];
+        $requestedBaseProductId = (int) ($requestedItem['bundle_item_base_product_id'] ?? 0);
+        $bundleItem = collect($option['items'] ?? [])
+            ->first(function (array $item) use ($requestedProductId, $requestedBaseProductId) {
+                $itemProductId = (int) ($item['product_id'] ?? $item['id'] ?? 0);
+                $itemBaseProductId = (int) ($item['base_product_id'] ?? 0);
+
+                return $itemProductId === $requestedProductId
+                    || ($requestedBaseProductId > 0 && $itemBaseProductId === $requestedBaseProductId)
+                    || ($itemBaseProductId > 0 && $itemBaseProductId === $requestedProductId);
+            });
+
+        if (!$bundleItem) {
+            return null;
+        }
+
+        $productId = (int) ($bundleItem['product_id'] ?? $bundleItem['id'] ?? $requestedProductId);
+
+        return array_merge(
+            $bundleItem,
+            [
+                'entry_kind' => 'bundle_item',
+                'bundle_parent_id' => (int) $parentProduct->id,
+                'bundle_parent_name' => $parentProduct->name,
+                'bundle_option_uid' => $option['bundle_option_uid'] ?? $option['uid'] ?? null,
+                'bundle_option_key' => $option['key'] ?? null,
+                'bundle_option_title' => $option['option_title'] ?? null,
+                'bundle_option_post_id' => $option['option_post_id'] ?? null,
+                'bundle_option_post_title' => $option['option_post_title'] ?? null,
+                'bundle_item_base_product_id' => (int) ($bundleItem['base_product_id'] ?? 0) ?: null,
+            ],
+            $this->resolveInventorySnapshotPayload($inventorySnapshotMap, $productId)
+        );
+    }
+
     public function refreshOrderItems(Request $request)
     {
         $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
+            'items.*.entry_kind' => 'nullable|string',
             'items.*.product_source_account_id' => 'nullable|integer',
             'items.*.source_account_id' => 'nullable|integer',
             'items.*.inventory_source_account_id' => 'nullable|integer',
             'items.*.sku' => 'nullable|string|max:120',
             'items.*.name' => 'nullable|string|max:255',
+            'items.*.bundle_parent_id' => 'nullable|integer',
+            'items.*.bundle_option_uid' => 'nullable|string|max:80',
+            'items.*.bundle_option_key' => 'nullable|string|max:255',
+            'items.*.bundle_option_title' => 'nullable|string|max:255',
+            'items.*.bundle_option_post_id' => 'nullable|integer',
+            'items.*.bundle_item_base_product_id' => 'nullable|integer',
         ]);
 
         $requestedItems = collect($validated['items'])
             ->map(function (array $item) {
+                $entryKind = Str::lower(Str::squish((string) ($item['entry_kind'] ?? 'product')));
+                $entryKind = $entryKind === 'bundle_option' ? 'bundle_option' : 'product';
+
                 return [
                     'product_id' => (int) $item['product_id'],
+                    'entry_kind' => $entryKind,
                     'product_source_account_id' => (int) ($item['product_source_account_id'] ?? $item['source_account_id'] ?? 0),
                     'inventory_source_account_id' => (int) ($item['inventory_source_account_id'] ?? 0),
                     'sku' => trim((string) ($item['sku'] ?? '')),
                     'name' => trim((string) ($item['name'] ?? '')),
+                    'bundle_parent_id' => (int) ($item['bundle_parent_id'] ?? 0),
+                    'bundle_option_uid' => trim((string) ($item['bundle_option_uid'] ?? '')),
+                    'bundle_option_key' => trim((string) ($item['bundle_option_key'] ?? '')),
+                    'bundle_option_title' => trim((string) ($item['bundle_option_title'] ?? '')),
+                    'bundle_option_post_id' => (int) ($item['bundle_option_post_id'] ?? 0),
+                    'bundle_item_base_product_id' => (int) ($item['bundle_item_base_product_id'] ?? 0),
                 ];
             })
             ->filter(fn (array $item) => $item['product_id'] > 0)
-            ->unique('product_id')
+            ->unique(function (array $item) {
+                if ($item['entry_kind'] === 'bundle_option') {
+                    return implode(':', [
+                        'bundle',
+                        $item['bundle_parent_id'] ?: $item['product_id'],
+                        $item['bundle_option_uid'],
+                        $item['bundle_option_key'],
+                        $item['bundle_option_post_id'],
+                        $item['bundle_option_title'],
+                        $item['bundle_item_base_product_id'],
+                        $item['product_id'],
+                    ]);
+                }
+
+                return 'product:' . $item['product_id'];
+            })
+            ->values();
+
+        $bundleParentIds = $requestedItems
+            ->filter(fn (array $item) => $item['entry_kind'] === 'bundle_option')
+            ->map(fn (array $item) => (int) ($item['bundle_parent_id'] ?: $item['product_id']))
+            ->filter()
+            ->unique()
             ->values();
 
         $sourceContexts = $this->resolveSourceContextsForAccountIds(
             $request,
             $requestedItems->pluck('product_source_account_id')->filter()->all()
         );
+        $sourceCatalogAccountIds = $sourceContexts
+            ->pluck('catalog_account_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+        $productIdsToLoad = $requestedItems
+            ->pluck('product_id')
+            ->merge($bundleParentIds)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
         $products = Product::withTrashed()
             ->withoutGlobalScope('account_id')
-            ->select(['id', 'account_id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id'])
+            ->select(['id', 'account_id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id', 'type', 'bundle_title', 'category_id', 'profit_center_id'])
             ->with([
                 'unit:id,name',
                 'attributeValues:id,product_id,attribute_id,value',
@@ -11367,9 +11609,42 @@ class ProductController extends Controller
                     ->select('products.id', 'products.account_id', 'products.name', 'products.inventory_unit_id')
                     ->with(['unit:id,name']),
             ])
-            ->whereIn('id', $requestedItems->pluck('product_id')->all())
+            ->whereIn('id', $productIdsToLoad)
             ->get()
             ->keyBy('id');
+
+        $bundleProducts = new \Illuminate\Database\Eloquent\Collection(
+            $bundleParentIds
+                ->map(fn (int $productId) => $products->get($productId))
+                ->filter(fn ($product) => $product instanceof Product && $product->type === 'bundle')
+                ->values()
+                ->all()
+        );
+
+        $bundleOptionsByParentId = [];
+        if ($bundleProducts->isNotEmpty()) {
+            $this->loadPickerBundleItems(
+                $bundleProducts,
+                null,
+                null,
+                [],
+                $sourceCatalogAccountIds
+            );
+            $this->appendBundleOptionPostMetaToProducts($bundleProducts);
+            $selectedBundleVariantMap = $this->loadPickerBundleSelectedVariantMap(
+                $bundleProducts,
+                null,
+                $sourceCatalogAccountIds
+            );
+
+            foreach ($bundleProducts as $bundleProduct) {
+                $bundleOptionsByParentId[(int) $bundleProduct->id] = $this->pickerBundleOptions(
+                    $bundleProduct,
+                    $selectedBundleVariantMap,
+                    $sourceContexts
+                );
+            }
+        }
 
         $inventorySourceAccountByProductId = $requestedItems
             ->filter(fn (array $item) => (int) ($item['inventory_source_account_id'] ?? 0) > 0)
@@ -11394,9 +11669,29 @@ class ProductController extends Controller
             );
         }
 
+        foreach ($bundleOptionsByParentId as $bundleOptions) {
+            foreach ($bundleOptions as $bundleOption) {
+                foreach (($bundleOption['items'] ?? []) as $bundleItem) {
+                    $bundleItemProductId = (int) ($bundleItem['product_id'] ?? $bundleItem['id'] ?? 0);
+                    $bundleItemInventorySourceAccountId = (int) ($bundleItem['inventory_source_account_id'] ?? 0);
+                    if ($bundleItemProductId > 0 && $bundleItemInventorySourceAccountId > 0) {
+                        $inventorySourceAccountByProductId[$bundleItemProductId] = $bundleItemInventorySourceAccountId;
+                    }
+                }
+            }
+        }
+
+        $bundleOptionProductIds = collect($bundleOptionsByParentId)
+            ->flatMap(fn (array $bundleOptions) => collect($bundleOptions)
+                ->flatMap(fn (array $bundleOption) => collect($bundleOption['items'] ?? [])->pluck('product_id')))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
         $inventorySnapshotMap = $this->buildInventorySnapshotMap(
             $request,
-            $requestedItems->pluck('product_id')->all(),
+            $requestedItems->pluck('product_id')->merge($bundleParentIds)->merge($bundleOptionProductIds)->all(),
             $inventorySourceAccountByProductId
         );
 
@@ -11405,6 +11700,41 @@ class ProductController extends Controller
 
         foreach ($requestedItems as $requestedItem) {
             $productId = $requestedItem['product_id'];
+            if ($requestedItem['entry_kind'] === 'bundle_option') {
+                $bundleParentId = (int) ($requestedItem['bundle_parent_id'] ?: $requestedItem['product_id']);
+                /** @var Product|null $bundleParent */
+                $bundleParent = $products->get($bundleParentId);
+                $bundleOption = $this->findRefreshBundleOption($requestedItem, $bundleOptionsByParentId);
+
+                if ($bundleParent && $bundleOption) {
+                    if ($bundleParentId === (int) $requestedItem['product_id']) {
+                        $items[] = $this->buildRefreshBundleOptionPickerPayload(
+                            $bundleParent,
+                            $bundleOption,
+                            $requestedItem,
+                            $inventorySnapshotMap,
+                            $sourceContexts
+                        );
+                    } else {
+                        $bundleLinePayload = $this->buildRefreshBundleLinePayload(
+                            $requestedItem,
+                            $bundleParent,
+                            $bundleOption,
+                            $inventorySnapshotMap
+                        );
+
+                        if ($bundleLinePayload !== null) {
+                            $items[] = $bundleLinePayload;
+                            continue;
+                        }
+                    }
+
+                    if ($bundleParentId === (int) $requestedItem['product_id']) {
+                        continue;
+                    }
+                }
+            }
+
             /** @var Product|null $product */
             $product = $products->get($productId);
 

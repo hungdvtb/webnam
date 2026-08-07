@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\PayrollAdjustment;
 use App\Models\PayrollAttendanceRecord;
 use App\Models\PayrollEmployee;
+use App\Models\PayrollSalaryRate;
 use App\Models\PayrollScheduleRegistration;
 use App\Models\PayrollUserScope;
 use App\Models\PayrollWorkShift;
@@ -29,7 +31,10 @@ class PayrollController extends Controller
         $this->ensureDefaultShifts($accountId);
 
         $employeeQuery = PayrollEmployee::query()
-            ->with(['user:id,name,email'])
+            ->with([
+                'user:id,name,email',
+                'salaryRates' => fn ($query) => $query->orderByDesc('effective_from')->orderByDesc('id'),
+            ])
             ->orderBy('department')
             ->orderBy('employee_code');
 
@@ -58,10 +63,18 @@ class PayrollController extends Controller
             ->get();
 
         $attendanceRecords = PayrollAttendanceRecord::query()
-            ->with(['employee:id,employee_code,full_name,department,salary_type,salary_amount,standard_work_units', 'shift:id,shift_code,shift_name,start_time,end_time,standard_hours,default_work_units,wage_multiplier'])
+            ->with(['employee.salaryRates' => fn ($query) => $query->orderByDesc('effective_from')->orderByDesc('id'), 'employee:id,employee_code,full_name,department,salary_type,salary_amount,salary_effective_from,standard_work_units', 'shift:id,shift_code,shift_name,start_time,end_time,standard_hours,default_work_units,wage_multiplier'])
             ->whereBetween('work_date', [$startDate, $endDate])
             ->whereIn('payroll_employee_id', $employeeIds)
             ->orderBy('work_date')
+            ->orderBy('payroll_employee_id')
+            ->get();
+
+        $adjustments = PayrollAdjustment::query()
+            ->with(['employee:id,employee_code,full_name,department'])
+            ->whereBetween('adjustment_date', [$startDate, $endDate])
+            ->whereIn('payroll_employee_id', $employeeIds)
+            ->orderBy('adjustment_date')
             ->orderBy('payroll_employee_id')
             ->get();
 
@@ -104,7 +117,8 @@ class PayrollController extends Controller
                 'shifts' => $shifts,
                 'schedules' => $schedules,
                 'attendance_records' => $this->serializeAttendanceRecords($attendanceRecords, $employeesById, $shiftsById, $canViewSalary),
-                'payroll_summary' => $this->buildPayrollSummary($attendanceRecords, $employeesById, $shiftsById, $canViewSalary),
+                'adjustments' => $this->serializeAdjustments($adjustments, $canViewSalary),
+                'payroll_summary' => $this->buildPayrollSummary($attendanceRecords, $employeesById, $shiftsById, $canViewSalary, $adjustments),
                 'user_scopes' => $userScopes,
             ],
         ]);
@@ -123,34 +137,77 @@ class PayrollController extends Controller
             'employees.*.phone' => 'nullable|string|max:50',
             'employees.*.address' => 'nullable|string|max:1000',
             'employees.*.identity_card_image_url' => 'nullable|string|max:1000',
+            'employees.*.identity_card_front_image_url' => 'nullable|string|max:1000',
+            'employees.*.identity_card_back_image_url' => 'nullable|string|max:1000',
             'employees.*.department' => 'nullable|string|max:255',
             'employees.*.position' => 'nullable|string|max:255',
             'employees.*.salary_type' => 'nullable|string|max:30',
             'employees.*.salary_amount' => 'nullable|numeric',
+            'employees.*.salary_effective_from' => 'nullable|date',
+            'employees.*.salary_rates' => 'nullable|array',
+            'employees.*.salary_rates.*.id' => 'nullable|integer',
+            'employees.*.salary_rates.*.salary_type' => 'nullable|string|max:30',
+            'employees.*.salary_rates.*.salary_amount' => 'nullable|numeric',
+            'employees.*.salary_rates.*.standard_work_units' => 'nullable|numeric',
+            'employees.*.salary_rates.*.effective_from' => 'nullable|date',
+            'employees.*.salary_rates.*.notes' => 'nullable|string|max:255',
+            'employees.*.deleted_salary_rate_ids' => 'nullable|array',
+            'employees.*.deleted_salary_rate_ids.*' => 'integer',
             'employees.*.standard_work_units' => 'nullable|numeric',
             'employees.*.lunch_allowance' => 'nullable|numeric',
             'employees.*.bonus_policy' => 'nullable|string|max:255',
             'employees.*.pay_schedule' => 'nullable|string|max:255',
             'employees.*.raise_plan' => 'nullable|string|max:255',
             'employees.*.bank_account_note' => 'nullable|string|max:255',
+            'employees.*.bank_qr_image_url' => 'nullable|string|max:1000',
             'employees.*.status' => 'nullable|string|max:30',
             'employees.*.notes' => 'nullable|string',
         ])['employees'];
 
-        DB::transaction(function () use ($rows, $accountId) {
+        DB::transaction(function () use ($rows, $accountId, $request) {
             foreach ($rows as $row) {
                 $employeeCode = trim((string) ($row['employee_code'] ?? ''));
                 $fullName = trim((string) ($row['full_name'] ?? ''));
 
-                if ($employeeCode === '' && $fullName === '') {
+                $hasProfileData = collect([
+                    $row['phone'] ?? null,
+                    $row['address'] ?? null,
+                    $row['identity_card_image_url'] ?? null,
+                    $row['identity_card_front_image_url'] ?? null,
+                    $row['identity_card_back_image_url'] ?? null,
+                    $row['user_id'] ?? null,
+                    $row['salary_amount'] ?? null,
+                    $row['salary_effective_from'] ?? null,
+                    $row['bank_account_note'] ?? null,
+                    $row['bank_qr_image_url'] ?? null,
+                    $row['notes'] ?? null,
+                ])->contains(fn ($value) => trim((string) ($value ?? '')) !== '');
+
+                if ($fullName === '' && !$hasProfileData) {
                     continue;
                 }
 
-                if ($employeeCode === '' || $fullName === '') {
+                if ($fullName === '') {
                     throw ValidationException::withMessages([
-                        'employees' => 'Mỗi dòng nhân sự cần có đủ Mã nhân viên và Họ tên.',
+                        'employees' => 'Mỗi dòng nhân sự cần có Tên nhân viên.',
                     ]);
                 }
+
+                $employee = !empty($row['id'])
+                    ? PayrollEmployee::query()->where('account_id', $accountId)->findOrFail($row['id'])
+                    : null;
+
+                if ($employee && $employeeCode === '') {
+                    $employeeCode = $employee->employee_code;
+                }
+
+                if ($employeeCode === '') {
+                    $employeeCode = $this->nextEmployeeCode($accountId);
+                }
+
+                $salaryEffectiveFrom = !empty($row['salary_effective_from'])
+                    ? Carbon::parse($row['salary_effective_from'])->toDateString()
+                    : ($employee?->salary_effective_from?->toDateString() ?: now()->toDateString());
 
                 $payload = [
                     'account_id' => $accountId,
@@ -160,33 +217,51 @@ class PayrollController extends Controller
                     'phone' => $this->nullableTrim($row['phone'] ?? null),
                     'address' => $this->nullableTrim($row['address'] ?? null),
                     'identity_card_image_url' => $this->nullableTrim($row['identity_card_image_url'] ?? null),
+                    'identity_card_front_image_url' => $this->nullableTrim($row['identity_card_front_image_url'] ?? null),
+                    'identity_card_back_image_url' => $this->nullableTrim($row['identity_card_back_image_url'] ?? null),
                     'department' => $this->nullableTrim($row['department'] ?? null),
                     'position' => $this->nullableTrim($row['position'] ?? null),
                     'salary_type' => $row['salary_type'] ?? 'theo_ca',
                     'salary_amount' => $this->number($row['salary_amount'] ?? 0),
+                    'salary_effective_from' => $salaryEffectiveFrom,
                     'standard_work_units' => $this->nullableNumber($row['standard_work_units'] ?? null),
                     'lunch_allowance' => $this->number($row['lunch_allowance'] ?? 0),
                     'bonus_policy' => $this->nullableTrim($row['bonus_policy'] ?? null),
                     'pay_schedule' => $this->nullableTrim($row['pay_schedule'] ?? null),
                     'raise_plan' => $this->nullableTrim($row['raise_plan'] ?? null),
                     'bank_account_note' => $this->nullableTrim($row['bank_account_note'] ?? null),
+                    'bank_qr_image_url' => $this->nullableTrim($row['bank_qr_image_url'] ?? null),
                     'status' => $row['status'] ?? 'Đang làm',
                     'notes' => $this->nullableTrim($row['notes'] ?? null),
                 ];
 
-                $employee = !empty($row['id'])
-                    ? PayrollEmployee::query()->where('account_id', $accountId)->findOrFail($row['id'])
-                    : PayrollEmployee::query()->where('account_id', $accountId)->where('employee_code', $employeeCode)->first();
+                if (!$employee) {
+                    $employee = PayrollEmployee::query()
+                        ->where('account_id', $accountId)
+                        ->where('employee_code', $employeeCode)
+                        ->first();
+                }
 
                 if ($employee) {
                     $employee->update($payload);
                 } else {
-                    PayrollEmployee::create($payload);
+                    $employee = PayrollEmployee::create($payload);
+                }
+
+                if ($employee) {
+                    $this->syncSalaryRates(
+                        $accountId,
+                        $employee,
+                        $payload,
+                        $row['salary_rates'] ?? [],
+                        $row['deleted_salary_rate_ids'] ?? [],
+                        $request->user()?->id
+                    );
                 }
             }
         });
 
-        return response()->json(['status' => 'success', 'message' => 'Đã lưu bảng hệ thống lương.']);
+        return response()->json(['status' => 'success', 'message' => 'Đã lưu danh sách nhân viên.']);
     }
 
     public function syncShifts(Request $request)
@@ -390,6 +465,75 @@ class PayrollController extends Controller
         });
 
         return response()->json(['status' => 'success', 'message' => 'Đã lưu bảng chấm công.']);
+    }
+
+    public function syncAdjustments(Request $request)
+    {
+        $accountId = $this->activeAccountId($request);
+        $scope = $this->resolvePayrollScope($accountId, $request->user());
+        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền sửa khoản cộng trừ lương.');
+
+        $rows = $request->validate([
+            'adjustments' => 'required|array',
+            'adjustments.*.id' => 'nullable|integer',
+            'adjustments.*.adjustment_date' => 'nullable|date',
+            'adjustments.*.payroll_employee_id' => 'nullable|integer|exists:payroll_employees,id',
+            'adjustments.*.adjustment_type' => 'nullable|string|max:30',
+            'adjustments.*.amount' => 'nullable|numeric',
+            'adjustments.*.notes' => 'nullable|string',
+        ])['adjustments'];
+
+        DB::transaction(function () use ($rows, $accountId, $request) {
+            foreach ($rows as $row) {
+                if (empty($row['adjustment_date']) && empty($row['payroll_employee_id']) && empty($row['amount'])) {
+                    continue;
+                }
+
+                if (empty($row['adjustment_date']) || empty($row['payroll_employee_id']) || empty($row['amount'])) {
+                    throw ValidationException::withMessages([
+                        'adjustments' => 'Mỗi dòng cộng trừ cần có đủ Ngày, Nhân viên và Số tiền.',
+                    ]);
+                }
+
+                $this->assertEmployeeBelongsToAccount($accountId, $row['payroll_employee_id']);
+
+                $payload = [
+                    'account_id' => $accountId,
+                    'adjustment_date' => $row['adjustment_date'],
+                    'payroll_employee_id' => $row['payroll_employee_id'],
+                    'adjustment_type' => $row['adjustment_type'] ?? 'deduction',
+                    'amount' => abs($this->number($row['amount'] ?? 0)),
+                    'notes' => $this->nullableTrim($row['notes'] ?? null),
+                    'created_by' => $request->user()?->id,
+                ];
+
+                $adjustment = !empty($row['id'])
+                    ? PayrollAdjustment::query()->where('account_id', $accountId)->findOrFail($row['id'])
+                    : null;
+
+                if ($adjustment) {
+                    $adjustment->update($payload);
+                } else {
+                    PayrollAdjustment::create($payload);
+                }
+            }
+        });
+
+        return response()->json(['status' => 'success', 'message' => 'Đã lưu bảng tạm ứng / cộng trừ.']);
+    }
+
+    public function deleteAdjustment(Request $request, int $id)
+    {
+        $accountId = $this->activeAccountId($request);
+        $scope = $this->resolvePayrollScope($accountId, $request->user());
+        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền xoá khoản cộng trừ lương.');
+
+        PayrollAdjustment::query()
+            ->where('account_id', $accountId)
+            ->findOrFail($id)
+            ->delete();
+
+        return response()->json(['status' => 'success', 'message' => 'Đã xoá khoản tạm ứng / cộng trừ.']);
     }
 
     public function syncUserScopes(Request $request)
@@ -637,14 +781,132 @@ class PayrollController extends Controller
             ->firstOrFail();
     }
 
+    private function syncSalaryRates(int $accountId, PayrollEmployee $employee, array $payload, array $rateRows, array $deletedIds, ?int $userId): void
+    {
+        if (!empty($deletedIds)) {
+            PayrollSalaryRate::query()
+                ->where('account_id', $accountId)
+                ->where('payroll_employee_id', $employee->id)
+                ->whereIn('id', $deletedIds)
+                ->delete();
+        }
+
+        $normalizedRows = [];
+        foreach ($rateRows as $row) {
+            if ($this->isEmptySalaryRateRow($row)) {
+                continue;
+            }
+
+            if (empty($row['effective_from'])) {
+                throw ValidationException::withMessages([
+                    'employees' => 'Mỗi mốc lương cần có ngày áp dụng.',
+                ]);
+            }
+
+            $effectiveFrom = Carbon::parse($row['effective_from'])->toDateString();
+            $normalizedRows[$effectiveFrom] = [
+                'id' => $row['id'] ?? null,
+                'effective_from' => $effectiveFrom,
+                'salary_type' => $row['salary_type'] ?? ($payload['salary_type'] ?? 'theo_ca'),
+                'salary_amount' => $this->number($row['salary_amount'] ?? 0),
+                'standard_work_units' => $this->nullableNumber($row['standard_work_units'] ?? null),
+                'notes' => $this->nullableTrim($row['notes'] ?? null),
+                'created_by' => $userId,
+            ];
+        }
+
+        if (!empty($payload['salary_effective_from'])) {
+            $effectiveFrom = Carbon::parse($payload['salary_effective_from'])->toDateString();
+            $normalizedRows[$effectiveFrom] = [
+                'id' => $normalizedRows[$effectiveFrom]['id'] ?? null,
+                'effective_from' => $effectiveFrom,
+                'salary_type' => $payload['salary_type'] ?? 'theo_ca',
+                'salary_amount' => $payload['salary_amount'] ?? 0,
+                'standard_work_units' => $payload['standard_work_units'] ?? null,
+                'notes' => $normalizedRows[$effectiveFrom]['notes'] ?? null,
+                'created_by' => $userId,
+            ];
+        }
+
+        foreach ($normalizedRows as $row) {
+            $values = [
+                'account_id' => $accountId,
+                'payroll_employee_id' => $employee->id,
+                'salary_type' => $row['salary_type'],
+                'salary_amount' => $row['salary_amount'],
+                'standard_work_units' => $row['standard_work_units'],
+                'effective_from' => $row['effective_from'],
+                'notes' => $row['notes'],
+                'created_by' => $row['created_by'],
+            ];
+
+            $salaryRate = !empty($row['id'])
+                ? PayrollSalaryRate::query()
+                    ->where('account_id', $accountId)
+                    ->where('payroll_employee_id', $employee->id)
+                    ->where('id', $row['id'])
+                    ->first()
+                : null;
+
+            if ($salaryRate) {
+                $conflict = PayrollSalaryRate::query()
+                    ->where('account_id', $accountId)
+                    ->where('payroll_employee_id', $employee->id)
+                    ->where('effective_from', $row['effective_from'])
+                    ->where('id', '<>', $salaryRate->id)
+                    ->first();
+
+                if ($conflict) {
+                    $conflict->update($values);
+                    $salaryRate->delete();
+                } else {
+                    $salaryRate->update($values);
+                }
+            } else {
+                PayrollSalaryRate::query()->updateOrCreate(
+                    [
+                        'account_id' => $accountId,
+                        'payroll_employee_id' => $employee->id,
+                        'effective_from' => $row['effective_from'],
+                    ],
+                    $values
+                );
+            }
+        }
+    }
+
+    private function isEmptySalaryRateRow(array $row): bool
+    {
+        return collect([
+            $row['salary_type'] ?? null,
+            $row['salary_amount'] ?? null,
+            $row['standard_work_units'] ?? null,
+            $row['effective_from'] ?? null,
+            $row['notes'] ?? null,
+        ])->every(fn ($value) => trim((string) ($value ?? '')) === '');
+    }
+
     private function serializeEmployees($employees, bool $canViewSalary)
     {
         return $employees->map(function (PayrollEmployee $employee) use ($canViewSalary) {
             $row = $employee->toArray();
+            $row['salary_effective_from'] = $employee->salary_effective_from?->toDateString();
+            $row['salary_rates'] = $employee->salaryRates
+                ->map(function (PayrollSalaryRate $rate) {
+                    $row = $rate->toArray();
+                    $row['effective_from'] = $rate->effective_from?->toDateString();
+
+                    return $row;
+                })
+                ->values();
+
             if (!$canViewSalary) {
                 $row['salary_amount'] = null;
+                $row['salary_effective_from'] = null;
                 $row['lunch_allowance'] = null;
+                $row['salary_rates'] = [];
                 $row['bank_account_note'] = null;
+                $row['bank_qr_image_url'] = null;
             }
 
             return $row;
@@ -671,7 +933,19 @@ class PayrollController extends Controller
         })->values();
     }
 
-    private function buildPayrollSummary($records, $employeesById, $shiftsById, bool $canViewSalary)
+    private function serializeAdjustments($adjustments, bool $canViewSalary)
+    {
+        return $adjustments->map(function (PayrollAdjustment $adjustment) use ($canViewSalary) {
+            $row = $adjustment->toArray();
+            if (!$canViewSalary) {
+                $row['amount'] = null;
+            }
+
+            return $row;
+        })->values();
+    }
+
+    private function buildPayrollSummary($records, $employeesById, $shiftsById, bool $canViewSalary, $adjustments = null)
     {
         $summary = [];
 
@@ -708,6 +982,26 @@ class PayrollController extends Controller
             }
         }
 
+        foreach (($adjustments ?? collect()) as $adjustment) {
+            $employee = $employeesById->get($adjustment->payroll_employee_id) ?? $adjustment->employee;
+            if (!$employee || !isset($summary[$employee->id])) {
+                continue;
+            }
+
+            $amount = abs((float) $adjustment->amount);
+            if ($this->isPositiveAdjustment($adjustment->adjustment_type)) {
+                $summary[$employee->id]['total_bonus'] += $amount;
+                if ($canViewSalary) {
+                    $summary[$employee->id]['total_salary'] += $amount;
+                }
+            } else {
+                $summary[$employee->id]['total_penalty'] += $amount;
+                if ($canViewSalary) {
+                    $summary[$employee->id]['total_salary'] -= $amount;
+                }
+            }
+        }
+
         return collect($summary)
             ->map(function ($row) {
                 $row['total_work_units'] = round($row['total_work_units'], 3);
@@ -724,6 +1018,11 @@ class PayrollController extends Controller
             ->values();
     }
 
+    private function isPositiveAdjustment(?string $type): bool
+    {
+        return in_array($type, ['bonus', 'plus', 'allowance'], true);
+    }
+
     private function calculateAttendanceAmount(PayrollAttendanceRecord $record, ?PayrollEmployee $employee, ?PayrollWorkShift $shift): float
     {
         if (!$employee) {
@@ -734,20 +1033,54 @@ class PayrollController extends Controller
         $bonus = (float) $record->bonus_amount;
         $penalty = (float) $record->penalty_amount;
         $multiplier = (float) ($shift?->wage_multiplier ?? 1);
-        $salaryAmount = (float) $employee->salary_amount;
+        $salary = $this->salaryContextForDate($employee, $record->work_date);
+        $salaryAmount = (float) $salary['salary_amount'];
 
         if ($record->unit_rate !== null) {
             $base = (float) $record->unit_rate * $workUnits * $multiplier;
             return round($base + $bonus - $penalty, 2);
         }
 
-        $base = match ($employee->salary_type) {
+        $base = match ($salary['salary_type']) {
             'theo_gio' => $salaryAmount * (float) ($shift?->standard_hours ?? 0) * $workUnits * $multiplier,
-            'theo_thang' => $this->monthlySalaryForWorkUnits($salaryAmount, (float) ($employee->standard_work_units ?: 0), $workUnits),
+            'theo_thang' => $this->monthlySalaryForWorkUnits($salaryAmount, (float) ($salary['standard_work_units'] ?: 0), $workUnits),
             default => $salaryAmount * $workUnits * $multiplier,
         };
 
         return round($base + $bonus - $penalty, 2);
+    }
+
+    private function salaryContextForDate(PayrollEmployee $employee, $workDate): array
+    {
+        $context = [
+            'salary_type' => $employee->salary_type,
+            'salary_amount' => (float) $employee->salary_amount,
+            'standard_work_units' => (float) ($employee->standard_work_units ?: 0),
+        ];
+
+        $date = Carbon::parse($workDate)->toDateString();
+        $rates = $employee->relationLoaded('salaryRates')
+            ? $employee->salaryRates
+            : PayrollSalaryRate::query()
+                ->where('account_id', $employee->account_id)
+                ->where('payroll_employee_id', $employee->id)
+                ->orderByDesc('effective_from')
+                ->orderByDesc('id')
+                ->get();
+
+        $rate = $rates->first(function (PayrollSalaryRate $item) use ($date) {
+            return Carbon::parse($item->effective_from)->toDateString() <= $date;
+        });
+
+        if (!$rate) {
+            return $context;
+        }
+
+        return [
+            'salary_type' => $rate->salary_type,
+            'salary_amount' => (float) $rate->salary_amount,
+            'standard_work_units' => (float) ($rate->standard_work_units ?: 0),
+        ];
     }
 
     private function monthlySalaryForWorkUnits(float $salaryAmount, float $standardWorkUnits, float $workUnits): float
@@ -757,6 +1090,25 @@ class PayrollController extends Controller
         }
 
         return $salaryAmount / $standardWorkUnits * $workUnits;
+    }
+
+    private function nextEmployeeCode(int $accountId): string
+    {
+        $number = PayrollEmployee::query()
+            ->where('account_id', $accountId)
+            ->count() + 1;
+
+        do {
+            $code = 'NV' . str_pad((string) $number, 3, '0', STR_PAD_LEFT);
+            $number++;
+        } while (
+            PayrollEmployee::query()
+                ->where('account_id', $accountId)
+                ->where('employee_code', $code)
+                ->exists()
+        );
+
+        return $code;
     }
 
     private function nullableTrim($value): ?string

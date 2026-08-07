@@ -159,6 +159,44 @@ class OrderInventorySlipService
             ->all();
     }
 
+    public function buildExportProductTotalsMap(Collection $orders): array
+    {
+        if ($orders->isEmpty()) {
+            return [];
+        }
+
+        $documentsByOrderId = $this->loadDocumentsForOrders($orders);
+        $automaticExportsByOrderId = $this->loadAutomaticExportsForOrders($orders);
+        $totals = [];
+
+        foreach ($orders as $order) {
+            $detail = $this->buildDetailPayload(
+                $order,
+                $documentsByOrderId->get((int) $order->id, collect()),
+                $automaticExportsByOrderId->get((int) $order->id, collect()),
+                false
+            );
+
+            foreach (($detail['products'] ?? []) as $product) {
+                $productId = (int) ($product['product_id'] ?? 0);
+                if ($productId <= 0) {
+                    continue;
+                }
+
+                $quantity = InventoryQuantity::normalize($product['exported_quantity'] ?? 0);
+                if ($quantity <= 0) {
+                    continue;
+                }
+
+                $totals[$productId] = InventoryQuantity::normalize($totals[$productId] ?? 0) + $quantity;
+            }
+        }
+
+        return collect($totals)
+            ->map(fn ($quantity) => InventoryQuantity::normalize($quantity))
+            ->all();
+    }
+
     public function applyExportSlipStateFilter($query, string $state): void
     {
         $state = strtolower(trim($state));

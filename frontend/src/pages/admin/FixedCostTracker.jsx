@@ -15,7 +15,8 @@ const formatDateString = (dateStr) => {
     if (!dateStr) return '';
 
     try {
-        const parts = dateStr.split(' ')[0].split('-');
+        const dateOnly = String(dateStr).split(/[T\s]/)[0];
+        const parts = dateOnly.split('-');
         if (parts.length === 3) {
             return `${parts[2]}/${parts[1]}/${parts[0]}`;
         }
@@ -26,16 +27,68 @@ const formatDateString = (dateStr) => {
 };
 
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Number(value) || 0)}đ`;
+const normalizeDateValue = (value) => {
+    if (!value) return '';
+    const dateOnly = String(value).split(/[T\s]/)[0];
+    return /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? dateOnly : '';
+};
+const stripLeadingZeroes = (value) => String(value || '').replace(/^0+(?=\d)/, '');
+const thousandsFormattedMoneyPattern = /^\d{1,3}(\.\d{3})+$/;
+const decimalMoneyPattern = /^-?\d+(\.\d+)?$/;
+const normalizeStoredMoney = (value) => {
+    if (value === '' || value === null || typeof value === 'undefined') {
+        return '';
+    }
+
+    if (typeof value === 'number') {
+        return String(Math.round(value));
+    }
+
+    const textValue = String(value).trim();
+    if (!textValue) {
+        return '';
+    }
+
+    if (!thousandsFormattedMoneyPattern.test(textValue) && decimalMoneyPattern.test(textValue)) {
+        const numericValue = Number(textValue);
+        if (Number.isFinite(numericValue)) {
+            return String(Math.round(numericValue));
+        }
+    }
+
+    const integerText = textValue.includes(',') ? textValue.split(',')[0] : textValue;
+    return stripLeadingZeroes(integerText.replace(/\D/g, ''));
+};
+const normalizeMoneyDraft = (value) => {
+    let textValue = String(value || '').trim();
+
+    if (textValue.includes(',')) {
+        textValue = textValue.split(',')[0];
+    } else if (!thousandsFormattedMoneyPattern.test(textValue) && /^\d+\.\d{1,2}$/.test(textValue)) {
+        textValue = textValue.split('.')[0];
+    }
+
+    return stripLeadingZeroes(textValue.replace(/\D/g, ''));
+};
+const formatMoneyInput = (value) => {
+    const normalizedValue = normalizeStoredMoney(value);
+    return normalizedValue
+        ? normalizedValue.replace(/\B(?=(\d{3})+(?!\d))/g, '.')
+        : '';
+};
 const normalizeCategoryName = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 const normalizeComparisonKey = (value) => normalizeCategoryName(value).toLocaleLowerCase('vi-VN');
+const resolveAppliedDateValue = (row, fallbackDate = '') => normalizeDateValue(row?.applied_from) || fallbackDate;
 
-const createNewRow = () => ({
+const createNewRow = (overrides = {}) => ({
     id: null,
     uid: Math.random().toString(36).slice(2, 11),
     category: '',
     name: '',
     amount: '',
     notes: '',
+    applied_from: '',
+    ...overrides,
 });
 
 const sortCategories = (items = []) => [...items].sort((left, right) => {
@@ -286,7 +339,13 @@ export default function FixedCostTracker() {
             const data = response.data.data || {};
             const fetchedCosts = Array.isArray(data.fixed_costs) ? data.fixed_costs : [];
 
-            setCosts(fetchedCosts.length > 0 ? fetchedCosts : [createNewRow()]);
+            setCosts(fetchedCosts.length > 0
+                ? fetchedCosts.map((item) => ({
+                    ...item,
+                    amount: normalizeStoredMoney(item.amount),
+                    applied_from: normalizeDateValue(item.applied_from),
+                }))
+                : [createNewRow({ applied_from: `${selectedMonth}-01` })]);
             syncCategories(Array.isArray(data.categories) ? data.categories : []);
             setTotalMonthly(Number(data.total_monthly) || 0);
             setCurrentDailyRate(Number(data.current_daily_rate) || 0);
@@ -303,6 +362,10 @@ export default function FixedCostTracker() {
     }, [fetchCosts]);
 
     const categoryOptions = useMemo(() => categories.map((category) => category.name), [categories]);
+    const defaultAppliedFrom = useMemo(() => {
+        const firstSnapshot = snapshots.find((snapshot) => normalizeDateValue(snapshot?.date));
+        return normalizeDateValue(firstSnapshot?.date) || `${selectedMonth}-01`;
+    }, [selectedMonth, snapshots]);
 
     const draftCategoryUsageMap = useMemo(() => (
         costs.reduce((accumulator, row) => {
@@ -317,7 +380,7 @@ export default function FixedCostTracker() {
     ), [costs]);
 
     const calculateCurrentTotal = useMemo(() => (
-        costs.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+        costs.reduce((sum, item) => sum + (Number(normalizeStoredMoney(item.amount)) || 0), 0)
     ), [costs]);
 
     const replaceCategoryNameInCosts = useCallback((oldName, newName) => {
@@ -337,14 +400,14 @@ export default function FixedCostTracker() {
     }, []);
 
     const handleAddRow = () => {
-        setCosts((prevCosts) => [...prevCosts, createNewRow()]);
+        setCosts((prevCosts) => [...prevCosts, createNewRow({ applied_from: defaultAppliedFrom })]);
     };
 
     const handleRemoveRow = (index) => {
         setCosts((prevCosts) => {
             const nextCosts = [...prevCosts];
             nextCosts.splice(index, 1);
-            return nextCosts.length > 0 ? nextCosts : [createNewRow()];
+            return nextCosts.length > 0 ? nextCosts : [createNewRow({ applied_from: defaultAppliedFrom })];
         });
     };
 
@@ -505,8 +568,9 @@ export default function FixedCostTracker() {
                 id: item.id,
                 category: normalizeCategoryName(item.category),
                 name: normalizeCategoryName(item.name),
-                amount: Number(item.amount) || 0,
+                amount: Number(normalizeStoredMoney(item.amount)) || 0,
                 notes: String(item.notes || '').trim(),
+                applied_from: resolveAppliedDateValue(item, defaultAppliedFrom),
             }));
 
         setSaving(true);
@@ -616,13 +680,14 @@ export default function FixedCostTracker() {
                 )}
 
                 <div className="relative max-h-[600px] overflow-x-auto overflow-y-auto">
-                    <table className="min-w-[800px] w-full border-collapse text-left">
+                    <table className="min-w-[980px] w-full border-collapse text-left">
                         <thead className="sticky top-0 z-20 border-b border-gray-200 bg-[#f4f6f8] shadow-sm">
                             <tr>
                                 <th className="w-1/4 border-r border-gray-200 px-4 py-2.5 text-[13px] font-semibold text-gray-700">Danh mục</th>
                                 <th className="w-1/4 border-r border-gray-200 px-4 py-2.5 text-[13px] font-semibold text-gray-700">Tên chi phí</th>
                                 <th className="w-1/5 border-r border-gray-200 px-4 py-2.5 text-[13px] font-semibold text-gray-700">Số tiền (VNĐ/tháng)</th>
                                 <th className="border-r border-gray-200 px-4 py-2.5 text-[13px] font-semibold text-gray-700">Ghi chú</th>
+                                <th className="w-40 border-r border-gray-200 px-4 py-2.5 text-[13px] font-semibold text-gray-700">Thời gian áp dụng</th>
                                 <th className="w-12 px-4 py-2.5 text-center text-[13px] font-semibold text-gray-700" />
                             </tr>
                         </thead>
@@ -650,20 +715,29 @@ export default function FixedCostTracker() {
                                     </td>
                                     <td className="border-r border-gray-100 p-0">
                                         <input
-                                            type="number"
+                                            type="text"
+                                            inputMode="numeric"
                                             className="w-full bg-transparent px-4 py-2.5 text-[13px] transition-colors focus:bg-primary/5 focus:outline-none"
                                             placeholder="0"
-                                            value={row.amount || ''}
-                                            onChange={(event) => handleChange(index, 'amount', event.target.value)}
+                                            value={formatMoneyInput(row.amount)}
+                                            onChange={(event) => handleChange(index, 'amount', normalizeMoneyDraft(event.target.value))}
                                         />
                                     </td>
-                                    <td className="p-0">
+                                    <td className="border-r border-gray-100 p-0">
                                         <input
                                             type="text"
                                             className="w-full bg-transparent px-4 py-2.5 text-[13px] text-gray-600 transition-colors focus:bg-primary/5 focus:outline-none"
                                             placeholder="Ghi chú thêm..."
                                             value={row.notes || ''}
                                             onChange={(event) => handleChange(index, 'notes', event.target.value)}
+                                        />
+                                    </td>
+                                    <td className="border-r border-gray-100 p-0">
+                                        <input
+                                            type="date"
+                                            className="w-full bg-transparent px-4 py-2.5 text-[13px] text-gray-700 transition-colors focus:bg-primary/5 focus:outline-none"
+                                            value={resolveAppliedDateValue(row, defaultAppliedFrom)}
+                                            onChange={(event) => handleChange(index, 'applied_from', event.target.value)}
                                         />
                                     </td>
                                     <td className="flex h-full items-center justify-center p-2 text-center">

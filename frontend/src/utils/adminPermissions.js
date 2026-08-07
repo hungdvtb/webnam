@@ -14,7 +14,7 @@ export const ADMIN_PERMISSION_OPTIONS = [
     { id: 'users', label: 'Quản lý người dùng' },
     { id: 'blog', label: 'Bài viết trên web' },
     { id: 'reports', label: 'Báo cáo và phân tích' },
-    { id: 'payroll', label: 'Công và lương' },
+    { id: 'payroll', label: 'Quản lí nhân sự' },
 ];
 
 export const ADMIN_ACTION_OPTIONS = [

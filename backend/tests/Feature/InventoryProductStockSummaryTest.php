@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Account;
 use App\Models\InventoryDocument;
+use App\Models\InventoryImportStatus;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Product;
@@ -32,6 +33,8 @@ class InventoryProductStockSummaryTest extends TestCase
 
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
+            'status_is_manual' => true,
             'import_date' => now()->subDays(5)->toDateString(),
             'items' => [[
                 'product_id' => $product->id,
@@ -103,8 +106,8 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(2, (int) ($row['total_damaged'] ?? 0));
         $this->assertSame(2, (int) ($row['total_adjusted'] ?? 0));
         $this->assertSame(7, (int) ($row['computed_stock'] ?? 0));
-        $this->assertSame(80000.0, (float) ($row['display_cost'] ?? 0));
-        $this->assertSame(560000.0, (float) ($row['inventory_value'] ?? 0));
+        $this->assertSame(100000.0, (float) ($row['display_cost'] ?? 0));
+        $this->assertSame(700000.0, (float) ($row['inventory_value'] ?? 0));
         $this->assertSame('available', (string) ($row['stock_alert'] ?? ''));
         $this->assertSame(7, (int) $product->fresh()->stock_quantity);
 
@@ -115,7 +118,7 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(2, (int) ($summary['total_adjusted'] ?? 0));
         $this->assertSame(7, (int) ($summary['total_stock'] ?? 0));
         $this->assertSame(7, (int) ($summary['total_sellable_stock'] ?? 0));
-        $this->assertSame(560000.0, (float) ($summary['total_inventory_value'] ?? 0));
+        $this->assertSame(700000.0, (float) ($summary['total_inventory_value'] ?? 0));
     }
 
     public function test_refresh_order_items_returns_inventory_snapshot_for_available_to_sell(): void
@@ -130,6 +133,7 @@ class InventoryProductStockSummaryTest extends TestCase
         $service = app(InventoryService::class);
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
             'import_date' => now()->subDay()->toDateString(),
             'items' => [[
                 'product_id' => $product->id,
@@ -165,28 +169,83 @@ class InventoryProductStockSummaryTest extends TestCase
         $this->assertSame(7, (int) ($item['available_to_sell'] ?? 0));
     }
 
+    public function test_refresh_order_items_prefers_current_product_prices_for_bundle_option_items(): void
+    {
+        [$account] = $this->authenticate();
+        $supplier = $this->createSupplier($account);
+        $bundle = $this->createProduct($account, $supplier, [
+            'type' => 'bundle',
+            'name' => 'Tron bo do tho test',
+            'sku' => 'BUNDLE-ORDER-REFRESH',
+            'price' => 0,
+            'bundle_title' => 'Chon kich thuoc',
+        ]);
+        $bundleItem = $this->createProduct($account, $supplier, [
+            'name' => 'Bat huong phi 20',
+            'sku' => 'BATHUONG-PHI20',
+            'price' => 1000000,
+            'expected_cost' => 380000,
+            'cost_price' => 380000,
+        ]);
+
+        $bundle->bundleItems()->attach($bundleItem->id, [
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 2,
+            'is_required' => true,
+            'option_title' => 'Ban tho 1m97',
+            'bundle_option_uid' => 'order-refresh-option',
+            'bundle_option_status' => 'visible',
+            'price' => 700000,
+            'cost_price' => 320000,
+        ]);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/products/refresh-order-items', [
+                'items' => [
+                    [
+                        'product_id' => $bundle->id,
+                        'entry_kind' => 'bundle_option',
+                        'bundle_parent_id' => $bundle->id,
+                        'bundle_option_uid' => 'order-refresh-option',
+                        'bundle_option_key' => 'uid:order-refresh-option',
+                    ],
+                    [
+                        'product_id' => $bundleItem->id,
+                        'entry_kind' => 'bundle_option',
+                        'bundle_parent_id' => $bundle->id,
+                        'bundle_option_uid' => 'order-refresh-option',
+                        'bundle_option_key' => 'uid:order-refresh-option',
+                        'bundle_item_base_product_id' => $bundleItem->id,
+                    ],
+                ],
+            ]);
+
+        $response->assertOk();
+
+        $bundleOption = collect($response->json('items'))->firstWhere('entry_kind', 'bundle_option');
+        $bundleLine = collect($response->json('items'))->firstWhere('entry_kind', 'bundle_item');
+
+        $this->assertNotNull($bundleOption);
+        $this->assertSame(2000000.0, (float) ($bundleOption['price'] ?? 0));
+        $this->assertSame(2000000.0, (float) ($bundleOption['bundle_option_total_price'] ?? 0));
+        $this->assertSame(1000000.0, (float) data_get($bundleOption, 'bundle_items.0.price'));
+
+        $this->assertNotNull($bundleLine);
+        $this->assertSame($bundleItem->id, (int) ($bundleLine['product_id'] ?? 0));
+        $this->assertSame(1000000.0, (float) ($bundleLine['price'] ?? 0));
+        $this->assertSame(320000.0, (float) ($bundleLine['cost_price'] ?? 0));
+    }
+
     public function test_refresh_order_items_uses_product_stock_quantity_as_available_to_sell_baseline(): void
     {
-        [$account, $user] = $this->authenticate();
+        [$account] = $this->authenticate();
         $supplier = $this->createSupplier($account);
         $product = $this->createProduct($account, $supplier, [
             'name' => 'San pham lech ton snapshot',
             'sku' => 'ORDER-FORM-DRIFT-001',
         ]);
-
-        $service = app(InventoryService::class);
-        $service->createImport([
-            'supplier_id' => $supplier->id,
-            'import_date' => now()->subDay()->toDateString(),
-            'items' => [[
-                'product_id' => $product->id,
-                'quantity' => 10,
-                'received_quantity' => 10,
-                'unit_cost' => 100000,
-            ]],
-        ], $account->id, $user->id);
-
-        $product->forceFill(['stock_quantity' => 0])->save();
 
         $response = $this
             ->withHeaders($this->headers($account))
@@ -220,6 +279,7 @@ class InventoryProductStockSummaryTest extends TestCase
         $service = app(InventoryService::class);
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
             'import_date' => now()->subDay()->toDateString(),
             'items' => [[
                 'product_id' => $product->id,
@@ -327,6 +387,7 @@ class InventoryProductStockSummaryTest extends TestCase
         $service = app(InventoryService::class);
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
             'import_date' => now()->subDay()->toDateString(),
             'items' => [[
                 'product_id' => $product->id,
@@ -378,6 +439,7 @@ class InventoryProductStockSummaryTest extends TestCase
 
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
             'import_date' => now()->subDays(2)->toDateString(),
             'items' => [
                 [
@@ -424,6 +486,7 @@ class InventoryProductStockSummaryTest extends TestCase
 
         $service->createImport([
             'supplier_id' => $supplier->id,
+            'inventory_import_status_id' => $this->completedImportStatusId(),
             'import_date' => now()->subDays(2)->toDateString(),
             'items' => [[
                 'product_id' => $product->id,
@@ -514,6 +577,25 @@ class InventoryProductStockSummaryTest extends TestCase
             'name' => 'Nha cung cap ' . Str::upper(Str::random(4)),
             'status' => true,
         ]);
+    }
+
+    private function completedImportStatusId(): int
+    {
+        $status = InventoryImportStatus::withoutGlobalScopes()
+            ->where('code', 'hoan_thanh')
+            ->firstOrNew(['account_id' => null, 'code' => 'hoan_thanh']);
+
+        $status->forceFill([
+            'name' => $status->name ?: 'Hoan thanh',
+            'color' => $status->color ?: '#10B981',
+            'sort_order' => $status->sort_order ?: 4,
+            'is_default' => false,
+            'is_system' => true,
+            'is_active' => true,
+            'affects_inventory' => true,
+        ])->save();
+
+        return (int) $status->id;
     }
 
     private function createProduct(Account $account, Supplier $supplier, array $overrides = []): Product

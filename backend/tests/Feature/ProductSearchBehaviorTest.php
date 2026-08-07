@@ -140,8 +140,8 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertOk()
             ->assertJsonPath('total', 1)
             ->assertJsonPath('data.0.id', $product->id)
-            ->assertJsonPath('data.0.expected_cost', 150000.0)
-            ->assertJsonPath('data.0.cost_price', 150000.0);
+            ->assertJsonPath('data.0.expected_cost', 150000)
+            ->assertJsonPath('data.0.cost_price', 150000);
     }
 
     public function test_picker_search_matches_compact_queries_for_variation_names(): void
@@ -526,6 +526,7 @@ class ProductSearchBehaviorTest extends TestCase
 
         $this->attachBundleItem($bundle, $bundleItem, [
             'option_title' => 'Ban tho 1m75-1m97 3 bat huong',
+            'price' => 7800000,
         ]);
         $this->attachBundleItem($otherBundle, $bundleItem, [
             'option_title' => 'Bo khac',

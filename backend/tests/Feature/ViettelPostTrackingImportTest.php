@@ -10,6 +10,7 @@ use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ViettelPostTrackingImportService;
 use App\Services\SimpleXlsxService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -25,6 +26,46 @@ class ViettelPostTrackingImportTest extends TestCase
         Carbon::setTestNow();
 
         parent::tearDown();
+    }
+
+    public function test_tracking_import_accepts_excel_extension_when_uploaded_mime_is_generic(): void
+    {
+        $this->withoutMiddleware(\App\Http\Middleware\AuditAdminAction::class);
+
+        $user = User::factory()->create([
+            'name' => 'VTP Upload Admin',
+            'email' => 'vtp-upload-' . Str::lower(Str::random(6)) . '@example.com',
+            'is_admin' => true,
+        ]);
+        Sanctum::actingAs($user, ['*']);
+
+        $this->mock(ViettelPostTrackingImportService::class, function ($mock) use ($user) {
+            $mock->shouldReceive('processFile')
+                ->once()
+                ->with(Mockery::type('string'), $user->id, null)
+                ->andReturn([
+                    'success' => true,
+                    'summary' => [
+                        'total_rows' => 1,
+                        'success' => 1,
+                        'failed' => 0,
+                        'not_found' => 0,
+                        'errors' => [],
+                    ],
+                ]);
+        });
+
+        $file = UploadedFile::fake()->createWithContent(
+            'VTP_danh_sach_van_don_08_08_2026_08_51_50.xlsx',
+            'plain export payload with an xlsx filename'
+        );
+
+        $this->post('/api/shipments/import-tracking/viettel-post', [
+            'file' => $file,
+        ])
+            ->assertOk()
+            ->assertJsonPath('total_rows', 1)
+            ->assertJsonPath('success', 1);
     }
 
     public function test_tracking_import_only_updates_orders_in_requested_account_and_parses_fee(): void

@@ -3877,11 +3877,6 @@ const QuoteCaptureSheet = ({ captureRef, quoteSettings, template, formData, orde
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{index + 1}</td>
                                 <td className="border border-[#D5CEC9] px-4 py-3 align-middle text-[12px] leading-6">
                                     <div className="font-semibold text-slate-900">{item.name}</div>
-                                    {getOrderLineOriginalNameLabel(item) ? (
-                                        <div className="mt-1 text-[10px] font-semibold leading-4 text-slate-500">
-                                            {`\u0054\u00ean g\u1ed1c: ${getOrderLineOriginalNameLabel(item)}`}
-                                        </div>
-                                    ) : null}
                                 </td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold">{item.quantity}</td>
                                 <td className="border border-[#D5CEC9] px-2 py-3 text-[12px] text-center font-semibold text-slate-700">{getOrderUnitDisplay(item)}</td>
@@ -9504,9 +9499,6 @@ const OrderForm = () => {
             const tableHeaderFontSize = 25;
             const rowTextFontSize = 20;
             const rowLineHeight = 28;
-            const rowMetaTextFontSize = 14;
-            const rowMetaLineHeight = 20;
-            const rowNameMetaGap = 4;
             const rowMinHeight = 66;
             const rowPaddingY = 16;
             const nameCellPaddingX = 18;
@@ -9590,22 +9582,10 @@ const OrderForm = () => {
             measureCtx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
 
             const rowHeights = formData.items.map((item) => {
-                const originalNameLabel = getOrderLineOriginalNameLabel(item);
                 measureCtx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 const lines = wrapCanvasText(measureCtx, item.name || '', nameColWidth - (nameCellPaddingX * 2));
-                measureCtx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
-                const originalLines = originalNameLabel
-                    ? wrapCanvasText(
-                        measureCtx,
-                        `\u0054\u00ean g\u1ed1c: ${originalNameLabel}`,
-                        nameColWidth - (nameCellPaddingX * 2)
-                    )
-                    : [];
-                const metaHeight = originalLines.length > 0
-                    ? rowNameMetaGap + (originalLines.length * rowMetaLineHeight)
-                    : 0;
 
-                return Math.max(rowMinHeight, (lines.length * rowLineHeight) + metaHeight + (rowPaddingY * 2));
+                return Math.max(rowMinHeight, (lines.length * rowLineHeight) + (rowPaddingY * 2));
             });
 
             const itemsHeight = rowHeights.reduce((sum, height) => sum + height, 0);
@@ -9776,17 +9756,8 @@ const OrderForm = () => {
             let currentY = bodyStartY;
             formData.items.forEach((item, index) => {
                 const rowHeight = rowHeights[index];
-                const originalNameLabel = getOrderLineOriginalNameLabel(item);
                 ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 const nameLines = wrapCanvasText(ctx, normalizeCanvasText(item.name || ''), nameColWidth - (nameCellPaddingX * 2));
-                ctx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
-                const originalNameLines = originalNameLabel
-                    ? wrapCanvasText(
-                        ctx,
-                        `\u0054\u00ean g\u1ed1c: ${originalNameLabel}`,
-                        nameColWidth - (nameCellPaddingX * 2)
-                    )
-                    : [];
 
                 ctx.fillStyle = index % 2 === 0 ? '#FFFFFF' : '#FBF8F4';
                 ctx.fillRect(xIndex, currentY, pageWidth - xIndex, rowHeight);
@@ -9801,25 +9772,9 @@ const OrderForm = () => {
                 ctx.fillStyle = textPrimary;
                 ctx.font = `400 ${rowTextFontSize}px ${quoteCanvasFontFamily}`;
                 const nameTextHeight = nameLines.length * rowLineHeight;
-                const originalNameHeight = originalNameLines.length > 0
-                    ? rowNameMetaGap + (originalNameLines.length * rowMetaLineHeight)
-                    : 0;
-                const nameBlockHeight = nameTextHeight + originalNameHeight;
+                const nameBlockHeight = nameTextHeight;
                 const nameTextY = currentY + ((rowHeight - nameBlockHeight) / 2);
                 drawTextLines(ctx, nameLines, xName + nameCellPaddingX, nameTextY, rowLineHeight, 'left');
-                if (originalNameLines.length > 0) {
-                    ctx.fillStyle = textMuted;
-                    ctx.font = `500 ${rowMetaTextFontSize}px ${quoteCanvasFontFamily}`;
-                    drawTextLines(
-                        ctx,
-                        originalNameLines,
-                        xName + nameCellPaddingX,
-                        nameTextY + nameTextHeight + rowNameMetaGap,
-                        rowMetaLineHeight,
-                        'left'
-                    );
-                    ctx.fillStyle = textPrimary;
-                }
 
                 const valueY = currentY + (rowHeight / 2);
                 ctx.textAlign = 'center';

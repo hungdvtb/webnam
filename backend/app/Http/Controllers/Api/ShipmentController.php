@@ -16,8 +16,10 @@ use App\Services\Shipping\ShipmentStatusSyncService;
 use App\Services\Shipping\ShipmentTransitionGuard;
 use App\Support\InventoryQuantity;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class ShipmentController extends Controller
 {
@@ -868,11 +870,7 @@ class ShipmentController extends Controller
     }
     public function reconcileViettelPost(Request $request)
     {
-        $request->validate([
-            'file' => 'required|file|mimes:xlsx,xls',
-        ]);
-
-        $file = $request->file('file');
+        $file = $this->validateViettelPostExcelUpload($request);
         $filePath = $file->getRealPath();
         $accountId = $request->header('X-Account-Id');
 
@@ -893,11 +891,7 @@ class ShipmentController extends Controller
 
     public function importTrackingViettelPost(Request $request)
     {
-        $request->validate([
-            'file' => 'required|file|mimes:xlsx,xls',
-        ]);
-
-        $file = $request->file('file');
+        $file = $this->validateViettelPostExcelUpload($request);
         $filePath = $file->getRealPath();
         $accountId = $request->header('X-Account-Id');
         
@@ -914,5 +908,28 @@ class ShipmentController extends Controller
         }
 
         return response()->json($result['summary']);
+    }
+
+    private function validateViettelPostExcelUpload(Request $request): UploadedFile
+    {
+        $request->validate([
+            'file' => ['required', 'file'],
+        ]);
+
+        $file = $request->file('file');
+        if (!$file instanceof UploadedFile) {
+            throw ValidationException::withMessages([
+                'file' => 'File upload khong hop le.',
+            ]);
+        }
+
+        $extension = mb_strtolower((string) $file->getClientOriginalExtension(), 'UTF-8');
+        if (!in_array($extension, ['xlsx', 'xls'], true)) {
+            throw ValidationException::withMessages([
+                'file' => 'File phai co dinh dang Excel (.xlsx hoac .xls).',
+            ]);
+        }
+
+        return $file;
     }
 }

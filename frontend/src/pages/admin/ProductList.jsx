@@ -399,6 +399,96 @@ function getDisplayStock(product) {
     return Number.isFinite(numericStock) ? numericStock : 0;
 }
 
+function isAdminListParentProduct(product) {
+    return ['configurable', 'grouped', 'bundle'].includes(String(product?.type || '').toLowerCase());
+}
+
+function resolveAdminListDisplayPrices(product, options = {}) {
+    const isSubRow = Boolean(options.isSubRow);
+    const isParent = isAdminListParentProduct(product);
+    let displayCostPrice = normalizeRoundedImportCostNumber(product?.expected_cost ?? product?.cost_price);
+    let displayPrice = product?.price;
+    const variants = Array.isArray(product?.variations) ? product.variations : [];
+
+    if (isParent && !isSubRow) {
+        if (String(product?.type || '').toLowerCase() === 'grouped') {
+            const components = Array.isArray(product?.grouped_items) ? product.grouped_items : [];
+            if (components.length > 0) {
+                displayCostPrice = components.reduce((sum, item) => (
+                    sum + ((normalizeRoundedImportCostNumber(item?.expected_cost ?? item?.cost_price) ?? 0) * (item?.pivot?.quantity || 1))
+                ), 0);
+
+                if (product?.price_type === 'sum') {
+                    displayPrice = components.reduce((sum, item) => (
+                        sum + (Number(item?.price || 0) * (item?.pivot?.quantity || 1))
+                    ), 0);
+                }
+            }
+        } else if (variants.length > 0) {
+            const variantCostPrices = variants.map((variant) => normalizeRoundedImportCostNumber(variant?.expected_cost ?? variant?.cost_price));
+            const firstCostPrice = variantCostPrices[0];
+            const allCostSame = variantCostPrices.every((costPrice) => (
+                costPrice !== null && costPrice !== undefined && Number(costPrice) === Number(firstCostPrice)
+            ));
+            displayCostPrice = allCostSame ? firstCostPrice : null;
+
+            const variantPrices = variants.map((variant) => variant?.price);
+            const firstPrice = variantPrices[0];
+            const allPriceSame = variantPrices.every((price) => (
+                price !== null && price !== undefined && Number(price) === Number(firstPrice)
+            ));
+            displayPrice = allPriceSame ? firstPrice : null;
+        }
+    }
+
+    return {
+        displayCostPrice,
+        displayPrice,
+        isParent,
+        variantCount: variants.length,
+    };
+}
+
+function formatAdminListMoney(value) {
+    const numericValue = normalizeWholeMoneyNumber(value);
+
+    if (numericValue === null || !Number.isFinite(numericValue) || numericValue <= 0) {
+        return '';
+    }
+
+    return `${new Intl.NumberFormat('vi-VN').format(Math.floor(numericValue))}\u20ab`;
+}
+
+function getAdminListPriceLabel(product, options = {}) {
+    const { displayPrice, isParent, variantCount } = resolveAdminListDisplayPrices(product, options);
+    const formattedDisplayPrice = formatAdminListMoney(displayPrice);
+
+    if (formattedDisplayPrice) {
+        return formattedDisplayPrice;
+    }
+
+    if (isParent && variantCount > 0) {
+        return 'Nhiều giá';
+    }
+
+    return formatAdminListMoney(product?.price) || '--';
+}
+
+function getAdminListPriceCopyValue(product, options = {}) {
+    const { displayPrice } = resolveAdminListDisplayPrices(product, options);
+    const normalizedDisplayPrice = normalizeWholeMoneyNumber(displayPrice);
+
+    if (normalizedDisplayPrice !== null && Number.isFinite(normalizedDisplayPrice) && normalizedDisplayPrice > 0) {
+        return Math.floor(normalizedDisplayPrice);
+    }
+
+    const normalizedProductPrice = normalizeWholeMoneyNumber(product?.price);
+
+    return normalizedProductPrice !== null && Number.isFinite(normalizedProductPrice) && normalizedProductPrice > 0
+        ? Math.floor(normalizedProductPrice)
+        : null;
+}
+
 function getGoogleMerchantStatus(product) {
     const status = String(product?.google_merchant_sync_status || 'not_synced');
     const meta = {
@@ -4748,8 +4838,301 @@ const ProductList = () => {
         );
     };
 
+    const mobileSelectedProducts = products.filter((product) => (
+        selectedIds.some((selectedId) => String(selectedId) === String(product.id))
+    ));
+
+    const buildMobileQuoteLine = (product, index, options = {}) => {
+        const sku = String(product?.sku || '').trim();
+        const name = String(product?.name || '').trim() || 'Sản phẩm';
+        const priceLabel = getAdminListPriceLabel(product, options);
+        const productLabel = [sku, name].filter(Boolean).join(' - ');
+
+        return `${index + 1}. ${productLabel}: ${priceLabel}`;
+    };
+
+    const handleCopyMobileQuote = (event) => {
+        if (event) event.stopPropagation();
+        if (mobileSelectedProducts.length === 0) return;
+
+        const text = mobileSelectedProducts
+            .map((product, index) => buildMobileQuoteLine(product, index))
+            .join('\n');
+
+        navigator.clipboard.writeText(text);
+        setCopiedText('mobile_quote');
+        setNotification({
+            type: 'success',
+            message: `Đã sao chép báo giá ${mobileSelectedProducts.length} sản phẩm`,
+        });
+        setTimeout(() => setNotification(null), 2000);
+        setTimeout(() => setCopiedText(null), 2000);
+    };
+
+    const renderMobileProductCard = (product, options = {}) => {
+        const isSubRow = Boolean(options.isSubRow);
+        const parentProduct = options.parentProduct || null;
+        const productKey = String(product?.id || '');
+        const isSelected = selectedIds.some((selectedId) => String(selectedId) === productKey);
+        const isParent = isAdminListParentProduct(product);
+        const canExpand = !isSubRow && isParent;
+        const isExpanded = expandedRows.some((id) => String(id) === productKey);
+        const isExpansionLoading = loadingExpandedIdSet.has(productKey);
+        const editTargetId = getProductEditTargetId(product);
+        const primaryImage = getPrimaryImage(product);
+        const priceLabel = getAdminListPriceLabel(product, { isSubRow });
+        const priceCopyValue = getAdminListPriceCopyValue(product, { isSubRow });
+        const stockValue = getDisplayStock(product);
+        const stockLabel = stockValue > 0 ? `Còn ${formatQuantityValue(stockValue)}` : 'Hết hàng';
+        const unitLabel = resolveProductUnitLabel(product, parentProduct);
+        const typeLabel = isSubRow || isConfigurableVariantChildProduct(product)
+            ? 'Biến thể'
+            : (TYPE_LABELS[product?.type]?.label || product?.type || 'Sản phẩm');
+        const quoteLine = buildMobileQuoteLine(product, 0, { isSubRow }).replace(/^1\.\s*/, '');
+
+        return (
+            <article
+                key={`${isSubRow ? 'mobile-child' : 'mobile'}-${productKey}`}
+                className={`rounded-md border p-3 shadow-sm transition-colors ${
+                    isSubRow
+                        ? 'ml-5 bg-slate-50 border-slate-200'
+                        : (isSelected ? 'border-gold bg-gold/[0.06]' : 'border-primary/10 bg-white')
+                }`}
+            >
+                <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3">
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            if (primaryImage) setPreviewImage({ url: primaryImage, name: product?.name });
+                        }}
+                        className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-primary/10 bg-primary/[0.04] text-primary/25"
+                        aria-label="Xem ảnh sản phẩm"
+                    >
+                        {primaryImage ? (
+                            <img src={primaryImage} className="h-full w-full object-cover" alt="" />
+                        ) : (
+                            <span className="material-symbols-outlined text-[24px]">image</span>
+                        )}
+                    </button>
+
+                    <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            {canExpand ? (
+                                <button
+                                    type="button"
+                                    onClick={(event) => toggleExpandRow(product.id, event)}
+                                    disabled={isExpansionLoading}
+                                    className={`flex size-6 shrink-0 items-center justify-center rounded-full border border-gold/30 text-gold transition-all ${
+                                        isExpanded ? 'bg-gold text-white rotate-90' : 'bg-white'
+                                    } ${isExpansionLoading ? 'cursor-wait opacity-70' : ''}`}
+                                    aria-label={isExpanded ? 'Thu gọn sản phẩm' : 'Xem biến thể sản phẩm'}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">
+                                        {isExpansionLoading ? 'progress_activity' : 'chevron_right'}
+                                    </span>
+                                </button>
+                            ) : null}
+                            <span className="min-w-0 truncate font-mono text-[12px] font-black text-primary">
+                                {product?.sku || 'Chưa có SKU'}
+                            </span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                if (canUpdateProducts && editTargetId) {
+                                    navigateToProductForm(`/admin/products/edit/${editTargetId}`);
+                                }
+                            }}
+                            className="mt-1 block w-full truncate text-left text-[13px] font-black leading-5 text-[#0F172A]"
+                            title={product?.name || ''}
+                        >
+                            {product?.name || 'Chưa có tên sản phẩm'}
+                        </button>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <span className={`rounded-sm px-2 py-0.5 text-[10px] font-black ${
+                                stockValue > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                            }`}>
+                                {stockLabel}
+                            </span>
+                            <span className="rounded-sm bg-primary/[0.06] px-2 py-0.5 text-[10px] font-bold text-primary/70">
+                                {typeLabel}
+                            </span>
+                            {unitLabel ? (
+                                <span className="rounded-sm bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                                    {unitLabel}
+                                </span>
+                            ) : null}
+                        </div>
+                    </div>
+
+                    <div className="min-w-[104px] shrink-0 text-right">
+                        <div className="text-[10px] font-black uppercase text-primary/40">Giá bán</div>
+                        <button
+                            type="button"
+                            onClick={(event) => {
+                                if (priceCopyValue == null) return;
+                                handleCopy(String(priceCopyValue), 'giá bán', event, `mobile-${productKey}-price`);
+                            }}
+                            disabled={priceCopyValue == null}
+                            className={`mt-1 max-w-[122px] truncate text-right font-black leading-6 ${
+                                priceLabel === 'Nhiều giá' ? 'text-[16px] text-amber-700' : 'text-[20px] text-brick'
+                            } ${priceCopyValue == null ? 'cursor-default' : 'hover:text-primary'}`}
+                            title={priceCopyValue == null ? priceLabel : 'Sao chép giá bán'}
+                        >
+                            {priceLabel}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-primary/10 pt-2">
+                    <label className="inline-flex min-w-0 items-center gap-2 text-[12px] font-bold text-primary/70">
+                        <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={() => toggleSelectProduct(product.id)}
+                            className="size-4 shrink-0 accent-primary"
+                        />
+                        <span className="truncate">Chọn báo giá</span>
+                    </label>
+
+                    <div className="flex shrink-0 items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={(event) => handleCopy(quoteLine, 'dòng báo giá', event, `mobile-${productKey}-quote`)}
+                            className="flex size-8 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 hover:bg-primary/5 hover:text-primary"
+                            title="Sao chép dòng báo giá"
+                            aria-label="Sao chép dòng báo giá"
+                        >
+                            <span className="material-symbols-outlined text-[17px]">content_copy</span>
+                        </button>
+                        {canUpdateProducts && (
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    navigateToProductForm(`/admin/products/edit/${editTargetId}`);
+                                }}
+                                className="flex size-8 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/65 hover:bg-primary/5 hover:text-primary"
+                                title="Sửa sản phẩm"
+                                aria-label="Sửa sản phẩm"
+                            >
+                                <span className="material-symbols-outlined text-[17px]">edit</span>
+                            </button>
+                        )}
+                        {isTrashView ? (
+                            <React.Fragment>
+                                {canUpdateProducts && (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => { event.stopPropagation(); handleRestore(product.id); }}
+                                        className="flex size-8 items-center justify-center rounded-sm border border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white"
+                                        title="Khôi phục"
+                                        aria-label="Khôi phục"
+                                    >
+                                        <span className="material-symbols-outlined text-[17px]">restore</span>
+                                    </button>
+                                )}
+                                {canDeleteProductsPermanently && (
+                                    <button
+                                        type="button"
+                                        onClick={(event) => { event.stopPropagation(); handleDelete(product.id); }}
+                                        className="flex size-8 items-center justify-center rounded-sm border border-brick/10 bg-brick/5 text-brick hover:bg-brick hover:text-white"
+                                        title="Xóa vĩnh viễn"
+                                        aria-label="Xóa vĩnh viễn"
+                                    >
+                                        <span className="material-symbols-outlined text-[17px]">delete_forever</span>
+                                    </button>
+                                )}
+                            </React.Fragment>
+                        ) : null}
+                    </div>
+                </div>
+            </article>
+        );
+    };
+
+    const renderMobileProductExpansion = (product) => {
+        const isExpanded = expandedRows.some((id) => String(id) === String(product.id));
+
+        if (!isExpanded) {
+            return null;
+        }
+
+        if (product.type === 'bundle') {
+            const bundleOptionGroups = buildBundleOptionGroups(product.bundle_items || []);
+
+            return (
+                <motion.div
+                    key={`mobile-expanded-${product.id}`}
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="ml-5 space-y-2 overflow-hidden"
+                >
+                    {bundleOptionGroups.length > 0 ? (
+                        bundleOptionGroups.map((option, optionIndex) => (
+                            <div key={`${product.id}-${option.key}`} className="rounded-md border border-primary/10 bg-[#fcfaf7] p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <div className="text-[10px] font-black uppercase text-primary/45">
+                                            Tùy chọn {optionIndex + 1}
+                                        </div>
+                                        <div className="mt-1 truncate text-[12px] font-black text-primary">{option.title}</div>
+                                    </div>
+                                    <div className="shrink-0 text-right text-[11px] font-bold text-primary/60">
+                                        {option.itemCount} SP
+                                    </div>
+                                </div>
+                                <div className="mt-2 space-y-1.5">
+                                    {option.items.map((item) => (
+                                        <div key={item.key} className="flex items-center justify-between gap-2 rounded-sm bg-white px-2 py-1.5">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-[12px] font-bold text-[#0F172A]">{item.name}</div>
+                                                <div className="truncate font-mono text-[10px] text-primary/45">{item.sku || '--'}</div>
+                                            </div>
+                                            <span className="shrink-0 rounded-sm bg-primary/10 px-2 py-0.5 text-[10px] font-black text-primary">x{item.quantity}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))
+                    ) : (
+                        <div className="rounded-md border border-dashed border-primary/15 bg-white px-4 py-3 text-[12px] font-bold text-primary/45">
+                            Bundle này chưa có tùy chọn nào
+                        </div>
+                    )}
+                </motion.div>
+            );
+        }
+
+        const children = product.type === 'grouped'
+            ? (product.grouped_items || [])
+            : (product.variations || []);
+
+        return (
+            <motion.div
+                key={`mobile-expanded-${product.id}`}
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                className="space-y-2 overflow-hidden"
+            >
+                {children.length > 0 ? (
+                    children.map((child) => renderMobileProductCard(child, { isSubRow: true, parentProduct: product }))
+                ) : (
+                    <div className="ml-5 rounded-md border border-dashed border-primary/15 bg-white px-4 py-3 text-[12px] font-bold text-primary/45">
+                        Sản phẩm này chưa có biến thể hoặc thành phần
+                    </div>
+                )}
+            </motion.div>
+        );
+    };
+
     return (
-        <div ref={pageRootRef} className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-6 z-10 w-full h-full">
+        <div ref={pageRootRef} className="absolute inset-0 flex flex-col bg-[#fcfcfa] animate-fade-in p-3 md:p-6 z-10 w-full h-full">
             <style>{`
                 @keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
                 .animate-refresh-spin { animation: refresh-spin 0.8s linear infinite; }
@@ -5509,8 +5892,8 @@ const ProductList = () => {
                 </div>
             )}
 
-            <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex justify-between items-center">
+            <div className="flex-none bg-[#F8FAFC] pb-3 space-y-2 md:pb-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <h1 className="admin-header-title italic">Quản lý sản phẩm</h1>
                     <AccountSelector user={user} />
                 </div>
@@ -5753,7 +6136,7 @@ const ProductList = () => {
                         </button>
                     </div>
 
-                    <div className="flex-1 relative" ref={searchContainerRef}>
+                    <div className="relative w-full min-w-0 md:flex-1" ref={searchContainerRef}>
                         <span className="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-primary/40 text-[16px] pointer-events-none z-10">search</span>
                         <input
                             type="text"
@@ -6362,7 +6745,80 @@ const ProductList = () => {
                 editLinkState={buildProductFormLocationState()}
             />
 
-            <div ref={tableScrollRef} className="flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-md">
+            <div className="flex-1 min-h-0 overflow-y-auto pb-3 pr-1 md:hidden">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                        <div className="text-[13px] font-black text-primary">
+                            {pagination.total} sản phẩm
+                        </div>
+                        {selectedIds.length > 0 ? (
+                            <div className="mt-0.5 text-[11px] font-bold text-gold">
+                                {selectedIds.length} đang chọn
+                            </div>
+                        ) : null}
+                    </div>
+                    {products.length > 0 ? (
+                        <button
+                            type="button"
+                            onClick={toggleSelectAll}
+                            className="shrink-0 rounded-sm border border-primary/15 bg-white px-3 py-2 text-[11px] font-black text-primary shadow-sm"
+                        >
+                            {areAllVisibleProductsSelected ? 'Bỏ chọn' : 'Chọn trang'}
+                        </button>
+                    ) : null}
+                </div>
+
+                {products.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-primary/15 bg-white px-4 py-10 text-center">
+                        <span className="material-symbols-outlined text-[42px] text-primary/25">inventory_2</span>
+                        <p className="mt-2 text-[14px] font-black text-primary">Không tìm thấy sản phẩm</p>
+                        <p className="mt-1 text-[12px] text-primary/50">Thử đổi từ khóa hoặc bộ lọc.</p>
+                    </div>
+                ) : (
+                    <div className="space-y-2.5">
+                        {products.map((product) => (
+                            <React.Fragment key={`mobile-group-${product.id}`}>
+                                {renderMobileProductCard(product)}
+                                <AnimatePresence>
+                                    {renderMobileProductExpansion(product)}
+                                </AnimatePresence>
+                            </React.Fragment>
+                        ))}
+                    </div>
+                )}
+
+                {products.length > 0 ? (
+                    <div className="sticky bottom-0 z-30 mt-3 rounded-md border border-primary/10 bg-white/95 p-2 shadow-[0_-12px_30px_rgba(15,23,42,0.12)] backdrop-blur">
+                        <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 px-1">
+                                <div className="text-[11px] font-black uppercase text-primary/45">Báo giá</div>
+                                <div className="truncate text-[13px] font-black text-primary">
+                                    {mobileSelectedProducts.length > 0
+                                        ? `${mobileSelectedProducts.length} sản phẩm`
+                                        : 'Chưa chọn sản phẩm'}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={handleCopyMobileQuote}
+                                disabled={mobileSelectedProducts.length === 0}
+                                className={`flex h-11 shrink-0 items-center justify-center gap-2 rounded-md px-4 text-[13px] font-black shadow-sm transition-colors ${
+                                    mobileSelectedProducts.length > 0
+                                        ? 'bg-brick text-white hover:bg-umber'
+                                        : 'cursor-not-allowed bg-slate-100 text-primary/35'
+                                }`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">
+                                    {copiedText === 'mobile_quote' ? 'check' : 'receipt_long'}
+                                </span>
+                                <span>Báo giá</span>
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
+            </div>
+
+            <div ref={tableScrollRef} className="hidden flex-1 bg-white border border-primary/10 shadow-xl overflow-auto table-scrollbar relative rounded-md md:block">
                 <table className="text-left border-collapse table-fixed min-w-full admin-text-13" style={{ width: `${totalTableWidth}px` }}>
                     <thead className="admin-table-header sticky top-0 z-20 shadow-sm border-b border-primary/10">
                         <tr>
@@ -6427,9 +6883,7 @@ const ProductList = () => {
                                         ? `Review AI: ${aiReviewState.message}`
                                         : 'Tạo lại review AI cho sản phẩm này';
                                     
-                                    // Custom aggregate price display for parent products
-                                    let displayCostPrice = normalizeRoundedImportCostNumber(p.expected_cost ?? p.cost_price);
-                                    let displayPrice = p.price;
+                                    const { displayCostPrice, displayPrice } = resolveAdminListDisplayPrices(p, { isSubRow });
                                     const pVariants = p.variations || [];
                                     const useVariantNameTextStyle = pIsParent || (!isSubRow && !pUsesChildRowStyle);
                                     const productNameRowClassName = useVariantNameTextStyle
@@ -6438,32 +6892,6 @@ const ProductList = () => {
                                     const productNameTextClassName = useVariantNameTextStyle
                                         ? 'truncate text-[14px] leading-5 font-black tracking-tight text-primary'
                                         : 'truncate text-[13px] leading-[18px] font-bold text-[#111]';
-                                    
-                                    if (pIsParent && !isSubRow) {
-                                        if (p.type === 'grouped') {
-                                            const components = p.grouped_items || [];
-                                            if (components.length > 0) {
-                                                // Calculate sum of cost prices for Grouped Product
-                                                displayCostPrice = components.reduce((sum, item) => sum + ((normalizeRoundedImportCostNumber(item.expected_cost ?? item.cost_price) ?? 0) * (item.pivot?.quantity || 1)), 0);
-                                                
-                                                // Calculate sum of selling prices (if price_type is 'sum')
-                                                if (p.price_type === 'sum') {
-                                                    displayPrice = components.reduce((sum, item) => sum + (Number(item.price || 0) * (item.pivot?.quantity || 1)), 0);
-                                                }
-                                            }
-                                        } else if (pVariants.length > 0) {
-                                            // Existing logic for Configurable products
-                                            const vCostPrices = pVariants.map(v => normalizeRoundedImportCostNumber(v.expected_cost ?? v.cost_price));
-                                            const firstCost = vCostPrices[0];
-                                            const allCostSame = vCostPrices.every(cp => cp !== null && cp !== undefined && Number(cp) === Number(firstCost));
-                                            displayCostPrice = allCostSame ? firstCost : null;
-
-                                            const vPrices = pVariants.map(v => v.price);
-                                            const firstPrice = vPrices[0];
-                                            const allPriceSame = vPrices.every(pr => pr !== null && pr !== undefined && Number(pr) === Number(firstPrice));
-                                            displayPrice = allPriceSame ? firstPrice : null;
-                                        }
-                                    }
                                     
                                     return (
                                         <motion.tr
@@ -7028,8 +7456,8 @@ const ProductList = () => {
                 </table>
             </div>
 
-            <div className="flex-none mt-4 flex justify-between items-center admin-text-13 border-t-2 border-primary/10 pt-4">
-                <div className="flex items-center gap-4">
+            <div className="flex-none mt-3 flex flex-col gap-3 admin-text-13 border-t-2 border-primary/10 pt-3 md:mt-4 md:flex-row md:items-center md:justify-between md:pt-4">
+                <div className="flex flex-wrap items-center gap-3 md:gap-4">
                     <div className="flex items-center gap-2">
                         <span className="font-bold text-primary/80 uppercase text-[10px] tracking-widest">Hiển thị:</span>
                         <select className="border border-primary/20 rounded px-2 py-1 font-bold text-primary bg-white outline-none focus:border-primary transition-colors" value={pagination.per_page} onChange={(e) => { const lp = parseInt(e.target.value); fetchProducts(1, filters, sortConfig, lp); }}>

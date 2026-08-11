@@ -198,6 +198,7 @@ const DailyProfitReport = () => {
         { id: 'ads_spend', label: 'Tổng Ads' },
         { id: 'tax', label: 'Thuế tạm tính' },
         { id: 'fixed_cost', label: 'Chi phí cố định' },
+        { id: 'employee_salary', label: 'Lương NV' },
         { id: 'extra_profit', label: 'Lãi/lỗ Đổi trả' },
         { id: 'profit', label: 'Lợi nhuận tạm tính' },
         { id: 'efficiency', label: 'Hiệu quả (%)' },
@@ -214,9 +215,10 @@ const DailyProfitReport = () => {
         'packaging_fee': 'Tổng số đơn hàng x Phí gói hàng định mức (VNĐ/đơn).',
         'ads_spend': 'Chi phí quảng cáo Facebook từ tài khoản quảng cáo liên kết.',
         'tax': 'Tỉ lệ thuế % x (Doanh thu thực - Chi phí vận chuyển).',
-        'fixed_cost': 'Chi phí cố định hàng ngày (Mặt bằng, lương, điện nước...) đã phân bổ.',
+        'fixed_cost': 'Chi phí cố định hàng ngày đã phân bổ như mặt bằng, điện nước và các khoản định kỳ khác.',
+        'employee_salary': 'Tổng lương nhân viên phải trả trong ngày, lấy từ bảng nhân sự và chấm công.',
         'extra_profit': 'Tổng lợi nhuận/thua lỗ phát sinh từ các đơn Đổi trả và đơn Giao 1 phần.',
-        'profit': '(Doanh thu thực - Giá vốn thực - Ship - Gói hàng - Thuế - Ads - CP cố định) + Lãi/lỗ Đổi trả.',
+        'profit': '(Doanh thu thực - Giá vốn thực - Ship - Gói hàng - Thuế - Ads - CP cố định - Lương NV) + Lãi/lỗ Đổi trả.',
         'efficiency': '(Lợi nhuận tạm tính / Doanh thu thực) x 100%.'
     };
 
@@ -231,7 +233,17 @@ const DailyProfitReport = () => {
                     ? parsed.filter(id => knownIds.includes(id))
                     : [];
                 defaultCols.forEach(col => {
-                    if (!merged.includes(col.id)) merged.push(col.id);
+                    if (merged.includes(col.id)) return;
+
+                    if (col.id === 'employee_salary') {
+                        const fixedCostIndex = merged.indexOf('fixed_cost');
+                        if (fixedCostIndex >= 0) {
+                            merged.splice(fixedCostIndex + 1, 0, col.id);
+                            return;
+                        }
+                    }
+
+                    merged.push(col.id);
                 });
                 return merged;
             }
@@ -365,6 +377,9 @@ const DailyProfitReport = () => {
             );
             case 'fixed_cost': return renderTH("px-3 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center",
                 <>Chi phí<br/>cố định</>
+            );
+            case 'employee_salary': return renderTH("px-3 py-4 text-[15px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center bg-pink-50/20",
+                <>Lương<br/>NV</>
             );
             case 'extra_profit': return renderTH("px-3 py-4 text-[14px] font-bold text-gray-700 border-b border-gray-200 leading-tight align-middle text-center text-orange-700 bg-orange-50/20",
                 <>Lãi/lỗ<br/>Đổi trả</>
@@ -526,6 +541,12 @@ const DailyProfitReport = () => {
                                      <span className="text-[13px] font-normal opacity-80">{(aggregatedTotal.revenue_raw > 0 ? (aggregatedTotal.fixed_cost / aggregatedTotal.revenue_raw * 100) : 0).toFixed(1)}%</span>
                                  </td>
 );
+            case 'employee_salary': return (
+<td  key='employee_salary' className="px-3 py-3 text-[13px] font-bold text-center bg-white/10">
+                                     {formatNumber(aggregatedTotal.employee_salary)}<br/>
+                                     <span className="text-[13px] font-normal opacity-80">{(aggregatedTotal.revenue_raw > 0 ? (aggregatedTotal.employee_salary / aggregatedTotal.revenue_raw * 100) : 0).toFixed(1)}%</span>
+                                 </td>
+);
             case 'extra_profit': return (
 <td  key='extra_profit' className={`px-3 py-3 text-[13px] font-bold text-center bg-white/10 ${aggregatedTotal.extra_profit < 0 ? 'text-red-200' : 'text-orange-200'}`}>
                                      {renderExtraProfitValue({
@@ -627,6 +648,12 @@ const DailyProfitReport = () => {
 <td  key='fixed_cost' className="px-3 py-3 text-[13px] text-gray-600 text-center">
                                              {formatNumber(row.fixed_cost)}<br/>
                                              <span className="text-[13px] text-gray-400 font-normal">{row.revenue_raw > 0 ? (row.fixed_cost / row.revenue_raw * 100).toFixed(1) : 0}%</span>
+                                         </td>
+);
+            case 'employee_salary': return (
+<td  key='employee_salary' className="px-3 py-3 text-[13px] text-pink-700 text-center bg-pink-50/10">
+                                             {formatNumber(row.employee_salary || row.salary || 0)}<br/>
+                                             <span className="text-[13px] text-gray-400 font-normal">{row.revenue_raw > 0 ? ((row.employee_salary || row.salary || 0) / row.revenue_raw * 100).toFixed(1) : 0}%</span>
                                          </td>
 );
             case 'extra_profit': return (
@@ -1303,6 +1330,7 @@ const DailyProfitReport = () => {
         ads_spend_raw: (acc.ads_spend_raw || 0) + (row.ads_spend_raw || 0),
         tax: acc.tax + (row.tax || 0),
         fixed_cost: acc.fixed_cost + (row.fixed_cost || 0),
+        employee_salary: acc.employee_salary + (row.employee_salary || row.salary || 0),
         exchange_return_order_count: acc.exchange_return_order_count + (row.exchange_return_order_count || 0),
         partial_delivery_order_count: acc.partial_delivery_order_count + (row.partial_delivery_order_count || 0),
         extra_profit_order_count: acc.extra_profit_order_count + (row.extra_profit_order_count || 0),
@@ -1312,7 +1340,7 @@ const DailyProfitReport = () => {
         order_count: 0, revenue_raw: 0, revenue_actual: 0, cost_raw: 0, cost_actual: 0,
         shipping_fee: 0, packaging_fee: 0,
         fb_ads_spend: 0, fb_ads_spend_raw: 0, google_ads_spend: 0, google_ads_spend_raw: 0,
-        ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0,
+        ads_spend: 0, ads_spend_raw: 0, tax: 0, fixed_cost: 0, employee_salary: 0,
         exchange_return_order_count: 0, partial_delivery_order_count: 0, extra_profit_order_count: 0, extra_profit: 0, profit: 0
     });
 
@@ -1875,7 +1903,7 @@ const DailyProfitReport = () => {
 
             {/* Ghi chú chân trang */}
             <div className="mt-4 flex flex-col md:flex-row justify-between items-start md:items-center text-[12px] text-gray-400 italic">
-                <p>* Dữ liệu Lợi nhuận tạm tính = (Doanh thu thực - Giá vốn thực - Phí ship - Gói hàng - Thuế - Ads) + Chênh lệch đơn đổi trả.</p>
+                <p>* Dữ liệu Lợi nhuận tạm tính = (Doanh thu thực - Giá vốn thực - Phí ship - Gói hàng - Thuế - Ads - Chi phí cố định - Lương NV) + Chênh lệch đơn đổi trả.</p>
                 <div className="flex gap-4 mt-2 md:mt-0">
                     <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> {'> 25% (Rất tốt)'}</span>
                     <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div> 15-25% (Ổn định)</span>

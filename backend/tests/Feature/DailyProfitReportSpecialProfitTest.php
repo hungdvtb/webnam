@@ -22,10 +22,12 @@ class DailyProfitReportSpecialProfitTest extends TestCase
             'name' => 'Daily Special Profit Test Account',
         ]);
 
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'is_admin' => true,
+        ]);
         $user->accounts()->attach($account->id, ['role' => 'owner']);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['*']);
 
         FinDailyReportConfig::query()->create([
             'return_rate' => 0,
@@ -123,10 +125,12 @@ class DailyProfitReportSpecialProfitTest extends TestCase
             'name' => 'Daily Special Profit Fallback Test Account',
         ]);
 
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'is_admin' => true,
+        ]);
         $user->accounts()->attach($account->id, ['role' => 'owner']);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['*']);
 
         FinDailyReportConfig::query()->create([
             'return_rate' => 0,
@@ -173,10 +177,12 @@ class DailyProfitReportSpecialProfitTest extends TestCase
             'name' => 'Daily Report Saved Ads Test Account',
         ]);
 
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'is_admin' => true,
+        ]);
         $user->accounts()->attach($account->id, ['role' => 'owner']);
 
-        Sanctum::actingAs($user);
+        Sanctum::actingAs($user, ['*']);
 
         FinDailyReportConfig::query()->create([
             'return_rate' => 0,
@@ -198,13 +204,13 @@ class DailyProfitReportSpecialProfitTest extends TestCase
             'platform' => DailyAdsSpend::PLATFORM_FACEBOOK,
             'date' => '2026-04-18',
             'amount' => 120,
-            'account_id' => null,
+            'account_id' => 123,
         ]);
         DailyAdsSpend::query()->create([
             'platform' => DailyAdsSpend::PLATFORM_GOOGLE,
             'date' => '2026-04-18',
             'amount' => 80,
-            'account_id' => null,
+            'account_id' => 4567890123,
         ]);
 
         Http::fake(function () {

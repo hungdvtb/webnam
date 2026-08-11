@@ -804,6 +804,59 @@ const normalizeProductSearchText = (value) => String(value ?? '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
+const normalizeStoreIdentityText = (value) => normalizeProductSearchText(
+    String(value ?? '').replace(/[\u0111\u0110]/g, 'd')
+);
+const getStoreIdentityText = (account = {}) => [
+    account?.name,
+    account?.site_code,
+    account?.domain,
+    account?.subdomain,
+].map(normalizeStoreIdentityText).filter(Boolean).join(' ');
+const compactStoreIdentityText = (account = {}) => getStoreIdentityText(account).replace(/\s+/g, '');
+const isDongDaiThanhAccount = (account = {}) => {
+    const identityText = getStoreIdentityText(account);
+    const compactIdentityText = compactStoreIdentityText(account);
+
+    return identityText.includes('dong dai thanh')
+        || compactIdentityText.includes('dongdaithanh')
+        || compactIdentityText.includes('gomdaithanhcn2')
+        || compactIdentityText.includes('chinhanh2');
+};
+const isGomDaiThanhAccount = (account = {}) => {
+    if (isDongDaiThanhAccount(account)) return false;
+
+    const identityText = getStoreIdentityText(account);
+    const compactIdentityText = compactStoreIdentityText(account);
+
+    return (identityText.includes('gom') && identityText.includes('dai thanh'))
+        || compactIdentityText.includes('gomsudaithanh')
+        || compactIdentityText.includes('gomdaithanh')
+        || compactIdentityText.includes('gsdt');
+};
+const mergeQuoteTemplates = (...templateGroups) => {
+    const mergedTemplates = new Map();
+
+    templateGroups.flat().forEach((template) => {
+        if (!template || typeof template !== 'object') return;
+
+        const templateId = Number(template.id) || 0;
+        const accountId = Number(template.account_id) || 0;
+        const fallbackKey = [
+            normalizeCanvasText(template.name).toLowerCase(),
+            normalizeCanvasText(template.image_url),
+        ].join('|');
+        const key = templateId > 0
+            ? `${accountId || 'account'}:${templateId}`
+            : `fallback:${fallbackKey}`;
+
+        if (!mergedTemplates.has(key)) {
+            mergedTemplates.set(key, template);
+        }
+    });
+
+    return sortQuoteTemplates(Array.from(mergedTemplates.values()));
+};
 const compactProductSearchText = (value) => normalizeProductSearchText(value).replace(/\s+/g, '');
 const PRODUCT_PLACEHOLDER_COMPACT_NAMES = new Set(['sanpham', 'sanphambundle']);
 const isPlaceholderProductName = (value, productId = 0) => {
@@ -1871,6 +1924,89 @@ const resolveSignedMoneyInputCommitValue = (value, fallback = 0) => {
     const rawValue = String(value ?? '').replace(/\s+/g, '');
     return rawValue === '' || rawValue === '-' ? 0 : fallback;
 };
+const DISCOUNT_INPUT_MODE_AMOUNT = 'amount';
+const DISCOUNT_INPUT_MODE_PERCENT = 'percent';
+const DISCOUNT_PERCENT_ROUNDING_UNIT = 10000;
+const isDiscountPercentInputValue = (value) => String(value ?? '').includes('%');
+const normalizeDiscountPercentInputValue = (value) => {
+    const rawValue = String(value ?? '').replace(/\s+/g, '');
+    if (rawValue === '') {
+        return '';
+    }
+
+    const isNegative = rawValue.startsWith('-');
+    let numberText = '';
+    let hasDecimalSeparator = false;
+
+    rawValue.split('').forEach((char) => {
+        if (/[0-9]/.test(char)) {
+            numberText += char;
+            return;
+        }
+
+        if ((char === '.' || char === ',') && !hasDecimalSeparator) {
+            numberText += ',';
+            hasDecimalSeparator = true;
+        }
+    });
+
+    if (numberText.startsWith(',')) {
+        numberText = `0${numberText}`;
+    }
+
+    return `${isNegative ? '-' : ''}${numberText}%`;
+};
+const formatDiscountPercentInputValue = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+        return '';
+    }
+
+    return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(numericValue);
+};
+const stripDiscountPercentSymbol = (value) => normalizeDiscountPercentInputValue(value).replace('%', '');
+const parseDiscountPercentInputValue = (value, { requireSymbol = true } = {}) => {
+    if (requireSymbol && !isDiscountPercentInputValue(value)) {
+        return null;
+    }
+
+    const normalizedValue = normalizeDiscountPercentInputValue(value)
+        .replace('%', '')
+        .replace(',', '.');
+    if (normalizedValue === '' || normalizedValue === '-' || normalizedValue === '.' || normalizedValue === '-.') {
+        return null;
+    }
+
+    const numericValue = Number(normalizedValue);
+    return Number.isFinite(numericValue) ? numericValue : null;
+};
+const roundMoneyToNearestUnit = (value, unit = DISCOUNT_PERCENT_ROUNDING_UNIT) => {
+    const numericValue = Number(value);
+    const normalizedUnit = Number(unit);
+    if (!Number.isFinite(numericValue) || !Number.isFinite(normalizedUnit) || normalizedUnit <= 0) {
+        return 0;
+    }
+
+    const sign = numericValue < 0 ? -1 : 1;
+    return sign * Math.round(Math.abs(numericValue) / normalizedUnit) * normalizedUnit;
+};
+const calculateDiscountAmountFromPercent = (percentValue, baseAmount) => {
+    const normalizedPercent = Number(percentValue);
+    const normalizedBaseAmount = parseMoneyNumber(baseAmount, 0) || 0;
+    if (!Number.isFinite(normalizedPercent) || !Number.isFinite(normalizedBaseAmount)) {
+        return 0;
+    }
+
+    return roundMoneyToNearestUnit((normalizedBaseAmount * normalizedPercent) / 100);
+};
+const resolveDiscountInputCommitValue = (value, fallback = 0, baseAmount = 0, inputMode = DISCOUNT_INPUT_MODE_AMOUNT) => {
+    if (inputMode === DISCOUNT_INPUT_MODE_PERCENT || isDiscountPercentInputValue(value)) {
+        const percentValue = parseDiscountPercentInputValue(value, { requireSymbol: false });
+        return percentValue === null ? 0 : calculateDiscountAmountFromPercent(percentValue, baseAmount);
+    }
+
+    return resolveSignedMoneyInputCommitValue(value, fallback);
+};
 const resolveFormattedMoneyCaretPosition = (formattedValue, digitCountBeforeCaret) => {
     if (digitCountBeforeCaret <= 0) {
         return formattedValue.startsWith('-') ? 1 : 0;
@@ -2713,6 +2849,81 @@ const applySequentialOrderLineSortOrder = (items = []) => (Array.isArray(items) 
     ...item,
     sort_order: index + 1,
 }));
+const MAX_DELETED_ORDER_LINE_ITEM_BATCHES = 10;
+const cloneOrderLineItemSnapshot = (item = {}) => {
+    if (!item || typeof item !== 'object') {
+        return {};
+    }
+
+    if (typeof structuredClone === 'function') {
+        try {
+            return structuredClone(item);
+        } catch {
+            // Fall back for non-cloneable values.
+        }
+    }
+
+    return JSON.parse(JSON.stringify(item));
+};
+const createDeletedOrderLineItemBatch = (items = [], shouldDeleteItem = () => false) => {
+    const deletedItems = [];
+
+    (Array.isArray(items) ? items : []).forEach((item, index) => {
+        if (!shouldDeleteItem(item, index)) {
+            return;
+        }
+
+        deletedItems.push({
+            index,
+            item: cloneOrderLineItemSnapshot(item),
+        });
+    });
+
+    return {
+        id: `deleted-order-items-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        items: deletedItems,
+    };
+};
+const restoreDeletedOrderLineItemBatch = (currentItems = [], deletedItems = []) => {
+    const nextItems = Array.isArray(currentItems) ? [...currentItems] : [];
+    const existingLineIds = new Set(
+        nextItems
+            .map((item) => normalizeCanvasText(item?.line_id))
+            .filter(Boolean)
+    );
+    const restoredLineIds = [];
+
+    [...(Array.isArray(deletedItems) ? deletedItems : [])]
+        .sort((a, b) => (Number(a?.index) || 0) - (Number(b?.index) || 0))
+        .forEach((entry) => {
+            const restoredItem = cloneOrderLineItemSnapshot(entry?.item || {});
+            if (!restoredItem || typeof restoredItem !== 'object') {
+                return;
+            }
+
+            const existingLineId = normalizeCanvasText(restoredItem.line_id);
+            if (!existingLineId || existingLineIds.has(existingLineId)) {
+                restoredItem.line_id = createOrderLineId('restored-order-item');
+            }
+
+            const restoredLineId = normalizeCanvasText(restoredItem.line_id);
+            if (restoredLineId) {
+                existingLineIds.add(restoredLineId);
+                restoredLineIds.push(restoredLineId);
+            }
+
+            const targetIndex = Math.min(
+                Math.max(Number(entry?.index) || 0, 0),
+                nextItems.length
+            );
+            nextItems.splice(targetIndex, 0, restoredItem);
+        });
+
+    return {
+        items: applySequentialOrderLineSortOrder(nextItems),
+        restoredLineIds,
+    };
+};
 const createOrderLineItem = (payload = {}) => {
     const {
         line_id,
@@ -4584,6 +4795,7 @@ const OrderForm = () => {
     const [productQuickFilterScopeKey, setProductQuickFilterScopeKey] = useState('');
     const [showProductQuickFilterPanel, setShowProductQuickFilterPanel] = useState(false);
     const [selectedLineItemIds, setSelectedLineItemIds] = useState(new Set());
+    const [deletedLineItemBatches, setDeletedLineItemBatches] = useState([]);
     const [showBulkReplaceModal, setShowBulkReplaceModal] = useState(false);
     const [showPriceMultiplierModal, setShowPriceMultiplierModal] = useState(false);
     const [showColumnConfig, setShowColumnConfig] = useState(false);
@@ -4597,6 +4809,8 @@ const OrderForm = () => {
     });
     const [quoteSettings, setQuoteSettings] = useState(defaultQuoteSettings);
     const [quoteTemplates, setQuoteTemplates] = useState([]);
+    const [sourceQuoteTemplates, setSourceQuoteTemplates] = useState([]);
+    const [sourceQuoteTemplatesLoading, setSourceQuoteTemplatesLoading] = useState(false);
     const [showSupplementItemsModal, setShowSupplementItemsModal] = useState(false);
     const [showQuoteTemplatePicker, setShowQuoteTemplatePicker] = useState(false);
     const [quoteTemplateSearch, setQuoteTemplateSearch] = useState('');
@@ -4646,6 +4860,9 @@ const OrderForm = () => {
     const profitCenterManualOverrideRef = useRef(false);
     const lineItemSelectionAnchorRef = useRef('');
     const lineItemSelectionDragRef = useRef(null);
+    useEffect(() => {
+        setDeletedLineItemBatches([]);
+    }, [duplicateFromId, id, leadId]);
     const orderAiQuickRuleOptions = useMemo(
         () => buildOrderAiQuickRuleOptions(orderAiTrainingRules.length > 0 ? orderAiTrainingRules : orderAiRules),
         [orderAiRules, orderAiTrainingRules]
@@ -4678,6 +4895,38 @@ const OrderForm = () => {
     const selectedCrossSellSourceAccounts = useMemo(() => (
         crossSellSourceAccounts.filter((account) => enabledCrossSellAccountIdSet.has(normalizeAccountId(account?.id)))
     ), [crossSellSourceAccounts, enabledCrossSellAccountIdSet]);
+    const activeProductSourceAccount = useMemo(() => (
+        productSourceAccounts.find((account) => normalizeAccountId(account?.id) === normalizeAccountId(activeAccountId)) || null
+    ), [activeAccountId, productSourceAccounts]);
+    const quoteTemplateSourceAccountIds = useMemo(() => {
+        const sourceAccountIds = [];
+
+        selectedCrossSellSourceAccounts
+            .filter(isDongDaiThanhAccount)
+            .forEach((account) => {
+                const accountId = normalizeAccountId(account?.id);
+                if (accountId) {
+                    sourceAccountIds.push(accountId);
+                }
+            });
+
+        if (activeProductSourceAccount && isDongDaiThanhAccount(activeProductSourceAccount)) {
+            productSourceAccounts
+                .filter(isGomDaiThanhAccount)
+                .forEach((account) => {
+                    const accountId = normalizeAccountId(account?.id);
+                    if (accountId && accountId !== normalizeAccountId(activeAccountId)) {
+                        sourceAccountIds.push(accountId);
+                    }
+                });
+        }
+
+        return Array.from(new Set(sourceAccountIds));
+    }, [activeAccountId, activeProductSourceAccount, productSourceAccounts, selectedCrossSellSourceAccounts]);
+    const quoteTemplateSourceAccountKey = useMemo(
+        () => quoteTemplateSourceAccountIds.join(','),
+        [quoteTemplateSourceAccountIds]
+    );
     const visibleProductSourceAccountIds = useMemo(() => new Set([
         normalizeAccountId(activeAccountId),
         ...enabledCrossSellAccountIds.map(normalizeAccountId),
@@ -5509,6 +5758,7 @@ const OrderForm = () => {
         status: 'new',
         province: ''
     });
+    const [discountInputMode, setDiscountInputMode] = useState(DISCOUNT_INPUT_MODE_AMOUNT);
     const [discountInputValue, setDiscountInputValue] = useState(() => formatSignedMoneyInputValue(0));
     const discountInputRef = useRef(null);
     useEffect(() => {
@@ -5568,8 +5818,12 @@ const OrderForm = () => {
         ));
     }, [automaticDiscountAdjustment, formData.manual_discount, formData.order_type, formData.supplement_items]);
     useEffect(() => {
+        if (discountInputMode === DISCOUNT_INPUT_MODE_PERCENT) {
+            return;
+        }
+
         setDiscountInputValue(formatSignedMoneyInputValue(formData.discount));
-    }, [formData.discount]);
+    }, [discountInputMode, formData.discount]);
     const selectedQuickSetupEntryKeys = useMemo(
         () => new Set(currentProductQuickSetupItems.map(getProductQuickSetupEntryKey).filter(Boolean)),
         [currentProductQuickSetupItems]
@@ -7002,6 +7256,75 @@ const OrderForm = () => {
     );
     const isAllLineItemsSelected = formData.items.length > 0 && selectedOrderLineItems.length === formData.items.length;
     const hasAnyLineItemSelected = selectedOrderLineItems.length > 0;
+    const lastDeletedLineItemBatch = deletedLineItemBatches[deletedLineItemBatches.length - 1] || null;
+    const deletedLineItemRestoreCount = Array.isArray(lastDeletedLineItemBatch?.items)
+        ? lastDeletedLineItemBatch.items.length
+        : 0;
+    const hasDeletedLineItemRestore = deletedLineItemRestoreCount > 0;
+
+    const pushDeletedLineItemBatch = useCallback((batch) => {
+        const batchItems = Array.isArray(batch?.items)
+            ? batch.items.filter((entry) => entry?.item)
+            : [];
+
+        if (batchItems.length === 0) {
+            return;
+        }
+
+        setDeletedLineItemBatches((prev) => [
+            ...prev,
+            {
+                ...batch,
+                items: batchItems,
+            },
+        ].slice(-MAX_DELETED_ORDER_LINE_ITEM_BATCHES));
+    }, []);
+
+    const handleRestoreLastDeletedLineItems = useCallback((event) => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+
+        if (!lastDeletedLineItemBatch || deletedLineItemRestoreCount === 0) {
+            showTransientNotification('error', 'Chưa có sản phẩm vừa xóa để khôi phục.');
+            return;
+        }
+
+        const restoreResult = restoreDeletedOrderLineItemBatch(formData.items, lastDeletedLineItemBatch.items);
+        if (restoreResult.restoredLineIds.length === 0) {
+            setDeletedLineItemBatches((prev) => prev.filter((batch) => batch?.id !== lastDeletedLineItemBatch.id));
+            showTransientNotification('error', 'Không khôi phục được nhóm sản phẩm vừa xóa.');
+            return;
+        }
+
+        closeOrderAiReplacePicker();
+        closeActualProductPicker();
+        setShowOrderAiInputReviewModal(false);
+        setFormData((prev) => ({
+            ...prev,
+            items: restoreResult.items,
+            cost_total: calculateItemsCostTotal(restoreResult.items),
+        }));
+        setDeletedLineItemBatches((prev) => {
+            const latestIndex = prev.length - 1;
+            if (prev[latestIndex]?.id === lastDeletedLineItemBatch.id) {
+                return prev.slice(0, -1);
+            }
+
+            return prev.filter((batch) => batch?.id !== lastDeletedLineItemBatch.id);
+        });
+        setSelectedLineItemIds(new Set(restoreResult.restoredLineIds));
+        lineItemSelectionAnchorRef.current = restoreResult.restoredLineIds[0] || '';
+        lineItemSelectionDragRef.current = null;
+        setSelectedOrderLineId(restoreResult.restoredLineIds[0] || '');
+        showTransientNotification('success', `Đã khôi phục ${restoreResult.restoredLineIds.length} sản phẩm vừa xóa.`);
+    }, [
+        closeActualProductPicker,
+        closeOrderAiReplacePicker,
+        deletedLineItemRestoreCount,
+        formData.items,
+        lastDeletedLineItemBatch,
+        showTransientNotification,
+    ]);
 
     const handleRemoveSelectedLineItems = useCallback((event) => {
         event?.preventDefault?.();
@@ -7021,10 +7344,14 @@ const OrderForm = () => {
 
         showModal({
             title: `Xóa ${selectedCount} sản phẩm đã chọn?`,
-            content: `Thao tác này sẽ xóa ${selectedCount} dòng sản phẩm đang được tick khỏi đơn.<br/>Bạn sẽ không thể khôi phục tự động sau khi xác nhận.`,
+            content: `Thao tác này sẽ xóa ${selectedCount} dòng sản phẩm đang được tick khỏi đơn.<br/>Sau khi xóa có thể bấm nút Khôi phục xóa cạnh Nhân hệ số để lấy lại nhóm này.`,
             type: 'warning',
             actionText: 'Xóa đã chọn',
             onAction: () => {
+                pushDeletedLineItemBatch(createDeletedOrderLineItemBatch(
+                    formData.items,
+                    (item) => selectedIds.has(normalizeCanvasText(item?.line_id))
+                ));
                 closeOrderAiReplacePicker();
                 closeActualProductPicker();
                 setShowOrderAiInputReviewModal(false);
@@ -7059,7 +7386,8 @@ const OrderForm = () => {
     }, [
         closeActualProductPicker,
         closeOrderAiReplacePicker,
-        formData.items.length,
+        formData.items,
+        pushDeletedLineItemBatch,
         selectedOrderLineItems,
         showModal,
         showTransientNotification,
@@ -8498,6 +8826,78 @@ const OrderForm = () => {
         return nextQuoteTemplates;
     }, []);
 
+    const loadSourceQuoteTemplates = useCallback(async (accountIds = quoteTemplateSourceAccountIds) => {
+        const normalizedAccountIds = Array.from(new Set(
+            (Array.isArray(accountIds) ? accountIds : [])
+                .map(normalizeAccountId)
+                .filter(Boolean)
+        ));
+
+        if (normalizedAccountIds.length === 0) {
+            return [];
+        }
+
+        const response = await orderApi.getBootstrap({
+            mode: 'form',
+            quote_source_account_ids: normalizedAccountIds.join(','),
+        });
+        const bootstrap = response.data || {};
+
+        return sortQuoteTemplates(bootstrap.quote_templates || []);
+    }, [quoteTemplateSourceAccountIds]);
+
+    const refreshSourceQuoteTemplates = useCallback(async () => {
+        if (quoteTemplateSourceAccountIds.length === 0) {
+            setSourceQuoteTemplates([]);
+            setSourceQuoteTemplatesLoading(false);
+            return [];
+        }
+
+        setSourceQuoteTemplatesLoading(true);
+
+        try {
+            const nextQuoteTemplates = await loadSourceQuoteTemplates(quoteTemplateSourceAccountIds);
+            setSourceQuoteTemplates(nextQuoteTemplates);
+            return nextQuoteTemplates;
+        } finally {
+            setSourceQuoteTemplatesLoading(false);
+        }
+    }, [loadSourceQuoteTemplates, quoteTemplateSourceAccountIds]);
+
+    useEffect(() => {
+        let isDisposed = false;
+
+        if (quoteTemplateSourceAccountIds.length === 0) {
+            setSourceQuoteTemplates([]);
+            setSourceQuoteTemplatesLoading(false);
+            return undefined;
+        }
+
+        setSourceQuoteTemplatesLoading(true);
+
+        loadSourceQuoteTemplates(quoteTemplateSourceAccountIds)
+            .then((nextQuoteTemplates) => {
+                if (!isDisposed) {
+                    setSourceQuoteTemplates(nextQuoteTemplates);
+                }
+            })
+            .catch((error) => {
+                if (!isDisposed) {
+                    console.error('Error loading source quote templates', error);
+                    setSourceQuoteTemplates([]);
+                }
+            })
+            .finally(() => {
+                if (!isDisposed) {
+                    setSourceQuoteTemplatesLoading(false);
+                }
+            });
+
+        return () => {
+            isDisposed = true;
+        };
+    }, [loadSourceQuoteTemplates, quoteTemplateSourceAccountIds, quoteTemplateSourceAccountKey]);
+
     const fetchOrder = async (targetId, isDuplicating = false) => {
         try {
             setLoading(true);
@@ -8948,9 +9348,11 @@ const OrderForm = () => {
             })
             .filter((item) => item.product_id && item.quantity > 0);
 
-        const submittedDiscount = resolveSignedMoneyInputCommitValue(
+        const submittedDiscount = resolveDiscountInputCommitValue(
             discountInputValue,
-            parseMoneyNumber(formData.discount, 0) || 0
+            parseMoneyNumber(formData.discount, 0) || 0,
+            calculateQuoteItemsSubtotal(formData.items),
+            discountInputMode
         );
 
         return {
@@ -9063,14 +9465,90 @@ const OrderForm = () => {
             settlement_delta: Number.isFinite(numericValue) ? numericValue : 0,
         }));
     };
+    const commitDiscountValue = (nextDiscount) => {
+        const normalizedDiscount = parseMoneyNumber(nextDiscount, 0) || 0;
+        const nextManualDiscount = calculateManualDiscountValue(
+            normalizedDiscount,
+            formData.order_type,
+            formData.supplement_items
+        );
+
+        setFormData((prev) => (
+            prev.discount === normalizedDiscount && prev.manual_discount === nextManualDiscount
+                ? prev
+                : {
+                    ...prev,
+                    manual_discount: nextManualDiscount,
+                    discount: normalizedDiscount,
+                }
+        ));
+    };
+    const focusDiscountInput = (selectText = false) => {
+        window.requestAnimationFrame(() => {
+            const input = discountInputRef.current;
+            if (!input) {
+                return;
+            }
+
+            input.focus();
+            if (selectText) {
+                input.select();
+            }
+        });
+    };
+    const handleDiscountInputModeChange = (nextMode) => {
+        if (![DISCOUNT_INPUT_MODE_AMOUNT, DISCOUNT_INPUT_MODE_PERCENT].includes(nextMode)) {
+            return;
+        }
+
+        const subtotal = calculateQuoteItemsSubtotal(formData.items);
+        const currentDiscount = resolveDiscountInputCommitValue(
+            discountInputValue,
+            parseMoneyNumber(formData.discount, 0) || 0,
+            subtotal,
+            discountInputMode
+        );
+
+        if (nextMode === DISCOUNT_INPUT_MODE_PERCENT) {
+            const currentPercentValue = subtotal > 0 && currentDiscount !== 0
+                ? (currentDiscount / subtotal) * 100
+                : null;
+
+            setDiscountInputMode(DISCOUNT_INPUT_MODE_PERCENT);
+            setDiscountInputValue(currentPercentValue === null ? '' : formatDiscountPercentInputValue(currentPercentValue));
+            focusDiscountInput(true);
+            return;
+        }
+
+        commitDiscountValue(currentDiscount);
+        setDiscountInputMode(DISCOUNT_INPUT_MODE_AMOUNT);
+        setDiscountInputValue(formatSignedMoneyInputValue(currentDiscount));
+        focusDiscountInput(true);
+    };
     const handleDiscountInputChange = (event) => {
         const rawValue = event.target.value;
         const selectionStart = event.target.selectionStart ?? rawValue.length;
         const digitCountBeforeCaret = rawValue.slice(0, selectionStart).replace(/[^0-9]/g, '').length;
-        const normalizedValue = normalizeSignedMoneyInputValue(rawValue);
-        const nextCaretPosition = resolveFormattedMoneyCaretPosition(normalizedValue, digitCountBeforeCaret);
+        const shouldUsePercentMode = discountInputMode === DISCOUNT_INPUT_MODE_PERCENT || isDiscountPercentInputValue(rawValue);
+        const normalizedValue = shouldUsePercentMode
+            ? stripDiscountPercentSymbol(rawValue)
+            : normalizeSignedMoneyInputValue(rawValue);
+        const nextCaretPosition = shouldUsePercentMode
+            ? normalizedValue.length
+            : resolveFormattedMoneyCaretPosition(normalizedValue, digitCountBeforeCaret);
+
+        if (shouldUsePercentMode && discountInputMode !== DISCOUNT_INPUT_MODE_PERCENT) {
+            setDiscountInputMode(DISCOUNT_INPUT_MODE_PERCENT);
+        }
 
         setDiscountInputValue(normalizedValue);
+        if (shouldUsePercentMode) {
+            const percentValue = parseDiscountPercentInputValue(normalizedValue, { requireSymbol: false });
+            if (percentValue !== null) {
+                commitDiscountValue(calculateDiscountAmountFromPercent(percentValue, calculateQuoteItemsSubtotal(formData.items)));
+            }
+        }
+
         window.requestAnimationFrame(() => {
             const input = discountInputRef.current;
             if (!input || document.activeElement !== input) {
@@ -9081,14 +9559,34 @@ const OrderForm = () => {
         });
     };
     const handleDiscountInputBlur = () => {
-        const nextDiscount = resolveSignedMoneyInputCommitValue(
+        const nextDiscount = resolveDiscountInputCommitValue(
             discountInputValue,
             calculateEffectiveDiscountValue(
                 formData.manual_discount,
                 formData.order_type,
                 formData.supplement_items
-            )
+            ),
+            calculateQuoteItemsSubtotal(formData.items),
+            discountInputMode
         );
+        commitDiscountValue(nextDiscount);
+        setDiscountInputValue(
+            discountInputMode === DISCOUNT_INPUT_MODE_PERCENT
+                ? stripDiscountPercentSymbol(discountInputValue)
+                : formatSignedMoneyInputValue(nextDiscount)
+        );
+    };
+    useEffect(() => {
+        if (discountInputMode !== DISCOUNT_INPUT_MODE_PERCENT) {
+            return;
+        }
+
+        const percentValue = parseDiscountPercentInputValue(discountInputValue, { requireSymbol: false });
+        if (percentValue === null) {
+            return;
+        }
+
+        const nextDiscount = calculateDiscountAmountFromPercent(percentValue, calculateQuoteItemsSubtotal(formData.items));
         const nextManualDiscount = calculateManualDiscountValue(
             nextDiscount,
             formData.order_type,
@@ -9104,8 +9602,7 @@ const OrderForm = () => {
                     discount: nextDiscount,
                 }
         ));
-        setDiscountInputValue(formatSignedMoneyInputValue(nextDiscount));
-    };
+    }, [discountInputMode, discountInputValue, formData.items, formData.order_type, formData.supplement_items]);
 
     const handleShippingAddressChange = (e) => {
         const value = e.target.value;
@@ -9269,6 +9766,19 @@ const OrderForm = () => {
 
     const removeItem = React.useCallback((lineId) => {
         const normalizedLineId = normalizeCanvasText(lineId);
+        if (!normalizedLineId) {
+            return;
+        }
+
+        const deletedBatch = createDeletedOrderLineItemBatch(
+            formData.items,
+            (item) => normalizeCanvasText(item?.line_id) === normalizedLineId
+        );
+        if (deletedBatch.items.length === 0) {
+            return;
+        }
+
+        pushDeletedLineItemBatch(deletedBatch);
         if (lineItemSelectionAnchorRef.current === normalizedLineId) {
             lineItemSelectionAnchorRef.current = '';
         }
@@ -9299,7 +9809,7 @@ const OrderForm = () => {
                 cost_total: costTotal
             };
         });
-    }, []);
+    }, [formData.items, pushDeletedLineItemBatch]);
 
     const handleRemoveAllItems = useCallback(() => {
         if (formData.items.length === 0) {
@@ -9308,10 +9818,11 @@ const OrderForm = () => {
 
         showModal({
             title: 'Xóa toàn bộ sản phẩm?',
-            content: 'Thao tác này sẽ xóa toàn bộ dòng sản phẩm hiện có trong đơn.<br/>Bạn sẽ không thể khôi phục tự động sau khi xác nhận.',
+            content: 'Thao tác này sẽ xóa toàn bộ dòng sản phẩm hiện có trong đơn.<br/>Sau khi xóa có thể bấm nút Khôi phục xóa cạnh Nhân hệ số để lấy lại nhóm này.',
             type: 'warning',
             actionText: 'Xóa tất cả',
             onAction: () => {
+                pushDeletedLineItemBatch(createDeletedOrderLineItemBatch(formData.items, () => true));
                 closeOrderAiReplacePicker();
                 closeActualProductPicker();
                 setShowActualProductSection(false);
@@ -9329,7 +9840,7 @@ const OrderForm = () => {
                 showTransientNotification('success', 'Đã xóa toàn bộ sản phẩm trong đơn.');
             },
         });
-    }, [closeActualProductPicker, closeOrderAiReplacePicker, formData.items.length, showModal, showTransientNotification]);
+    }, [closeActualProductPicker, closeOrderAiReplacePicker, formData.items, pushDeletedLineItemBatch, showModal, showTransientNotification]);
 
     const pendingOrderAiItems = useMemo(
         () => formData.items.filter((item) => isPendingOrderAiItem(item)),
@@ -9390,6 +9901,12 @@ const OrderForm = () => {
     const quotePricingSummary = buildOrderPricingSummary(formData);
     const subtotalAmount = quotePricingSummary.subtotal;
     const totalPaymentAmount = quotePricingSummary.totalPayment;
+    const discountPercentPreviewValue = discountInputMode === DISCOUNT_INPUT_MODE_PERCENT
+        ? parseDiscountPercentInputValue(discountInputValue, { requireSymbol: false })
+        : null;
+    const discountPercentPreviewAmount = discountPercentPreviewValue !== null
+        ? calculateDiscountAmountFromPercent(discountPercentPreviewValue, subtotalAmount)
+        : null;
     const costTotalAmount = parseMoneyNumber(formData.cost_total, 0) || 0;
     const baseGrossProfitAmount = calculateGrossProfitTotal(totalPaymentAmount, costTotalAmount);
     const supplementItemsTotal = calculateSupplementItemsTotal(formData.supplement_items);
@@ -9961,7 +10478,18 @@ const OrderForm = () => {
     const handleScreenshot = async () => {
         if (formData.items.length === 0 || isCapturing) return;
 
-        const availableTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+        let currentSourceQuoteTemplates = sourceQuoteTemplates;
+
+        if (quoteTemplateSourceAccountIds.length > 0) {
+            try {
+                currentSourceQuoteTemplates = await refreshSourceQuoteTemplates();
+            } catch (error) {
+                console.error('Error refreshing source quote templates', error);
+            }
+        }
+
+        const availableTemplates = mergeQuoteTemplates(quoteTemplates, currentSourceQuoteTemplates)
+            .filter((template) => template.is_active !== false);
 
         if (availableTemplates.length === 0) {
             let refreshedTemplates = [];
@@ -9971,7 +10499,16 @@ const OrderForm = () => {
                 console.error('Error refreshing quote bootstrap', error);
             }
 
-            const refreshedAvailableTemplates = refreshedTemplates.filter((template) => template.is_active !== false);
+            if (quoteTemplateSourceAccountIds.length > 0) {
+                try {
+                    currentSourceQuoteTemplates = await refreshSourceQuoteTemplates();
+                } catch (error) {
+                    console.error('Error refreshing source quote templates', error);
+                }
+            }
+
+            const refreshedAvailableTemplates = mergeQuoteTemplates(refreshedTemplates, currentSourceQuoteTemplates)
+                .filter((template) => template.is_active !== false);
             if (refreshedAvailableTemplates.length > 0) {
                 setQuoteTemplateSearch('');
                 setShowQuoteTemplatePicker(true);
@@ -9991,6 +10528,11 @@ const OrderForm = () => {
         refreshQuoteBootstrap().catch((error) => {
             console.error('Error refreshing quote bootstrap', error);
         });
+        if (quoteTemplateSourceAccountIds.length > 0) {
+            refreshSourceQuoteTemplates().catch((error) => {
+                console.error('Error refreshing source quote templates', error);
+            });
+        }
     };
 
     const handleCopyCellValue = async (text, message, event, copyId) => {
@@ -10164,7 +10706,11 @@ const OrderForm = () => {
         setFormData(prev => ({ ...prev, items: applySequentialOrderLineSortOrder(newItems) }));
     }, []);
 
-    const availableQuoteTemplates = quoteTemplates.filter((template) => template.is_active !== false);
+    const mergedQuoteTemplates = useMemo(
+        () => mergeQuoteTemplates(quoteTemplates, sourceQuoteTemplates),
+        [quoteTemplates, sourceQuoteTemplates]
+    );
+    const availableQuoteTemplates = mergedQuoteTemplates.filter((template) => template.is_active !== false);
     const orderSourceMeta = useMemo(
         () => getOrderSourceMeta(formData.source, UNKNOWN_ORDER_SOURCE),
         [formData.source]
@@ -12931,6 +13477,22 @@ const OrderForm = () => {
                                             </span>
                                         ) : null}
                                     </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleRestoreLastDeletedLineItems}
+                                        disabled={!hasDeletedLineItemRestore}
+                                        className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title={hasDeletedLineItemRestore ? `Khôi phục ${deletedLineItemRestoreCount} sản phẩm vừa xóa` : 'Chưa có sản phẩm vừa xóa để khôi phục'}
+                                        data-screenshot-hide="true"
+                                    >
+                                        <span className="material-symbols-outlined text-[16px]">undo</span>
+                                        Khôi phục xóa
+                                        {hasDeletedLineItemRestore ? (
+                                            <span className="rounded-full bg-sky-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                                {deletedLineItemRestoreCount}
+                                            </span>
+                                        ) : null}
+                                    </button>
                                     {hasAnyLineItemSelected ? (
                                         <button
                                             type="button"
@@ -12986,16 +13548,48 @@ const OrderForm = () => {
 
                                 <div className="flex justify-between items-center" data-screenshot-hide="true">
                                     <span className="font-bold text-blue-600/40 text-[12px]">Chiết khấu/Giảm:</span>
-                                    <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
-                                        <input
-                                            ref={discountInputRef}
-                                            type="text"
-                                            value={discountInputValue}
-                                            onChange={handleDiscountInputChange}
-                                            onBlur={handleDiscountInputBlur}
-                                            className="w-24 text-right bg-transparent py-1 font-bold text-brick text-[15px] focus:outline-none placeholder:text-blue-600/10"
-                                        />
-                                        <span className="font-bold text-brick text-[15px]">₫</span>
+                                    <div className="flex flex-col items-end gap-1">
+                                        <div className="flex items-center gap-1">
+                                            <div className="flex items-center gap-1 border-b border-blue-600/10 focus-within:border-blue-600/40 transition-colors">
+                                                <input
+                                                    ref={discountInputRef}
+                                                    type="text"
+                                                    value={discountInputValue}
+                                                    onChange={handleDiscountInputChange}
+                                                    onBlur={handleDiscountInputBlur}
+                                                    title="Nhập số tiền giảm hoặc phần trăm, ví dụ 15%"
+                                                    className="w-24 text-right bg-transparent py-1 font-bold text-brick text-[15px] focus:outline-none placeholder:text-blue-600/10"
+                                                />
+                                                <span className="min-w-[12px] font-bold text-brick text-[15px]">
+                                                    {discountInputMode === DISCOUNT_INPUT_MODE_PERCENT ? '%' : '₫'}
+                                                </span>
+                                            </div>
+                                            <div className="ml-1 inline-flex overflow-hidden rounded-full border border-blue-600/10 bg-white shadow-sm">
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(event) => event.preventDefault()}
+                                                    onClick={() => handleDiscountInputModeChange(DISCOUNT_INPUT_MODE_AMOUNT)}
+                                                    title="Nhập giảm bằng số tiền"
+                                                    className={`inline-flex h-7 w-8 items-center justify-center text-[12px] font-black transition-all ${discountInputMode === DISCOUNT_INPUT_MODE_AMOUNT ? 'bg-brick text-white' : 'text-blue-600/45 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                >
+                                                    ₫
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onMouseDown={(event) => event.preventDefault()}
+                                                    onClick={() => handleDiscountInputModeChange(DISCOUNT_INPUT_MODE_PERCENT)}
+                                                    title="Nhập giảm bằng phần trăm"
+                                                    className={`inline-flex h-7 w-8 items-center justify-center text-[12px] font-black transition-all ${discountInputMode === DISCOUNT_INPUT_MODE_PERCENT ? 'bg-brick text-white' : 'text-blue-600/45 hover:bg-blue-50 hover:text-blue-600'}`}
+                                                >
+                                                    %
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {discountInputMode === DISCOUNT_INPUT_MODE_PERCENT && discountPercentPreviewAmount !== null && (
+                                            <div className="text-right text-[11px] font-semibold text-brick/55">
+                                                = {new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 }).format(discountPercentPreviewAmount)}₫
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                                 {normalizedOrderType === ORDER_TYPE_PARTIAL_DELIVERY && automaticDiscountAdjustment > 0 && (
@@ -13459,7 +14053,7 @@ const OrderForm = () => {
                     </div>
                 </div>
 
-                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-6' : 'grid-cols-5'}`}>
+                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-7' : 'grid-cols-6'}`}>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null)}
@@ -13508,6 +14102,21 @@ const OrderForm = () => {
                         className="relative inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-emerald-200 bg-emerald-50 px-2 text-emerald-700 transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         <span className="material-symbols-outlined text-[18px]">percent</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleRestoreLastDeletedLineItems}
+                        disabled={!hasDeletedLineItemRestore || saving}
+                        title={hasDeletedLineItemRestore ? `Khôi phục ${deletedLineItemRestoreCount} sản phẩm vừa xóa` : 'Chưa có sản phẩm vừa xóa để khôi phục'}
+                        aria-label="Khôi phục xóa"
+                        className="relative inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-sky-200 bg-sky-50 px-2 text-sky-700 transition-all hover:border-sky-300 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">undo</span>
+                        {hasDeletedLineItemRestore && (
+                            <span className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-sky-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-[#F8FAFC]">
+                                {deletedLineItemRestoreCount}
+                            </span>
+                        )}
                     </button>
                     <button
                         type="button"
@@ -13648,6 +14257,12 @@ const OrderForm = () => {
                                         </div>
 
                                         <div className="flex items-center gap-2 text-[12px] text-primary/45">
+                                            {sourceQuoteTemplatesLoading && (
+                                                <>
+                                                    <span className="font-semibold text-sky-600">{'\u0110ang t\u1ea3i m\u1eabu ngu\u1ed3n...'}</span>
+                                                    <span className="text-primary/20">/</span>
+                                                </>
+                                            )}
                                             <span className="font-semibold">{filteredQuoteTemplates.length}</span>
                                             <span>mẫu hiển thị</span>
                                             <span className="text-primary/20">/</span>
@@ -13666,7 +14281,7 @@ const OrderForm = () => {
                                         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
                                             {filteredQuoteTemplates.map((template) => (
                                                 <button
-                                                    key={template.id}
+                                                    key={`${template.account_id || 'quote'}-${template.id || normalizeCanvasText(template.name)}`}
                                                     type="button"
                                                     onClick={() => captureQuoteImage(template)}
                                                     className="group overflow-hidden rounded-sm border border-primary/10 bg-white text-left shadow-sm hover:border-primary/30 hover:shadow-md transition-all"

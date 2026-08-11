@@ -48,6 +48,21 @@ class PayrollController extends Controller
         $employeeIds = $employees->pluck('id');
         $employeesById = $employees->keyBy('id');
 
+        $scheduleEmployeeQuery = PayrollEmployee::query()
+            ->orderBy('department')
+            ->orderBy('employee_code');
+
+        if (!($scope['can_view_all_schedule'] ?? false)) {
+            $this->applyEmployeeScope($scheduleEmployeeQuery, $scope);
+        }
+
+        if ($department !== '') {
+            $scheduleEmployeeQuery->where('department', $department);
+        }
+
+        $scheduleEmployees = $scheduleEmployeeQuery->get();
+        $scheduleEmployeeIds = $scheduleEmployees->pluck('id');
+
         $shifts = PayrollWorkShift::query()
             ->orderBy('sort_order')
             ->orderBy('start_time')
@@ -57,7 +72,7 @@ class PayrollController extends Controller
         $schedules = PayrollScheduleRegistration::query()
             ->with(['employee:id,employee_code,full_name,department', 'shift:id,shift_code,shift_name,start_time,end_time,standard_hours,default_work_units,wage_multiplier'])
             ->whereBetween('work_date', [$startDate, $endDate])
-            ->whereIn('payroll_employee_id', $employeeIds)
+            ->whereIn('payroll_employee_id', $scheduleEmployeeIds)
             ->orderBy('work_date')
             ->orderBy('payroll_employee_id')
             ->get();
@@ -98,11 +113,13 @@ class PayrollController extends Controller
         $userScopes = $canManagePayroll
             ? PayrollUserScope::query()
                 ->with(['user:id,name,email', 'employee:id,employee_code,full_name,department'])
+                ->where('account_id', $accountId)
                 ->orderBy('role_name')
                 ->orderBy('department')
                 ->get()
             : PayrollUserScope::query()
                 ->with(['user:id,name,email', 'employee:id,employee_code,full_name,department'])
+                ->where('account_id', $accountId)
                 ->where('user_id', $user?->id)
                 ->get();
 
@@ -114,6 +131,7 @@ class PayrollController extends Controller
                 'departments' => $departments,
                 'users' => $users,
                 'employees' => $this->serializeEmployees($employees, $canViewSalary),
+                'schedule_employees' => $this->serializeScheduleEmployees($scheduleEmployees),
                 'shifts' => $shifts,
                 'schedules' => $schedules,
                 'attendance_records' => $this->serializeAttendanceRecords($attendanceRecords, $employeesById, $shiftsById, $canViewSalary),
@@ -330,7 +348,17 @@ class PayrollController extends Controller
     public function syncSchedules(Request $request)
     {
         $accountId = $this->activeAccountId($request);
-        $this->ensureCanEditAttendance($accountId, $request->user());
+        $scope = $this->resolvePayrollScope($accountId, $request->user());
+        $canEditAllSchedules = (bool) ($scope['can_edit_attendance'] || $scope['can_manage_payroll']);
+        $selfEmployeeId = ($scope['self_employee_id'] ?? $scope['employee_id'])
+            ? (int) ($scope['self_employee_id'] ?? $scope['employee_id'])
+            : null;
+        $canEditOwnSchedule = !$canEditAllSchedules
+            && (bool) ($scope['can_edit_own_schedule'] ?? false)
+            && $selfEmployeeId;
+
+        abort_unless($canEditAllSchedules || $canEditOwnSchedule, 403, 'Bạn chưa có quyền sửa lịch làm.');
+
         $rows = $request->validate([
             'schedules' => 'required|array',
             'schedules.*.id' => 'nullable|integer',
@@ -342,7 +370,7 @@ class PayrollController extends Controller
             'schedules.*.notes' => 'nullable|string',
         ])['schedules'];
 
-        DB::transaction(function () use ($rows, $accountId, $request) {
+        DB::transaction(function () use ($rows, $accountId, $request, $canEditAllSchedules, $selfEmployeeId) {
             foreach ($rows as $row) {
                 if (empty($row['work_date']) && empty($row['payroll_employee_id']) && empty($row['payroll_work_shift_id'])) {
                     continue;
@@ -352,6 +380,10 @@ class PayrollController extends Controller
                     throw ValidationException::withMessages([
                         'schedules' => 'Mỗi dòng đăng ký lịch cần có đủ Ngày, Nhân viên và Ca làm.',
                     ]);
+                }
+
+                if (!$canEditAllSchedules && (int) $row['payroll_employee_id'] !== $selfEmployeeId) {
+                    abort(403, 'Bạn chỉ có thể đăng ký lịch của chính mình.');
                 }
 
                 $this->assertEmployeeBelongsToAccount($accountId, $row['payroll_employee_id']);
@@ -376,6 +408,10 @@ class PayrollController extends Controller
                         ->where('payroll_employee_id', $row['payroll_employee_id'])
                         ->where('payroll_work_shift_id', $row['payroll_work_shift_id'])
                         ->first();
+
+                if (!$canEditAllSchedules && $schedule && (int) $schedule->payroll_employee_id !== $selfEmployeeId) {
+                    abort(403, 'Bạn chỉ có thể đăng ký lịch của chính mình.');
+                }
 
                 if ($schedule) {
                     $schedule->update($payload);
@@ -471,7 +507,7 @@ class PayrollController extends Controller
     {
         $accountId = $this->activeAccountId($request);
         $scope = $this->resolvePayrollScope($accountId, $request->user());
-        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền sửa khoản cộng trừ lương.');
+        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền sửa khoản tạm ứng.');
 
         $rows = $request->validate([
             'adjustments' => 'required|array',
@@ -491,7 +527,7 @@ class PayrollController extends Controller
 
                 if (empty($row['adjustment_date']) || empty($row['payroll_employee_id']) || empty($row['amount'])) {
                     throw ValidationException::withMessages([
-                        'adjustments' => 'Mỗi dòng cộng trừ cần có đủ Ngày, Nhân viên và Số tiền.',
+                        'adjustments' => 'Mỗi dòng tạm ứng cần có đủ Ngày, Nhân viên và Số tiền.',
                     ]);
                 }
 
@@ -501,7 +537,7 @@ class PayrollController extends Controller
                     'account_id' => $accountId,
                     'adjustment_date' => $row['adjustment_date'],
                     'payroll_employee_id' => $row['payroll_employee_id'],
-                    'adjustment_type' => $row['adjustment_type'] ?? 'deduction',
+                    'adjustment_type' => $row['adjustment_type'] ?? 'advance',
                     'amount' => abs($this->number($row['amount'] ?? 0)),
                     'notes' => $this->nullableTrim($row['notes'] ?? null),
                     'created_by' => $request->user()?->id,
@@ -519,21 +555,21 @@ class PayrollController extends Controller
             }
         });
 
-        return response()->json(['status' => 'success', 'message' => 'Đã lưu bảng tạm ứng / cộng trừ.']);
+        return response()->json(['status' => 'success', 'message' => 'Đã lưu bảng tạm ứng.']);
     }
 
     public function deleteAdjustment(Request $request, int $id)
     {
         $accountId = $this->activeAccountId($request);
         $scope = $this->resolvePayrollScope($accountId, $request->user());
-        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền xoá khoản cộng trừ lương.');
+        abort_unless(($scope['can_edit_attendance'] || $scope['can_manage_payroll']) && $scope['can_view_salary'], 403, 'Bạn chưa có quyền xoá khoản tạm ứng.');
 
         PayrollAdjustment::query()
             ->where('account_id', $accountId)
             ->findOrFail($id)
             ->delete();
 
-        return response()->json(['status' => 'success', 'message' => 'Đã xoá khoản tạm ứng / cộng trừ.']);
+        return response()->json(['status' => 'success', 'message' => 'Đã xoá khoản tạm ứng.']);
     }
 
     public function syncUserScopes(Request $request)
@@ -659,21 +695,32 @@ class PayrollController extends Controller
             return [
                 'scope_type' => 'Không có quyền',
                 'employee_id' => null,
+                'self_employee_id' => null,
                 'department' => null,
                 'can_view_salary' => false,
                 'can_edit_attendance' => false,
                 'can_manage_payroll' => false,
+                'can_view_all_schedule' => false,
+                'can_edit_own_schedule' => false,
             ];
         }
+
+        $linkedEmployee = PayrollEmployee::query()
+            ->where('account_id', $accountId)
+            ->where('user_id', $user->id)
+            ->first(['id', 'department']);
 
         if ($user->is_admin) {
             return [
                 'scope_type' => 'Tất cả',
                 'employee_id' => null,
+                'self_employee_id' => $linkedEmployee?->id,
                 'department' => null,
                 'can_view_salary' => true,
                 'can_edit_attendance' => true,
                 'can_manage_payroll' => true,
+                'can_view_all_schedule' => true,
+                'can_edit_own_schedule' => true,
             ];
         }
 
@@ -682,35 +729,71 @@ class PayrollController extends Controller
             ->where('user_id', $user->id)
             ->first();
 
-        if (!$scope) {
-            if ($this->userHasPayrollModulePermission($user)) {
-                return [
-                    'scope_type' => 'Tất cả',
-                    'employee_id' => null,
-                    'department' => null,
-                    'can_view_salary' => true,
-                    'can_edit_attendance' => true,
-                    'can_manage_payroll' => true,
-                ];
+        if ($scope) {
+            $employeeId = $scope->payroll_employee_id;
+            if ($scope->scope_type === 'Chỉ bản thân' && !$employeeId && $linkedEmployee) {
+                $employeeId = $linkedEmployee->id;
             }
 
+            $department = $scope->department;
+            if ($scope->scope_type === 'Chỉ bản thân' && !$department && $linkedEmployee) {
+                $department = $linkedEmployee->department;
+            }
+
+            $canEditAttendance = (bool) $scope->can_edit_attendance;
+            $canManagePayroll = (bool) $scope->can_manage_payroll;
+
             return [
-                'scope_type' => 'Không có quyền',
-                'employee_id' => null,
-                'department' => null,
-                'can_view_salary' => false,
+                'scope_type' => $scope->scope_type,
+                'employee_id' => $employeeId,
+                'self_employee_id' => $linkedEmployee?->id ?? $employeeId,
+                'department' => $department,
+                'can_view_salary' => (bool) $scope->can_view_salary,
+                'can_edit_attendance' => $canEditAttendance,
+                'can_manage_payroll' => $canManagePayroll,
+                'can_view_all_schedule' => true,
+                'can_edit_own_schedule' => $canEditAttendance || $canManagePayroll || (bool) ($linkedEmployee?->id ?? $employeeId),
+            ];
+        }
+
+        if ($linkedEmployee) {
+            return [
+                'scope_type' => 'Chỉ bản thân',
+                'employee_id' => $linkedEmployee->id,
+                'self_employee_id' => $linkedEmployee->id,
+                'department' => $linkedEmployee->department,
+                'can_view_salary' => true,
                 'can_edit_attendance' => false,
                 'can_manage_payroll' => false,
+                'can_view_all_schedule' => true,
+                'can_edit_own_schedule' => true,
+            ];
+        }
+
+        if ($this->userHasPayrollModulePermission($user)) {
+            return [
+                'scope_type' => 'Tất cả',
+                'employee_id' => null,
+                'self_employee_id' => null,
+                'department' => null,
+                'can_view_salary' => true,
+                'can_edit_attendance' => true,
+                'can_manage_payroll' => true,
+                'can_view_all_schedule' => true,
+                'can_edit_own_schedule' => true,
             ];
         }
 
         return [
-            'scope_type' => $scope->scope_type,
-            'employee_id' => $scope->payroll_employee_id,
-            'department' => $scope->department,
-            'can_view_salary' => (bool) $scope->can_view_salary,
-            'can_edit_attendance' => (bool) $scope->can_edit_attendance,
-            'can_manage_payroll' => (bool) $scope->can_manage_payroll,
+            'scope_type' => 'Không có quyền',
+            'employee_id' => null,
+            'self_employee_id' => null,
+            'department' => null,
+            'can_view_salary' => false,
+            'can_edit_attendance' => false,
+            'can_manage_payroll' => false,
+            'can_view_all_schedule' => false,
+            'can_edit_own_schedule' => false,
         ];
     }
 
@@ -886,6 +969,18 @@ class PayrollController extends Controller
         ])->every(fn ($value) => trim((string) ($value ?? '')) === '');
     }
 
+    private function serializeScheduleEmployees($employees)
+    {
+        return $employees->map(fn (PayrollEmployee $employee) => [
+            'id' => $employee->id,
+            'employee_code' => $employee->employee_code,
+            'full_name' => $employee->full_name,
+            'department' => $employee->department,
+            'salary_type' => $employee->salary_type,
+            'status' => $employee->status,
+        ])->values();
+    }
+
     private function serializeEmployees($employees, bool $canViewSalary)
     {
         return $employees->map(function (PayrollEmployee $employee) use ($canViewSalary) {
@@ -958,6 +1053,7 @@ class PayrollController extends Controller
                 'salary_type' => $employee->salary_type,
                 'total_work_units' => 0,
                 'total_hours' => 0,
+                'total_advance' => 0,
                 'total_bonus' => 0,
                 'total_penalty' => 0,
                 'total_salary' => $canViewSalary ? 0 : null,
@@ -988,39 +1084,27 @@ class PayrollController extends Controller
                 continue;
             }
 
-            $amount = abs((float) $adjustment->amount);
-            if ($this->isPositiveAdjustment($adjustment->adjustment_type)) {
-                $summary[$employee->id]['total_bonus'] += $amount;
-                if ($canViewSalary) {
-                    $summary[$employee->id]['total_salary'] += $amount;
-                }
-            } else {
-                $summary[$employee->id]['total_penalty'] += $amount;
-                if ($canViewSalary) {
-                    $summary[$employee->id]['total_salary'] -= $amount;
-                }
-            }
+            $summary[$employee->id]['total_advance'] += abs((float) $adjustment->amount);
         }
 
         return collect($summary)
             ->map(function ($row) {
                 $row['total_work_units'] = round($row['total_work_units'], 3);
                 $row['total_hours'] = round($row['total_hours'], 2);
+                $row['total_advance'] = round($row['total_advance'], 2);
                 $row['total_bonus'] = round($row['total_bonus'], 2);
                 $row['total_penalty'] = round($row['total_penalty'], 2);
                 if ($row['total_salary'] !== null) {
                     $row['total_salary'] = round($row['total_salary'], 2);
                 }
+                $row['remaining_salary'] = $row['total_salary'] === null
+                    ? null
+                    : round($row['total_salary'] - $row['total_advance'], 2);
 
                 return $row;
             })
             ->sortBy('employee_code')
             ->values();
-    }
-
-    private function isPositiveAdjustment(?string $type): bool
-    {
-        return in_array($type, ['bonus', 'plus', 'allowance'], true);
     }
 
     private function calculateAttendanceAmount(PayrollAttendanceRecord $record, ?PayrollEmployee $employee, ?PayrollWorkShift $shift): float

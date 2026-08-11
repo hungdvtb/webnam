@@ -243,15 +243,25 @@ export function normalizeAdminPermissions(user, accountId = readActiveAccountId(
 
     const detailedPermissions = normalizeDetailedAdminPermissions(user, accountId);
 
-    return unique(detailedPermissions.map((permission) => {
+    const modules = detailedPermissions.map((permission) => {
         const [module] = String(permission || '').split('.');
         return ADMIN_MODULE_IDS.has(module) ? module : null;
-    }));
+    });
+
+    if (hasPayrollScopedAccess(user, accountId)) {
+        modules.push('payroll');
+    }
+
+    return unique(modules);
 }
 
 export function hasAdminPermission(user, permission, accountId = readActiveAccountId()) {
     if (!user) return false;
     if (user.is_admin) return true;
+
+    if (permission === 'payroll.view' && hasPayrollScopedAccess(user, accountId)) {
+        return true;
+    }
 
     const permissions = normalizeDetailedAdminPermissions(user, accountId);
     if (permissions.includes(permission)) return true;
@@ -262,6 +272,19 @@ export function hasAdminPermission(user, permission, accountId = readActiveAccou
     }
 
     return permissions.includes(`${module}.*`);
+}
+
+function hasPayrollScopedAccess(user, accountId = readActiveAccountId()) {
+    const scopedAccountIds = Array.isArray(user?.payroll_access_account_ids)
+        ? user.payroll_access_account_ids.map((id) => String(id))
+        : [];
+
+    if (scopedAccountIds.length === 0) {
+        return false;
+    }
+
+    const selectedAccountId = String(accountId || '').trim();
+    return selectedAccountId ? scopedAccountIds.includes(selectedAccountId) : true;
 }
 
 export function hasAdminDataPermission(user, permission, accountId = readActiveAccountId()) {

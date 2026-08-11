@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\PayrollEmployee;
+use App\Models\PayrollUserScope;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -59,11 +61,9 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $user->load('accounts');
-
         return response()->json([
             'token' => $user->createToken('auth_token')->plainTextToken,
-            'user' => $user,
+            'user' => $this->userPayload($user),
         ]);
     }
 
@@ -78,7 +78,42 @@ class AuthController extends Controller
 
     public function user(Request $request)
     {
-        return response()->json($request->user()->load('accounts'));
+        return response()->json($this->userPayload($request->user()));
+    }
+
+    private function userPayload(User $user): User
+    {
+        $user->load('accounts');
+
+        $accountIds = $user->accounts
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->values();
+
+        if ($accountIds->isEmpty()) {
+            $user->setAttribute('payroll_access_account_ids', []);
+            return $user;
+        }
+
+        $scopeAccountIds = PayrollUserScope::query()
+            ->where('user_id', $user->id)
+            ->whereIn('account_id', $accountIds)
+            ->pluck('account_id');
+
+        $employeeAccountIds = PayrollEmployee::query()
+            ->where('user_id', $user->id)
+            ->whereIn('account_id', $accountIds)
+            ->pluck('account_id');
+
+        $user->setAttribute('payroll_access_account_ids', $scopeAccountIds
+            ->merge($employeeAccountIds)
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all());
+
+        return $user;
     }
 
     private function ensureLocalAdminAccessUser(string $normalizedEmail): void

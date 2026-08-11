@@ -193,13 +193,13 @@ const MonthlyProfitReport = () => {
         'cost_actual',
         'shipping_fee',
         'damaged_goods',
-        'salary',
         'packaging_fee',
         'fb_ads_spend',
         'google_ads_spend',
         'ads_spend',
         'tax',
         'fixed_cost',
+        'salary',
         'exchange_profit_loss',
         'partial_delivery_profit_loss',
         'total_profit',
@@ -214,14 +214,14 @@ const MonthlyProfitReport = () => {
         damaged_goods: 'Chi phí hàng hỏng. Hiện chỉ cộng được khi backend trả riêng trường này.',
         exchange_profit_loss: 'Tổng lãi/lỗ đổi trả trong tháng.',
         partial_delivery_profit_loss: 'Tổng lãi/lỗ giao hàng 1 phần trong tháng.',
-        salary: 'Chi phí lương. Hiện chỉ cộng được khi backend trả riêng trường này.',
+        salary: 'Tổng lương nhân viên trong tháng, lấy từ bảng nhân sự và chấm công.',
         packaging_fee: 'Tổng số đơn của tháng x Phí đóng gói/đơn lấy từ phần cấu hình của báo cáo lãi lỗ ngày.',
         fb_ads_spend: 'Tổng QC Facebook trong tháng. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
         google_ads_spend: 'Tổng QC Google trong tháng. Số chính là sau thuế, số trong ngoặc là trước thuế khi có chênh lệch.',
         ads_spend: 'Tổng QC thực tế trong tháng, bằng QC FB + QC GG. Số này được dùng để tính lãi lỗ.',
         tax: 'Tổng thuế tạm tính trong tháng.',
         fixed_cost: 'Tổng chi phí cố định trong tháng.',
-        total_profit: 'Lợi nhuận tổng = Doanh thu - Tiền hàng thực tế - Tiền ship hàng - Hàng hỏng - Chi phí lương - Chi phí gói hàng - QC - Thuế - Chi phí cố định + Lãi lỗ đổi trả + Lãi lỗ giao 1 phần.',
+        total_profit: 'Lợi nhuận tổng = Doanh thu - Tiền hàng thực tế - Tiền ship hàng - Hàng hỏng - Chi phí gói hàng - QC - Thuế - Chi phí cố định - Lương NV + Lãi lỗ đổi trả + Lãi lỗ giao 1 phần.',
     };
 
     columnFormulas.shipping_fee = 'Tổng phí ship của tất cả đơn hợp lệ trong tháng, gồm đơn thường, đơn đổi trả và giao hàng 1 phần; ưu tiên phí ship thực tế, nếu chưa có thì lấy 5% x doanh số đơn.';
@@ -461,7 +461,7 @@ const MonthlyProfitReport = () => {
             case 'partial_delivery_profit_loss':
                 return renderTH('bg-gray-50 px-3 py-4 text-center align-middle text-[12px] font-bold text-red-600', <>Lãi lỗ<br />giao 1 phần</>);
             case 'salary':
-                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />lương</>);
+                return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Lương<br />NV</>);
             case 'packaging_fee':
                 return renderTH('px-3 py-4 text-center align-middle text-[12px] font-bold text-gray-700', <>Chi phí<br />gói hàng</>);
             case 'fb_ads_spend':

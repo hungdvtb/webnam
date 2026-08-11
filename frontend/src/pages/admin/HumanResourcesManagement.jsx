@@ -5,8 +5,8 @@ const NAV_ITEMS = [
     { id: 'employees', label: 'Nhân viên', icon: 'groups' },
     { id: 'schedule', label: 'Lịch làm', icon: 'calendar_month' },
     { id: 'attendance', label: 'Chấm công', icon: 'schedule' },
-    { id: 'salary', label: 'Bảng lương', icon: 'payments' },
     { id: 'adjustments', label: 'Tạm ứng', icon: 'volunteer_activism' },
+    { id: 'salary', label: 'Bảng lương', icon: 'payments' },
     { id: 'reports', label: 'Báo cáo', icon: 'bar_chart' },
 ];
 
@@ -20,16 +20,21 @@ const EMPLOYEE_STATUS = ['Đang làm', 'Tạm nghỉ', 'Nghỉ việc'];
 const ATTENDANCE_STATUS = ['Đi làm', 'Làm lẻ', 'Nửa ca', 'Nghỉ', 'Nghỉ phép', 'Tăng ca'];
 const SCHEDULE_STATUS = ['Đã đăng ký', 'Đổi ca', 'Huỷ lịch'];
 const ADJUSTMENT_TYPES = [
-    { value: 'bonus', label: 'Cộng / thưởng' },
     { value: 'advance', label: 'Tạm ứng' },
-    { value: 'deduction', label: 'Trừ khác' },
 ];
+
+const REGISTERED_SCHEDULE_STATUS = 'Đã đăng ký';
+const CANCELLED_SCHEDULE_STATUS = 'Huỷ lịch';
+const FULL_TIME_SHIFT_CODES = new Set(['S', 'C']);
+const DEFAULT_STANDARD_WORK_UNITS = 26;
+const SCHEDULE_WEEK_FILTERS = [1, 2, 3, 4, 5];
 
 const BLANK_DATA = {
     scope: {},
     departments: [],
     users: [],
     employees: [],
+    schedule_employees: [],
     shifts: [],
     schedules: [],
     attendance_records: [],
@@ -38,7 +43,8 @@ const BLANK_DATA = {
 };
 
 const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
-const decimalFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
+const decimalFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
+const workUnitFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
 
 const currentMonth = () => {
     const date = new Date();
@@ -73,6 +79,13 @@ const parseDecimal = (value) => {
     if (value === null || value === undefined || value === '') return '';
     const normalized = String(value).trim().replace(',', '.').replace(/[^\d.-]/g, '');
     const number = Number(normalized);
+    return Number.isFinite(number) ? String(Math.round(number * 10) / 10) : '';
+};
+
+const parseWorkUnits = (value) => {
+    if (value === null || value === undefined || value === '') return '';
+    const normalized = String(value).trim().replace(',', '.').replace(/[^\d.-]/g, '');
+    const number = Number(normalized);
     return Number.isFinite(number) ? String(Math.round(number * 100) / 100) : '';
 };
 
@@ -82,8 +95,18 @@ const formatMoney = (value) => {
 };
 
 const formatDecimal = (value) => decimalFormatter.format(safeNumber(value));
+const formatWorkUnit = (value) => workUnitFormatter.format(safeNumber(value));
+const formatEditableDecimal = (value) => {
+    if (value === null || value === undefined || value === '') return '';
+    const number = safeNumber(String(value).replace(',', '.'));
+    return Number.isFinite(number) ? String(Math.round(number * 10) / 10) : '';
+};
 const formatTime = (value) => (value ? String(value).slice(0, 5) : '');
 const firstDayOfMonth = (month) => `${month || currentMonth()}-01`;
+const lastDayOfMonth = (month) => {
+    const [year, monthNumber] = String(month || currentMonth()).split('-').map(Number);
+    return isoDate(new Date(year, monthNumber, 0));
+};
 const dateValue = (value) => {
     const match = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
     return match ? match[1] : '';
@@ -108,11 +131,45 @@ const addDays = (date, days) => {
     return next;
 };
 
-const weekStartOf = (value) => {
-    const date = dateFromInput(value);
-    const day = date.getDay() || 7;
-    return isoDate(addDays(date, 1 - day));
+const datesBetween = (startValue, endValue) => {
+    const start = dateFromInput(startValue);
+    const end = dateFromInput(endValue);
+    const dates = [];
+
+    for (let current = start; current <= end; current = addDays(current, 1)) {
+        dates.push(isoDate(current));
+    }
+
+    return dates;
 };
+
+const monthOfDate = (value) => {
+    const normalized = dateValue(value);
+    return normalized ? normalized.slice(0, 7) : currentMonth();
+};
+
+const monthWeeksOf = (month) => {
+    const dates = datesBetween(firstDayOfMonth(month), lastDayOfMonth(month));
+    const weeks = [];
+
+    for (let index = 0; index < dates.length; index += 7) {
+        weeks.push({
+            weekNumber: Math.floor(index / 7) + 1,
+            days: dates.slice(index, index + 7),
+        });
+    }
+
+    const currentDate = isoDate(new Date());
+    const currentWeekIndex = weeks.findIndex((week) => week.days.includes(currentDate));
+
+    if (currentWeekIndex > 0) {
+        return [...weeks.slice(currentWeekIndex), ...weeks.slice(0, currentWeekIndex)];
+    }
+
+    return weeks;
+};
+
+const isDateInMonth = (date, month) => String(date || '').startsWith(`${month}-`);
 
 const shortDate = (value) => {
     const [, month, day] = String(value || '').split('-');
@@ -120,6 +177,47 @@ const shortDate = (value) => {
 };
 
 const weekday = (value) => ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][dateFromInput(value).getDay()];
+const dayColumnTone = (date, month) => {
+    if (!isDateInMonth(date, month)) {
+        return {
+            header: 'border-gray-200 bg-white text-gray-400',
+            cell: 'border-gray-200 bg-white',
+        };
+    }
+
+    const tones = [
+        {
+            header: 'border-gray-200 bg-white text-red-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-sky-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-emerald-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-amber-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-violet-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-teal-700',
+            cell: 'border-gray-200 bg-white',
+        },
+        {
+            header: 'border-gray-200 bg-white text-orange-700',
+            cell: 'border-gray-200 bg-white',
+        },
+    ];
+
+    return tones[dateFromInput(date).getDay()];
+};
 const employeeTypeLabel = (value) => EMPLOYEE_TYPES.find((item) => item.value === value)?.label || 'Part-time';
 const salaryUnitLabel = (value) => ({
     theo_gio: 'đ / giờ',
@@ -132,8 +230,58 @@ const formatSalary = (amount, type) => {
 };
 const isFullTime = (employee) => employee?.salary_type === 'theo_thang';
 const normalizeId = (value) => (value === '' || value === null || value === undefined ? null : value);
-const positiveAdjustment = (type) => type === 'bonus';
 const employeeRowKey = (employee) => String(employee?.id || employee?.uid || '');
+const scheduleKey = (row) => [
+    dateValue(row?.work_date),
+    row?.payroll_employee_id,
+    row?.payroll_work_shift_id,
+].join('|');
+const attendanceKey = (row) => [
+    dateValue(row?.work_date),
+    row?.payroll_employee_id,
+    row?.payroll_work_shift_id,
+].join('|');
+const activeShiftSorter = (left, right) => (
+    safeNumber(left.sort_order) - safeNumber(right.sort_order)
+    || formatTime(left.start_time).localeCompare(formatTime(right.start_time))
+    || String(left.shift_code || '').localeCompare(String(right.shift_code || ''))
+);
+const parseTimeMinutes = (value) => {
+    const match = String(value || '').match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return null;
+
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+    return hours * 60 + minutes;
+};
+const calculateShiftHours = (startTime, endTime) => {
+    const startMinutes = parseTimeMinutes(startTime);
+    const endMinutes = parseTimeMinutes(endTime);
+    if (startMinutes === null || endMinutes === null) return '';
+
+    const diff = endMinutes >= startMinutes
+        ? endMinutes - startMinutes
+        : endMinutes + (24 * 60) - startMinutes;
+
+    return parseDecimal(diff / 60);
+};
+const shiftDisplayCode = (shift) => {
+    const code = String(shift?.shift_code || '').trim();
+    if (code) return code.toUpperCase();
+
+    return String(shift?.shift_name || 'Ca').trim().slice(0, 2).toUpperCase();
+};
+const isPrimaryFullTimeShift = (shift, fallbackIds = new Set()) => {
+    if (fallbackIds.has(String(shift?.id))) return true;
+
+    const code = String(shift?.shift_code || '').trim().toUpperCase();
+    if (FULL_TIME_SHIFT_CODES.has(code)) return true;
+
+    const name = String(shift?.shift_name || '').toLowerCase();
+    return name.includes('sáng') || name.includes('chiều');
+};
 const imageSource = (value) => {
     const source = String(value || '').trim();
     if (!source) return '';
@@ -188,6 +336,228 @@ const normalizeEmployee = (row = {}) => {
     };
 };
 
+const salaryContextForDate = (employee = {}, workDate) => {
+    const context = {
+        salary_type: employee.salary_type || 'theo_gio',
+        salary_amount: safeNumber(employee.salary_amount),
+        standard_work_units: safeNumber(employee.standard_work_units),
+    };
+    const date = dateValue(workDate);
+    const rate = salaryRatesForEmployee(employee)
+        .slice()
+        .reverse()
+        .find((item) => dateValue(item.effective_from) && dateValue(item.effective_from) <= date);
+
+    if (!rate) return context;
+
+    return {
+        salary_type: rate.salary_type || context.salary_type,
+        salary_amount: safeNumber(rate.salary_amount),
+        standard_work_units: safeNumber(rate.standard_work_units),
+    };
+};
+
+const monthlySalaryForWorkUnits = (salaryAmount, standardWorkUnits, workUnits) => (
+    safeNumber(standardWorkUnits) > 0 ? (safeNumber(salaryAmount) / safeNumber(standardWorkUnits)) * safeNumber(workUnits) : 0
+);
+
+const calculateAttendanceAmount = (record = {}, employee = {}, shift = {}) => {
+    if (!employee?.id) return 0;
+
+    const workUnits = safeNumber(record.work_units);
+    const multiplier = safeNumber(shift?.wage_multiplier || 1) || 1;
+    const salary = salaryContextForDate(employee, record.work_date);
+    const unitRate = record.unit_rate;
+
+    if (unitRate !== null && unitRate !== undefined && unitRate !== '') {
+        return Math.round((safeNumber(unitRate) * workUnits * multiplier) * 100) / 100;
+    }
+
+    const base = salary.salary_type === 'theo_gio'
+        ? salary.salary_amount * safeNumber(shift?.standard_hours) * workUnits * multiplier
+        : salary.salary_type === 'theo_thang'
+            ? monthlySalaryForWorkUnits(salary.salary_amount, salary.standard_work_units, workUnits)
+            : salary.salary_amount * workUnits * multiplier;
+
+    return Math.round(base * 100) / 100;
+};
+
+const payrollSalaryBasisLabel = (row = {}) => {
+    if (!row.can_view_salary) return 'Ẩn';
+    if (row.has_multiple_salary_rates) return 'Nhiều mức trong tháng';
+
+    if (row.salary_type === 'theo_thang') {
+        const standard = safeNumber(row.standard_work_units);
+        const standardText = standard > 0 ? `${formatDecimal(standard)} ngày / tháng` : 'chưa đặt công chuẩn';
+        return `${formatMoney(row.salary_amount)} / tháng (${standardText})`;
+    }
+
+    if (row.salary_type === 'theo_gio') {
+        return `${formatMoney(row.salary_amount)} / giờ`;
+    }
+
+    return `${formatMoney(row.salary_amount)} / ca`;
+};
+
+const payrollFormulaLabel = (row = {}) => {
+    if (!row.can_view_salary) return 'Ẩn lương';
+    const multiplierText = row.has_shift_multiplier ? ' x Hệ số ca' : '';
+    if (row.has_unit_rate_override) return `Tổng lương = Tổng công x Đơn giá riêng${multiplierText}; Còn thanh toán = Tổng lương - Tạm ứng`;
+
+    if (row.salary_type === 'theo_thang') {
+        return 'Tổng lương = Tổng công / Công chuẩn x Định mức lương; Còn thanh toán = Tổng lương - Tạm ứng';
+    }
+
+
+    if (row.salary_type === 'theo_gio') {
+        return `Tổng lương = Tổng giờ x Định mức lương${multiplierText}; Còn thanh toán = Tổng lương - Tạm ứng`;
+    }
+
+    return `Tổng lương = Tổng công x Định mức lương${multiplierText}; Còn thanh toán = Tổng lương - Tạm ứng`;
+};
+
+const buildLocalPayrollSummary = ({
+    employees = [],
+    records = [],
+    shiftsById = new Map(),
+    canViewSalary = false,
+    adjustments = [],
+    monthDays = [],
+}) => {
+    const employeesById = new Map(employees.filter((employee) => employee.id).map((employee) => [String(employee.id), employee]));
+    const summary = new Map();
+
+    employeesById.forEach((employee) => {
+        const salary = salaryContextForDate(employee, monthDays[monthDays.length - 1] || isoDate(new Date()));
+        summary.set(String(employee.id), {
+            payroll_employee_id: employee.id,
+            employee_code: employee.employee_code || '',
+            full_name: employee.full_name || '',
+            department: employee.department || '',
+            salary_type: salary.salary_type || employee.salary_type || 'theo_gio',
+            salary_amount: salary.salary_amount,
+            standard_work_units: salary.standard_work_units,
+            can_view_salary: canViewSalary,
+            has_unit_rate_override: false,
+            has_shift_multiplier: false,
+            salary_context_keys: new Set(),
+            total_work_units: 0,
+            total_hours: 0,
+            total_advance: 0,
+            total_bonus: 0,
+            total_penalty: 0,
+            total_salary: canViewSalary ? 0 : null,
+        });
+    });
+
+    records.forEach((record) => {
+        const employee = employeesById.get(String(record.payroll_employee_id)) || record.employee;
+        const row = employee?.id ? summary.get(String(employee.id)) : null;
+        if (!employee || !row) return;
+
+        const shift = shiftsById.get(String(record.payroll_work_shift_id)) || record.shift || {};
+        const workUnits = safeNumber(record.work_units);
+        const salary = salaryContextForDate(employee, record.work_date);
+        const multiplier = safeNumber(shift?.wage_multiplier || 1) || 1;
+        row.salary_context_keys.add(`${salary.salary_type}|${salary.salary_amount}|${salary.standard_work_units}`);
+        if (record.unit_rate !== null && record.unit_rate !== undefined && record.unit_rate !== '') {
+            row.has_unit_rate_override = true;
+        }
+        if (multiplier !== 1) {
+            row.has_shift_multiplier = true;
+        }
+        row.total_work_units += workUnits;
+        row.total_hours += workUnits * safeNumber(shift?.standard_hours);
+        if (canViewSalary) {
+            row.total_salary += calculateAttendanceAmount(record, employee, shift);
+        }
+    });
+
+    adjustments
+        .filter((adjustment) => monthDays.includes(dateValue(adjustment.adjustment_date)))
+        .forEach((adjustment) => {
+            const row = summary.get(String(adjustment.payroll_employee_id));
+            if (!row) return;
+
+            row.total_advance += Math.abs(safeNumber(adjustment.amount));
+        });
+
+    return Array.from(summary.values())
+        .map((row) => ({
+            ...row,
+            has_multiple_salary_rates: row.salary_context_keys.size > 1,
+        }))
+        .map((row) => {
+            const nextRow = {
+                ...row,
+                total_work_units: Math.round(row.total_work_units * 1000) / 1000,
+                total_hours: Math.round(row.total_hours * 100) / 100,
+                total_advance: Math.round(row.total_advance * 100) / 100,
+                total_bonus: Math.round(row.total_bonus * 100) / 100,
+                total_penalty: Math.round(row.total_penalty * 100) / 100,
+                total_salary: row.total_salary === null ? null : Math.round(row.total_salary * 100) / 100,
+            };
+            delete nextRow.salary_context_keys;
+
+            return {
+                ...nextRow,
+                remaining_salary: nextRow.total_salary === null ? null : Math.round((nextRow.total_salary - nextRow.total_advance) * 100) / 100,
+                salary_basis: payrollSalaryBasisLabel(nextRow),
+                salary_formula: payrollFormulaLabel(nextRow),
+            };
+        })
+        .sort((left, right) => String(left.employee_code || '').localeCompare(String(right.employee_code || '')));
+};
+
+const buildDailyPayrollSummary = ({
+    employees = [],
+    records = [],
+    shiftsById = new Map(),
+    canViewSalary = false,
+    monthDays = [],
+}) => {
+    const employeesById = new Map(employees.filter((employee) => employee.id).map((employee) => [String(employee.id), employee]));
+    const rowsByDate = new Map(monthDays.map((date) => [date, {
+        work_date: date,
+        employee_ids: new Set(),
+        shift_count: 0,
+        total_work_units: 0,
+        total_hours: 0,
+        total_salary: canViewSalary ? 0 : null,
+    }]));
+
+    records.forEach((record) => {
+        const workDate = dateValue(record.work_date);
+        const row = rowsByDate.get(workDate);
+        if (!row) return;
+
+        const employee = employeesById.get(String(record.payroll_employee_id)) || record.employee;
+        if (!employee?.id) return;
+
+        const shift = shiftsById.get(String(record.payroll_work_shift_id)) || record.shift || {};
+        const workUnits = safeNumber(record.work_units);
+
+        if (workUnits > 0) {
+            row.employee_ids.add(String(employee.id));
+            row.shift_count += 1;
+        }
+
+        row.total_work_units += workUnits;
+        row.total_hours += workUnits * safeNumber(shift?.standard_hours);
+        if (canViewSalary) {
+            row.total_salary += calculateAttendanceAmount(record, employee, shift);
+        }
+    });
+
+    return Array.from(rowsByDate.values()).map(({ employee_ids: employeeIds, ...row }) => ({
+        ...row,
+        employee_count: employeeIds.size,
+        total_work_units: Math.round(row.total_work_units * 1000) / 1000,
+        total_hours: Math.round(row.total_hours * 100) / 100,
+        total_salary: row.total_salary === null ? null : Math.round(row.total_salary * 100) / 100,
+    }));
+};
+
 const employeePayload = (rows) => rows.map((row) => ({
     id: row.id || null,
     user_id: normalizeId(row.user_id),
@@ -237,7 +607,7 @@ const shiftPayload = (rows) => rows.map((row) => ({
     shift_name: row.shift_name || '',
     start_time: row.start_time || '',
     end_time: row.end_time || '',
-    standard_hours: parseDecimal(row.standard_hours),
+    standard_hours: parseDecimal(calculateShiftHours(row.start_time, row.end_time) || row.standard_hours),
     default_work_units: parseDecimal(row.default_work_units),
     wage_multiplier: parseDecimal(row.wage_multiplier || 1),
     is_active: Boolean(row.is_active),
@@ -251,7 +621,7 @@ const schedulePayload = (rows) => rows.map((row) => ({
     payroll_employee_id: normalizeId(row.payroll_employee_id),
     payroll_work_shift_id: normalizeId(row.payroll_work_shift_id),
     registered_work_units: parseDecimal(row.registered_work_units || 1),
-    status: row.status || 'Đã đăng ký',
+    status: row.status || REGISTERED_SCHEDULE_STATUS,
     notes: row.notes || '',
 }));
 
@@ -262,7 +632,7 @@ const attendancePayload = (rows) => rows.map((row) => ({
     payroll_employee_id: normalizeId(row.payroll_employee_id),
     payroll_work_shift_id: normalizeId(row.payroll_work_shift_id),
     attendance_status: row.attendance_status || 'Đi làm',
-    work_units: parseDecimal(row.work_units || 0),
+    work_units: parseWorkUnits(row.work_units || 0),
     unit_rate: parseMoney(row.unit_rate),
     bonus_amount: parseMoney(row.bonus_amount),
     penalty_amount: parseMoney(row.penalty_amount),
@@ -305,7 +675,7 @@ function TextAreaInput({ value, onChange, disabled = false, placeholder = '' }) 
     );
 }
 
-function MoneyInput({ value, onChange, disabled = false, suffix = 'đ' }) {
+function MoneyInput({ value, onChange, disabled = false, suffix = 'đ', inputClassName = 'text-right' }) {
     const paddingClass = suffix === 'đ' ? 'pr-7' : 'pr-20';
 
     return (
@@ -316,33 +686,49 @@ function MoneyInput({ value, onChange, disabled = false, suffix = 'đ' }) {
                 value={value === null || value === undefined || value === '' ? '' : moneyFormatter.format(Math.ceil(safeNumber(value)))}
                 disabled={disabled}
                 onChange={(event) => onChange(parseMoney(event.target.value))}
-                className={`h-9 w-full rounded border border-gray-200 bg-white px-2.5 ${paddingClass} text-right text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400`}
+                className={`h-9 w-full rounded border border-gray-200 bg-white px-2.5 ${paddingClass} ${inputClassName} text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400`}
             />
             <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-bold text-gray-400">{suffix}</span>
         </div>
     );
 }
 
-function DecimalInput({ value, onChange, disabled = false }) {
+function DecimalInput({ value, onChange, disabled = false, className = '', suffix = '', wrapperClassName = '' }) {
+    if (suffix) {
+        return (
+            <div className={`flex h-9 w-full items-center rounded border border-gray-200 bg-white focus-within:border-teal-500 focus-within:ring-1 focus-within:ring-teal-100 ${disabled ? 'bg-gray-50 text-gray-400' : ''} ${wrapperClassName}`}>
+                <input
+                    type="text"
+                    inputMode="decimal"
+                    value={formatEditableDecimal(value)}
+                    disabled={disabled}
+                    onChange={(event) => onChange(parseDecimal(event.target.value))}
+                    className={`h-full min-w-0 flex-1 bg-transparent px-2 text-center text-[13px] text-gray-800 outline-none disabled:text-gray-400 ${className}`}
+                />
+                <span className="shrink-0 pr-2 text-[10px] font-bold text-gray-400">{suffix}</span>
+            </div>
+        );
+    }
+
     return (
         <input
             type="text"
             inputMode="decimal"
-            value={value ?? ''}
+            value={formatEditableDecimal(value)}
             disabled={disabled}
             onChange={(event) => onChange(parseDecimal(event.target.value))}
-            className="h-9 w-full rounded border border-gray-200 bg-white px-2.5 text-right text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400"
+            className={`h-9 w-full rounded border border-gray-200 bg-white px-2.5 text-center text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400 ${className}`}
         />
     );
 }
 
-function SelectInput({ value, onChange, options, disabled = false, placeholder = 'Chọn' }) {
+function SelectInput({ value, onChange, options, disabled = false, placeholder = 'Chọn', className = '' }) {
     return (
         <select
             value={value ?? ''}
             disabled={disabled}
             onChange={(event) => onChange(event.target.value)}
-            className="h-9 w-full rounded border border-gray-200 bg-white px-2.5 text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400"
+            className={`h-9 w-full rounded border border-gray-200 bg-white px-2.5 text-[13px] text-gray-800 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400 ${className}`}
         >
             <option value="">{placeholder}</option>
             {options.map((option) => {
@@ -355,7 +741,7 @@ function SelectInput({ value, onChange, options, disabled = false, placeholder =
 
 function MiniTable({ columns, rows, renderRow, empty = 'Chưa có dữ liệu.' }) {
     return (
-        <table className="w-full border-collapse text-left text-[12px]">
+        <table className="w-full border-collapse text-center text-[12px]">
             <thead>
                 <tr>
                     {columns.map((column) => (
@@ -372,14 +758,14 @@ function MiniTable({ columns, rows, renderRow, empty = 'Chưa có dữ liệu.' 
     );
 }
 
-function DataTable({ columns, minWidth = 980, children }) {
+function DataTable({ columns, minWidth = 980, children, headerClassName = '' }) {
     return (
         <div className="overflow-auto">
-            <table className="w-full border-collapse text-left text-[13px]" style={{ minWidth }}>
+            <table className="w-full border-collapse text-center text-[13px]" style={{ minWidth }}>
                 <thead>
                     <tr>
                         {columns.map((column) => (
-                            <th key={column} className="sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-[12px] font-bold text-gray-500">{column}</th>
+                            <th key={column} className={`sticky top-0 z-10 border-b border-gray-200 bg-white px-3 py-2 text-center text-[12px] font-bold text-gray-500 ${headerClassName}`}>{column}</th>
                         ))}
                     </tr>
                 </thead>
@@ -391,6 +777,49 @@ function DataTable({ columns, minWidth = 980, children }) {
 
 function EmptyRow({ colSpan, message }) {
     return <tr><td colSpan={colSpan} className="px-4 py-10 text-center text-[13px] font-semibold text-gray-400">{message}</td></tr>;
+}
+
+function FormulaTooltipValue({ value, formula }) {
+    const [tooltip, setTooltip] = useState(null);
+    const showTooltip = (event) => {
+        if (!formula) return;
+
+        const rect = event.currentTarget.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const placeAbove = rect.bottom + 96 > viewportHeight;
+        setTooltip({
+            left: rect.left + (rect.width / 2),
+            top: placeAbove ? rect.top - 8 : rect.bottom + 8,
+            placeAbove,
+        });
+    };
+
+    return (
+        <span
+            className="inline-flex cursor-help items-center justify-center"
+            title={formula || ''}
+            tabIndex={0}
+            onMouseEnter={showTooltip}
+            onMouseMove={showTooltip}
+            onMouseLeave={() => setTooltip(null)}
+            onFocus={showTooltip}
+            onBlur={() => setTooltip(null)}
+        >
+            <span className="border-b border-dotted border-teal-500">{value}</span>
+            {tooltip && (
+                <span
+                    className="pointer-events-none fixed z-[9999] w-max max-w-[340px] -translate-x-1/2 rounded border border-gray-200 bg-white px-3 py-2 text-left text-[12px] font-semibold leading-5 text-gray-600 shadow-lg"
+                    style={{
+                        left: tooltip.left,
+                        top: tooltip.top,
+                        transform: `translate(-50%, ${tooltip.placeAbove ? '-100%' : '0'})`,
+                    }}
+                >
+                    {formula}
+                </span>
+            )}
+        </span>
+    );
 }
 
 function Panel({ title, icon, onOpen, children, footer }) {
@@ -451,6 +880,76 @@ function TickButton({ checked, disabled, onClick }) {
     );
 }
 
+function ScheduleShiftButton({ shift, checked, disabled, defaulted, onClick }) {
+    const code = shiftDisplayCode(shift);
+
+    return (
+        <button
+            type="button"
+            disabled={disabled}
+            onClick={onClick}
+            title={`${shift?.shift_name || code} ${formatTime(shift?.start_time)}-${formatTime(shift?.end_time)}`}
+            className={`relative inline-flex size-10 shrink-0 items-center justify-center rounded border text-[13px] font-extrabold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${checked ? 'border-teal-600 bg-teal-700 text-white shadow-sm' : 'border-gray-200 bg-white text-gray-500 hover:border-teal-300 hover:bg-teal-50'}`}
+        >
+            {code}
+            {checked && (
+                <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-white bg-emerald-500 text-white">
+                    <span className="material-symbols-outlined text-[12px]">done</span>
+                </span>
+            )}
+            {defaulted && !checked && (
+                <span className="absolute -bottom-1 -right-1 size-2 rounded-full bg-amber-400" />
+            )}
+        </button>
+    );
+}
+
+function AttendanceShiftControl({ shift, record, disabled, onToggle, onHoursChange }) {
+    const code = shiftDisplayCode(shift);
+    const standardHours = safeNumber(shift?.standard_hours);
+    const defaultWorkUnits = safeNumber(shift?.default_work_units || 1) || 1;
+    const isFull = record?.attendance_status === 'Đi làm' && safeNumber(record.work_units) >= defaultWorkUnits;
+    const hasPartial = record && !isFull && safeNumber(record.work_units) > 0;
+    const hours = hasPartial && standardHours > 0
+        ? formatDecimal((safeNumber(record.work_units) / defaultWorkUnits) * standardHours)
+        : '';
+    const workUnits = hasPartial && standardHours > 0
+        ? formatWorkUnit(safeNumber(record.work_units))
+        : '';
+
+    return (
+        <div className="flex min-w-[42px] flex-col items-center gap-1">
+            <button
+                type="button"
+                disabled={disabled}
+                onClick={onToggle}
+                title={`${shift?.shift_name || code} ${formatTime(shift?.start_time)}-${formatTime(shift?.end_time)}`}
+                className={`relative inline-flex size-9 items-center justify-center rounded border text-[12px] font-extrabold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isFull ? 'border-teal-600 bg-teal-700 text-white shadow-sm' : hasPartial ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-gray-200 bg-white text-gray-500 hover:border-teal-300 hover:bg-teal-50'}`}
+            >
+                {code}
+                {isFull && (
+                    <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full border border-white bg-emerald-500 text-white">
+                        <span className="material-symbols-outlined text-[12px]">done</span>
+                    </span>
+                )}
+            </button>
+            {!isFull && (
+                <input
+                    type="text"
+                    inputMode="decimal"
+                    disabled={disabled}
+                    value={hours}
+                    placeholder="giờ"
+                    onChange={(event) => onHoursChange(event.target.value)}
+                    title={workUnits ? `${workUnits} công` : 'Nhập giờ thực tế'}
+                    className="h-5 w-10 rounded border border-gray-200 bg-white px-1 text-center text-[10px] font-bold text-gray-700 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-100 disabled:bg-gray-50 disabled:text-gray-400"
+                />
+            )}
+            {hasPartial && <span className="text-[9px] font-bold text-amber-700">{workUnits} công</span>}
+        </div>
+    );
+}
+
 function DetailShell({ title, action, children }) {
     return (
         <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
@@ -466,7 +965,10 @@ function DetailShell({ title, action, children }) {
 export default function HumanResourcesManagement() {
     const [activeView, setActiveView] = useState('overview');
     const [month, setMonth] = useState(currentMonth());
-    const [weekStart, setWeekStart] = useState(weekStartOf(firstDayOfMonth(currentMonth())));
+    const [weekStart, setWeekStart] = useState(firstDayOfMonth(currentMonth()));
+    const [attendanceFilterMode, setAttendanceFilterMode] = useState('month');
+    const [attendanceDate, setAttendanceDate] = useState(isoDate(new Date()));
+    const [scheduleWeekFilter, setScheduleWeekFilter] = useState('all');
     const departmentFilter = '';
     const [reloadKey, setReloadKey] = useState(0);
     const [loading, setLoading] = useState(true);
@@ -477,12 +979,14 @@ export default function HumanResourcesManagement() {
     const [closedMonth, setClosedMonth] = useState('');
     const [data, setData] = useState(BLANK_DATA);
     const [employees, setEmployees] = useState([]);
+    const [scheduleEmployees, setScheduleEmployees] = useState([]);
     const [shifts, setShifts] = useState([]);
     const [schedules, setSchedules] = useState([]);
     const [attendance, setAttendance] = useState([]);
     const [adjustments, setAdjustments] = useState([]);
     const [employeeProfileKey, setEmployeeProfileKey] = useState('');
     const [zoomImage, setZoomImage] = useState({ url: '', title: '' });
+    const [showShiftModal, setShowShiftModal] = useState(false);
 
     useEffect(() => {
         let active = true;
@@ -491,8 +995,10 @@ export default function HumanResourcesManagement() {
                 if (!active) return;
                 const nextData = response?.data?.data || BLANK_DATA;
                 const normalizedEmployees = (nextData.employees || []).map(normalizeEmployee);
-                setData({ ...nextData, employees: normalizedEmployees });
+                const normalizedScheduleEmployees = (nextData.schedule_employees || nextData.employees || []).map(normalizeEmployee);
+                setData({ ...nextData, employees: normalizedEmployees, schedule_employees: normalizedScheduleEmployees });
                 setEmployees(normalizedEmployees);
+                setScheduleEmployees(normalizedScheduleEmployees);
                 setShifts(nextData.shifts || []);
                 setSchedules(nextData.schedules || []);
                 setAttendance(nextData.attendance_records || []);
@@ -503,6 +1009,7 @@ export default function HumanResourcesManagement() {
                 if (!active) return;
                 setData(BLANK_DATA);
                 setEmployees([]);
+                setScheduleEmployees([]);
                 setShifts([]);
                 setSchedules([]);
                 setAttendance([]);
@@ -521,14 +1028,137 @@ export default function HumanResourcesManagement() {
     const canManagePayroll = Boolean(scope.can_manage_payroll);
     const canEditAttendance = Boolean(scope.can_edit_attendance || scope.can_manage_payroll);
     const canViewSalary = Boolean(scope.can_view_salary);
+    const selfEmployeeId = String(scope.self_employee_id || scope.employee_id || '');
+    const canEditOwnSchedule = Boolean(scope.can_edit_own_schedule || canEditAttendance);
+    const canSaveSchedules = canEditAttendance || (canEditOwnSchedule && Boolean(selfEmployeeId));
+    const canEditScheduleForEmployee = (employee) => canEditAttendance || (
+        canEditOwnSchedule
+        && selfEmployeeId
+        && String(employee?.id || '') === selfEmployeeId
+    );
     const employeeById = useMemo(() => new Map(employees.map((employee) => [String(employee.id), employee])), [employees]);
     const shiftById = useMemo(() => new Map(shifts.map((shift) => [String(shift.id), shift])), [shifts]);
-    const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => isoDate(addDays(dateFromInput(weekStart), index))), [weekStart]);
-    const payrollSummary = data.payroll_summary || [];
+    const activeShifts = useMemo(() => shifts.filter((shift) => shift.id && shift.is_active !== false).slice().sort(activeShiftSorter), [shifts]);
+    const primaryFullTimeShifts = activeShifts.filter((shift) => isPrimaryFullTimeShift(shift));
+    const fullTimeDefaultShifts = primaryFullTimeShifts.length > 0 ? primaryFullTimeShifts : activeShifts.slice(0, 2);
+    const fullTimeDefaultShiftIds = new Set(fullTimeDefaultShifts.map((shift) => String(shift.id)));
+    const weekDays = useMemo(() => (
+        Array.from({ length: 7 }, (_, index) => isoDate(addDays(dateFromInput(weekStart), index)))
+            .filter((date) => isDateInMonth(date, month))
+    ), [month, weekStart]);
+    const monthDays = useMemo(() => datesBetween(firstDayOfMonth(month), lastDayOfMonth(month)), [month]);
+    const monthWeeks = useMemo(() => monthWeeksOf(month), [month]);
+    const scheduleDisplayWeeks = useMemo(() => (
+        monthWeeks.slice().sort((left, right) => left.weekNumber - right.weekNumber)
+    ), [monthWeeks]);
+    const scheduleVisibleWeeks = useMemo(() => (
+        scheduleWeekFilter === 'all'
+            ? scheduleDisplayWeeks
+            : scheduleDisplayWeeks.filter((week) => week.weekNumber === Number(scheduleWeekFilter))
+    ), [scheduleDisplayWeeks, scheduleWeekFilter]);
+    const scheduleWeekNumbers = useMemo(() => new Set(scheduleDisplayWeeks.map((week) => week.weekNumber)), [scheduleDisplayWeeks]);
+    const attendanceAutoFillDays = useMemo(() => {
+        const today = isoDate(new Date());
+        const thisMonth = currentMonth();
+
+        if (month > thisMonth) {
+            return [];
+        }
+
+        if (month < thisMonth) {
+            return monthDays;
+        }
+
+        return monthDays.filter((date) => date <= today);
+    }, [month, monthDays]);
+    const visibleAttendanceWeeks = useMemo(() => {
+        const today = isoDate(new Date());
+        const thisMonth = currentMonth();
+
+        if (month > thisMonth) {
+            return [];
+        }
+
+        if (month === thisMonth) {
+            return monthWeeks.filter((week) => week.days.some((date) => date <= today));
+        }
+
+        return monthWeeks;
+    }, [month, monthWeeks]);
+    const attendanceFilterDays = useMemo(() => (
+        attendanceFilterMode === 'day' && isDateInMonth(attendanceDate, month) ? [attendanceDate] : monthDays
+    ), [attendanceDate, attendanceFilterMode, month, monthDays]);
+    const attendanceDisplayWeeks = useMemo(() => {
+        if (attendanceFilterMode === 'day') {
+            const selectedWeek = monthWeeks.find((week) => week.days.includes(attendanceDate));
+            return isDateInMonth(attendanceDate, month) ? [{
+                weekNumber: selectedWeek?.weekNumber || 1,
+                days: [attendanceDate],
+            }] : [];
+        }
+
+        return visibleAttendanceWeeks;
+    }, [attendanceDate, attendanceFilterMode, month, monthWeeks, visibleAttendanceWeeks]);
+    const attendanceTitle = attendanceFilterMode === 'day'
+        ? `Ch\u1ea5m c\u00f4ng ng\u00e0y ${shortDate(attendanceDate)}`
+        : `Ch\u1ea5m c\u00f4ng th\u00e1ng ${month}`;
+    const attendanceFilterLabel = attendanceFilterMode === 'day'
+        ? shortDate(attendanceDate)
+        : `${shortDate(firstDayOfMonth(month))} - ${shortDate(lastDayOfMonth(month))}`;
+    const serverPayrollSummary = data.payroll_summary || [];
     const filteredEmployees = employees;
     const activeEmployees = filteredEmployees.filter((employee) => employee.status !== 'Nghỉ việc');
-    const weekSchedules = schedules.filter((schedule) => weekDays.includes(schedule.work_date) && schedule.status !== 'Huỷ lịch');
-    const weekAttendance = attendance.filter((record) => weekDays.includes(record.work_date));
+    const activeScheduleEmployees = scheduleEmployees.filter((employee) => employee.status !== 'Nghỉ việc');
+    const monthSchedules = schedulesForDates(monthDays, activeEmployees);
+    const attendanceFilterSchedules = monthSchedules.filter((schedule) => attendanceFilterDays.includes(schedule.work_date));
+    const attendanceWithScheduleDefaults = useMemo(() => {
+        const existingKeys = new Set(attendance.map(attendanceKey));
+        const defaultRows = schedulesForDates(attendanceAutoFillDays)
+            .filter((schedule) => !existingKeys.has(attendanceKey(schedule)))
+            .map((schedule) => {
+                const shift = shiftById.get(String(schedule.payroll_work_shift_id)) || schedule.shift || {};
+                return {
+                    uid: `auto-attendance-${attendanceKey(schedule)}`,
+                    virtual_auto_attendance: true,
+                    payroll_schedule_registration_id: schedule.id || null,
+                    work_date: schedule.work_date,
+                    payroll_employee_id: schedule.payroll_employee_id,
+                    payroll_work_shift_id: schedule.payroll_work_shift_id,
+                    attendance_status: 'Đi làm',
+                    work_units: parseWorkUnits(schedule.registered_work_units || shift.default_work_units || 1),
+                    unit_rate: '',
+                    bonus_amount: '',
+                    penalty_amount: '',
+                    notes: '',
+                };
+            });
+
+        return [...attendance, ...defaultRows];
+    }, [activeEmployees, attendance, attendanceAutoFillDays, fullTimeDefaultShifts, schedules, shiftById]);
+    const weekAttendance = attendanceWithScheduleDefaults.filter((record) => weekDays.includes(record.work_date));
+    const monthAttendance = attendanceWithScheduleDefaults.filter((record) => monthDays.includes(record.work_date));
+    const attendanceFilterRecords = attendanceWithScheduleDefaults.filter((record) => attendanceFilterDays.includes(record.work_date));
+    const payrollSummary = useMemo(() => {
+        if (employees.length === 0 && serverPayrollSummary.length > 0) {
+            return serverPayrollSummary;
+        }
+
+        return buildLocalPayrollSummary({
+            employees,
+            records: monthAttendance,
+            shiftsById: shiftById,
+            canViewSalary,
+            adjustments,
+            monthDays,
+        });
+    }, [adjustments, canViewSalary, employees, monthAttendance, monthDays, serverPayrollSummary, shiftById]);
+    const dailySalarySummary = useMemo(() => buildDailyPayrollSummary({
+        employees,
+        records: monthAttendance,
+        shiftsById: shiftById,
+        canViewSalary,
+        monthDays,
+    }), [canViewSalary, employees, monthAttendance, monthDays, shiftById]);
     const employeeOptions = employees.filter((employee) => employee.id).map((employee) => ({
         value: employee.id,
         label: employee.full_name || 'Chưa đặt tên',
@@ -537,19 +1167,30 @@ export default function HumanResourcesManagement() {
         value: user.id,
         label: [user.name, user.email].filter(Boolean).join(' - ') || `User #${user.id}`,
     }));
-    const shiftOptions = shifts.filter((shift) => shift.id && shift.is_active !== false).map((shift) => ({
-        value: shift.id,
-        label: `${shift.shift_name || shift.shift_code || 'Ca'} ${formatTime(shift.start_time)}-${formatTime(shift.end_time)}`,
-    }));
+    const accountLabel = (employee) => {
+        const user = employee?.user || {};
+        return [user.name, user.email].filter(Boolean).join(' - ') || (employee?.user_id ? `User #${employee.user_id}` : 'Chưa gắn');
+    };
     const employeeProfile = employees.find((employee) => employeeRowKey(employee) === employeeProfileKey) || null;
 
     const totalHours = payrollSummary.reduce((sum, row) => sum + safeNumber(row.total_hours), 0);
     const totalWorkUnits = payrollSummary.reduce((sum, row) => sum + safeNumber(row.total_work_units), 0);
     const totalSalary = payrollSummary.reduce((sum, row) => sum + safeNumber(row.total_salary), 0);
-    const manualCount = attendance.filter((record) => !isFullAttendance(record)).length;
-    const adjustmentImpact = adjustments.reduce((sum, adjustment) => (
-        sum + (positiveAdjustment(adjustment.adjustment_type) ? safeNumber(adjustment.amount) : -safeNumber(adjustment.amount))
-    ), 0);
+    const totalAdvance = payrollSummary.reduce((sum, row) => sum + safeNumber(row.total_advance), 0);
+    const totalRemainingSalary = payrollSummary.reduce((sum, row) => sum + safeNumber(row.remaining_salary), 0);
+    const dailySalaryRowsWithWork = dailySalarySummary.filter((row) => row.shift_count > 0 || safeNumber(row.total_work_units) > 0);
+    const dailySalaryWorkDays = dailySalaryRowsWithWork.length;
+    const averageDailySalary = dailySalaryWorkDays > 0 ? totalSalary / dailySalaryWorkDays : 0;
+    const highestDailySalary = dailySalaryRowsWithWork.reduce((best, row) => (
+        !best || safeNumber(row.total_salary) > safeNumber(best.total_salary) ? row : best
+    ), null);
+    const highestDailySalaryLabel = highestDailySalary
+        ? `${shortDate(highestDailySalary.work_date)} - ${canViewSalary ? formatMoney(highestDailySalary.total_salary) : 'Ẩn'}`
+        : '-';
+    const attendanceMonthHours = attendanceFilterRecords.reduce((sum, record) => sum + attendanceHours(record), 0);
+    const attendanceMonthWorkUnits = attendanceFilterRecords.reduce((sum, record) => sum + safeNumber(record.work_units), 0);
+    const manualCount = monthAttendance.filter((record) => !isFullAttendance(record)).length;
+    const partialAttendanceCount = attendanceFilterRecords.filter((record) => safeNumber(record.work_units) > 0 && !isFullAttendance(record)).length;
 
     function reloadData() {
         setLoading(true);
@@ -586,12 +1227,12 @@ export default function HumanResourcesManagement() {
                 uid: tempId(),
                 salary_type: 'theo_gio',
                 salary_amount: '',
-                standard_work_units: 26,
+                standard_work_units: DEFAULT_STANDARD_WORK_UNITS,
                 effective_from: effectiveFrom,
                 notes: '',
             }],
             deleted_salary_rate_ids: [],
-            standard_work_units: 26,
+            standard_work_units: DEFAULT_STANDARD_WORK_UNITS,
             lunch_allowance: '',
             bank_account_note: '',
             status: 'Đang làm',
@@ -610,6 +1251,14 @@ export default function HumanResourcesManagement() {
             const nextPatch = typeof patch === 'function' ? patch(row) : patch;
             return { ...row, ...nextPatch };
         }));
+    }
+
+    function saveEmployees() {
+        return saveRows(
+            'employees',
+            () => payrollApi.saveEmployees(employeePayload(employees)),
+            '\u0110\u00e3 l\u01b0u nh\u00e2n vi\u00ean.'
+        );
     }
 
     async function uploadEmployeeBankQr(file) {
@@ -686,9 +1335,37 @@ export default function HumanResourcesManagement() {
     }
 
     function changeMonth(value) {
-        setMonth(value);
-        setWeekStart(weekStartOf(firstDayOfMonth(value)));
+        const nextMonth = value || currentMonth();
+
+        setMonth(nextMonth);
+        setWeekStart(firstDayOfMonth(nextMonth));
+        setAttendanceDate((current) => (isDateInMonth(current, nextMonth) ? current : firstDayOfMonth(nextMonth)));
+        setScheduleWeekFilter('all');
         setLoading(true);
+        setMessage('');
+        setError('');
+    }
+
+    function changeAttendanceFilterMode(value) {
+        setAttendanceFilterMode(value);
+        if (value === 'day' && !isDateInMonth(attendanceDate, month)) {
+            setAttendanceDate(firstDayOfMonth(month));
+        }
+        setMessage('');
+        setError('');
+    }
+
+    function changeAttendanceDate(value) {
+        const nextDate = dateValue(value) || isoDate(new Date());
+        const nextMonth = monthOfDate(nextDate);
+
+        setAttendanceDate(nextDate);
+        if (nextMonth !== month) {
+            setMonth(nextMonth);
+            setWeekStart(firstDayOfMonth(nextMonth));
+            setScheduleWeekFilter('all');
+            setLoading(true);
+        }
         setMessage('');
         setError('');
     }
@@ -706,60 +1383,141 @@ export default function HumanResourcesManagement() {
         return record?.attendance_status === 'Đi làm' && safeNumber(record.work_units) >= safeNumber(shift.default_work_units || 1);
     }
 
-    function shiftText(shift) {
-        return [shift?.shift_name, `${formatTime(shift?.start_time)}-${formatTime(shift?.end_time)}`].filter(Boolean).join(' ');
+    function attendanceHours(record, shift = resolveShift(record)) {
+        const standardHours = safeNumber(shift?.standard_hours);
+        const defaultWorkUnits = safeNumber(shift?.default_work_units || 1) || 1;
+        return defaultWorkUnits > 0 ? (safeNumber(record?.work_units) / defaultWorkUnits) * standardHours : 0;
     }
 
-    function findSchedule(employeeId, date) {
+    function schedulesForDates(dates, rosterEmployees = activeEmployees) {
+        const rosterEmployeeIds = new Set(rosterEmployees.map((employee) => String(employee.id || '')).filter(Boolean));
+
+        return [
+            ...schedules.filter((schedule) => (
+                dates.includes(schedule.work_date)
+                && schedule.status !== CANCELLED_SCHEDULE_STATUS
+                && rosterEmployeeIds.has(String(schedule.payroll_employee_id || ''))
+            )),
+            ...rosterEmployees.flatMap((employee) => {
+                if (!employee.id || !isFullTime(employee)) return [];
+
+                return dates.flatMap((date) => fullTimeDefaultShifts
+                    .filter((shift) => !schedules.some((schedule) => (
+                        String(schedule.payroll_employee_id) === String(employee.id)
+                        && schedule.work_date === date
+                        && String(schedule.payroll_work_shift_id) === String(shift.id)
+                    )))
+                    .map((shift) => ({
+                        uid: `default-${employee.id}-${date}-${shift.id}`,
+                        virtual_default: true,
+                        work_date: date,
+                        payroll_employee_id: employee.id,
+                        payroll_work_shift_id: shift.id,
+                        registered_work_units: parseDecimal(shift.default_work_units || 1),
+                        status: REGISTERED_SCHEDULE_STATUS,
+                        notes: '',
+                    })));
+            }),
+        ];
+    }
+
+    function findSchedule(employeeId, date, shiftId) {
         return schedules.find((schedule) => (
             String(schedule.payroll_employee_id) === String(employeeId)
             && schedule.work_date === date
-            && schedule.status !== 'Huỷ lịch'
+            && String(schedule.payroll_work_shift_id) === String(shiftId)
         ));
     }
 
-    function setScheduleCell(employee, date, shiftId) {
-        const existing = findSchedule(employee.id, date);
-        const shift = shiftById.get(String(shiftId));
+    function isScheduleShiftChecked(employee, date, shift) {
+        const existing = findSchedule(employee.id, date, shift.id);
+        if (existing) return existing.status !== CANCELLED_SCHEDULE_STATUS;
 
-        if (!shiftId) {
-            if (!existing) return;
-            if (!existing.id) {
+        return isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id));
+    }
+
+    function toggleScheduleShift(employee, date, shift) {
+        if (!employee.id || !shift.id) return;
+
+        const existing = findSchedule(employee.id, date, shift.id);
+        if (existing) {
+            const checked = existing.status !== CANCELLED_SCHEDULE_STATUS;
+            if (checked && !existing.id && !isFullTime(employee)) {
                 setSchedules((rows) => rows.filter((row) => row !== existing));
                 return;
             }
-            updateRow(setSchedules, existing, { status: 'Huỷ lịch' });
-            return;
-        }
 
-        if (existing) {
             updateRow(setSchedules, existing, {
-                payroll_work_shift_id: shiftId,
-                registered_work_units: shift?.default_work_units || existing.registered_work_units || 1,
-                status: 'Đã đăng ký',
+                registered_work_units: shift.default_work_units || existing.registered_work_units || 1,
+                status: checked ? CANCELLED_SCHEDULE_STATUS : REGISTERED_SCHEDULE_STATUS,
             });
             return;
         }
 
+        const checkedByDefault = isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id));
         setSchedules((rows) => [...rows, {
             uid: tempId(),
             work_date: date,
             payroll_employee_id: employee.id,
-            payroll_work_shift_id: shiftId,
-            registered_work_units: shift?.default_work_units || 1,
-            status: 'Đã đăng ký',
+            payroll_work_shift_id: shift.id,
+            registered_work_units: shift.default_work_units || 1,
+            status: checkedByDefault ? CANCELLED_SCHEDULE_STATUS : REGISTERED_SCHEDULE_STATUS,
             notes: '',
         }]);
     }
 
-    function createAttendanceFromWeek() {
+    function schedulesWithFullTimeDefaults(rosterEmployees = activeEmployees) {
+        const existingKeys = new Set(schedules.map(scheduleKey));
+        const defaultRows = rosterEmployees.flatMap((employee) => {
+            if (!employee.id || !isFullTime(employee)) return [];
+
+            return monthDays.flatMap((date) => fullTimeDefaultShifts
+                .filter((shift) => !existingKeys.has([
+                    date,
+                    employee.id,
+                    shift.id,
+                ].join('|')))
+                .map((shift) => ({
+                    uid: tempId(),
+                    work_date: date,
+                    payroll_employee_id: employee.id,
+                    payroll_work_shift_id: shift.id,
+                    registered_work_units: shift.default_work_units || 1,
+                    status: REGISTERED_SCHEDULE_STATUS,
+                    notes: '',
+                })));
+        });
+
+        return [...schedules, ...defaultRows];
+    }
+
+    function schedulesForSave() {
+        const rosterEmployees = canEditAttendance ? activeScheduleEmployees : activeEmployees;
+        const rows = schedulesWithFullTimeDefaults(rosterEmployees);
+
+        if (canEditAttendance) return rows;
+
+        return rows.filter((row) => String(row.payroll_employee_id || '') === selfEmployeeId);
+    }
+
+    function updateShiftTime(shift, patch) {
+        const nextShift = { ...shift, ...patch };
+        const nextHours = calculateShiftHours(nextShift.start_time, nextShift.end_time);
+        updateRow(setShifts, shift, {
+            ...patch,
+            ...(nextHours !== '' ? { standard_hours: nextHours } : {}),
+        });
+    }
+
+    function createAttendanceFromSchedule() {
         const existingKeys = new Set(attendance.map((record) => [
             record.work_date,
             record.payroll_employee_id,
             record.payroll_work_shift_id,
         ].join('|')));
 
-        const newRows = weekSchedules
+        const sourceSchedules = schedulesForDates(attendanceAutoFillDays);
+        const newRows = sourceSchedules
             .filter((schedule) => !existingKeys.has([
                 schedule.work_date,
                 schedule.payroll_employee_id,
@@ -774,7 +1532,7 @@ export default function HumanResourcesManagement() {
                     payroll_employee_id: schedule.payroll_employee_id,
                     payroll_work_shift_id: schedule.payroll_work_shift_id,
                     attendance_status: 'Đi làm',
-                    work_units: parseDecimal(schedule.registered_work_units || shift.default_work_units || 1),
+                    work_units: parseWorkUnits(schedule.registered_work_units || shift.default_work_units || 1),
                     unit_rate: '',
                     bonus_amount: '',
                     penalty_amount: '',
@@ -783,31 +1541,141 @@ export default function HumanResourcesManagement() {
             });
 
         if (newRows.length === 0) {
-            setMessage('Tuần này không có lịch mới cần tạo chấm công.');
+            setMessage(attendanceAutoFillDays.length === 0
+                ? 'Ch\u01b0a t\u1edbi ng\u00e0y n\u00e0o trong th\u00e1ng n\u00e0y \u0111\u1ec3 t\u1ea1o ch\u1ea5m c\u00f4ng.'
+                : 'Th\u00e1ng n\u00e0y kh\u00f4ng c\u00f3 l\u1ecbch m\u1edbi c\u1ea7n t\u1ea1o ch\u1ea5m c\u00f4ng.');
             setActiveView('attendance');
             return;
         }
 
         setAttendance((rows) => [...rows, ...newRows]);
-        setMessage(`Đã tạo ${newRows.length} dòng chấm công từ lịch tuần.`);
+        setMessage(`\u0110\u00e3 t\u1ea1o ${newRows.length} d\u00f2ng ch\u1ea5m c\u00f4ng t\u1eeb l\u1ecbch t\u1edbi ng\u00e0y hi\u1ec7n t\u1ea1i.`);
         setActiveView('attendance');
     }
 
-    function toggleFullAttendance(record) {
-        const shift = resolveShift(record);
-        const isFull = isFullAttendance(record);
+    function findAttendanceRecord(employeeId, date, shiftId) {
+        return attendanceWithScheduleDefaults.find((record) => (
+            String(record.payroll_employee_id) === String(employeeId)
+            && record.work_date === date
+            && String(record.payroll_work_shift_id) === String(shiftId)
+        ));
+    }
+
+    function attendanceShiftsFor(employee, date) {
+        const byId = new Map();
+
+        monthSchedules
+            .filter((schedule) => (
+                String(schedule.payroll_employee_id) === String(employee.id)
+                && schedule.work_date === date
+                && schedule.status !== CANCELLED_SCHEDULE_STATUS
+            ))
+            .forEach((schedule) => {
+                const shift = shiftById.get(String(schedule.payroll_work_shift_id)) || schedule.shift;
+                if (shift?.id) byId.set(String(shift.id), shift);
+            });
+
+        attendance
+            .filter((record) => (
+                String(record.payroll_employee_id) === String(employee.id)
+                && record.work_date === date
+            ))
+            .forEach((record) => {
+                const shift = shiftById.get(String(record.payroll_work_shift_id)) || record.shift;
+                if (shift?.id) byId.set(String(shift.id), shift);
+            });
+
+        return Array.from(byId.values()).sort(activeShiftSorter);
+    }
+
+    function buildAttendanceRow(employee, date, shift, patch = {}) {
+        const schedule = findSchedule(employee.id, date, shift.id);
+        return {
+            uid: tempId(),
+            payroll_schedule_registration_id: schedule?.id || null,
+            work_date: date,
+            payroll_employee_id: employee.id,
+            payroll_work_shift_id: shift.id,
+            attendance_status: 'Đi làm',
+            work_units: parseWorkUnits(shift.default_work_units || 1),
+            unit_rate: '',
+            bonus_amount: '',
+            penalty_amount: '',
+            notes: '',
+            ...patch,
+        };
+    }
+
+    function upsertAttendanceShift(employee, date, shift, patch) {
+        const existing = findAttendanceRecord(employee.id, date, shift.id);
+        const schedule = findSchedule(employee.id, date, shift.id);
+
+        if (existing && !existing.virtual_auto_attendance) {
+            updateRow(setAttendance, existing, {
+                payroll_schedule_registration_id: existing.payroll_schedule_registration_id || schedule?.id || null,
+                ...patch,
+            });
+            return;
+        }
+
+        setAttendance((rows) => [...rows, buildAttendanceRow(employee, date, shift, patch)]);
+    }
+
+    function clearAttendanceShift(record) {
+        if (!record) return;
+
+        if (record.virtual_auto_attendance) {
+            setAttendance((rows) => [...rows, {
+                ...record,
+                uid: tempId(),
+                virtual_auto_attendance: false,
+                attendance_status: 'Nghỉ',
+                work_units: 0,
+            }]);
+            return;
+        }
+
+        if (!record.id) {
+            setAttendance((rows) => rows.filter((row) => row !== record));
+            return;
+        }
+
         updateRow(setAttendance, record, {
-            attendance_status: isFull ? 'Làm lẻ' : 'Đi làm',
-            work_units: isFull ? record.work_units : parseDecimal(shift.default_work_units || 1),
+            attendance_status: 'Nghỉ',
+            work_units: 0,
         });
     }
 
-    function setAttendanceHours(record, hours) {
-        const shift = resolveShift(record);
+    function toggleAttendanceShift(employee, date, shift) {
+        const existing = findAttendanceRecord(employee.id, date, shift.id);
+        if (existing && isFullAttendance(existing)) {
+            clearAttendanceShift(existing);
+            return;
+        }
+
+        upsertAttendanceShift(employee, date, shift, {
+            attendance_status: 'Đi làm',
+            work_units: parseWorkUnits(shift.default_work_units || 1),
+        });
+    }
+
+    function setAttendanceShiftHours(employee, date, shift, hours) {
+        const value = safeNumber(String(hours).replace(',', '.'));
+        const existing = findAttendanceRecord(employee.id, date, shift.id);
         const standardHours = safeNumber(shift.standard_hours);
-        updateRow(setAttendance, record, {
-            attendance_status: 'Làm lẻ',
-            work_units: parseDecimal(standardHours > 0 ? safeNumber(hours) / standardHours : 0),
+        const defaultWorkUnits = safeNumber(shift.default_work_units || 1) || 1;
+
+        if (!value || value <= 0) {
+            clearAttendanceShift(existing);
+            return;
+        }
+
+        const nextWorkUnits = standardHours > 0 ? (value / standardHours) * defaultWorkUnits : 0;
+        const isFull = nextWorkUnits >= defaultWorkUnits;
+
+        upsertAttendanceShift(employee, date, shift, {
+            attendance_status: isFull ? 'Đi làm' : 'Làm lẻ',
+            work_units: parseWorkUnits(isFull ? defaultWorkUnits : nextWorkUnits),
         });
     }
 
@@ -817,7 +1685,7 @@ export default function HumanResourcesManagement() {
             return;
         }
 
-        const confirmed = window.confirm('Xoá khoản cộng trừ này?');
+        const confirmed = window.confirm('Xoá khoản tạm ứng này?');
         if (!confirmed) return;
 
         setSavingKey(`delete-adjustment-${adjustment.id}`);
@@ -825,25 +1693,27 @@ export default function HumanResourcesManagement() {
         setError('');
         try {
             await payrollApi.deleteAdjustment(adjustment.id);
-            setMessage('Đã xoá khoản cộng trừ.');
+            setMessage('Đã xoá khoản tạm ứng.');
             reloadData();
         } catch (err) {
-            setError(err?.response?.data?.message || err?.message || 'Không xoá được khoản cộng trừ.');
+            setError(err?.response?.data?.message || err?.message || 'Không xoá được khoản tạm ứng.');
         } finally {
             setSavingKey('');
         }
     }
 
     function exportSalaryCsv() {
-        const header = ['Họ tên', 'Loại', 'Tổng giờ', 'Tổng công', 'Cộng', 'Trừ', 'Thực nhận'];
+        const header = ['Họ tên', 'Loại', 'Định mức lương', 'Tổng giờ', 'Tổng công', 'Tổng lương', 'Tạm ứng', 'Còn thanh toán', 'Ghi chú công thức'];
         const body = payrollSummary.map((row) => [
             row.full_name || '',
             employeeTypeLabel(row.salary_type),
+            row.salary_basis || '',
             safeNumber(row.total_hours),
             safeNumber(row.total_work_units),
-            safeNumber(row.total_bonus),
-            safeNumber(row.total_penalty),
             row.total_salary ?? '',
+            row.total_advance ?? '',
+            row.remaining_salary ?? '',
+            row.salary_formula || '',
         ]);
         const csv = [header, ...body].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
         const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
@@ -851,6 +1721,27 @@ export default function HumanResourcesManagement() {
         const link = document.createElement('a');
         link.href = url;
         link.download = `bang-luong-${month}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function exportDailySalaryCsv() {
+        const header = ['Ngày', 'Thứ', 'Nhân viên có công', 'Số ca', 'Tổng giờ', 'Tổng công', 'Lương phải trả'];
+        const body = dailySalarySummary.map((row) => [
+            row.work_date || '',
+            weekday(row.work_date),
+            row.employee_count,
+            row.shift_count,
+            safeNumber(row.total_hours),
+            safeNumber(row.total_work_units),
+            canViewSalary ? (row.total_salary ?? '') : 'Ẩn',
+        ]);
+        const csv = [header, ...body].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+        const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `luong-theo-ngay-${month}.csv`;
         link.click();
         URL.revokeObjectURL(url);
     }
@@ -867,17 +1758,17 @@ export default function HumanResourcesManagement() {
                                 <tr key={employee.id || employee.uid} className="hover:bg-gray-50">
                                     <td className="border-b border-gray-100 px-3 py-2 font-semibold text-gray-800">{employee.full_name || 'Chưa đặt tên'}</td>
                                     <td className="border-b border-gray-100 px-3 py-2 text-gray-600">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right text-gray-600">{formatSalary(employee.salary_amount, employee.salary_type)}</td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center text-gray-600">{formatSalary(employee.salary_amount, employee.salary_type)}</td>
                                     <td className="border-b border-gray-100 px-3 py-2"><StatusBadge tone={employee.status === 'Đang làm' ? 'green' : 'amber'}>{employee.status || 'Đang làm'}</StatusBadge></td>
                                 </tr>
                             )}
                         />
                     </Panel>
 
-                    <Panel title="2. Lịch làm" icon="calendar_month" onOpen={() => setActiveView('schedule')} footer={`Tổng: ${weekSchedules.length} lịch tuần này`}>
+                    <Panel title="2. Lịch làm" icon="calendar_month" onOpen={() => setActiveView('schedule')} footer={`Tổng: ${monthSchedules.length} lịch tháng này`}>
                         <MiniTable
                             columns={['Nhân viên', 'Ngày', 'Ca', 'Giờ ca']}
-                            rows={weekSchedules.slice(0, 4)}
+                            rows={monthSchedules.slice(0, 4)}
                             renderRow={(schedule) => {
                                 const employee = resolveEmployee(schedule);
                                 const shift = resolveShift(schedule);
@@ -909,8 +1800,8 @@ export default function HumanResourcesManagement() {
                                                 {isFullAttendance(record) ? 'check_box' : 'check_box_outline_blank'}
                                             </span>
                                         </td>
-                                        <td className="border-b border-gray-100 px-3 py-2 text-right text-gray-700">
-                                            {formatDecimal(safeNumber(record.work_units) * safeNumber(shift.standard_hours))} / {formatDecimal(record.work_units)}
+                                        <td className="border-b border-gray-100 px-3 py-2 text-center text-gray-700">
+                                            {formatDecimal(attendanceHours(record, shift))} / {formatWorkUnit(record.work_units)}
                                         </td>
                                     </tr>
                                 );
@@ -918,39 +1809,37 @@ export default function HumanResourcesManagement() {
                         />
                     </Panel>
 
-                    <Panel title="4. Bảng lương tháng" icon="payments" onOpen={() => setActiveView('salary')} footer={`Tổng quỹ lương tạm tính: ${formatMoney(totalSalary)}`}>
+                    <Panel title="4. Tạm ứng" icon="receipt_long" onOpen={() => setActiveView('adjustments')} footer={`Tổng tạm ứng: ${formatMoney(totalAdvance)}`}>
                         <MiniTable
-                            columns={['Nhân viên', 'Tổng giờ', 'Tổng công', 'Thực nhận']}
-                            rows={payrollSummary.slice(0, 4)}
-                            renderRow={(row) => (
-                                <tr key={row.payroll_employee_id || row.employee_code} className="hover:bg-gray-50">
-                                    <td className="border-b border-gray-100 px-3 py-2 font-semibold text-gray-800">{row.full_name || '-'}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right text-gray-600">{formatDecimal(row.total_hours)}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right text-gray-600">{formatDecimal(row.total_work_units)}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right font-bold text-teal-700">{formatMoney(row.total_salary)}</td>
-                                </tr>
-                            )}
-                        />
-                    </Panel>
-
-                    <Panel title="5. Tạm ứng / Cộng trừ" icon="receipt_long" onOpen={() => setActiveView('adjustments')} footer={`Tổng ảnh hưởng: ${adjustmentImpact >= 0 ? '+' : '-'}${formatMoney(Math.abs(adjustmentImpact))}`}>
-                        <MiniTable
-                            columns={['Ngày', 'Nhân viên', 'Loại', 'Số tiền']}
+                            columns={['Ngày', 'Nhân viên', 'Số tiền']}
                             rows={adjustments.slice(0, 4)}
                             renderRow={(adjustment) => {
                                 const employee = resolveEmployee(adjustment);
-                                const positive = positiveAdjustment(adjustment.adjustment_type);
                                 return (
                                     <tr key={adjustment.id || adjustment.uid} className="hover:bg-gray-50">
                                         <td className="border-b border-gray-100 px-3 py-2 text-gray-600">{shortDate(adjustment.adjustment_date)}</td>
                                         <td className="border-b border-gray-100 px-3 py-2 font-semibold text-gray-800">{employee.full_name || '-'}</td>
-                                        <td className="border-b border-gray-100 px-3 py-2 text-gray-600">{ADJUSTMENT_TYPES.find((item) => item.value === adjustment.adjustment_type)?.label || 'Trừ khác'}</td>
-                                        <td className={`border-b border-gray-100 px-3 py-2 text-right font-bold ${positive ? 'text-emerald-700' : 'text-red-600'}`}>
-                                            {positive ? '+' : '-'}{formatMoney(adjustment.amount)}
-                                        </td>
+                                        <td className="border-b border-gray-100 px-3 py-2 text-center font-bold text-teal-700">{formatMoney(adjustment.amount)}</td>
                                     </tr>
                                 );
                             }}
+                        />
+                    </Panel>
+
+                    <Panel title="5. Bảng lương tháng" icon="payments" onOpen={() => setActiveView('salary')} footer={`Còn thanh toán: ${formatMoney(totalRemainingSalary)}`}>
+                        <MiniTable
+                            columns={['Nhân viên', 'Tổng lương', 'Tạm ứng', 'Còn thanh toán']}
+                            rows={payrollSummary.slice(0, 4)}
+                            renderRow={(row) => (
+                                <tr key={row.payroll_employee_id || row.employee_code} className="hover:bg-gray-50">
+                                    <td className="border-b border-gray-100 px-3 py-2 font-semibold text-gray-800">{row.full_name || '-'}</td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center font-bold text-teal-700">
+                                        <FormulaTooltipValue value={formatMoney(row.total_salary)} formula={row.salary_formula} />
+                                    </td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center font-bold text-amber-700">{formatMoney(row.total_advance)}</td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center font-bold text-emerald-700">{formatMoney(row.remaining_salary)}</td>
+                                </tr>
+                            )}
                         />
                     </Panel>
 
@@ -961,8 +1850,8 @@ export default function HumanResourcesManagement() {
                             renderRow={(item) => (
                                 <tr key={item} className="hover:bg-gray-50">
                                     <td className="border-b border-gray-100 px-3 py-2 font-semibold text-gray-800">{item}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right text-gray-600">{formatDecimal(totalHours)}</td>
-                                    <td className="border-b border-gray-100 px-3 py-2 text-right font-bold text-teal-700">{formatMoney(totalSalary)}</td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center text-gray-600">{formatDecimal(totalHours)}</td>
+                                    <td className="border-b border-gray-100 px-3 py-2 text-center font-bold text-teal-700">{formatMoney(totalSalary)}</td>
                                     <td className="border-b border-gray-100 px-3 py-2"><button type="button" onClick={exportSalaryCsv} className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">Excel</button></td>
                                 </tr>
                             )}
@@ -1007,31 +1896,47 @@ export default function HumanResourcesManagement() {
                     <SaveButton saving={savingKey === 'employees'} disabled={!canManagePayroll} onClick={() => saveRows('employees', () => payrollApi.saveEmployees(employeePayload(employees)), 'Đã lưu nhân viên.')}>Áp dụng thay đổi</SaveButton>
                 </div>
             )}>
-                <DataTable columns={['Tên nhân viên', 'Loại', 'Lương', 'Áp dụng từ', 'Số điện thoại', 'QR ngân hàng', 'Địa chỉ', 'Trạng thái', 'Hồ sơ']} minWidth={1420}>
-                    {employees.length === 0 ? <EmptyRow colSpan={9} message="Chưa có nhân viên." /> : employees.map((employee) => (
+                <DataTable columns={['Tên nhân viên', 'Tài khoản', 'Loại', 'Lương', 'Công chuẩn', 'Áp dụng từ', 'Số điện thoại', 'QR ngân hàng', 'Địa chỉ', 'Trạng thái', 'Hồ sơ']} minWidth={1460}>
+                    {employees.length === 0 ? <EmptyRow colSpan={11} message="Chưa có nhân viên." /> : employees.map((employee) => (
                         <tr key={employee.id || employee.uid} className="border-b border-gray-100 hover:bg-gray-50">
-                            <td className="px-3 py-2">
+                            <td className="w-[150px] px-2 py-2">
                                 <TextInput disabled={!canManagePayroll} value={employee.full_name} onChange={(value) => updateRow(setEmployees, employee, { full_name: value })} placeholder="Tên nhân viên" />
                             </td>
-                            <td className="px-3 py-2"><SelectInput disabled={!canManagePayroll} value={employee.salary_type} onChange={(value) => updateRow(setEmployees, employee, { salary_type: value, salary_effective_from: dateValue(employee.salary_effective_from) || firstDayOfMonth(month) })} options={EMPLOYEE_TYPES} /></td>
-                            <td className="px-3 py-2">{canViewSalary ? <MoneyInput disabled={!canManagePayroll} value={employee.salary_amount} suffix={salaryUnitLabel(employee.salary_type)} onChange={(value) => updateRow(setEmployees, employee, { salary_amount: value, salary_effective_from: dateValue(employee.salary_effective_from) || firstDayOfMonth(month) })} /> : <span className="text-gray-400">Ẩn</span>}</td>
-                            <td className="px-3 py-2">{canViewSalary ? <TextInput type="date" disabled={!canManagePayroll} value={dateValue(employee.salary_effective_from)} onChange={(value) => updateRow(setEmployees, employee, { salary_effective_from: value })} /> : <span className="text-gray-400">Ẩn</span>}</td>
-                            <td className="px-3 py-2"><TextInput disabled={!canManagePayroll} value={employee.phone} onChange={(value) => updateRow(setEmployees, employee, { phone: value })} placeholder="Số điện thoại" /></td>
-                            <td className="px-3 py-2">
+                            <td className="w-[180px] px-2 py-2">
+                                {canManagePayroll ? (
+                                    <SelectInput disabled={!canManagePayroll} value={employee.user_id} onChange={(value) => updateRow(setEmployees, employee, { user_id: value })} options={userOptions} placeholder="Gắn tài khoản" />
+                                ) : (
+                                    <div className="truncate text-center text-[12px] font-semibold text-gray-700" title={accountLabel(employee)}>
+                                        {accountLabel(employee)}
+                                    </div>
+                                )}
+                            </td>
+                            <td className="w-[112px] px-2 py-2"><SelectInput disabled={!canManagePayroll} value={employee.salary_type} onChange={(value) => updateRow(setEmployees, employee, { salary_type: value, salary_effective_from: dateValue(employee.salary_effective_from) || firstDayOfMonth(month), ...(value === 'theo_thang' && !employee.standard_work_units ? { standard_work_units: DEFAULT_STANDARD_WORK_UNITS } : {}) })} options={EMPLOYEE_TYPES} /></td>
+                            <td className="w-[185px] px-2 py-2">{canViewSalary ? <MoneyInput disabled={!canManagePayroll} value={employee.salary_amount} suffix={salaryUnitLabel(employee.salary_type)} onChange={(value) => updateRow(setEmployees, employee, { salary_amount: value, salary_effective_from: dateValue(employee.salary_effective_from) || firstDayOfMonth(month) })} /> : <span className="text-gray-400">Ẩn</span>}</td>
+                            <td className="w-[132px] px-2 py-2">
+                                {employee.salary_type === 'theo_thang' ? (
+                                    canViewSalary ? (
+                                        <DecimalInput disabled={!canManagePayroll} value={employee.standard_work_units || DEFAULT_STANDARD_WORK_UNITS} suffix="ngày / tháng" wrapperClassName="mx-auto max-w-[124px]" onChange={(value) => updateRow(setEmployees, employee, { standard_work_units: value, salary_effective_from: dateValue(employee.salary_effective_from) || firstDayOfMonth(month) })} />
+                                    ) : <span className="text-gray-400">Ẩn</span>
+                                ) : <span className="block h-9" />}
+                            </td>
+                            <td className="w-[140px] px-2 py-2">{canViewSalary ? <TextInput type="date" disabled={!canManagePayroll} value={dateValue(employee.salary_effective_from)} onChange={(value) => updateRow(setEmployees, employee, { salary_effective_from: value })} /> : <span className="text-gray-400">Ẩn</span>}</td>
+                            <td className="w-[140px] px-2 py-2"><TextInput disabled={!canManagePayroll} value={employee.phone} onChange={(value) => updateRow(setEmployees, employee, { phone: value })} placeholder="Số điện thoại" /></td>
+                            <td className="w-[96px] px-2 py-2">
                                 <BankQrPreview
                                     url={canViewSalary ? employee.bank_qr_image_url : ''}
-                                    sizeClass="size-24"
+                                    sizeClass="size-20"
                                     onZoom={() => setZoomImage({ url: employee.bank_qr_image_url, title: 'QR tài khoản ngân hàng' })}
                                 />
                             </td>
-                            <td className="px-3 py-2">
-                                <div className="max-w-[280px] truncate text-[13px] text-gray-700" title={employee.address || ''}>
+                            <td className="w-[112px] px-2 py-2">
+                                <div className="max-w-[112px] truncate text-[13px] text-gray-700" title={employee.address || ''}>
                                     {employee.address || <span className="text-gray-400">Chưa nhập</span>}
                                 </div>
                             </td>
-                            <td className="px-3 py-2"><SelectInput disabled={!canManagePayroll} value={employee.status} onChange={(value) => updateRow(setEmployees, employee, { status: value })} options={EMPLOYEE_STATUS} /></td>
-                            <td className="px-3 py-2">
-                                <button type="button" onClick={() => setEmployeeProfileKey(employeeRowKey(employee))} className="inline-flex h-9 items-center gap-2 rounded border border-teal-200 bg-teal-50 px-3 text-[13px] font-bold text-teal-700 hover:bg-teal-100">
+                            <td className="w-[112px] px-2 py-2"><SelectInput disabled={!canManagePayroll} value={employee.status} onChange={(value) => updateRow(setEmployees, employee, { status: value })} options={EMPLOYEE_STATUS} /></td>
+                            <td className="w-[76px] px-2 py-2">
+                                <button type="button" onClick={() => setEmployeeProfileKey(employeeRowKey(employee))} className="inline-flex h-9 items-center gap-1.5 rounded border border-teal-200 bg-teal-50 px-2 text-[12px] font-bold text-teal-700 hover:bg-teal-100">
                                     <span className="material-symbols-outlined text-[18px]">badge</span>
                                     Hồ sơ
                                 </button>
@@ -1039,139 +1944,333 @@ export default function HumanResourcesManagement() {
                         </tr>
                     ))}
                 </DataTable>
+                {canManagePayroll && (
+                    <div className="sticky bottom-0 z-20 flex flex-col gap-3 border-t border-teal-100 bg-teal-50/95 px-4 py-3 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-[12px] font-semibold text-teal-800">
+                            {'Sau khi \u0111\u1ed5i lo\u1ea1i nh\u00e2n vi\u00ean ho\u1eb7c l\u01b0\u01a1ng, b\u1ea5m L\u01b0u nh\u00e2n vi\u00ean \u0111\u1ec3 c\u1eadp nh\u1eadt.'}
+                        </div>
+                        <SaveButton saving={savingKey === 'employees'} disabled={!canManagePayroll} onClick={saveEmployees}>
+                            {'\u004c\u01b0u nh\u00e2n vi\u00ean'}
+                        </SaveButton>
+                    </div>
+                )}
             </DetailShell>
+        );
+    }
+
+    function addShift() {
+        setShifts((rows) => [...rows, {
+            uid: tempId(),
+            shift_code: '',
+            shift_name: '',
+            start_time: '08:00',
+            end_time: '12:00',
+            standard_hours: calculateShiftHours('08:00', '12:00'),
+            default_work_units: 1,
+            wage_multiplier: 1,
+            is_active: true,
+            sort_order: rows.length * 10 + 10,
+            notes: '',
+        }]);
+    }
+
+    function renderShiftModal() {
+        if (!showShiftModal) return null;
+
+        return (
+            <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-black/45 px-4 py-6" onClick={() => setShowShiftModal(false)}>
+                <section className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                    <div className="flex flex-col gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <h2 className="text-[16px] font-bold text-gray-900">Ca làm</h2>
+                        <div className="flex flex-wrap justify-end gap-2">
+                            <button type="button" disabled={!canManagePayroll} onClick={addShift} className="inline-flex h-9 items-center gap-2 rounded border border-gray-200 bg-white px-3 text-[13px] font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                                <span className="material-symbols-outlined text-[18px]">add</span>
+                                Thêm ca
+                            </button>
+                            <SaveButton saving={savingKey === 'shifts'} disabled={!canManagePayroll} onClick={() => saveRows('shifts', () => payrollApi.saveShifts(shiftPayload(shifts)), 'Đã lưu ca làm.')} />
+                            <button type="button" onClick={() => setShowShiftModal(false)} className="inline-flex size-9 items-center justify-center rounded border border-gray-200 bg-white text-gray-500 hover:bg-gray-50" title="Đóng">
+                                <span className="material-symbols-outlined text-[21px]">close</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div className="min-h-0 overflow-auto p-4">
+                        <DataTable columns={['Mã ca', 'Tên ca', 'Bắt đầu', 'Kết thúc', 'Giờ', 'Công', 'Hệ số', 'Hoạt động', 'Ghi chú']} minWidth={980}>
+                            {shifts.length === 0 ? <EmptyRow colSpan={9} message="Chưa có ca làm." /> : shifts.map((shift) => (
+                                <tr key={shift.id || shift.uid} className="border-b border-gray-100 hover:bg-gray-50">
+                                    <td className="px-3 py-2 text-center"><TextInput disabled={!canManagePayroll} value={shift.shift_code} onChange={(value) => updateRow(setShifts, shift, { shift_code: value })} placeholder="S" className="text-center" /></td>
+                                    <td className="px-3 py-2 text-center"><TextInput disabled={!canManagePayroll} value={shift.shift_name} onChange={(value) => updateRow(setShifts, shift, { shift_name: value })} placeholder="Ca sáng" className="text-center" /></td>
+                                    <td className="px-3 py-2 text-center"><TextInput type="time" disabled={!canManagePayroll} value={formatTime(shift.start_time)} onChange={(value) => updateShiftTime(shift, { start_time: value })} className="text-center" /></td>
+                                    <td className="px-3 py-2 text-center"><TextInput type="time" disabled={!canManagePayroll} value={formatTime(shift.end_time)} onChange={(value) => updateShiftTime(shift, { end_time: value })} className="text-center" /></td>
+                                    <td className="px-3 py-2 text-center"><DecimalInput disabled={!canManagePayroll} value={shift.standard_hours} onChange={(value) => updateRow(setShifts, shift, { standard_hours: value })} /></td>
+                                    <td className="px-3 py-2 text-center"><DecimalInput disabled={!canManagePayroll} value={shift.default_work_units} onChange={(value) => updateRow(setShifts, shift, { default_work_units: value })} /></td>
+                                    <td className="px-3 py-2 text-center"><DecimalInput disabled={!canManagePayroll} value={shift.wage_multiplier} onChange={(value) => updateRow(setShifts, shift, { wage_multiplier: value })} /></td>
+                                    <td className="px-3 py-2 text-center">
+                                        <button
+                                            type="button"
+                                            disabled={!canManagePayroll}
+                                            onClick={() => updateRow(setShifts, shift, { is_active: !shift.is_active })}
+                                            className={`inline-flex h-9 items-center justify-center gap-2 rounded border px-3 text-[12px] font-bold disabled:opacity-50 ${shift.is_active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-gray-50 text-gray-500'}`}
+                                        >
+                                            <span className="material-symbols-outlined text-[18px]">{shift.is_active ? 'toggle_on' : 'toggle_off'}</span>
+                                            {shift.is_active ? 'Đang dùng' : 'Tắt'}
+                                        </button>
+                                    </td>
+                                    <td className="px-3 py-2 text-center"><TextInput disabled={!canManagePayroll} value={shift.notes} onChange={(value) => updateRow(setShifts, shift, { notes: value })} className="text-center" /></td>
+                                </tr>
+                            ))}
+                        </DataTable>
+                    </div>
+                </section>
+            </div>
         );
     }
 
     function renderSchedule() {
         return (
             <div className="grid gap-4">
-                <DetailShell title="Ca làm" action={(
-                    <div className="flex flex-wrap gap-2">
-                        <button type="button" disabled={!canManagePayroll} onClick={() => setShifts((rows) => [...rows, {
-                            uid: tempId(),
-                            shift_code: '',
-                            shift_name: '',
-                            start_time: '08:00',
-                            end_time: '12:00',
-                            standard_hours: 4,
-                            default_work_units: 1,
-                            wage_multiplier: 1,
-                            is_active: true,
-                            sort_order: rows.length * 10 + 10,
-                            notes: '',
-                        }])} className="inline-flex h-9 items-center gap-2 rounded border border-gray-200 bg-white px-3 text-[13px] font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                            <span className="material-symbols-outlined text-[18px]">add</span>
-                            Thêm ca
-                        </button>
-                        <SaveButton saving={savingKey === 'shifts'} disabled={!canManagePayroll} onClick={() => saveRows('shifts', () => payrollApi.saveShifts(shiftPayload(shifts)), 'Đã lưu ca làm.')} />
-                    </div>
-                )}>
-                    <DataTable columns={['Mã ca', 'Tên ca', 'Bắt đầu', 'Kết thúc', 'Giờ', 'Công', 'Hệ số', 'Hoạt động', 'Ghi chú']} minWidth={980}>
-                        {shifts.length === 0 ? <EmptyRow colSpan={9} message="Chưa có ca làm." /> : shifts.map((shift) => (
-                            <tr key={shift.id || shift.uid} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="px-3 py-2"><TextInput disabled={!canManagePayroll} value={shift.shift_code} onChange={(value) => updateRow(setShifts, shift, { shift_code: value })} placeholder="S" /></td>
-                                <td className="px-3 py-2"><TextInput disabled={!canManagePayroll} value={shift.shift_name} onChange={(value) => updateRow(setShifts, shift, { shift_name: value })} placeholder="Ca sáng" /></td>
-                                <td className="px-3 py-2"><TextInput type="time" disabled={!canManagePayroll} value={formatTime(shift.start_time)} onChange={(value) => updateRow(setShifts, shift, { start_time: value })} /></td>
-                                <td className="px-3 py-2"><TextInput type="time" disabled={!canManagePayroll} value={formatTime(shift.end_time)} onChange={(value) => updateRow(setShifts, shift, { end_time: value })} /></td>
-                                <td className="px-3 py-2"><DecimalInput disabled={!canManagePayroll} value={shift.standard_hours} onChange={(value) => updateRow(setShifts, shift, { standard_hours: value })} /></td>
-                                <td className="px-3 py-2"><DecimalInput disabled={!canManagePayroll} value={shift.default_work_units} onChange={(value) => updateRow(setShifts, shift, { default_work_units: value })} /></td>
-                                <td className="px-3 py-2"><DecimalInput disabled={!canManagePayroll} value={shift.wage_multiplier} onChange={(value) => updateRow(setShifts, shift, { wage_multiplier: value })} /></td>
-                                <td className="px-3 py-2">
+                <DetailShell title={`Đăng ký lịch làm tháng ${month}`} action={(
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="inline-flex h-9 overflow-hidden rounded border border-gray-200 bg-white">
+                            <button
+                                type="button"
+                                onClick={() => setScheduleWeekFilter('all')}
+                                className={`px-3 text-[12px] font-bold ${scheduleWeekFilter === 'all' ? 'bg-teal-700 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                            >
+                                Tất cả
+                            </button>
+                            {SCHEDULE_WEEK_FILTERS.map((weekNumber) => {
+                                const available = scheduleWeekNumbers.has(weekNumber);
+                                const active = scheduleWeekFilter === weekNumber;
+                                return (
                                     <button
+                                        key={weekNumber}
                                         type="button"
-                                        disabled={!canManagePayroll}
-                                        onClick={() => updateRow(setShifts, shift, { is_active: !shift.is_active })}
-                                        className={`inline-flex h-9 items-center gap-2 rounded border px-3 text-[12px] font-bold disabled:opacity-50 ${shift.is_active ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-gray-50 text-gray-500'}`}
+                                        disabled={!available}
+                                        onClick={() => setScheduleWeekFilter(weekNumber)}
+                                        className={`border-l border-gray-200 px-3 text-[12px] font-bold disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-300 ${active ? 'bg-teal-700 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
                                     >
-                                        <span className="material-symbols-outlined text-[18px]">{shift.is_active ? 'toggle_on' : 'toggle_off'}</span>
-                                        {shift.is_active ? 'Đang dùng' : 'Tắt'}
+                                        Tuần {weekNumber}
                                     </button>
-                                </td>
-                                <td className="px-3 py-2"><TextInput disabled={!canManagePayroll} value={shift.notes} onChange={(value) => updateRow(setShifts, shift, { notes: value })} /></td>
-                            </tr>
-                        ))}
-                    </DataTable>
-                </DetailShell>
-
-                <DetailShell title="Đăng ký lịch làm theo tuần" action={(
-                    <div className="flex flex-wrap gap-2">
-                        <input type="date" value={weekStart} onChange={(event) => setWeekStart(weekStartOf(event.target.value))} className="h-9 rounded border border-gray-200 bg-white px-3 text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
-                        <SaveButton saving={savingKey === 'schedules'} disabled={!canEditAttendance} onClick={() => saveRows('schedules', () => payrollApi.saveSchedules(schedulePayload(schedules)), 'Đã lưu lịch làm.')} />
-                        <button type="button" disabled={!canEditAttendance} onClick={createAttendanceFromWeek} className="inline-flex h-9 items-center gap-2 rounded border border-teal-200 bg-teal-50 px-3 text-[13px] font-bold text-teal-700 hover:bg-teal-100 disabled:opacity-50">
+                                );
+                            })}
+                        </div>
+                        <input type="month" value={month} onChange={(event) => changeMonth(event.target.value)} className="h-9 rounded border border-gray-200 bg-white px-3 text-center text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
+                        <span className="rounded border border-gray-200 bg-white px-3 py-2 text-[12px] font-bold text-gray-600">
+                            {shortDate(firstDayOfMonth(month))} - {shortDate(lastDayOfMonth(month))}
+                        </span>
+                        <button type="button" onClick={() => setShowShiftModal(true)} className="inline-flex h-9 items-center gap-2 rounded border border-teal-200 bg-white px-3 text-[13px] font-bold text-teal-700 hover:bg-teal-50">
+                            <span className="material-symbols-outlined text-[18px]">view_module</span>
+                            Ca làm
+                        </button>
+                        <SaveButton saving={savingKey === 'schedules'} disabled={!canSaveSchedules} onClick={() => saveRows('schedules', () => payrollApi.saveSchedules(schedulePayload(schedulesForSave())), 'Đã lưu lịch làm.')} />
+                        <button type="button" disabled={!canEditAttendance} onClick={createAttendanceFromSchedule} className="inline-flex h-9 items-center gap-2 rounded border border-teal-200 bg-teal-50 px-3 text-[13px] font-bold text-teal-700 hover:bg-teal-100 disabled:opacity-50">
                             <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
                             Tạo chấm công
                         </button>
                     </div>
                 )}>
-                    <DataTable columns={['Nhân viên', ...weekDays.map((date) => `${weekday(date)} ${shortDate(date)}`)]} minWidth={1180}>
-                        {activeEmployees.length === 0 ? <EmptyRow colSpan={8} message="Chưa có nhân viên." /> : activeEmployees.map((employee) => (
-                            <tr key={employee.id || employee.uid} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="px-3 py-2">
-                                    <div className="font-bold text-gray-800">{employee.full_name || 'Chưa đặt tên'}</div>
-                                    <div className="text-[11px] font-semibold text-gray-400">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</div>
-                                </td>
-                                {weekDays.map((date) => {
-                                    const schedule = findSchedule(employee.id, date);
-                                    return (
-                                        <td key={`${employee.id}-${date}`} className="min-w-[136px] px-2 py-2">
-                                            <SelectInput disabled={!canEditAttendance || !employee.id} value={schedule?.payroll_work_shift_id || ''} onChange={(value) => setScheduleCell(employee, date, value)} options={shiftOptions} placeholder="Không lịch" />
-                                        </td>
-                                    );
-                                })}
-                            </tr>
-                        ))}
-                    </DataTable>
+                    <div className="grid gap-3 bg-gray-50 p-3">
+                        {activeScheduleEmployees.length === 0 ? (
+                            <div className="rounded border border-gray-200 bg-white px-4 py-10 text-center text-[13px] font-semibold text-gray-400">Chưa có nhân viên.</div>
+                        ) : scheduleVisibleWeeks.length === 0 ? (
+                            <div className="rounded border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-[13px] font-semibold text-gray-400">
+                                {scheduleWeekFilter === 'all' ? 'Chưa có tuần trong tháng này.' : `Tháng này không có tuần ${scheduleWeekFilter}.`}
+                            </div>
+                        ) : scheduleVisibleWeeks.map((week) => {
+                            const weekDaysInMonth = week.days;
+                            const weekGridStyle = {
+                                gridTemplateColumns: `132px repeat(${weekDaysInMonth.length}, minmax(112px, 1fr))`,
+                                minWidth: `${Math.max(420, 132 + (weekDaysInMonth.length * 132))}px`,
+                            };
+
+                            return (
+                                <section key={weekDaysInMonth[0]} className="overflow-x-auto rounded border border-gray-200 bg-white">
+                                    <div className="grid border-b border-gray-200 bg-white" style={weekGridStyle}>
+                                        <div className="flex min-h-11 flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-1 text-center text-[12px] font-bold text-gray-700">
+                                            Tuần {week.weekNumber}
+                                            <span className="text-[10px] font-semibold text-gray-500">{shortDate(weekDaysInMonth[0])} - {shortDate(weekDaysInMonth[weekDaysInMonth.length - 1])}</span>
+                                        </div>
+                                        {weekDaysInMonth.map((date) => {
+                                            const tone = dayColumnTone(date, month);
+                                            return (
+                                                <div key={date} className={`flex min-h-11 flex-col items-center justify-center border-r px-2 py-1 text-center text-[12px] font-bold last:border-r-0 ${tone.header}`}>
+                                                    {weekday(date)}
+                                                    <span className="text-[10px] font-semibold opacity-80">{shortDate(date)}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    {activeScheduleEmployees.map((employee) => (
+                                        <div key={`${weekDaysInMonth[0]}-${employee.id || employee.uid}`} className="grid border-b border-gray-200 last:border-b-0 hover:bg-gray-50" style={weekGridStyle}>
+                                            <div className="flex min-h-[78px] flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-2 text-center">
+                                                <div className="text-[13px] font-bold text-gray-800">{employee.full_name || 'Chưa đặt tên'}</div>
+                                                <div className="text-[11px] font-semibold text-gray-400">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</div>
+                                            </div>
+                                            {weekDaysInMonth.map((date) => {
+                                                const tone = dayColumnTone(date, month);
+                                                return (
+                                                    <div key={`${employee.id}-${date}`} className={`flex min-h-[78px] items-center justify-center border-r px-1.5 py-2 text-center last:border-r-0 ${tone.cell}`}>
+                                                        {activeShifts.length === 0 ? (
+                                                            <span className="text-[12px] font-semibold text-gray-400">Chưa có ca</span>
+                                                        ) : (
+                                                            <div className="flex flex-wrap items-center justify-center gap-2">
+                                                                {activeShifts.map((shift) => {
+                                                                    const checked = isScheduleShiftChecked(employee, date, shift);
+                                                                    return (
+                                                                        <ScheduleShiftButton
+                                                                            key={shift.id}
+                                                                            shift={shift}
+                                                                            checked={checked}
+                                                                            defaulted={isFullTime(employee) && fullTimeDefaultShiftIds.has(String(shift.id))}
+                                                                            disabled={!canEditScheduleForEmployee(employee) || !employee.id}
+                                                                            onClick={() => toggleScheduleShift(employee, date, shift)}
+                                                                        />
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
+                                </section>
+                            );
+                        })}
+                    </div>
                 </DetailShell>
+                {renderShiftModal()}
             </div>
         );
     }
 
     function renderAttendance() {
         return (
-            <DetailShell title="Chấm công nhanh" action={(
-                <div className="flex flex-wrap gap-2">
-                    <button type="button" disabled={!canEditAttendance} onClick={() => setAttendance((rows) => [...rows, {
-                        uid: tempId(),
-                        work_date: weekStart,
-                        payroll_employee_id: '',
-                        payroll_work_shift_id: '',
-                        attendance_status: 'Đi làm',
-                        work_units: 1,
-                        unit_rate: '',
-                        bonus_amount: '',
-                        penalty_amount: '',
-                        notes: '',
-                    }])} className="inline-flex h-9 items-center gap-2 rounded border border-gray-200 bg-white px-3 text-[13px] font-bold text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                        <span className="material-symbols-outlined text-[18px]">add</span>
-                        Thêm dòng lẻ
-                    </button>
-                    <SaveButton saving={savingKey === 'attendance'} disabled={!canEditAttendance} onClick={() => saveRows('attendance', () => payrollApi.saveAttendance(attendancePayload(attendance)), 'Đã lưu chấm công.')} />
+            <DetailShell title={attendanceTitle} action={(
+                <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex h-9 overflow-hidden rounded border border-gray-200 bg-white">
+                        <button
+                            type="button"
+                            onClick={() => changeAttendanceFilterMode('month')}
+                            className={`px-3 text-[12px] font-bold ${attendanceFilterMode === 'month' ? 'bg-teal-700 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                        >
+                            {'Th\u00e1ng'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => changeAttendanceFilterMode('day')}
+                            className={`border-l border-gray-200 px-3 text-[12px] font-bold ${attendanceFilterMode === 'day' ? 'bg-teal-700 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                        >
+                            {'Ng\u00e0y'}
+                        </button>
+                    </div>
+                    {attendanceFilterMode === 'month' ? (
+                        <input type="month" value={month} onChange={(event) => changeMonth(event.target.value)} className="h-9 rounded border border-gray-200 bg-white px-3 text-center text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
+                    ) : (
+                        <input type="date" value={attendanceDate} onChange={(event) => changeAttendanceDate(event.target.value)} className="h-9 rounded border border-gray-200 bg-white px-3 text-center text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
+                    )}
+                    <span className="rounded border border-gray-200 bg-white px-3 py-2 text-[12px] font-bold text-gray-600">
+                        {attendanceFilterLabel}
+                    </span>
+                    <SaveButton saving={savingKey === 'attendance'} disabled={!canEditAttendance} onClick={() => saveRows('attendance', () => payrollApi.saveAttendance(attendancePayload(attendanceWithScheduleDefaults)), 'Đã lưu chấm công.')} />
                 </div>
             )}>
-                <DataTable columns={['Ngày', 'Nhân viên', 'Ca', 'Đủ ca', 'Giờ thực tế', 'Công tính', 'Trạng thái', 'Ghi chú']} minWidth={1120}>
-                    {weekAttendance.length === 0 ? <EmptyRow colSpan={8} message="Tuần này chưa có chấm công." /> : weekAttendance.map((record) => {
-                        const employee = resolveEmployee(record);
-                        const shift = resolveShift(record);
-                        const isFull = isFullAttendance(record);
-                        const hours = safeNumber(record.work_units) * safeNumber(shift.standard_hours);
+                <div className="grid border-b border-gray-200 bg-white sm:grid-cols-4">
+                    <div className="border-b border-gray-100 px-4 py-3 sm:border-b-0 sm:border-r">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Ca theo lịch</div>
+                        <div className="mt-1 text-[18px] font-bold text-gray-900">{attendanceFilterSchedules.length}</div>
+                    </div>
+                    <div className="border-b border-gray-100 px-4 py-3 sm:border-b-0 sm:border-r">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tổng giờ</div>
+                        <div className="mt-1 text-[18px] font-bold text-teal-700">{formatDecimal(attendanceMonthHours)}h</div>
+                    </div>
+                    <div className="border-b border-gray-100 px-4 py-3 sm:border-b-0 sm:border-r">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tổng công</div>
+                        <div className="mt-1 text-[18px] font-bold text-teal-700">{formatWorkUnit(attendanceMonthWorkUnits)}</div>
+                    </div>
+                    <div className="px-4 py-3">
+                        <div className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Ca thiếu giờ</div>
+                        <div className="mt-1 text-[18px] font-bold text-amber-600">{partialAttendanceCount}</div>
+                    </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 bg-white px-4 py-2 text-[11px] font-bold text-gray-500">
+                    <span className="inline-flex items-center gap-1"><span className="size-3 rounded-sm bg-teal-700" />Đủ ca</span>
+                    <span className="inline-flex items-center gap-1"><span className="size-3 rounded-sm border border-amber-300 bg-amber-50" />Thiếu giờ, nhập giờ thực tế</span>
+                    <span className="inline-flex items-center gap-1"><span className="size-3 rounded-sm border border-gray-200 bg-white" />Chưa chấm công</span>
+                    <span className="inline-flex items-center gap-1"><span className="size-3 rounded-sm border border-dashed border-gray-300 bg-gray-50" />{'\u004b\u0068\u00f4\u006e\u0067 \u006c\u1ecb\u0063\u0068'}</span>
+                </div>
+
+                <div className="grid gap-3 bg-gray-50 p-3">
+                    {activeEmployees.length === 0 ? (
+                        <div className="rounded border border-gray-200 bg-white px-4 py-10 text-center text-[13px] font-semibold text-gray-400">Chưa có nhân viên.</div>
+                    ) : attendanceDisplayWeeks.length === 0 ? (
+                        <div className="rounded border border-dashed border-gray-200 bg-white px-4 py-10 text-center text-[13px] font-semibold text-gray-400">
+                            {'Ch\u01b0a t\u1edbi tu\u1ea7n ch\u1ea5m c\u00f4ng trong th\u00e1ng n\u00e0y.'}
+                        </div>
+                    ) : attendanceDisplayWeeks.map((week) => {
+                        const weekDaysInMonth = week.days;
+                        const weekGridStyle = {
+                            gridTemplateColumns: `132px repeat(${weekDaysInMonth.length}, minmax(82px, 1fr))`,
+                            minWidth: `${Math.max(360, 132 + (weekDaysInMonth.length * 112))}px`,
+                        };
                         return (
-                            <tr key={record.id || record.uid} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="px-3 py-2"><TextInput type="date" disabled={!canEditAttendance} value={record.work_date} onChange={(value) => updateRow(setAttendance, record, { work_date: value })} /></td>
-                                <td className="px-3 py-2">
-                                    <SelectInput disabled={!canEditAttendance} value={record.payroll_employee_id} onChange={(value) => updateRow(setAttendance, record, { payroll_employee_id: value })} options={employeeOptions} placeholder="Nhân viên" />
-                                    <div className="mt-1 text-[11px] font-semibold text-gray-400">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</div>
-                                </td>
-                                <td className="px-3 py-2"><SelectInput disabled={!canEditAttendance} value={record.payroll_work_shift_id} onChange={(value) => updateRow(setAttendance, record, { payroll_work_shift_id: value, work_units: shiftById.get(String(value))?.default_work_units || record.work_units || 1 })} options={shiftOptions} placeholder="Ca" /></td>
-                                <td className="px-3 py-2 text-center"><TickButton disabled={!canEditAttendance} checked={isFull} onClick={() => toggleFullAttendance(record)} /></td>
-                                <td className="px-3 py-2"><DecimalInput disabled={!canEditAttendance || isFull} value={formatDecimal(hours)} onChange={(value) => setAttendanceHours(record, value)} /></td>
-                                <td className="px-3 py-2"><DecimalInput disabled={!canEditAttendance || isFull} value={record.work_units} onChange={(value) => updateRow(setAttendance, record, { work_units: value, attendance_status: 'Làm lẻ' })} /></td>
-                                <td className="px-3 py-2"><SelectInput disabled={!canEditAttendance} value={record.attendance_status} onChange={(value) => updateRow(setAttendance, record, { attendance_status: value })} options={ATTENDANCE_STATUS} /></td>
-                                <td className="px-3 py-2"><TextInput disabled={!canEditAttendance} value={record.notes} onChange={(value) => updateRow(setAttendance, record, { notes: value })} placeholder={shiftText(shift)} /></td>
-                            </tr>
+                        <section key={weekDaysInMonth[0]} className="overflow-x-auto rounded border border-gray-200 bg-white">
+                            <div className="grid border-b border-gray-200 bg-white" style={weekGridStyle}>
+                                <div className="flex min-h-11 flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-1 text-center text-[12px] font-bold text-gray-700">
+                                    Tuần {week.weekNumber}
+                                    <span className="text-[10px] font-semibold text-gray-500">{shortDate(weekDaysInMonth[0])} - {shortDate(weekDaysInMonth[weekDaysInMonth.length - 1])}</span>
+                                </div>
+                                {weekDaysInMonth.map((date) => {
+                                    const tone = dayColumnTone(date, month);
+                                    return (
+                                        <div key={date} className={`flex min-h-11 flex-col items-center justify-center border-r px-2 py-1 text-center text-[12px] font-bold last:border-r-0 ${tone.header}`}>
+                                            {weekday(date)}
+                                            <span className="text-[10px] font-semibold opacity-80">{isDateInMonth(date, month) ? shortDate(date) : ''}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                            {activeEmployees.map((employee) => (
+                                <div key={`${weekDaysInMonth[0]}-${employee.id || employee.uid}`} className="grid border-b border-gray-200 last:border-b-0 hover:bg-gray-50" style={weekGridStyle}>
+                                    <div className="flex min-h-[72px] flex-col items-center justify-center border-r border-gray-200 bg-white px-2 py-2 text-center">
+                                        <div className="text-[13px] font-bold text-gray-800">{employee.full_name || 'Chưa đặt tên'}</div>
+                                        <div className="text-[11px] font-semibold text-gray-400">{isFullTime(employee) ? 'Full-time' : 'Part-time'}</div>
+                                    </div>
+                                    {weekDaysInMonth.map((date) => {
+                                        const inMonth = isDateInMonth(date, month);
+                                        const tone = dayColumnTone(date, month);
+                                        const shiftsForDay = inMonth ? attendanceShiftsFor(employee, date) : [];
+                                        return (
+                                            <div key={`${employee.id}-${date}`} className={`flex min-h-[72px] items-center justify-center gap-2 border-r px-1.5 py-2 text-center last:border-r-0 ${tone.cell}`}>
+                                                {!inMonth ? (
+                                                    <span className="text-[11px] font-semibold text-gray-300">-</span>
+                                                ) : shiftsForDay.length === 0 ? (
+                                                    <span
+                                                        title={'Ng\u00e0y n\u00e0y ch\u01b0a \u0111\u01b0\u1ee3c x\u1ebfp ca trong L\u1ecbch l\u00e0m.'}
+                                                        className="inline-flex min-h-7 items-center rounded border border-dashed border-gray-300 bg-gray-50 px-2 text-[10px] font-bold text-gray-400"
+                                                    >
+                                                        {'\u004b\u0068\u00f4\u006e\u0067 \u006c\u1ecb\u0063\u0068'}
+                                                    </span>
+                                                ) : shiftsForDay.map((shift) => (
+                                                    <AttendanceShiftControl
+                                                        key={shift.id}
+                                                        shift={shift}
+                                                        record={findAttendanceRecord(employee.id, date, shift.id)}
+                                                        disabled={!canEditAttendance || !employee.id}
+                                                        onToggle={() => toggleAttendanceShift(employee, date, shift)}
+                                                        onHoursChange={(value) => setAttendanceShiftHours(employee, date, shift, value)}
+                                                    />
+                                                ))}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ))}
+                        </section>
                         );
                     })}
-                </DataTable>
+                </div>
             </DetailShell>
         );
     }
@@ -1184,19 +2283,22 @@ export default function HumanResourcesManagement() {
                     Xuất Excel
                 </button>
             )}>
-                <DataTable columns={['Nhân viên', 'Loại', 'Tổng giờ', 'Tổng công', 'Cộng', 'Trừ', 'Thực nhận']} minWidth={900}>
-                    {payrollSummary.length === 0 ? <EmptyRow colSpan={7} message="Chưa có dữ liệu lương." /> : payrollSummary.map((row) => (
+                <DataTable columns={['Nhân viên', 'Loại', 'Định mức lương', 'Tổng giờ', 'Tổng công', 'Tổng lương', 'Tạm ứng', 'Còn thanh toán']} minWidth={1120}>
+                    {payrollSummary.length === 0 ? <EmptyRow colSpan={8} message="Chưa có dữ liệu lương." /> : payrollSummary.map((row) => (
                         <tr key={row.payroll_employee_id || row.employee_code} className="border-b border-gray-100 hover:bg-gray-50">
                             <td className="px-3 py-2">
                                 <div className="font-bold text-gray-800">{row.full_name || '-'}</div>
                                 <div className="text-[11px] font-semibold text-gray-400">{row.employee_code || '-'}</div>
                             </td>
                             <td className="px-3 py-2 text-gray-600">{employeeTypeLabel(row.salary_type)}</td>
-                            <td className="px-3 py-2 text-right">{formatDecimal(row.total_hours)}</td>
-                            <td className="px-3 py-2 text-right">{formatDecimal(row.total_work_units)}</td>
-                            <td className="px-3 py-2 text-right text-emerald-700">{formatMoney(row.total_bonus)}</td>
-                            <td className="px-3 py-2 text-right text-red-600">{formatMoney(row.total_penalty)}</td>
-                            <td className="px-3 py-2 text-right font-bold text-teal-700">{formatMoney(row.total_salary)}</td>
+                            <td className="min-w-[150px] px-3 py-2 text-center font-semibold text-gray-700">{row.salary_basis || '-'}</td>
+                            <td className="px-3 py-2 text-center">{formatDecimal(row.total_hours)}</td>
+                            <td className="px-3 py-2 text-center">{formatDecimal(row.total_work_units)}</td>
+                            <td className="px-3 py-2 text-center font-bold text-teal-700">
+                                <FormulaTooltipValue value={formatMoney(row.total_salary)} formula={row.salary_formula} />
+                            </td>
+                            <td className="px-3 py-2 text-center font-bold text-amber-700">{formatMoney(row.total_advance)}</td>
+                            <td className="px-3 py-2 text-center font-bold text-emerald-700">{formatMoney(row.remaining_salary)}</td>
                         </tr>
                     ))}
                 </DataTable>
@@ -1206,7 +2308,7 @@ export default function HumanResourcesManagement() {
 
     function renderAdjustments() {
         return (
-            <DetailShell title="Tạm ứng / cộng trừ" action={(
+            <DetailShell title="Tạm ứng" action={(
                 <div className="flex flex-wrap gap-2">
                     <button type="button" disabled={!canEditAttendance || !canViewSalary} onClick={() => setAdjustments((rows) => [...rows, {
                         uid: tempId(),
@@ -1219,20 +2321,17 @@ export default function HumanResourcesManagement() {
                         <span className="material-symbols-outlined text-[18px]">add</span>
                         Thêm khoản
                     </button>
-                    <SaveButton saving={savingKey === 'adjustments'} disabled={!canEditAttendance || !canViewSalary} onClick={() => saveRows('adjustments', () => payrollApi.saveAdjustments(adjustmentPayload(adjustments)), 'Đã lưu cộng trừ.')} />
+                    <SaveButton saving={savingKey === 'adjustments'} disabled={!canEditAttendance || !canViewSalary} onClick={() => saveRows('adjustments', () => payrollApi.saveAdjustments(adjustmentPayload(adjustments)), 'Đã lưu tạm ứng.')} />
                 </div>
             )}>
-                <DataTable columns={['Ngày', 'Nhân viên', 'Loại', 'Số tiền', 'Ảnh hưởng', 'Ghi chú', 'Xoá']} minWidth={1040}>
-                    {adjustments.length === 0 ? <EmptyRow colSpan={7} message="Chưa có khoản cộng trừ." /> : adjustments.map((adjustment) => {
-                        const positive = positiveAdjustment(adjustment.adjustment_type);
+                <DataTable columns={['Ngày', 'Nhân viên', 'Số tiền', 'Ghi chú', 'Xoá']} minWidth={820}>
+                    {adjustments.length === 0 ? <EmptyRow colSpan={5} message="Chưa có khoản tạm ứng." /> : adjustments.map((adjustment) => {
                         return (
                             <tr key={adjustment.id || adjustment.uid} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="px-3 py-2"><TextInput type="date" disabled={!canEditAttendance || !canViewSalary} value={adjustment.adjustment_date} onChange={(value) => updateRow(setAdjustments, adjustment, { adjustment_date: value })} /></td>
-                                <td className="px-3 py-2"><SelectInput disabled={!canEditAttendance || !canViewSalary} value={adjustment.payroll_employee_id} onChange={(value) => updateRow(setAdjustments, adjustment, { payroll_employee_id: value })} options={employeeOptions} placeholder="Nhân viên" /></td>
-                                <td className="px-3 py-2"><SelectInput disabled={!canEditAttendance || !canViewSalary} value={adjustment.adjustment_type} onChange={(value) => updateRow(setAdjustments, adjustment, { adjustment_type: value })} options={ADJUSTMENT_TYPES} /></td>
-                                <td className="px-3 py-2">{canViewSalary ? <MoneyInput disabled={!canEditAttendance} value={adjustment.amount} onChange={(value) => updateRow(setAdjustments, adjustment, { amount: value })} /> : <span className="text-gray-400">Ẩn</span>}</td>
-                                <td className={`px-3 py-2 text-right font-bold ${positive ? 'text-emerald-700' : 'text-red-600'}`}>{adjustment.amount ? `${positive ? '+' : '-'}${formatMoney(adjustment.amount)}` : '-'}</td>
-                                <td className="px-3 py-2"><TextInput disabled={!canEditAttendance || !canViewSalary} value={adjustment.notes} onChange={(value) => updateRow(setAdjustments, adjustment, { notes: value })} /></td>
+                                <td className="px-3 py-2"><TextInput type="date" disabled={!canEditAttendance || !canViewSalary} value={adjustment.adjustment_date} onChange={(value) => updateRow(setAdjustments, adjustment, { adjustment_date: value })} className="text-center" /></td>
+                                <td className="px-3 py-2"><SelectInput disabled={!canEditAttendance || !canViewSalary} value={adjustment.payroll_employee_id} onChange={(value) => updateRow(setAdjustments, adjustment, { payroll_employee_id: value })} options={employeeOptions} placeholder="Nhân viên" className="text-center" /></td>
+                                <td className="px-3 py-2">{canViewSalary ? <MoneyInput disabled={!canEditAttendance} value={adjustment.amount} inputClassName="text-center" onChange={(value) => updateRow(setAdjustments, adjustment, { amount: value })} /> : <span className="text-gray-400">Ẩn</span>}</td>
+                                <td className="px-3 py-2"><TextInput disabled={!canEditAttendance || !canViewSalary} value={adjustment.notes} onChange={(value) => updateRow(setAdjustments, adjustment, { notes: value })} className="text-center" /></td>
                                 <td className="px-3 py-2 text-center">
                                     <button type="button" disabled={!canEditAttendance || !canViewSalary || savingKey === `delete-adjustment-${adjustment.id}`} onClick={() => deleteAdjustment(adjustment)} className="inline-flex size-8 items-center justify-center rounded border border-red-100 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40" title="Xoá">
                                         <span className="material-symbols-outlined text-[17px]">delete</span>
@@ -1247,6 +2346,8 @@ export default function HumanResourcesManagement() {
     }
 
     function renderReports() {
+        const today = isoDate(new Date());
+
         return (
             <DetailShell title="Báo cáo" action={(
                 <button type="button" onClick={exportSalaryCsv} className="inline-flex h-9 items-center gap-2 rounded bg-teal-700 px-3 text-[13px] font-bold text-white hover:bg-teal-800">
@@ -1257,13 +2358,53 @@ export default function HumanResourcesManagement() {
                 <DataTable columns={['Tháng', 'Nhân viên', 'Tổng giờ', 'Tổng công', 'Quỹ lương', 'Trạng thái']} minWidth={820}>
                     <tr className="border-b border-gray-100 hover:bg-gray-50">
                         <td className="px-3 py-3 font-bold text-gray-800">{month}</td>
-                        <td className="px-3 py-3 text-right">{activeEmployees.length}</td>
-                        <td className="px-3 py-3 text-right">{formatDecimal(totalHours)}</td>
-                        <td className="px-3 py-3 text-right">{formatDecimal(totalWorkUnits)}</td>
-                        <td className="px-3 py-3 text-right font-bold text-teal-700">{formatMoney(totalSalary)}</td>
+                        <td className="px-3 py-3 text-center">{activeEmployees.length}</td>
+                        <td className="px-3 py-3 text-center">{formatDecimal(totalHours)}</td>
+                        <td className="px-3 py-3 text-center">{formatDecimal(totalWorkUnits)}</td>
+                        <td className="px-3 py-3 text-center font-bold text-teal-700">{formatMoney(totalSalary)}</td>
                         <td className="px-3 py-3">{closedMonth === month ? <StatusBadge>Đã chốt</StatusBadge> : <StatusBadge tone="amber">Đang tính</StatusBadge>}</td>
                     </tr>
                 </DataTable>
+                <div className="border-t border-gray-200 bg-white">
+                    <div className="grid border-b border-gray-200 sm:grid-cols-3">
+                        <div className="border-b border-gray-100 px-4 py-3 sm:border-b-0 sm:border-r">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Ngày có lương</span>
+                            <p className="mt-1 text-[18px] font-bold text-gray-900">{dailySalaryWorkDays}/{monthDays.length} ngày</p>
+                        </div>
+                        <div className="border-b border-gray-100 px-4 py-3 sm:border-b-0 sm:border-r">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Trung bình/ngày</span>
+                            <p className="mt-1 text-[18px] font-bold text-emerald-700">{canViewSalary ? formatMoney(averageDailySalary) : 'Ẩn'}</p>
+                        </div>
+                        <div className="px-4 py-3">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Ngày cao nhất</span>
+                            <p className="mt-1 text-[18px] font-bold text-amber-700">{highestDailySalaryLabel}</p>
+                        </div>
+                    </div>
+                    <div className="flex flex-col gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                        <h3 className="text-[15px] font-bold text-gray-900">Lương phải trả theo ngày</h3>
+                        <button type="button" onClick={exportDailySalaryCsv} className="inline-flex h-9 items-center justify-center gap-2 rounded border border-emerald-200 bg-emerald-50 px-3 text-[13px] font-bold text-emerald-700 hover:bg-emerald-100">
+                            <span className="material-symbols-outlined text-[18px]">download</span>
+                            Xuất theo ngày
+                        </button>
+                    </div>
+                    <DataTable columns={['Ngày', 'Thứ', 'Nhân viên có công', 'Số ca', 'Tổng giờ', 'Tổng công', 'Lương phải trả']} minWidth={980}>
+                        {dailySalarySummary.length === 0 ? <EmptyRow colSpan={7} message="Chưa có dữ liệu theo ngày." /> : dailySalarySummary.map((row) => {
+                            const hasWork = row.shift_count > 0 || safeNumber(row.total_work_units) > 0;
+                            const isToday = row.work_date === today;
+                            return (
+                                <tr key={row.work_date} className={`border-b border-gray-100 ${isToday ? 'bg-teal-50/70' : 'hover:bg-gray-50'} ${hasWork ? 'text-gray-700' : 'text-gray-400'}`}>
+                                    <td className="px-3 py-3 font-bold text-gray-800">{shortDate(row.work_date)}</td>
+                                    <td className="px-3 py-3 text-center font-semibold">{weekday(row.work_date)}</td>
+                                    <td className="px-3 py-3 text-center">{row.employee_count}</td>
+                                    <td className="px-3 py-3 text-center">{row.shift_count}</td>
+                                    <td className="px-3 py-3 text-center">{formatDecimal(row.total_hours)}</td>
+                                    <td className="px-3 py-3 text-center">{formatDecimal(row.total_work_units)}</td>
+                                    <td className={`px-3 py-3 text-center font-bold ${hasWork && canViewSalary ? 'text-teal-700' : 'text-gray-400'}`}>{canViewSalary ? formatMoney(row.total_salary) : 'Ẩn'}</td>
+                                </tr>
+                            );
+                        })}
+                    </DataTable>
+                </div>
             </DetailShell>
         );
     }
@@ -1329,16 +2470,16 @@ export default function HumanResourcesManagement() {
                                         <span>{formatDecimal(totalWorkUnits)} công</span>
                                     </div>
                                 </div>
-                                <div className="grid w-full gap-3 rounded border border-gray-200 bg-white p-3 shadow-sm sm:grid-cols-3 xl:w-[560px]">
-                                    <label className="grid gap-1">
+                                <div className="grid w-full gap-3 rounded border border-gray-200 bg-white p-3 text-center shadow-sm sm:grid-cols-3 xl:w-[560px]">
+                                    <label className="grid gap-1 text-center">
                                         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tháng</span>
-                                        <input type="month" value={month} onChange={(event) => changeMonth(event.target.value)} className="h-9 rounded border border-gray-200 bg-white px-2.5 text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
+                                        <input type="month" value={month} onChange={(event) => changeMonth(event.target.value)} className="h-9 rounded border border-gray-200 bg-white px-2.5 text-center text-[13px] font-semibold text-gray-700 outline-none focus:border-teal-500" />
                                     </label>
-                                    <div>
+                                    <div className="text-center">
                                         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tổng công</span>
                                         <p className="mt-2 text-[16px] font-bold text-gray-900">{formatDecimal(totalWorkUnits)}</p>
                                     </div>
-                                    <div>
+                                    <div className="text-center">
                                         <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-gray-500">Tổng lương</span>
                                         <p className="mt-2 text-[16px] font-bold text-teal-700">{formatMoney(totalSalary)}</p>
                                     </div>
@@ -1531,7 +2672,7 @@ function SalaryHistoryEditor({ employee, canEdit, onChange }) {
             uid: tempId(),
             salary_type: currentEmployee.salary_type || 'theo_gio',
             salary_amount: currentEmployee.salary_amount || '',
-            standard_work_units: currentEmployee.standard_work_units || 26,
+            standard_work_units: currentEmployee.standard_work_units || DEFAULT_STANDARD_WORK_UNITS,
             effective_from: dateValue(currentEmployee.salary_effective_from) || firstDayOfMonth(currentMonth()),
             notes: '',
         }]);
@@ -1558,20 +2699,21 @@ function SalaryHistoryEditor({ employee, canEdit, onChange }) {
                 </button>
             </div>
             <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] border-collapse text-left text-[12px]">
+                <table className="w-full min-w-[840px] border-collapse text-center text-[12px]">
                     <thead>
                         <tr className="bg-white">
-                            <th className="border-b border-gray-200 px-3 py-2 font-bold text-gray-500">Áp dụng từ</th>
-                            <th className="border-b border-gray-200 px-3 py-2 font-bold text-gray-500">Loại</th>
-                            <th className="border-b border-gray-200 px-3 py-2 text-right font-bold text-gray-500">Mức lương</th>
-                            <th className="border-b border-gray-200 px-3 py-2 font-bold text-gray-500">Ghi chú</th>
+                            <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Áp dụng từ</th>
+                            <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Loại</th>
+                            <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Mức lương</th>
+                            <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Công chuẩn</th>
+                            <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Ghi chú</th>
                             <th className="border-b border-gray-200 px-3 py-2 text-center font-bold text-gray-500">Xoá</th>
                         </tr>
                     </thead>
                     <tbody>
                         {rows.length === 0 ? (
                             <tr>
-                                <td colSpan={5} className="px-3 py-5 text-center font-semibold text-gray-400">Chưa có lịch sử lương.</td>
+                                <td colSpan={6} className="px-3 py-5 text-center font-semibold text-gray-400">Chưa có lịch sử lương.</td>
                             </tr>
                         ) : rows.map((rate, index) => (
                             <tr key={salaryRateKey(rate, index)} className="border-b border-gray-100 last:border-b-0">
@@ -1579,10 +2721,15 @@ function SalaryHistoryEditor({ employee, canEdit, onChange }) {
                                     <TextInput type="date" disabled={!canEdit} value={dateValue(rate.effective_from)} onChange={(value) => updateRate(rate, index, { effective_from: value })} />
                                 </td>
                                 <td className="px-3 py-2">
-                                    <SelectInput disabled={!canEdit} value={rate.salary_type} onChange={(value) => updateRate(rate, index, { salary_type: value })} options={EMPLOYEE_TYPES} />
+                                    <SelectInput disabled={!canEdit} value={rate.salary_type} onChange={(value) => updateRate(rate, index, { salary_type: value, ...(value === 'theo_thang' && !rate.standard_work_units ? { standard_work_units: DEFAULT_STANDARD_WORK_UNITS } : {}) })} options={EMPLOYEE_TYPES} />
                                 </td>
                                 <td className="px-3 py-2">
                                     <MoneyInput disabled={!canEdit} value={rate.salary_amount} suffix={salaryUnitLabel(rate.salary_type)} onChange={(value) => updateRate(rate, index, { salary_amount: value })} />
+                                </td>
+                                <td className="px-3 py-2">
+                                    {rate.salary_type === 'theo_thang' ? (
+                                        <DecimalInput disabled={!canEdit} value={rate.standard_work_units || DEFAULT_STANDARD_WORK_UNITS} suffix="ngày / tháng" onChange={(value) => updateRate(rate, index, { standard_work_units: value })} />
+                                    ) : <span className="block h-9" />}
                                 </td>
                                 <td className="px-3 py-2">
                                     <TextInput disabled={!canEdit} value={rate.notes} onChange={(value) => updateRate(rate, index, { notes: value })} placeholder="VD: Tăng lương tháng 12" />

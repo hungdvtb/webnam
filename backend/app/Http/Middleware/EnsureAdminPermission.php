@@ -2,6 +2,8 @@
 
 namespace App\Http\Middleware;
 
+use App\Models\PayrollEmployee;
+use App\Models\PayrollUserScope;
 use App\Services\AccessControlService;
 use Closure;
 use Illuminate\Http\Request;
@@ -24,7 +26,7 @@ class EnsureAdminPermission
         $access = app(AccessControlService::class);
         $accountId = $access->resolveAccountIdFromRequest($request);
 
-        if (!$access->can($user, $permission, $accountId)) {
+        if (!$access->can($user, $permission, $accountId) && !$this->allowsPayrollScopedAccess($request, $user, $accountId, $permission)) {
             return response()->json([
                 'message' => 'Bạn không có quyền thực hiện thao tác này.',
                 'required_permission' => $permission,
@@ -32,6 +34,39 @@ class EnsureAdminPermission
         }
 
         return $next($request);
+    }
+
+    private function allowsPayrollScopedAccess(Request $request, $user, int|string|null $accountId, string $permission): bool
+    {
+        if (!str_starts_with($permission, 'payroll.')) {
+            return false;
+        }
+
+        if ((int) ($user->status ?? 1) !== 1) {
+            return false;
+        }
+
+        $path = preg_replace('#^api/#', '', trim($request->path(), '/'));
+        if (!preg_match('#^payroll(/|$)#', $path)) {
+            return false;
+        }
+
+        if (!$accountId || $accountId === 'all') {
+            $accountId = $user->accounts()->first()?->id;
+        }
+
+        if (!$accountId) {
+            return false;
+        }
+
+        return PayrollUserScope::query()
+            ->where('account_id', (int) $accountId)
+            ->where('user_id', $user->id)
+            ->exists()
+            || PayrollEmployee::query()
+                ->where('account_id', (int) $accountId)
+                ->where('user_id', $user->id)
+                ->exists();
     }
 
     private function resolveRequiredPermission(Request $request): ?string

@@ -7,6 +7,11 @@ use App\Models\FinDailyReportConfig;
 use App\Models\InventoryDocument;
 use App\Models\AdAccountProfitCenter;
 use App\Models\Order;
+use App\Models\PayrollAttendanceRecord;
+use App\Models\PayrollEmployee;
+use App\Models\PayrollSalaryRate;
+use App\Models\PayrollScheduleRegistration;
+use App\Models\PayrollWorkShift;
 use App\Models\ProfitCenter;
 use App\Models\User;
 use App\Services\AccessControlService;
@@ -19,6 +24,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 class FinDailyProfitReportController extends Controller
 {
@@ -965,6 +971,227 @@ class FinDailyProfitReportController extends Controller
         return OrderShippingFeeCalculator::resolveShippingSummary($order);
     }
 
+    private function payrollWorkKey(string $date, mixed $employeeId, mixed $shiftId): string
+    {
+        return implode('|', [$date, $employeeId, $shiftId]);
+    }
+
+    private function isPayrollScheduleCancelled(?string $status): bool
+    {
+        return trim((string) $status) === 'Huỷ lịch';
+    }
+
+    private function isPrimaryFullTimePayrollShift(PayrollWorkShift $shift): bool
+    {
+        $code = Str::upper(trim((string) $shift->shift_code));
+        if (in_array($code, ['S', 'C'], true)) {
+            return true;
+        }
+
+        $name = Str::lower((string) $shift->shift_name);
+        return Str::contains($name, ['sáng', 'chiều']);
+    }
+
+    private function fullTimeDefaultPayrollShifts(int $accountId): Collection
+    {
+        $activeShifts = PayrollWorkShift::query()
+            ->where('account_id', $accountId)
+            ->where(function ($query) {
+                $query->where('is_active', true)->orWhereNull('is_active');
+            })
+            ->orderBy('sort_order')
+            ->orderBy('start_time')
+            ->orderBy('shift_code')
+            ->get();
+
+        $primaryShifts = $activeShifts
+            ->filter(fn (PayrollWorkShift $shift) => $this->isPrimaryFullTimePayrollShift($shift))
+            ->values();
+
+        return $primaryShifts->isNotEmpty()
+            ? $primaryShifts
+            : $activeShifts->take(2)->values();
+    }
+
+    private function payrollSalaryContextForDate(PayrollEmployee $employee, string $workDate): array
+    {
+        $context = [
+            'salary_type' => $employee->salary_type,
+            'salary_amount' => (float) $employee->salary_amount,
+            'standard_work_units' => (float) ($employee->standard_work_units ?: 0),
+        ];
+
+        $rates = $employee->relationLoaded('salaryRates')
+            ? $employee->salaryRates
+            : PayrollSalaryRate::query()
+                ->where('account_id', $employee->account_id)
+                ->where('payroll_employee_id', $employee->id)
+                ->orderByDesc('effective_from')
+                ->orderByDesc('id')
+                ->get();
+
+        $rate = $rates->first(function (PayrollSalaryRate $item) use ($workDate) {
+            return Carbon::parse($item->effective_from)->toDateString() <= $workDate;
+        });
+
+        if (!$rate) {
+            return $context;
+        }
+
+        return [
+            'salary_type' => $rate->salary_type,
+            'salary_amount' => (float) $rate->salary_amount,
+            'standard_work_units' => (float) ($rate->standard_work_units ?: 0),
+        ];
+    }
+
+    private function payrollMonthlySalaryForWorkUnits(float $salaryAmount, float $standardWorkUnits, float $workUnits): float
+    {
+        if ($standardWorkUnits <= 0) {
+            return 0;
+        }
+
+        return $salaryAmount / $standardWorkUnits * $workUnits;
+    }
+
+    private function calculatePayrollAmountForWork(
+        PayrollEmployee $employee,
+        ?PayrollWorkShift $shift,
+        string $workDate,
+        float $workUnits,
+        mixed $unitRate = null,
+        float $bonus = 0,
+        float $penalty = 0
+    ): float {
+        $multiplier = (float) ($shift?->wage_multiplier ?? 1);
+
+        if ($unitRate !== null && $unitRate !== '') {
+            return round(((float) $unitRate * $workUnits * $multiplier) + $bonus - $penalty, 2);
+        }
+
+        $salary = $this->payrollSalaryContextForDate($employee, $workDate);
+        $salaryAmount = (float) $salary['salary_amount'];
+
+        $base = match ($salary['salary_type']) {
+            'theo_gio' => $salaryAmount * (float) ($shift?->standard_hours ?? 0) * $workUnits * $multiplier,
+            'theo_thang' => $this->payrollMonthlySalaryForWorkUnits($salaryAmount, (float) ($salary['standard_work_units'] ?: 0), $workUnits),
+            default => $salaryAmount * $workUnits * $multiplier,
+        };
+
+        return round($base + $bonus - $penalty, 2);
+    }
+
+    private function payrollSalaryTotalsByDate(?int $accountId, string $startDate, string $endDate): array
+    {
+        if (!$accountId) {
+            return [];
+        }
+
+        if ($startDate > $endDate) {
+            return [];
+        }
+
+        $fallbackEndDate = min($endDate, Carbon::today()->toDateString());
+        $totals = [];
+        $attendanceKeys = [];
+        $salaryRatesLoader = fn ($query) => $query->orderByDesc('effective_from')->orderByDesc('id');
+
+        $attendanceRecords = PayrollAttendanceRecord::query()
+            ->with([
+                'employee.salaryRates' => $salaryRatesLoader,
+                'shift',
+            ])
+            ->where('account_id', $accountId)
+            ->whereBetween('work_date', [$startDate, $endDate])
+            ->get();
+
+        foreach ($attendanceRecords as $record) {
+            $date = Carbon::parse($record->work_date)->toDateString();
+            $attendanceKeys[$this->payrollWorkKey($date, $record->payroll_employee_id, $record->payroll_work_shift_id)] = true;
+
+            if (!$record->employee) {
+                continue;
+            }
+
+            $totals[$date] = ($totals[$date] ?? 0) + $this->calculatePayrollAmountForWork(
+                $record->employee,
+                $record->shift,
+                $date,
+                (float) $record->work_units,
+                $record->unit_rate,
+                (float) $record->bonus_amount,
+                (float) $record->penalty_amount
+            );
+        }
+
+        $scheduleKeys = [];
+        if ($startDate <= $fallbackEndDate) {
+            $schedules = PayrollScheduleRegistration::query()
+                ->with([
+                    'employee.salaryRates' => $salaryRatesLoader,
+                    'shift',
+                ])
+                ->where('account_id', $accountId)
+                ->whereBetween('work_date', [$startDate, $fallbackEndDate])
+                ->get();
+
+            foreach ($schedules as $schedule) {
+                $date = Carbon::parse($schedule->work_date)->toDateString();
+                $key = $this->payrollWorkKey($date, $schedule->payroll_employee_id, $schedule->payroll_work_shift_id);
+                $scheduleKeys[$key] = true;
+
+                if (isset($attendanceKeys[$key]) || $this->isPayrollScheduleCancelled($schedule->status) || !$schedule->employee) {
+                    continue;
+                }
+
+                $workUnits = (float) ($schedule->registered_work_units ?: ($schedule->shift?->default_work_units ?? 1));
+                $totals[$date] = ($totals[$date] ?? 0) + $this->calculatePayrollAmountForWork(
+                    $schedule->employee,
+                    $schedule->shift,
+                    $date,
+                    $workUnits
+                );
+            }
+        }
+
+        $defaultShifts = $startDate <= $fallbackEndDate ? $this->fullTimeDefaultPayrollShifts($accountId) : collect();
+        if ($defaultShifts->isNotEmpty()) {
+            $fullTimeEmployees = PayrollEmployee::query()
+                ->with(['salaryRates' => $salaryRatesLoader])
+                ->where('account_id', $accountId)
+                ->where('salary_type', 'theo_thang')
+                ->where(function ($query) {
+                    $query->whereNull('status')->orWhere('status', '<>', 'Nghỉ việc');
+                })
+                ->get();
+
+            foreach (\Carbon\CarbonPeriod::create($startDate, $fallbackEndDate) as $date) {
+                $dateKey = $date->format('Y-m-d');
+
+                foreach ($fullTimeEmployees as $employee) {
+                    foreach ($defaultShifts as $shift) {
+                        $key = $this->payrollWorkKey($dateKey, $employee->id, $shift->id);
+                        if (isset($attendanceKeys[$key]) || isset($scheduleKeys[$key])) {
+                            continue;
+                        }
+
+                        $workUnits = (float) ($shift->default_work_units ?: 1);
+                        $totals[$dateKey] = ($totals[$dateKey] ?? 0) + $this->calculatePayrollAmountForWork(
+                            $employee,
+                            $shift,
+                            $dateKey,
+                            $workUnits
+                        );
+                    }
+                }
+            }
+        }
+
+        return collect($totals)
+            ->map(fn ($amount) => round((float) $amount, 2))
+            ->toArray();
+    }
+
     private function buildDailyReportPayload(string $startDate, string $endDate, array $filters = []): array
     {
         $config = $filters['config'] ?? $this->dailyReportConfigForAccount(null, false);
@@ -973,6 +1200,9 @@ class FinDailyProfitReportController extends Controller
         $taxRate = $config ? (float) $config->tax_rate : 1.5;
         $adChannel = $this->normalizeReportAdChannel($filters['ad_channel'] ?? null);
         $profitScope = $filters['profit_scope'] ?? null;
+        $accountId = isset($filters['account_id'])
+            ? (int) $filters['account_id']
+            : (($profitScope['account_id'] ?? null) !== null ? (int) $profitScope['account_id'] : null);
         $hasProfitScopeFilter = $profitScope !== null && (
             !($profitScope['all'] ?? false)
             || !empty($profitScope['requested_manager_user_ids'] ?? [])
@@ -1015,6 +1245,9 @@ class FinDailyProfitReportController extends Controller
                 ->whereBetween('date', [$startDate, $endDate])
                 ->pluck('amount', 'date')
                 ->toArray()
+            : [];
+        $employeeSalaryByDate = $includeSharedCosts
+            ? $this->payrollSalaryTotalsByDate($accountId, $startDate, $endDate)
             : [];
 
         $fbAdsSpends = $includeFacebookAds
@@ -1066,6 +1299,7 @@ class FinDailyProfitReportController extends Controller
             $packagingFee = $orderCount * $packFee;
             $tax = ($taxRate / 100) * ($revenueActual - $shippingFee);
             $fixedCostDaily = isset($fixedCosts[$dateStr]) ? (float) $fixedCosts[$dateStr] : 0;
+            $employeeSalaryDaily = isset($employeeSalaryByDate[$dateStr]) ? (float) $employeeSalaryByDate[$dateStr] : 0;
 
             $fbAdsSpendRawDaily = (float) ($fbAdsSpends[$dateStr] ?? 0);
             $fbAdsSpendDaily = $fbAdsSpendRawDaily * (1 + $fbTaxRate / 100);
@@ -1074,7 +1308,7 @@ class FinDailyProfitReportController extends Controller
             $adsSpendRawDaily = $fbAdsSpendRawDaily + $googleAdsSpendRawDaily;
             $adsSpendDaily = $fbAdsSpendDaily + $googleAdsSpendDaily;
 
-            $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $adsSpendDaily;
+            $profitFromNewOrders = $revenueActual - $costActual - $shippingFee - $packagingFee - $tax - $fixedCostDaily - $employeeSalaryDaily - $adsSpendDaily;
             $specialProfit = $specialProfitByDate->get($dateStr);
             $exchangeReturnOrderCount = $specialProfit ? (int) $specialProfit->exchange_return_order_count : 0;
             $partialDeliveryOrderCount = $specialProfit ? (int) $specialProfit->partial_delivery_order_count : 0;
@@ -1097,6 +1331,8 @@ class FinDailyProfitReportController extends Controller
                 'packaging_fee' => $packagingFee,
                 'tax' => $tax,
                 'fixed_cost' => $fixedCostDaily,
+                'employee_salary' => $employeeSalaryDaily,
+                'salary' => $employeeSalaryDaily,
                 'fb_ads_spend_raw' => $fbAdsSpendRawDaily,
                 'fb_ads_spend' => $fbAdsSpendDaily,
                 'google_ads_spend_raw' => $googleAdsSpendRawDaily,
@@ -1116,6 +1352,7 @@ class FinDailyProfitReportController extends Controller
                 'percent_ship' => $revenueRaw > 0 ? ($shippingFee / $revenueRaw * 100) : 0,
                 'percent_pack' => $revenueRaw > 0 ? ($packagingFee / $revenueRaw * 100) : 0,
                 'percent_tax' => $revenueRaw > 0 ? ($tax / $revenueRaw * 100) : 0,
+                'percent_employee_salary' => $revenueRaw > 0 ? ($employeeSalaryDaily / $revenueRaw * 100) : 0,
                 'percent_ads' => $revenueRaw > 0 ? ($adsSpendDaily / $revenueRaw * 100) : 0,
                 'percent_profit' => $revenueRaw > 0 ? ($profit / $revenueRaw * 100) : 0,
             ];
@@ -1141,11 +1378,13 @@ class FinDailyProfitReportController extends Controller
                 'google_ads_spend' => round((float) $reportCollection->sum('google_ads_spend'), 2),
                 'ads_spend_raw' => round((float) $reportCollection->sum('ads_spend_raw'), 2),
                 'ads_spend' => round((float) $reportCollection->sum('ads_spend'), 2),
+                'employee_salary' => round((float) $reportCollection->sum('employee_salary'), 2),
             ],
             'meta' => [
                 'ad_channel' => $adChannel,
                 'ad_channel_label' => $this->reportAdChannelLabel($adChannel),
                 'shared_costs_included' => $includeSharedCosts,
+                'employee_salary_included' => $includeSharedCosts,
                 'profit_scope' => $profitScope,
                 'profit_scope_label' => $profitScope['label'] ?? 'Tong tat ca nguoi quan ly',
             ],

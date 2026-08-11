@@ -4396,14 +4396,101 @@ class OrderController extends Controller
             ->value('account_id') ?: $accountId);
     }
 
-    private function loadQuoteTemplates(int $accountId): array
+    private function loadQuoteTemplatesForAccounts(array $accountIds): array
     {
+        $normalizedAccountIds = collect($accountIds)
+            ->map(fn ($accountId) => (int) $accountId)
+            ->filter(fn ($accountId) => $accountId > 0)
+            ->unique()
+            ->values();
+
+        if ($normalizedAccountIds->isEmpty()) {
+            return [];
+        }
+
         return QuoteTemplate::query()
-            ->where('account_id', $accountId)
+            ->whereIn('account_id', $normalizedAccountIds->all())
             ->orderBy('sort_order')
             ->orderBy('name')
             ->get()
             ->toArray();
+    }
+
+    private function parseAccountIdList(mixed $value): array
+    {
+        $values = is_array($value)
+            ? $value
+            : preg_split('/[,\s]+/', (string) $value, -1, PREG_SPLIT_NO_EMPTY);
+
+        return collect($values ?: [])
+            ->map(fn ($accountId) => (int) $accountId)
+            ->filter(fn ($accountId) => $accountId > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function accessibleAccountIds(Request $request, array $accountIds): array
+    {
+        $normalizedAccountIds = collect($accountIds)
+            ->map(fn ($accountId) => (int) $accountId)
+            ->filter(fn ($accountId) => $accountId > 0)
+            ->unique()
+            ->values();
+
+        if ($normalizedAccountIds->isEmpty()) {
+            return [];
+        }
+
+        $user = $request->user() ?: Auth::user();
+        $query = Account::query()->whereIn('id', $normalizedAccountIds->all());
+
+        if (!$user?->is_admin) {
+            if (!$user) {
+                return [];
+            }
+
+            $query->whereHas('users', fn ($userQuery) => $userQuery->where('users.id', $user->id));
+        }
+
+        return $query
+            ->pluck('id')
+            ->map(fn ($accountId) => (int) $accountId)
+            ->all();
+    }
+
+    private function requestedQuoteTemplateSourceAccountIds(Request $request): array
+    {
+        $requestedAccountIds = $this->parseAccountIdList($request->input('quote_source_account_ids'));
+
+        return $this->accessibleAccountIds($request, $requestedAccountIds);
+    }
+
+    private function buildOrderFormBootstrapPayload(int $accountId, array $quoteSourceAccountIds = []): array
+    {
+        $quoteTemplateSourceAccountId = $this->resolveQuoteTemplateSourceAccountId($accountId);
+        $quoteTemplateAccountIds = collect([$quoteTemplateSourceAccountId]);
+
+        collect($quoteSourceAccountIds)
+            ->map(fn ($sourceAccountId) => $this->resolveQuoteTemplateSourceAccountId((int) $sourceAccountId))
+            ->filter(fn ($sourceAccountId) => $sourceAccountId > 0)
+            ->each(fn ($sourceAccountId) => $quoteTemplateAccountIds->push($sourceAccountId));
+
+        $quoteTemplateAccountIds = $quoteTemplateAccountIds
+            ->filter(fn ($sourceAccountId) => $sourceAccountId > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        return [
+            'order_statuses' => $this->loadOrderStatuses($accountId),
+            'order_attributes' => $this->loadOrderAttributes('order'),
+            'product_attributes' => $this->loadOrderProductQuickFilterAttributes($accountId),
+            'profit_centers' => $this->loadOrderProfitCenters($accountId),
+            'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
+            'quote_settings' => $this->loadQuoteSettings($accountId, $quoteTemplateSourceAccountId),
+            'quote_templates' => $this->loadQuoteTemplatesForAccounts($quoteTemplateAccountIds),
+        ];
     }
 
     private function loadOrderQuickPickGroups(int $accountId): array
@@ -4575,22 +4662,22 @@ class OrderController extends Controller
             $mode = 'list';
         }
 
+        if ($mode === 'form') {
+            $quoteSourceAccountIds = $this->requestedQuoteTemplateSourceAccountIds($request);
+
+            if ($quoteSourceAccountIds !== []) {
+                return response()->json(
+                    $this->buildOrderFormBootstrapPayload($accountId, $quoteSourceAccountIds)
+                );
+            }
+        }
+
         $payload = Cache::remember(
             $this->bootstrapCacheKey($accountId, $mode),
             now()->addSeconds(self::BOOTSTRAP_CACHE_TTL_SECONDS),
             function () use ($accountId, $mode) {
                 if ($mode === 'form') {
-                    $quoteTemplateSourceAccountId = $this->resolveQuoteTemplateSourceAccountId($accountId);
-
-                    return [
-                        'order_statuses' => $this->loadOrderStatuses($accountId),
-                        'order_attributes' => $this->loadOrderAttributes('order'),
-                        'product_attributes' => $this->loadOrderProductQuickFilterAttributes($accountId),
-                        'profit_centers' => $this->loadOrderProfitCenters($accountId),
-                        'product_quick_pick_groups' => $this->loadOrderQuickPickGroups($accountId),
-                        'quote_settings' => $this->loadQuoteSettings($accountId, $quoteTemplateSourceAccountId),
-                        'quote_templates' => $this->loadQuoteTemplates($quoteTemplateSourceAccountId),
-                    ];
+                    return $this->buildOrderFormBootstrapPayload($accountId);
                 }
 
                 return [

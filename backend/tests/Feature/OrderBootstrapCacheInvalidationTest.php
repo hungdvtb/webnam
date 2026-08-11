@@ -160,6 +160,45 @@ class OrderBootstrapCacheInvalidationTest extends TestCase
         $this->assertSame(['Men ran shared'], collect($response->json('quote_templates'))->pluck('name')->all());
     }
 
+    public function test_order_form_bootstrap_does_not_include_source_quote_templates_without_source_request(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $sourceAccount = $this->createAccount('dong-dai-thanh');
+        $user->accounts()->attach($sourceAccount->id, ['role' => 'manager']);
+
+        $this->createQuoteConfig($account, 'Gom quote template');
+        $this->createQuoteConfig($sourceAccount, 'Dong quote template');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders/bootstrap?mode=form');
+
+        $response->assertOk();
+        $this->assertSame(['Gom quote template'], collect($response->json('quote_templates'))->pluck('name')->all());
+    }
+
+    public function test_order_form_bootstrap_merges_requested_source_quote_templates(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $sourceAccount = $this->createAccount('dong-dai-thanh');
+        $user->accounts()->attach($sourceAccount->id, ['role' => 'manager']);
+
+        $this->createQuoteConfig($account, 'Gom quote template');
+        $this->createQuoteConfig($sourceAccount, 'Dong quote template');
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/orders/bootstrap?mode=form&quote_source_account_ids=' . $sourceAccount->id);
+
+        $response->assertOk();
+
+        $templateNames = collect($response->json('quote_templates'))->pluck('name')->all();
+
+        $this->assertContains('Gom quote template', $templateNames);
+        $this->assertContains('Dong quote template', $templateNames);
+        $this->assertCount(2, $templateNames);
+    }
+
     private function authenticate(): array
     {
         $account = $this->createAccount('quote-cache');

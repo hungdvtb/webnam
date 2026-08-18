@@ -27,6 +27,7 @@ import { SHIPPING_SOUND_STORAGE_KEY, defaultSoundSettings, beep } from '../../co
 import OrderInventorySlipDrawer from '../../components/admin/OrderInventorySlipDrawer';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
+import OrderPrintTemplateModal from '../../components/admin/OrderPrintTemplateModal';
 import ViettelPostTrackingImportModal from '../../components/admin/ViettelPostTrackingImportModal';
 import AdminMultiSelect from '../../components/admin/AdminMultiSelect';
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge';
@@ -36,7 +37,12 @@ import MultiKeywordSearchInput, {
     parseKeywordTokens,
     serializeKeywordTokens,
 } from '../../components/admin/MultiKeywordSearchInput';
-import { closePrintSession, exportOrderPdf, printOrders } from '../../utils/orderPrint';
+import {
+    DEFAULT_ORDER_PRINT_TEMPLATE,
+    closePrintSession,
+    exportOrderPdf,
+    printOrders,
+} from '../../utils/orderPrint';
 import {
     addOrderIdsToReturnWorkbench,
     clearOrderReturnWorkbench,
@@ -2790,6 +2796,10 @@ const OrderList = () => {
 
     const [notification, setNotification] = useState(null);
     const [printingOrders, setPrintingOrders] = useState(false);
+    const [printTemplateState, setPrintTemplateState] = useState({
+        open: false,
+        ids: [],
+    });
     const [exportingPdf, setExportingPdf] = useState(false);
     const [vtpExportOpen, setVtpExportOpen] = useState(false);
     const [vtpTrackingImportOpen, setVtpTrackingImportOpen] = useState(false);
@@ -4339,13 +4349,39 @@ const OrderList = () => {
         }
     };
 
-    const handleBulkPrint = async () => {
+    const handleBulkPrint = () => {
         if (!selectedIds.length || printingOrders || printConfirmState.open) return;
 
-        const ids = [...selectedIds];
+        setPrintTemplateState({
+            open: true,
+            ids: [...selectedIds],
+        });
+    };
+
+    const closePrintTemplateModal = useCallback(() => {
+        if (printingOrders) return;
+
+        setPrintTemplateState({
+            open: false,
+            ids: [],
+        });
+    }, [printingOrders]);
+
+    const handleBulkPrintWithTemplate = async (template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
+        if (printingOrders || printConfirmState.open) return;
+
+        const ids = printTemplateState.ids.length
+            ? [...printTemplateState.ids]
+            : [...selectedIds];
+
+        if (!ids.length) return;
 
         try {
             setPrintingOrders(true);
+            setPrintTemplateState((state) => ({
+                ...state,
+                open: false,
+            }));
 
             const response = await orderApi.getPrintData(ids);
             const printableOrders = response?.data?.data || [];
@@ -4359,6 +4395,7 @@ const OrderList = () => {
 
             const printSession = await printOrders(printableOrders, {
                 ownerWindow: window,
+                template,
             });
             setPrintConfirmState({
                 open: true,
@@ -5251,7 +5288,7 @@ const OrderList = () => {
                         ) : (
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
-                                <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
+                                <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open || printTemplateState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open && !printTemplateState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
                                 <button onClick={handleBulkExportPdf} disabled={selectedIds.length === 0 || exportingPdf} title="Tải PDF đơn hàng về máy" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !exportingPdf ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-refresh-spin' : ''}`}>{exportingPdf ? 'progress_activity' : 'picture_as_pdf'}</span></button>
                                 {/* ViettelPost Export Button */}
                                 <div className="relative flex items-center gap-1">
@@ -6949,6 +6986,13 @@ const OrderList = () => {
                 confirming={printConfirmState.submitting}
                 onCancel={closePrintConfirmation}
                 onConfirm={handleConfirmPrinted}
+            />
+            <OrderPrintTemplateModal
+                open={printTemplateState.open}
+                orderCount={printTemplateState.ids.length || selectedIds.length}
+                loading={printingOrders}
+                onClose={closePrintTemplateModal}
+                onSelect={handleBulkPrintWithTemplate}
             />
 
             <StatusDropdownPortal

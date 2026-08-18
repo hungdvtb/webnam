@@ -15,13 +15,31 @@ use App\Models\User;
 use App\Support\SimpleXlsx;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
+use ZipArchive;
 
 class ProductExcelImportExportTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->fakeMediaStorage();
+        Http::fake([
+            'https://cdn.example.com/*' => Http::response($this->pngBinary(), 200, [
+                'Content-Type' => 'image/png',
+            ]),
+            'http://localhost:8003/storage/*' => Http::response($this->pngBinary(), 200, [
+                'Content-Type' => 'image/png',
+            ]),
+        ]);
+    }
 
     public function test_product_export_excel_includes_online_images_and_variant_json(): void
     {
@@ -287,8 +305,8 @@ class ProductExcelImportExportTest extends TestCase
 
         $parentRow = $dataRows->get('CFG-001');
         $this->assertNotNull($parentRow);
-        $this->assertSame('MÃ£ SP con', $rows[0][1]);
-        $this->assertSame('Biáº¿n thá»ƒ', $rows[0][2]);
+        $this->assertSame('Mã SP con', $rows[0][1]);
+        $this->assertSame('Biến thể', $rows[0][2]);
         $this->assertSame('CFG-001-A | CFG-001-B', $parentRow[1]);
         $this->assertStringContainsString('CFG-001-A', (string) $parentRow[2]);
         $this->assertStringContainsString('CFG-001-B', (string) $parentRow[2]);
@@ -383,8 +401,8 @@ class ProductExcelImportExportTest extends TestCase
 
         $bundleRow = $dataRows->get('BUNDLE-001');
         $this->assertNotNull($bundleRow);
-        $this->assertSame('MÃ£ SP con', $rows[0][2]);
-        $this->assertSame('ThÃ nh pháº§n bundle/grouped', $rows[0][3]);
+        $this->assertSame('Mã SP con', $rows[0][2]);
+        $this->assertSame('Thành phần bundle/grouped', $rows[0][3]);
         $this->assertSame('bundle', $bundleRow[1]);
         $this->assertStringContainsString('BOWL-001', (string) $bundleRow[2]);
         $this->assertStringContainsString('OPTION-001-RED', (string) $bundleRow[2]);
@@ -496,6 +514,197 @@ class ProductExcelImportExportTest extends TestCase
         $this->assertNotNull($bundleRow);
         $this->assertSame('Bien the xanh | Bien the do', $configurableRow[1]);
         $this->assertSame('Bat huong men lam | Bien the do', $bundleRow[1]);
+    }
+
+    public function test_product_warehouse_label_export_expands_children_and_keeps_uncategorized_last(): void
+    {
+        $account = $this->createAccount();
+        $headers = ['X-Account-Id' => (string) $account->id];
+
+        $menRan = Category::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Bo men ran',
+            'code' => 'bo-men-ran',
+            'slug' => 'bo-men-ran',
+            'status' => true,
+            'order' => 0,
+        ]);
+        $menLam = Category::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Bo men lam',
+            'code' => 'bo-men-lam',
+            'slug' => 'bo-men-lam',
+            'status' => true,
+            'order' => 1,
+        ]);
+
+        $parent = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'configurable',
+            'name' => 'Tron bo do tho men ran M2',
+            'slug' => 'tron-bo-do-tho-men-ran-m2',
+            'sku' => 'MR71',
+            'price' => 5000000,
+            'category_id' => $menRan->id,
+            'status' => true,
+        ]);
+        $parent->categories()->attach($menRan->id, ['sort_order' => 0, 'item_type' => 'product']);
+
+        $variantA = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bat com men ran sen M2',
+            'slug' => 'bat-com-men-ran-sen-m2',
+            'sku' => 'MR71-BATCOMRAN',
+            'price' => 80000,
+            'stock_quantity' => 24,
+            'status' => true,
+        ]);
+        $variantB = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Bat huong men ran M2',
+            'slug' => 'bat-huong-men-ran-m2',
+            'sku' => 'MR71-BATHUONGRAN',
+            'price' => 400000,
+            'stock_quantity' => 6,
+            'status' => true,
+        ]);
+
+        $parent->linkedProducts()->attach($variantA->id, [
+            'link_type' => 'super_link',
+            'position' => 0,
+        ]);
+        $parent->linkedProducts()->attach($variantB->id, [
+            'link_type' => 'super_link',
+            'position' => 1,
+        ]);
+
+        $uncategorized = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'Au com men ran',
+            'slug' => 'au-com-men-ran',
+            'sku' => 'UNCAT-001',
+            'price' => 750000,
+            'stock_quantity' => 4,
+            'status' => true,
+        ]);
+
+        $bundle = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'bundle',
+            'name' => 'Bundle men ran khong xuat tem',
+            'slug' => 'bundle-men-ran-khong-xuat-tem',
+            'sku' => 'BUNDLE-LABEL-001',
+            'price' => 900000,
+            'category_id' => $menRan->id,
+            'status' => true,
+        ]);
+        $bundle->categories()->attach($menRan->id, ['sort_order' => 0, 'item_type' => 'product']);
+
+        $bundleChild = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'San pham con cua bundle khong xuat tem',
+            'slug' => 'san-pham-con-cua-bundle-khong-xuat-tem',
+            'sku' => 'BUNDLE-CHILD-LABEL-001',
+            'price' => 120000,
+            'category_id' => $menLam->id,
+            'stock_quantity' => 10,
+            'status' => true,
+        ]);
+        $bundleChild->categories()->attach($menLam->id, ['sort_order' => 0, 'item_type' => 'product']);
+        $bundle->bundleItems()->attach($bundleChild->id, [
+            'link_type' => 'bundle',
+            'position' => 0,
+            'quantity' => 2,
+            'is_required' => true,
+        ]);
+
+        $grouped = Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'grouped',
+            'name' => 'Nhom san pham men ran khong xuat tem',
+            'slug' => 'nhom-san-pham-men-ran-khong-xuat-tem',
+            'sku' => 'GROUPED-LABEL-001',
+            'price' => 1400000,
+            'category_id' => $menRan->id,
+            'status' => true,
+        ]);
+        $grouped->categories()->attach($menRan->id, ['sort_order' => 0, 'item_type' => 'product']);
+
+        Product::query()->create([
+            'account_id' => $account->id,
+            'type' => 'simple',
+            'name' => 'San pham men lam khong nam trong file',
+            'slug' => 'san-pham-men-lam-khong-nam-trong-file',
+            'sku' => 'LAM-OUT-001',
+            'price' => 100000,
+            'category_id' => $menLam->id,
+            'status' => true,
+        ]);
+
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]), ['*']);
+
+        $response = $this
+            ->withHeaders($headers)
+            ->get('/api/products/export?export_mode=warehouse_labels&include_parent_rows=0&category_ids=' . $menRan->id . ',uncategorized')
+            ->assertOk();
+
+        $this->assertStringContainsString('tem-nhan-kho-', (string) $response->headers->get('content-disposition'));
+
+        $tempPath = tempnam(sys_get_temp_dir(), 'product_warehouse_labels_');
+        file_put_contents($tempPath, $response->getContent());
+        $rows = SimpleXlsx::readRows($tempPath);
+
+        $header = $rows[0] ?? [];
+        $headerIndex = array_flip($header);
+        $dataRows = array_slice($rows, 1);
+        $skuColumn = $headerIndex['SKU tem'];
+        $groupColumn = $headerIndex['Nhóm danh mục'];
+        $labelNameColumn = $headerIndex['Tên in tem'];
+        $rowTypeColumn = $headerIndex['Loại dòng'];
+        $parentSkuColumn = $headerIndex['Mã SP cha'];
+
+        $skus = collect($dataRows)->pluck($skuColumn)->values()->all();
+
+        $this->assertSame('Tên in tem', $header[$labelNameColumn]);
+        $this->assertContains('MR71-BATCOMRAN', $skus);
+        $this->assertContains('MR71-BATHUONGRAN', $skus);
+        $this->assertContains('UNCAT-001', $skus);
+        $this->assertNotContains('MR71', $skus);
+        $this->assertNotContains('BUNDLE-LABEL-001', $skus);
+        $this->assertNotContains('BUNDLE-CHILD-LABEL-001', $skus);
+        $this->assertNotContains('GROUPED-LABEL-001', $skus);
+        $this->assertNotContains('LAM-OUT-001', $skus);
+
+        $variantRow = collect($dataRows)->firstWhere($skuColumn, 'MR71-BATCOMRAN');
+        $uncategorizedRow = collect($dataRows)->firstWhere($skuColumn, 'UNCAT-001');
+
+        $this->assertSame('Bo men ran', $variantRow[$groupColumn]);
+        $this->assertSame('MR71', $variantRow[$parentSkuColumn]);
+        $this->assertSame('Con', $variantRow[$rowTypeColumn]);
+        $this->assertSame('Bat com men ran sen M2', $variantRow[$labelNameColumn]);
+        $this->assertSame('Chưa gắn danh mục', $uncategorizedRow[$groupColumn]);
+        $this->assertSame('Sản phẩm', $uncategorizedRow[$rowTypeColumn]);
+        $this->assertGreaterThan(
+            array_search('MR71-BATHUONGRAN', $skus, true),
+            array_search($uncategorized->sku, $skus, true)
+        );
+
+        $zip = new ZipArchive();
+        $this->assertTrue($zip->open($tempPath));
+        $firstSheetXml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $thirdSheetXml = $zip->getFromName('xl/worksheets/sheet3.xml');
+        $zip->close();
+        @unlink($tempPath);
+
+        $this->assertStringContainsString('<pane ySplit="1"', (string) $firstSheetXml);
+        $this->assertStringContainsString('<autoFilter ref="A1:', (string) $firstSheetXml);
+        $this->assertStringContainsString('<cols>', (string) $firstSheetXml);
+        $this->assertStringContainsString('UNCAT-001', (string) $thirdSheetXml);
+        $this->assertStringNotContainsString('MR71-BATCOMRAN', (string) $thirdSheetXml);
     }
 
     public function test_product_import_excel_auto_creates_missing_categories_attributes_values_images_and_variants(): void
@@ -1143,6 +1352,29 @@ class ProductExcelImportExportTest extends TestCase
             'site_code' => 'example-test',
             'status' => true,
         ]);
+    }
+
+    private function fakeMediaStorage(): void
+    {
+        $root = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'webnam-product-excel-media-test';
+        @mkdir($root, 0777, true);
+
+        Config::set('app.url', 'http://localhost:8003');
+        Config::set('filesystems.disks.product_excel_media_test', [
+            'driver' => 'local',
+            'root' => $root,
+            'throw' => false,
+        ]);
+        Config::set('media.disk', 'product_excel_media_test');
+        Config::set('media.public_base_url', null);
+    }
+
+    private function pngBinary(): string
+    {
+        return (string) base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6n0CkAAAAASUVORK5CYII=',
+            true
+        );
     }
 
     private function createAttribute(int $accountId, string $name, string $code, string $frontendType = 'select', bool $isVariant = false): Attribute

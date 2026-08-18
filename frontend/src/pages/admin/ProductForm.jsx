@@ -1199,6 +1199,12 @@ const generateSKUFromName = (name) => {
 
 const normalizeSkuDraft = (value) => String(value || '').trim().replace(/\s+/g, '-');
 
+const normalizeWarehouseSequenceDraft = (value) => (
+    String(value ?? '')
+        .replace(/[^0-9]/g, '')
+        .replace(/^0+/, '')
+);
+
 const buildAutoVariantSkuList = (parentSku, variants) => {
     const baseSku = normalizeSkuDraft(parentSku);
     if (!baseSku) return variants;
@@ -2181,6 +2187,7 @@ const buildDuplicateVariantDrafts = (variants = [], parentSku = '') => {
         return {
             ...variant,
             sku: nextSku,
+            warehouse_sequence: '',
             sku_auto: true,
             source_id: variant?.source_id ?? variant?.id ?? null,
         };
@@ -2403,6 +2410,7 @@ const ProductForm = () => {
         status: true,
         stock_quantity: '',
         sku: '',
+        warehouse_sequence: '',
         meta_title: '',
         meta_description: '',
         meta_keywords: '',
@@ -2568,6 +2576,7 @@ const ProductForm = () => {
         image: 80,
         name: 320,
         sku: 200,
+        warehouse_sequence: 112,
         price: 150,
         expected_cost: 150,
         current_cost: 150,
@@ -3550,12 +3559,17 @@ const ProductForm = () => {
     }, [formData.sku, variants]);
 
     const parentSkuError = localSkuValidation.parent || serverValidationErrors?.sku?.[0] || '';
+    const parentWarehouseSequenceError = serverValidationErrors?.warehouse_sequence?.[0] || '';
     const getVariantSkuError = useCallback((index) => (
         localSkuValidation.variants[index]
         || serverValidationErrors?.[`variants.${index}.sku`]?.[0]
         || serverValidationErrors?.[`variants.${index}.id`]?.[0]
         || ''
     ), [localSkuValidation.variants, serverValidationErrors]);
+    const getVariantWarehouseSequenceError = useCallback((index) => (
+        serverValidationErrors?.[`variants.${index}.warehouse_sequence`]?.[0]
+        || ''
+    ), [serverValidationErrors]);
 
     const getVariantSelectionKey = useCallback((variant, index) => (
         String(variant?.id ?? `variant_${index}`)
@@ -4831,6 +4845,7 @@ const ProductForm = () => {
         const newV = {
             id: `manual_${Date.now()}`,
             sku: '',
+            warehouse_sequence: '',
             price: formData.price,
             expected_cost: formData.expected_cost,
             current_cost: '',
@@ -4923,6 +4938,7 @@ const ProductForm = () => {
                 status: isDuplicate ? false : (data.hasOwnProperty('status') ? !!data.status : true),
                 stock_quantity: resolvedStockQuantity,
                 sku: duplicateParentSku,
+                warehouse_sequence: isDuplicate ? '' : normalizeWarehouseSequenceDraft(data.warehouse_sequence),
                 meta_title: data.meta_title || '',
                 meta_description: data.meta_description || '',
                 meta_keywords: data.meta_keywords || '',
@@ -5127,6 +5143,7 @@ const ProductForm = () => {
                         inventory_unit_id: v.inventory_unit_id ? String(v.inventory_unit_id) : (data.inventory_unit_id ? String(data.inventory_unit_id) : ''),
                         status: normalizeVariantStatus(v.status, true),
                         sku: v.sku ?? '',
+                        warehouse_sequence: isDuplicate ? '' : normalizeWarehouseSequenceDraft(v.warehouse_sequence),
                         sku_auto: false,
                         is_default: !!v.pivot?.is_default,
                         attributes: attrs,
@@ -5899,7 +5916,17 @@ const ProductForm = () => {
             return;
         }
 
-        setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+        if (name === 'warehouse_sequence') {
+            setFormData(prev => ({ ...prev, [name]: normalizeWarehouseSequenceDraft(value) }));
+            clearServerValidationErrors(['warehouse_sequence']);
+            return;
+        }
+
+        setFormData(prev => ({
+            ...prev,
+            [name]: type === 'checkbox' ? checked : value,
+            ...(name === 'type' && ['configurable', 'bundle'].includes(value) ? { warehouse_sequence: '' } : {}),
+        }));
         if (name === 'sku') {
             clearServerValidationErrors(['sku', 'variants.']);
         }
@@ -5988,6 +6015,7 @@ const ProductForm = () => {
             return {
                 id: `new_${Date.now()}_${index}`,
                 sku: '',
+                warehouse_sequence: '',
                 price: formData.price,
                 expected_cost: formData.expected_cost,
                 current_cost: '',
@@ -6025,6 +6053,9 @@ const ProductForm = () => {
             value = normalizeSkuDraft(value);
             updated[index].sku_auto = false;
             clearServerValidationErrors([`variants.${index}.sku`, 'sku']);
+        } else if (field === 'warehouse_sequence') {
+            value = normalizeWarehouseSequenceDraft(value);
+            clearServerValidationErrors([`variants.${index}.warehouse_sequence`, 'warehouse_sequence']);
         }
         updated[index][field] = value;
         setVariants(updated);
@@ -7439,6 +7470,10 @@ const ProductForm = () => {
                     }
                 } else if (key === 'super_attribute_ids') {
                     appendSubmitArray('super_attribute_ids', selectedSuperAttributes.map((attr) => attr.id));
+                } else if (key === 'warehouse_sequence') {
+                    if (!['configurable', 'bundle'].includes(formData.type) && val !== '' && val !== null && val !== undefined) {
+                        appendSubmitValue(key, normalizeWarehouseSequenceDraft(val));
+                    }
                 } else if (key === 'linked_product_ids') {
                     if (selectedProductsData.length === 0) {
                         // Gửi tham số tường minh để Backend thực hiện detach/sync
@@ -7568,6 +7603,7 @@ const ProductForm = () => {
                         : normalizeSkuDraft(v.sku);
 
                     setVariantValue('sku', resolvedVariantSku);
+                    setVariantValue('warehouse_sequence', normalizeWarehouseSequenceDraft(v.warehouse_sequence));
                     setVariantValue('name', v.label); // Send label as name
                     setVariantValue('price', v.price);
                     const normalizedVariantExpectedCost = normalizeRoundedImportCostNumber(v.expected_cost);
@@ -8027,7 +8063,7 @@ const ProductForm = () => {
                             <SectionTitle icon="shopping_bag" title="Thông tin cơ bản" />
 
                             <div className="grid grid-cols-1 gap-y-8">
-                                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,0.85fr)]">
+                                <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(116px,0.7fr)_minmax(0,1.45fr)_minmax(0,0.95fr)_minmax(0,1.25fr)_minmax(0,0.85fr)]">
                                     <div className="min-w-0 self-start">
                                         <Field label={<>Mã sản phẩm (SKU) <span className="text-brick text-[14px] ml-1">*</span></>} className={`group/sku ${parentSkuError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}`}>
                                             <OverflowPreviewInput
@@ -8052,6 +8088,22 @@ const ProductForm = () => {
                                         </Field>
                                         {parentSkuError ? <p className="mt-2 text-[12px] font-semibold text-brick">{parentSkuError}</p> : null}
                                     </div>
+
+                                    {!['configurable', 'bundle'].includes(formData.type) ? (
+                                        <div className="min-w-0 self-start">
+                                            <Field label="Số thứ tự kho" className={parentWarehouseSequenceError ? 'border-brick/50 bg-brick/5' : 'border-gold/20'}>
+                                                <input
+                                                    name="warehouse_sequence"
+                                                    value={formData.warehouse_sequence ?? ''}
+                                                    onChange={handleChange}
+                                                    inputMode="numeric"
+                                                    className="w-full bg-transparent border-none focus:outline-none focus:ring-0 text-primary font-black text-[15px] placeholder:text-stone/25"
+                                                    placeholder="Tự động"
+                                                />
+                                            </Field>
+                                            {parentWarehouseSequenceError ? <p className="mt-2 text-[12px] font-semibold text-brick">{parentWarehouseSequenceError}</p> : null}
+                                        </div>
+                                    ) : null}
 
                                     <div className="min-w-0 self-start lg:col-span-2 xl:col-span-1">
                                         <Field label={<>Tên sản phẩm <span className="text-brick text-[14px] ml-1">*</span></>}>
@@ -9044,6 +9096,10 @@ const ProductForm = () => {
                                                         Mã SKU
                                                         <div onMouseDown={(e) => handleVariantColumnResize('sku', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
                                                     </th>
+                                                    <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.warehouse_sequence }}>
+                                                        STT kho
+                                                        <div onMouseDown={(e) => handleVariantColumnResize('warehouse_sequence', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
+                                                    </th>
                                                     <th className="relative px-4 py-3 border-r border-stone/20 text-center" style={{ width: variantTableWidths.expected_cost }}>
                                                         {expectedCostLabel}
                                                         <div onMouseDown={(e) => handleVariantColumnResize('expected_cost', e)} className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-gold/50 active:bg-gold transition-colors z-10" />
@@ -9070,7 +9126,7 @@ const ProductForm = () => {
                                             <tbody className="divide-y divide-stone/20">
                                                 {visibleVariantCount === 0 ? (
                                                     <tr>
-                                                        <td colSpan={11} className="px-6 py-12">
+                                                        <td colSpan={12} className="px-6 py-12">
                                                             <div className="flex flex-col items-center justify-center gap-3 text-center">
                                                                 <span className="material-symbols-outlined text-4xl text-amber-300">inventory_2</span>
                                                                 <div>
@@ -9290,6 +9346,20 @@ const ProductForm = () => {
                                                                     )}
                                                                 </div>
                                                                 {getVariantSkuError(index) ? <p className="mt-1 text-[11px] font-semibold text-brick">{getVariantSkuError(index)}</p> : null}
+                                                            </td>
+                                                            <td className="px-4 py-3 border-r border-stone/20">
+                                                                <div className="relative flex items-center justify-center">
+                                                                    <input
+                                                                        className={`w-full rounded px-2 py-2 text-center text-[13px] font-black transition-all ${getVariantWarehouseSequenceError(index) ? 'border border-brick/40 bg-brick/5 text-brick focus:border-brick' : 'border border-transparent bg-stone/5 text-primary focus:border-primary/40 focus:bg-white'}`}
+                                                                        value={v.warehouse_sequence ?? ''}
+                                                                        onChange={(e) => handleVariantChange(index, 'warehouse_sequence', e.target.value)}
+                                                                        inputMode="numeric"
+                                                                        placeholder="Tự động"
+                                                                    />
+                                                                </div>
+                                                                {getVariantWarehouseSequenceError(index) ? (
+                                                                    <p className="mt-1 text-[11px] font-semibold text-brick">{getVariantWarehouseSequenceError(index)}</p>
+                                                                ) : null}
                                                             </td>
                                                             <td className="px-4 py-3 border-r border-stone/20">
                                                                 <div className="relative flex items-center justify-center">

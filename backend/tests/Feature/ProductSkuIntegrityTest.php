@@ -50,8 +50,91 @@ class ProductSkuIntegrityTest extends TestCase
             ->findOrFail((int) $response->json('id'));
 
         $variantSkus = $product->variations->pluck('sku')->sort()->values()->all();
+        $variantWarehouseSequences = $product->variations
+            ->pluck('warehouse_sequence')
+            ->map(fn ($value) => (int) $value)
+            ->sort()
+            ->values()
+            ->all();
 
+        $this->assertNull($product->warehouse_sequence);
         $this->assertSame(['MEN-NGOC-01-V1', 'MEN-NGOC-01-V2'], $variantSkus);
+        $this->assertSame([1, 2], $variantWarehouseSequences);
+    }
+
+    public function test_bundle_product_does_not_receive_warehouse_sequence(): void
+    {
+        $account = $this->authenticate();
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products', [
+                'type' => 'bundle',
+                'name' => 'Set qua tang gom',
+                'price' => 250000,
+                'sku' => 'SET-GOM-01',
+            ]);
+
+        $response->assertCreated();
+
+        $bundle = Product::withoutGlobalScopes()->findOrFail((int) $response->json('id'));
+        $this->assertNull($bundle->warehouse_sequence);
+
+        $simpleResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products', [
+                'type' => 'simple',
+                'name' => 'Chen gom le',
+                'price' => 50000,
+                'sku' => 'CHEN-GOM-LE',
+            ])
+            ->assertCreated();
+
+        $simple = Product::withoutGlobalScopes()->findOrFail((int) $simpleResponse->json('id'));
+        $this->assertSame(1, (int) $simple->warehouse_sequence);
+    }
+
+    public function test_update_rejects_duplicate_warehouse_sequence(): void
+    {
+        $account = $this->authenticate();
+
+        $firstResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products', [
+                'type' => 'simple',
+                'name' => 'Cho men lam',
+                'price' => 120000,
+                'sku' => 'CHO-MEN-LAM',
+            ])
+            ->assertCreated();
+
+        $secondResponse = $this
+            ->withHeaders($this->headers($account))
+            ->post('/api/products', [
+                'type' => 'simple',
+                'name' => 'Binh men ran',
+                'price' => 150000,
+                'sku' => 'BINH-MEN-RAN',
+            ])
+            ->assertCreated();
+
+        $first = Product::withoutGlobalScopes()->findOrFail((int) $firstResponse->json('id'));
+        $second = Product::withoutGlobalScopes()->findOrFail((int) $secondResponse->json('id'));
+
+        $this->assertSame(1, (int) $first->warehouse_sequence);
+        $this->assertSame(2, (int) $second->warehouse_sequence);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->post("/api/products/{$second->id}", [
+                'type' => 'simple',
+                'name' => $second->name,
+                'price' => $second->price,
+                'sku' => $second->sku,
+                'warehouse_sequence' => $first->warehouse_sequence,
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['warehouse_sequence']);
     }
 
     public function test_update_rejects_existing_variant_duplicate_sku(): void
@@ -87,6 +170,42 @@ class ProductSkuIntegrityTest extends TestCase
         $response
             ->assertStatus(422)
             ->assertJsonValidationErrors(['variants.0.sku']);
+    }
+
+    public function test_update_rejects_existing_variant_duplicate_warehouse_sequence(): void
+    {
+        $account = $this->authenticate();
+        [$product, $variants] = $this->createConfigurableProduct($account, 'Cho gom', 'CHO-GOM-01');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->post("/api/products/{$product->id}", [
+                'type' => 'configurable',
+                'name' => $product->name,
+                'price' => $product->price,
+                'sku' => $product->sku,
+                'warehouse_sequence' => $product->warehouse_sequence,
+                'variants' => [
+                    [
+                        'id' => $variants[0]->id,
+                        'name' => $variants[0]->name,
+                        'sku' => $variants[0]->sku,
+                        'warehouse_sequence' => $variants[1]->warehouse_sequence,
+                        'price' => $variants[0]->price,
+                        'stock_quantity' => $variants[0]->stock_quantity,
+                    ],
+                    [
+                        'id' => $variants[1]->id,
+                        'name' => $variants[1]->name,
+                        'sku' => $variants[1]->sku,
+                        'warehouse_sequence' => $variants[1]->warehouse_sequence,
+                        'price' => $variants[1]->price,
+                        'stock_quantity' => $variants[1]->stock_quantity,
+                    ],
+                ],
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['variants.0.warehouse_sequence']);
     }
 
     public function test_duplicate_clones_variants_with_new_ids_and_parent_based_skus(): void

@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { orderApi, orderStatusApi } from '../../services/api';
 import PrintCompletionConfirmModal from '../../components/admin/PrintCompletionConfirmModal';
+import OrderPrintTemplateModal from '../../components/admin/OrderPrintTemplateModal';
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
-import { closePrintSession, printOrders } from '../../utils/orderPrint';
+import { DEFAULT_ORDER_PRINT_TEMPLATE, closePrintSession, printOrders } from '../../utils/orderPrint';
 import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
     getOrderItemDisplayName,
@@ -35,6 +36,7 @@ const OrderDetail = () => {
     const [loading, setLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
     const [printing, setPrinting] = useState(false);
+    const [printTemplateOpen, setPrintTemplateOpen] = useState(false);
     const [printConfirmOpen, setPrintConfirmOpen] = useState(false);
     const [confirmingPrinted, setConfirmingPrinted] = useState(false);
     const [printSession, setPrintSession] = useState(null);
@@ -85,7 +87,14 @@ const OrderDetail = () => {
     const handlePrintOrder = async () => {
         if (printing || printConfirmOpen) return;
 
+        setPrintTemplateOpen(true);
+    };
+
+    const handlePrintOrderWithTemplate = async (template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
+        if (printing || printConfirmOpen) return;
+
         setPrinting(true);
+        setPrintTemplateOpen(false);
         setPrintError('');
         try {
             const response = await orderApi.getPrintData([Number(id)]);
@@ -97,6 +106,7 @@ const OrderDetail = () => {
 
             const session = await printOrders(printableOrders, {
                 ownerWindow: window,
+                template,
             });
 
             setPrintSession(session);
@@ -170,8 +180,8 @@ const OrderDetail = () => {
                     )}
                     <button
                         onClick={handlePrintOrder}
-                        disabled={printing || printConfirmOpen}
-                        className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing || printConfirmOpen ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
+                        disabled={printing || printConfirmOpen || printTemplateOpen}
+                        className={`px-6 py-2 bg-primary/5 text-primary border border-primary/20 font-ui text-[10px] font-bold uppercase tracking-widest transition-all flex items-center gap-2 shadow-sm ${printing || printConfirmOpen || printTemplateOpen ? 'opacity-60 cursor-not-allowed' : 'hover:bg-primary/10'}`}
                     >
                         <span className="material-symbols-outlined text-sm">print</span>
                         {printing ? 'Đang chuẩn bị...' : 'In Hóa Đơn'}
@@ -426,6 +436,16 @@ const OrderDetail = () => {
                     )}
                 </div>
             </div>
+
+            <OrderPrintTemplateModal
+                open={printTemplateOpen}
+                orderCount={1}
+                loading={printing}
+                onClose={() => {
+                    if (!printing) setPrintTemplateOpen(false);
+                }}
+                onSelect={handlePrintOrderWithTemplate}
+            />
 
             <PrintCompletionConfirmModal
                 open={printConfirmOpen}

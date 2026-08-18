@@ -13,9 +13,12 @@ use App\Http\Controllers\Api\OrderAiController;
 use App\Http\Controllers\Api\OrderAiTrainingController;
 use App\Http\Controllers\Api\PayrollController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\ProductCategoryCloneController;
 use App\Http\Controllers\Api\ProductGroupController;
 use App\Http\Controllers\Api\ProductImageController;
+use App\Http\Controllers\Api\ProductReplacementController;
 use App\Http\Controllers\Api\SiteAnalyticsController;
+use App\Http\Controllers\Api\WarehouseShelfController;
 use App\Http\Controllers\Api\AIController;
 use App\Http\Controllers\Api\MediaController;
 use App\Http\Controllers\Api\MediaAssetController;
@@ -88,6 +91,13 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::delete('/products/bulk-force-delete', [ProductController::class , 'bulkForceDelete']);
     Route::post('/products/refresh-order-items', [ProductController::class , 'refreshOrderItems']);
     Route::get('/products/sort-items', [ProductController::class , 'sortItems']);
+    Route::post('/products/category-clone/preview', [ProductCategoryCloneController::class, 'preview']);
+    Route::post('/products/category-clone/apply', [ProductCategoryCloneController::class, 'apply']);
+    Route::get('/product-replacements/lookup', [ProductReplacementController::class, 'lookup']);
+    Route::get('/product-replacements', [ProductReplacementController::class, 'index']);
+    Route::post('/product-replacements', [ProductReplacementController::class, 'store']);
+    Route::put('/product-replacements/{id}', [ProductReplacementController::class, 'update'])->whereNumber('id');
+    Route::delete('/product-replacements/{id}', [ProductReplacementController::class, 'destroy'])->whereNumber('id');
     Route::get('/products/seo-bulk/runs', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'index']);
     Route::post('/products/seo-bulk/runs', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'store']);
     Route::get('/products/seo-bulk/runs/{runId}', [\App\Http\Controllers\Api\ProductSeoBulkController::class , 'show'])->whereNumber('runId');
@@ -190,6 +200,14 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::delete('/warehouses/{id}', [App\Http\Controllers\Api\WarehouseController::class , 'destroy']);
     Route::get('/warehouses/{id}/inventory', [App\Http\Controllers\Api\WarehouseController::class , 'getInventory']);
     Route::post('/warehouses/{id}/inventory', [App\Http\Controllers\Api\WarehouseController::class , 'updateInventory']);
+    Route::get('/warehouse-shelves/search', [WarehouseShelfController::class, 'search']);
+    Route::get('/warehouse-shelves', [WarehouseShelfController::class, 'index']);
+    Route::post('/warehouse-shelves', [WarehouseShelfController::class, 'store']);
+    Route::get('/warehouse-shelves/{id}', [WarehouseShelfController::class, 'show'])->whereNumber('id');
+    Route::put('/warehouse-shelves/{id}', [WarehouseShelfController::class, 'update'])->whereNumber('id');
+    Route::delete('/warehouse-shelves/{id}', [WarehouseShelfController::class, 'destroy'])->whereNumber('id');
+    Route::post('/warehouse-shelves/{id}/assign', [WarehouseShelfController::class, 'assign'])->whereNumber('id');
+    Route::delete('/warehouse-shelf-locations/{locationId}', [WarehouseShelfController::class, 'destroyLocation'])->whereNumber('locationId');
 
     // Order management
     Route::get('/orders/bootstrap', [\App\Http\Controllers\Api\OrderController::class , 'bootstrap']);

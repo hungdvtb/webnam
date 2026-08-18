@@ -30,6 +30,10 @@ class SimpleXlsx
             fn (array $sheet, int $index) => [
                 'name' => self::sanitizeSheetName((string) ($sheet['name'] ?? ('Sheet ' . ($index + 1)))),
                 'rows' => array_values($sheet['rows'] ?? []),
+                'freeze_top_row' => (bool) ($sheet['freeze_top_row'] ?? false),
+                'auto_filter' => (bool) ($sheet['auto_filter'] ?? false),
+                'auto_width' => (bool) ($sheet['auto_width'] ?? false),
+                'column_widths' => is_array($sheet['column_widths'] ?? null) ? $sheet['column_widths'] : [],
             ],
             $sheets,
             array_keys($sheets)
@@ -57,7 +61,7 @@ class SimpleXlsx
         foreach ($normalizedSheets as $index => $sheet) {
             $zip->addFromString(
                 sprintf('xl/worksheets/sheet%d.xml', $index + 1),
-                self::buildWorksheetXml($sheet['rows'])
+                self::buildWorksheetXml($sheet)
             );
         }
 
@@ -235,8 +239,9 @@ class SimpleXlsx
             . '</styleSheet>';
     }
 
-    private static function buildWorksheetXml(array $rows): string
+    private static function buildWorksheetXml(array $sheet): string
     {
+        $rows = array_values($sheet['rows'] ?? []);
         $rowXml = [];
         $maxColumn = 1;
 
@@ -256,14 +261,91 @@ class SimpleXlsx
         }
 
         $dimension = sprintf('A1:%s%d', self::columnNameFromIndex($maxColumn), max(count($rows), 1));
+        $sheetViewsXml = self::buildSheetViewsXml((bool) ($sheet['freeze_top_row'] ?? false));
+        $columnsXml = self::buildColumnsXml($rows, $maxColumn, (array) ($sheet['column_widths'] ?? []), (bool) ($sheet['auto_width'] ?? false));
+        $autoFilterXml = !empty($sheet['auto_filter']) && !empty($rows)
+            ? '<autoFilter ref="' . $dimension . '"/>'
+            : '';
 
         return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             . '<worksheet xmlns="' . self::SPREADSHEET_NS . '">'
             . '<dimension ref="' . $dimension . '"/>'
-            . '<sheetViews><sheetView workbookViewId="0"/></sheetViews>'
+            . $sheetViewsXml
             . '<sheetFormatPr defaultRowHeight="15"/>'
+            . $columnsXml
             . '<sheetData>' . implode('', $rowXml) . '</sheetData>'
+            . $autoFilterXml
             . '</worksheet>';
+    }
+
+    private static function buildSheetViewsXml(bool $freezeTopRow): string
+    {
+        if (!$freezeTopRow) {
+            return '<sheetViews><sheetView workbookViewId="0"/></sheetViews>';
+        }
+
+        return '<sheetViews><sheetView workbookViewId="0">'
+            . '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+            . '<selection pane="bottomLeft"/>'
+            . '</sheetView></sheetViews>';
+    }
+
+    private static function buildColumnsXml(array $rows, int $maxColumn, array $explicitWidths, bool $autoWidth): string
+    {
+        if ($maxColumn <= 0) {
+            return '';
+        }
+
+        $widths = [];
+        for ($index = 1; $index <= $maxColumn; $index++) {
+            $explicitWidth = $explicitWidths[$index - 1] ?? $explicitWidths[(string) $index] ?? null;
+            if (is_numeric($explicitWidth)) {
+                $widths[$index] = self::normalizeColumnWidth((float) $explicitWidth);
+            }
+        }
+
+        if ($autoWidth) {
+            foreach ($rows as $row) {
+                $values = array_values(is_array($row) ? $row : [$row]);
+                foreach ($values as $columnIndex => $value) {
+                    if ($value === null || $value === '') {
+                        continue;
+                    }
+
+                    $columnNumber = $columnIndex + 1;
+                    $text = (string) $value;
+                    $lineLengths = array_map(
+                        static fn (string $line): int => mb_strlen($line),
+                        preg_split('/\R/u', $text) ?: [$text]
+                    );
+                    $length = max($lineLengths ?: [0]);
+                    $calculatedWidth = self::normalizeColumnWidth($length + 2);
+                    $widths[$columnNumber] = max($widths[$columnNumber] ?? 0, $calculatedWidth);
+                }
+            }
+        }
+
+        if (empty($widths)) {
+            return '';
+        }
+
+        ksort($widths);
+        $columns = [];
+        foreach ($widths as $columnNumber => $width) {
+            $columns[] = sprintf(
+                '<col min="%d" max="%d" width="%s" customWidth="1"/>',
+                (int) $columnNumber,
+                (int) $columnNumber,
+                rtrim(rtrim(number_format((float) $width, 2, '.', ''), '0'), '.')
+            );
+        }
+
+        return '<cols>' . implode('', $columns) . '</cols>';
+    }
+
+    private static function normalizeColumnWidth(float $width): float
+    {
+        return min(max($width, 8), 60);
     }
 
     private static function buildCellXml(int $rowIndex, int $columnIndex, mixed $value, int $styleIndex = 0): ?string

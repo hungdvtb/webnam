@@ -58,6 +58,10 @@ class ProductParentRetailPriceSyncService
             return false;
         }
 
+        if ($product->type === 'bundle' && $this->isSumPricedBundle($product)) {
+            return false;
+        }
+
         $price = match ($product->type) {
             'configurable' => $this->resolveLowestActiveVariantPrice((int) $product->id),
             'bundle' => $this->resolveLowestValidBundleOptionPrice((int) $product->id),
@@ -229,6 +233,19 @@ class ProductParentRetailPriceSyncService
                 'price' => round($price, 2),
                 'updated_at' => now(),
             ]);
+    }
+
+    private function isSumPricedBundle(Product $product): bool
+    {
+        $priceType = $product->getAttribute('price_type');
+
+        if ($priceType === null && $product->exists) {
+            $priceType = Product::query()
+                ->whereKey((int) $product->id)
+                ->value('price_type');
+        }
+
+        return (string) $priceType === 'sum';
     }
 
     private function validVariantPairsForBundleRows($rows): array

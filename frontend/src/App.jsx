@@ -38,6 +38,8 @@ import OrderList from './pages/admin/OrderList';
 import OrderDetail from './pages/admin/OrderDetail';
 import OrderForm from './pages/admin/OrderForm';
 import InventoryMovement from './pages/admin/InventoryMovement';
+import ProductReplacementManager from './pages/admin/ProductReplacementManager';
+import WarehouseShelfManager from './pages/admin/WarehouseShelfManager';
 import CustomerManagement from './pages/admin/CustomerManagement';
 import SalesReportPage from './pages/admin/SalesReportPage';
 import WebAnalyticsReport from './pages/admin/WebAnalyticsReport';
@@ -181,6 +183,9 @@ function App() {
                 <Route path="orders/new" element={<OrderForm />} />
                 <Route path="orders/edit/:id" element={<OrderForm />} />
                 <Route path="inventory" element={<InventoryMovement />} />
+                <Route path="inventory/vi-tri-ke" element={<WarehouseShelfManager />} />
+                <Route path="inventory/ma-thay-the" element={<ProductReplacementManager mode="manage" />} />
+                <Route path="inventory/tra-ma-kho" element={<ProductReplacementManager mode="lookup" />} />
                 <Route path="inventory/:section" element={<InventoryMovement />} />
                 <Route path="customers" element={<CustomerManagement />} />
                 <Route path="leads" element={<LeadList />} />

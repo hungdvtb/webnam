@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class Product extends Model
@@ -18,7 +19,7 @@ class Product extends Model
         'type', 'name', 'slug', 'description', 'specifications', 'price', 'price_type', 'cost_price', 'expected_cost', 'special_price', 'special_price_from', 'special_price_to', 
         'imported_quantity_total', 'imported_value_total', 'category_id', 'stock_quantity', 'damaged_quantity', 'status', 'is_featured', 'is_new', 'sku', 'account_id',
         'meta_title', 'meta_description', 'meta_keywords', 'weight', 'inventory_unit_id', 'inventory_import_starred', 'supplier_id', 'video_url', 'video_urls', 'additional_info', 'bundle_title', 'site_domain_id', 'store_id', 'profit_center_id',
-        'sort_order',
+        'sort_order', 'warehouse_sequence',
         'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
         'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_product_input_name',
         'google_merchant_last_payload_hash', 'google_merchant_last_action',
@@ -54,6 +55,7 @@ class Product extends Model
         'video_urls' => 'array',
         'store_id' => 'integer',
         'sort_order' => 'integer',
+        'warehouse_sequence' => 'integer',
         'google_merchant_last_synced_at' => 'datetime',
         'google_merchant_last_attempted_at' => 'datetime',
     ];
@@ -69,6 +71,115 @@ class Product extends Model
         }
 
         return self::$schemaColumnCache[$cacheKey];
+    }
+
+    protected static function booted(): void
+    {
+        static::creating(function (Product $product): void {
+            if (!self::tableHasColumnCached($product->getTable(), 'warehouse_sequence')) {
+                return;
+            }
+
+            if (!self::usesWarehouseSequence($product->type)) {
+                $product->warehouse_sequence = null;
+                return;
+            }
+
+            $accountId = $product->account_id !== null ? (int) $product->account_id : null;
+            $requestedSequence = $product->warehouse_sequence;
+
+            if (
+                $requestedSequence === null
+                || $requestedSequence === ''
+                || self::warehouseSequenceExists($accountId, (int) $requestedSequence)
+            ) {
+                $product->warehouse_sequence = self::nextWarehouseSequence($accountId);
+            }
+        });
+    }
+
+    public static function usesWarehouseSequence(?string $type): bool
+    {
+        return !in_array((string) $type, ['configurable', 'bundle'], true);
+    }
+
+    public function hasVariantChildren(): bool
+    {
+        if (!$this->exists || !$this->getKey()) {
+            return false;
+        }
+
+        if (array_key_exists('variations_exists', $this->getAttributes())) {
+            return (bool) $this->getAttribute('variations_exists');
+        }
+
+        if (array_key_exists('variations_count', $this->getAttributes())) {
+            return (int) $this->getAttribute('variations_count') > 0;
+        }
+
+        return DB::table('product_links')
+            ->where('product_id', $this->getKey())
+            ->where('link_type', 'super_link')
+            ->exists();
+    }
+
+    public function usesWarehouseSequenceForDisplay(): bool
+    {
+        return self::usesWarehouseSequence($this->type) && !$this->hasVariantChildren();
+    }
+
+    public static function warehouseSequenceExists(?int $accountId, int $sequence, ?int $ignoreProductId = null): bool
+    {
+        if ($sequence <= 0 || !self::tableHasColumnCached('products', 'warehouse_sequence')) {
+            return false;
+        }
+
+        $query = DB::table('products')
+            ->where('warehouse_sequence', $sequence);
+
+        $accountId === null
+            ? $query->whereNull('account_id')
+            : $query->where('account_id', $accountId);
+
+        if ($ignoreProductId !== null) {
+            $query->where('id', '<>', $ignoreProductId);
+        }
+
+        return $query->exists();
+    }
+
+    public static function nextWarehouseSequence(?int $accountId = null, array $reserved = [], ?int $ignoreProductId = null): int
+    {
+        if (!self::tableHasColumnCached('products', 'warehouse_sequence')) {
+            return 1;
+        }
+
+        $reservedValues = collect($reserved)
+            ->map(fn ($value) => is_numeric($value) ? (int) $value : null)
+            ->filter(fn ($value) => $value !== null && $value > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $query = DB::table('products');
+        $accountId === null
+            ? $query->whereNull('account_id')
+            : $query->where('account_id', $accountId);
+
+        if ($ignoreProductId !== null) {
+            $query->where('id', '<>', $ignoreProductId);
+        }
+
+        $candidate = max(1, ((int) $query->max('warehouse_sequence')) + 1);
+
+        while (
+            in_array($candidate, $reservedValues, true)
+            || self::warehouseSequenceExists($accountId, $candidate, $ignoreProductId)
+        ) {
+            $candidate++;
+        }
+
+        return $candidate;
     }
 
     public function reviews()

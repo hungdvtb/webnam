@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import api, { accountApi, orderAiTrainingApi, orderApi, productApi, leadApi, cmsApi } from '../../services/api';
+import api, { accountApi, orderAiTrainingApi, orderApi, productApi, productReplacementApi, leadApi, cmsApi } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useUI } from '../../context/UIContext';
 import { motion, Reorder, AnimatePresence } from 'framer-motion';
@@ -1844,6 +1844,17 @@ const parseMoneyNumber = (value, fallback = null) => {
     const numericValue = Number(value);
     return Number.isFinite(numericValue) ? numericValue : fallback;
 };
+const resolveApiErrorMessage = (error, fallback) => {
+    const errors = error?.response?.data?.errors;
+    if (errors && typeof errors === 'object') {
+        const firstError = Object.values(errors).flat().find(Boolean);
+        if (firstError) {
+            return String(firstError);
+        }
+    }
+
+    return error?.response?.data?.message || fallback;
+};
 const normalizeOrderPriceMultiplierDraft = (value) => {
     const rawValue = String(value ?? '');
     let normalizedValue = '';
@@ -2362,6 +2373,31 @@ const resolveProductCostPrice = (product, fallback = 0) => resolveRoundedImportC
     product?.product?.expected_cost,
     fallback
 ), fallback);
+const resolveActualReplacementFinancialPreview = (entry, currentLine = null) => {
+    const quantity = Math.max(MIN_ORDER_ITEM_QUANTITY, parseQuantityNumber(currentLine?.quantity, 1) || 1);
+    const lockedPrice = resolveMoneyValue(
+        entry?.locked_price,
+        entry?.effective_selling_price,
+        currentLine?.price,
+        entry?.price,
+        0
+    );
+    const listPrice = resolveMoneyValue(entry?.list_price, entry?.price, 0);
+    const costPrice = resolveProductCostPrice(entry, currentLine?.cost_price ?? 0);
+    const serverProfitTotal = parseMoneyNumber(entry?.replacement_profit_total);
+    const profitTotal = serverProfitTotal !== null
+        ? serverProfitTotal
+        : ((parseMoneyNumber(lockedPrice, 0) || 0) * quantity) - calculateRoundedImportCostLineTotal(costPrice, quantity);
+
+    return {
+        quantity,
+        lockedPrice: parseMoneyNumber(lockedPrice, 0) || 0,
+        listPrice: parseMoneyNumber(listPrice, 0) || 0,
+        costPrice,
+        profitTotal,
+        priceDelta: (parseMoneyNumber(listPrice, 0) || 0) - (parseMoneyNumber(lockedPrice, 0) || 0),
+    };
+};
 const hasProductCostSnapshot = (product) => [
     product?.current_cost_price,
     product?.cost_price,
@@ -2414,6 +2450,80 @@ const normalizeProductPickerEntry = (product) => {
             }))
             : product?.bundle_options,
     };
+};
+const withActualReplacementLineContext = (entry, currentLine = null, { declared = false, groupId = null } = {}) => {
+    if (!entry || typeof entry !== 'object') return entry;
+
+    const normalizedEntry = normalizeProductPickerEntry(entry);
+    const quantity = Math.max(MIN_ORDER_ITEM_QUANTITY, parseQuantityNumber(currentLine?.quantity, 1) || 1);
+    const lockedPrice = parseMoneyNumber(currentLine?.price, 0) || 0;
+    const listPrice = resolveMoneyValue(entry?.list_price, entry?.price, normalizedEntry?.price, 0);
+    const costPrice = resolveProductCostPrice(normalizedEntry, currentLine?.cost_price ?? 0);
+    const profitTotal = (lockedPrice * quantity) - calculateRoundedImportCostLineTotal(costPrice, quantity);
+
+    return {
+        ...normalizedEntry,
+        list_price: listPrice,
+        locked_price: lockedPrice,
+        effective_selling_price: lockedPrice,
+        quantity,
+        cost_price: costPrice,
+        replacement_cost_price: costPrice,
+        replacement_profit_total: profitTotal,
+        replacement_group_id: groupId || normalizedEntry?.replacement_group_id || entry?.replacement_group_id || null,
+        is_declared_replacement: declared || Boolean(normalizedEntry?.is_declared_replacement),
+    };
+};
+const getActualReplacementEntryKey = (entry) => {
+    if (!entry || typeof entry !== 'object') return '';
+
+    const entryKind = String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT).trim() || SEARCH_ENTRY_PRODUCT;
+    const productId = Number(entry?.target_product_id ?? entry?.product_id ?? entry?.id ?? 0) || 0;
+    if (productId > 0) {
+        return `${entryKind}:${productId}`;
+    }
+
+    const sku = normalizeProductSearchText(entry?.display_sku || entry?.sku);
+    return sku ? `${entryKind}:sku:${sku}` : '';
+};
+const mergeActualProductReplacementEntries = (...entryGroups) => {
+    const seenKeys = new Set();
+    const mergedEntries = [];
+
+    entryGroups.flat().forEach((entry) => {
+        if (!entry || typeof entry !== 'object') return;
+
+        const normalizedEntry = normalizeProductPickerEntry(entry);
+        const entryKey = getActualReplacementEntryKey(normalizedEntry);
+        if (!entryKey || seenKeys.has(entryKey)) return;
+
+        seenKeys.add(entryKey);
+        mergedEntries.push(normalizedEntry);
+    });
+
+    return mergedEntries;
+};
+const getProductReplacementDeclarationSku = (entry) => normalizeCanvasText(entry?.display_sku || entry?.sku);
+const getProductReplacementDeclarationName = (entry) => (
+    normalizeCanvasText(entry?.display_name || entry?.name) || 'Sản phẩm'
+);
+const buildProductReplacementDeclarationEntryFromLine = (line) => {
+    const productId = Number(line?.product_id ?? line?.target_product_id ?? line?.id ?? 0) || 0;
+    const sku = normalizeCanvasText(line?.display_sku || line?.sku);
+    if (productId <= 0 && !sku) return null;
+
+    return normalizeProductPickerEntry({
+        ...line,
+        id: productId || undefined,
+        product_id: productId || line?.product_id || undefined,
+        target_product_id: productId || line?.target_product_id || undefined,
+        entry_kind: SEARCH_ENTRY_PRODUCT,
+        display_name: line?.display_name || line?.name,
+        display_sku: sku,
+        sku,
+        price: resolveMoneyValue(line?.price, 0),
+        cost_price: resolveProductCostPrice(line),
+    });
 };
 const isBundleOptionPickerEntry = (entry) => (
     String(entry?.entry_kind || '').trim() === SEARCH_ENTRY_BUNDLE_OPTION
@@ -4539,11 +4649,27 @@ const OrderAiLineReplacePanel = ({
     currentLabel = '',
     searchPlaceholder = '',
     emptyMessage = '',
+    preserveCurrentLinePrice = false,
 }) => {
     const isAiLine = isOrderAiItem(currentLine);
     const currentSourceLabel = currentLabel || currentLine?.ai_meta?.source_phrase || currentLine?.name || '';
     const currentVariantLabel = currentLine?.options?.variant_label || '';
     const currentSku = currentLine?.sku || '';
+    const currentLineFinancial = preserveCurrentLinePrice
+        ? resolveActualReplacementFinancialPreview(currentLine, currentLine)
+        : null;
+    const formatPanelMoney = (value) => {
+        const numericValue = Number(value) || 0;
+        if (currencyFormatter && typeof currencyFormatter.format === 'function') {
+            return `${currencyFormatter.format(numericValue)}đ`;
+        }
+
+        if (typeof currencyFormatter === 'function') {
+            return currencyFormatter(numericValue);
+        }
+
+        return `${quoteCurrencyFormatter.format(numericValue)}đ`;
+    };
     const panelHeading = heading || (isAiLine ? 'Đổi sản phẩm AI' : 'Đổi sản phẩm');
     const hasSearchTerm = searchTerm.trim().length >= 2;
     const emptyStateMessage = emptyMessage || (hasSearchTerm
@@ -4619,7 +4745,7 @@ const OrderAiLineReplacePanel = ({
                             <span className="material-symbols-outlined text-[16px]">close</span>
                         </button>
                     </div>
-                    <div className="mt-2 flex h-10 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-semibold text-primary/65">
+                    <div className="mt-2 flex min-h-10 flex-wrap items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 py-2 text-[11px] font-semibold text-primary/65">
                         <span className="material-symbols-outlined shrink-0 text-[16px] text-sky-700/75">quick_reference</span>
                         <span className="truncate text-[12px] font-bold text-primary">
                             {currentSourceLabel || 'Chọn sản phẩm thay thế'}
@@ -4633,6 +4759,16 @@ const OrderAiLineReplacePanel = ({
                             <span className="max-w-[150px] truncate rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
                                 {currentVariantLabel}
                             </span>
+                        )}
+                        {currentLineFinancial && (
+                            <>
+                                <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-black text-sky-800">
+                                    Giá chốt {formatPanelMoney(currentLineFinancial.lockedPrice)}
+                                </span>
+                                <span className="shrink-0 rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-black text-primary/55">
+                                    SL {formatOrderFormQuantity(currentLineFinancial.quantity)}
+                                </span>
+                            </>
                         )}
                     </div>
                 </div>
@@ -4657,35 +4793,86 @@ const OrderAiLineReplacePanel = ({
                             Đang tìm sản phẩm...
                         </div>
                     ) : results.length > 0 ? (
-                        results.map((entry, index) => (
-                            <button
-                                key={`${entry?.target_product_id || entry?.sku || 'order-ai-replace'}-${index}`}
-                                type="button"
-                                onClick={() => onSelect(entry)}
-                                className="flex w-full items-start justify-between gap-3 border-b border-primary/5 px-4 py-3 text-left transition-all hover:bg-primary/[0.03] last:border-b-0"
-                            >
-                                <div className="min-w-0">
-                                    <div className="text-[13px] font-bold leading-snug text-primary">
-                                        {entry?.display_name || entry?.name || 'Sản phẩm'}
-                                    </div>
-                                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
-                                        {entry?.display_sku && (
-                                            <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
-                                                {entry.display_sku}
-                                            </span>
+                        results.map((entry, index) => {
+                            const financialPreview = preserveCurrentLinePrice
+                                ? resolveActualReplacementFinancialPreview(entry, currentLine)
+                                : null;
+                            const profitClass = financialPreview?.profitTotal < 0
+                                ? 'text-brick'
+                                : financialPreview?.profitTotal === 0
+                                    ? 'text-amber-600'
+                                    : 'text-emerald-700';
+                            const stockValue = parseQuantityNumber(entry?.available_to_sell, parseQuantityNumber(entry?.stock_quantity));
+                            const hasStockValue = stockValue !== null;
+
+                            return (
+                                <button
+                                    key={`${entry?.target_product_id || entry?.sku || 'order-ai-replace'}-${index}`}
+                                    type="button"
+                                    onClick={() => onSelect(entry)}
+                                    className="flex w-full items-start justify-between gap-3 border-b border-primary/5 px-4 py-3 text-left transition-all hover:bg-primary/[0.03] last:border-b-0"
+                                >
+                                    <div className="min-w-0 flex-1">
+                                        <div className="text-[13px] font-bold leading-snug text-primary">
+                                            {entry?.display_name || entry?.name || 'Sản phẩm'}
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
+                                            {entry?.display_sku && (
+                                                <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                                    {entry.display_sku}
+                                                </span>
+                                            )}
+                                            {entry?.option_label && (
+                                                <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
+                                                    {entry.option_label}
+                                                </span>
+                                            )}
+                                            {entry?.is_declared_replacement && (
+                                                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-black text-emerald-700">
+                                                    Mã thay thế
+                                                </span>
+                                            )}
+                                            {hasStockValue && (
+                                                <span className={`rounded-full border border-primary/10 bg-white px-2 py-0.5 font-black ${getAvailableToSellTextClass(stockValue)}`}>
+                                                    Còn {formatOrderFormQuantity(stockValue)}
+                                                </span>
+                                            )}
+                                        </div>
+                                        {financialPreview && (
+                                            <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] font-bold text-primary/45">
+                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                    Niêm yết <b className="text-primary/70">{formatPanelMoney(financialPreview.listPrice)}</b>
+                                                </span>
+                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-1 text-sky-800">
+                                                    Giữ đơn <b>{formatPanelMoney(financialPreview.lockedPrice)}</b>
+                                                </span>
+                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                    Giá vốn <b className="text-primary/70">{formatPanelMoney(financialPreview.costPrice)}</b>
+                                                </span>
+                                                <span className="rounded-sm border border-primary/10 bg-white px-2 py-1">
+                                                    Lãi <b className={profitClass}>{formatPanelMoney(financialPreview.profitTotal)}</b>
+                                                </span>
+                                            </div>
                                         )}
-                                        {entry?.option_label && (
-                                            <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
-                                                {entry.option_label}
-                                            </span>
+                                    </div>
+                                    <div className="shrink-0 text-right text-[12px] font-black text-primary/65">
+                                        {financialPreview ? (
+                                            <>
+                                                <div className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-700/60">Giữ</div>
+                                                <div className="text-[13px] text-sky-800">{formatPanelMoney(financialPreview.lockedPrice)}</div>
+                                                {financialPreview.listPrice !== financialPreview.lockedPrice && (
+                                                    <div className="mt-0.5 text-[10px] font-semibold text-primary/35">
+                                                        SP {formatPanelMoney(financialPreview.listPrice)}
+                                                    </div>
+                                                )}
+                                            </>
+                                        ) : (
+                                            formatPanelMoney(entry?.price ?? 0)
                                         )}
                                     </div>
-                                </div>
-                                <div className="shrink-0 text-right text-[12px] font-black text-primary/65">
-                                    {currencyFormatter?.format(Number(entry?.price ?? 0) || 0)}đ
-                                </div>
-                            </button>
-                        ))
+                                </button>
+                            );
+                        })
                     ) : (
                         <div className="px-4 py-4">
                             <div className="flex min-h-10 items-center rounded-sm border border-dashed border-primary/10 bg-primary/[0.02] px-3 text-[12px] font-semibold text-primary/40">
@@ -4773,6 +4960,22 @@ const OrderForm = () => {
     const [actualProductPickerSearchTerm, setActualProductPickerSearchTerm] = useState('');
     const [actualProductPickerResults, setActualProductPickerResults] = useState([]);
     const [actualProductPickerLoading, setActualProductPickerLoading] = useState(false);
+    const [showReplacementDeclarationModal, setShowReplacementDeclarationModal] = useState(false);
+    const [replacementDeclarationSource, setReplacementDeclarationSource] = useState(null);
+    const [replacementDeclarationGroupId, setReplacementDeclarationGroupId] = useState(null);
+    const [replacementDeclarationSourceSearchTerm, setReplacementDeclarationSourceSearchTerm] = useState('');
+    const [replacementDeclarationSourceResults, setReplacementDeclarationSourceResults] = useState([]);
+    const [replacementDeclarationSourceLoading, setReplacementDeclarationSourceLoading] = useState(false);
+    const [replacementDeclarationSearchTerm, setReplacementDeclarationSearchTerm] = useState('');
+    const [replacementDeclarationResults, setReplacementDeclarationResults] = useState([]);
+    const [replacementDeclarationSearchLoading, setReplacementDeclarationSearchLoading] = useState(false);
+    const [replacementDeclarationSelected, setReplacementDeclarationSelected] = useState([]);
+    const [replacementDeclarationLookupLoading, setReplacementDeclarationLookupLoading] = useState(false);
+    const [replacementDeclarationGroups, setReplacementDeclarationGroups] = useState([]);
+    const [replacementDeclarationGroupsSearchTerm, setReplacementDeclarationGroupsSearchTerm] = useState('');
+    const [replacementDeclarationGroupsLoading, setReplacementDeclarationGroupsLoading] = useState(false);
+    const [replacementDeclarationGroupsReloadKey, setReplacementDeclarationGroupsReloadKey] = useState(0);
+    const [replacementDeclarationSaving, setReplacementDeclarationSaving] = useState(false);
     const [selectedOrderLineId, setSelectedOrderLineId] = useState('');
     const [showActualProductSection, setShowActualProductSection] = useState(false);
     const [productQuickFilterAttributes, setProductQuickFilterAttributes] = useState([]);
@@ -4855,6 +5058,10 @@ const OrderForm = () => {
     const orderAiLastInputPreviewUrlRef = useRef('');
     const orderAiReplaceAnchorRef = useRef(null);
     const actualProductPickerAnchorRef = useRef(null);
+    const replacementDeclarationSourceAbortRef = useRef(null);
+    const replacementDeclarationSearchAbortRef = useRef(null);
+    const replacementDeclarationLookupAbortRef = useRef(null);
+    const replacementDeclarationGroupsAbortRef = useRef(null);
     const actualProductSectionRef = useRef(null);
     const orderItemNameRefs = useRef(new Map());
     const profitCenterManualOverrideRef = useRef(false);
@@ -5792,6 +5999,18 @@ const OrderForm = () => {
         () => selectedOrderLine || formData.items[0] || null,
         [formData.items, selectedOrderLine]
     );
+    const replacementDeclarationSourceKey = useMemo(
+        () => getActualReplacementEntryKey(replacementDeclarationSource),
+        [replacementDeclarationSource]
+    );
+    const replacementDeclarationSelectedKeys = useMemo(
+        () => new Set(replacementDeclarationSelected.map(getActualReplacementEntryKey).filter(Boolean)),
+        [replacementDeclarationSelected]
+    );
+    const replacementDeclarationSelectedSkus = useMemo(
+        () => replacementDeclarationSelected.map(getProductReplacementDeclarationSku).filter(Boolean),
+        [replacementDeclarationSelected]
+    );
     const isActualProductPickerOpenForSectionLine = Boolean(actualProductSectionLine)
         && normalizeCanvasText(actualProductPickerLineId) === normalizeCanvasText(actualProductSectionLine?.line_id);
     useEffect(() => {
@@ -6357,7 +6576,7 @@ const OrderForm = () => {
                     active.getAttribute('contenteditable') === 'true'
                 );
 
-                if (isWriting && !showColumnConfig && !showSearchDropdown && !showQuoteTemplatePicker && !orderAiReplaceLineId && !actualProductPickerLineId) return;
+                if (isWriting && !showColumnConfig && !showSearchDropdown && !showQuoteTemplatePicker && !orderAiReplaceLineId && !actualProductPickerLineId && !showReplacementDeclarationModal) return;
 
                 if (showColumnConfig) {
                     setShowColumnConfig(false);
@@ -6386,6 +6605,24 @@ const OrderForm = () => {
                     actualProductPickerAnchorRef.current = null;
                     return;
                 }
+                if (showReplacementDeclarationModal) {
+                    replacementDeclarationSourceAbortRef.current?.abort();
+                    replacementDeclarationSearchAbortRef.current?.abort();
+                    replacementDeclarationLookupAbortRef.current?.abort();
+                    setShowReplacementDeclarationModal(false);
+                    setReplacementDeclarationSource(null);
+                    setReplacementDeclarationGroupId(null);
+                    setReplacementDeclarationSelected([]);
+                    setReplacementDeclarationSourceSearchTerm('');
+                    setReplacementDeclarationSourceResults([]);
+                    setReplacementDeclarationSourceLoading(false);
+                    setReplacementDeclarationSearchTerm('');
+                    setReplacementDeclarationResults([]);
+                    setReplacementDeclarationSearchLoading(false);
+                    setReplacementDeclarationLookupLoading(false);
+                    setReplacementDeclarationSaving(false);
+                    return;
+                }
                 if (showOrderAiInputReviewModal) {
                     setShowOrderAiInputReviewModal(false);
                     return;
@@ -6395,7 +6632,7 @@ const OrderForm = () => {
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [actualProductPickerLineId, closeProductSearchDropdown, orderAiReplaceLineId, showColumnConfig, showOrderAiInputReviewModal, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
+    }, [actualProductPickerLineId, closeProductSearchDropdown, orderAiReplaceLineId, showColumnConfig, showOrderAiInputReviewModal, showReplacementDeclarationModal, showSearchDropdown, showQuoteTemplatePicker, handleCancel]);
 
     useEffect(() => () => {
         if (copyFeedbackTimeoutRef.current) {
@@ -6479,6 +6716,31 @@ const OrderForm = () => {
         setActualProductPickerResults([]);
         setActualProductPickerLoading(false);
     }, []);
+    const closeReplacementDeclarationModal = useCallback(() => {
+        replacementDeclarationSourceAbortRef.current?.abort();
+        replacementDeclarationSearchAbortRef.current?.abort();
+        replacementDeclarationLookupAbortRef.current?.abort();
+        replacementDeclarationGroupsAbortRef.current?.abort();
+        replacementDeclarationSourceAbortRef.current = null;
+        replacementDeclarationSearchAbortRef.current = null;
+        replacementDeclarationLookupAbortRef.current = null;
+        replacementDeclarationGroupsAbortRef.current = null;
+        setShowReplacementDeclarationModal(false);
+        setReplacementDeclarationSource(null);
+        setReplacementDeclarationGroupId(null);
+        setReplacementDeclarationSelected([]);
+        setReplacementDeclarationSourceSearchTerm('');
+        setReplacementDeclarationSourceResults([]);
+        setReplacementDeclarationSourceLoading(false);
+        setReplacementDeclarationSearchTerm('');
+        setReplacementDeclarationResults([]);
+        setReplacementDeclarationSearchLoading(false);
+        setReplacementDeclarationLookupLoading(false);
+        setReplacementDeclarationGroups([]);
+        setReplacementDeclarationGroupsSearchTerm('');
+        setReplacementDeclarationGroupsLoading(false);
+        setReplacementDeclarationSaving(false);
+    }, []);
     const handleSelectOrderLine = useCallback((lineId) => {
         setSelectedOrderLineId((prev) => (
             normalizeCanvasText(prev) === normalizeCanvasText(lineId)
@@ -6509,6 +6771,48 @@ const OrderForm = () => {
 
         setShowActualProductSection(true);
     }, [closeActualProductPicker, formData.items, handleSelectOrderLine, selectedOrderLine, showActualProductSection, showTransientNotification]);
+    const handleOpenReplacementDeclarationModal = useCallback((line = null) => {
+        const checkedLine = formData.items.find((item) => selectedLineItemIds.has(normalizeCanvasText(item?.line_id)));
+        const fallbackLine = line || selectedOrderLine || checkedLine || formData.items[0] || null;
+        if (!fallbackLine) {
+            showTransientNotification('error', 'Đơn chưa có sản phẩm để khai báo thay thế.');
+            return;
+        }
+
+        const sourceEntry = buildProductReplacementDeclarationEntryFromLine(fallbackLine);
+        if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
+            showTransientNotification('error', 'Sản phẩm gốc cần có mã SKU để khai báo thay thế.');
+            return;
+        }
+
+        closeActualProductPicker();
+        closeOrderAiReplacePicker();
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+        setReplacementDeclarationSource(sourceEntry);
+        setReplacementDeclarationGroupId(null);
+        setReplacementDeclarationSelected([]);
+        setReplacementDeclarationSourceSearchTerm('');
+        setReplacementDeclarationSourceResults([]);
+        setReplacementDeclarationSearchTerm('');
+        setReplacementDeclarationResults([]);
+        setReplacementDeclarationSearchLoading(false);
+        setReplacementDeclarationGroupsSearchTerm('');
+        setShowReplacementDeclarationModal(true);
+    }, [
+        closeActualProductPicker,
+        closeOrderAiReplacePicker,
+        formData.items,
+        selectedLineItemIds,
+        selectedOrderLine,
+        showTransientNotification,
+    ]);
+    const handleOpenProductReplacementManager = useCallback(() => {
+        closeReplacementDeclarationModal();
+        navigate('/admin/inventory/ma-thay-the');
+    }, [closeReplacementDeclarationModal, navigate]);
 
     const toggleOrderAiPanel = useCallback(() => {
         setShowOrderAiPanel((prev) => !prev);
@@ -6645,7 +6949,7 @@ const OrderForm = () => {
         handleSelectOrderLine(normalizedLineId);
         handleOpenActualProductPicker(
             normalizedLineId,
-            getOrderItemActualNameLabel(line) || line?.name || line?.sku || '',
+            '',
             triggerElement
         );
     }, [actualProductPickerLineId, closeActualProductPicker, handleOpenActualProductPicker, handleSelectOrderLine]);
@@ -7532,6 +7836,84 @@ const OrderForm = () => {
         }
     }, [orderAiPreview, refreshOrderItemInventorySnapshot, showTransientNotification]);
 
+    const buildReplacementDeclarationSearchParams = useCallback((term = '') => {
+        const params = {
+            picker: 1,
+            fast_picker: 1,
+            per_page: isCompactCompositeProductSearch(term) ? 160 : 60,
+            quick_filter_enabled: hasActiveProductQuickFilter ? 1 : 0,
+        };
+
+        if (term) {
+            params.search = term;
+            params.filter_bundle_options_by_search = 1;
+        }
+
+        if (hasActiveProductQuickFilter) {
+            appendProductQuickFilterParams(params, activeProductQuickFilterAttribute, normalizedProductQuickFilterValues);
+            appendProductQuickFilterParams(params, activeProductQuickFilterAttribute2, normalizedProductQuickFilterValues2);
+        }
+
+        appendCrossSellSourceParams(params);
+
+        return params;
+    }, [
+        activeProductQuickFilterAttribute,
+        activeProductQuickFilterAttribute2,
+        appendCrossSellSourceParams,
+        hasActiveProductQuickFilter,
+        normalizedProductQuickFilterValues,
+        normalizedProductQuickFilterValues2,
+    ]);
+    const normalizeReplacementDeclarationResults = useCallback((rows = [], { excludeSource = false, excludeSelected = false } = {}) => (
+        buildSourceAwareOrderAiPickerEntries(rows)
+            .filter((entry) => getProductReplacementDeclarationSku(entry))
+            .filter((entry) => {
+                const entryKey = getActualReplacementEntryKey(entry);
+                if (!entryKey) return false;
+                if (excludeSource && replacementDeclarationSourceKey && entryKey === replacementDeclarationSourceKey) return false;
+                if (excludeSelected && replacementDeclarationSelectedKeys.has(entryKey)) return false;
+                return true;
+            })
+    ), [
+        buildSourceAwareOrderAiPickerEntries,
+        replacementDeclarationSelectedKeys,
+        replacementDeclarationSourceKey,
+    ]);
+    const getReplacementDeclarationQuickModeRows = useCallback((term = '') => {
+        const trimmedTerm = normalizeCanvasText(term);
+        const latestEntryMap = new Map();
+        (Array.isArray(productQuickSetupLatestEntries) ? productQuickSetupLatestEntries : []).forEach((entry) => {
+            const entryKey = getProductQuickSetupEntryKey(entry);
+            if (entryKey && !latestEntryMap.has(entryKey)) {
+                latestEntryMap.set(entryKey, entry);
+            }
+        });
+
+        const rows = buildStoredQuickSetupSearchEntries(activeProductQuickSetupItems)
+            .map((entry) => latestEntryMap.get(getProductQuickSetupEntryKey(entry)) || entry)
+            .filter(isProductSearchEntrySourceEnabled);
+        if (!trimmedTerm) {
+            return rows.slice(0, 80);
+        }
+
+        return rows
+            .map((entry) => ({
+                ...entry,
+                __searchScore: scoreProductSearchResult(entry, trimmedTerm),
+            }))
+            .filter((entry) => entry.__searchScore > 0)
+            .sort((left, right) => (
+                right.__searchScore - left.__searchScore
+                || String(left?.name || left?.display_name || '').localeCompare(String(right?.name || right?.display_name || ''), 'vi')
+            ))
+            .slice(0, 80);
+    }, [
+        activeProductQuickSetupItems,
+        isProductSearchEntrySourceEnabled,
+        productQuickSetupLatestEntries,
+    ]);
+
     useEffect(() => {
         if (!orderAiFile) {
             setOrderAiFilePreviewUrl('');
@@ -7619,7 +8001,38 @@ const OrderForm = () => {
         };
     }, [appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries, orderAiReplaceLineId, orderAiReplaceSearchTerm]);
     useEffect(() => {
-        if (!actualProductPickerLineId || actualProductPickerSearchTerm.trim().length < 2) {
+        if (!actualProductPickerLineId) {
+            setActualProductPickerResults([]);
+            setActualProductPickerLoading(false);
+            return undefined;
+        }
+
+        const currentLine = activeActualProductPickerLine;
+        const searchTerm = actualProductPickerSearchTerm.trim();
+        const hasSearchTerm = searchTerm.length >= 2;
+        const canLookupDeclaredReplacements = Boolean(currentLine?.product_id || currentLine?.sku);
+        const currentLineSku = getProductReplacementDeclarationSku(currentLine);
+        const currentLineSkuKey = normalizeProductSearchText(currentLineSku);
+        const currentLineProductId = Number(currentLine?.product_id ?? currentLine?.target_product_id ?? currentLine?.id ?? 0) || 0;
+        const buildDeclaredReplacementFallbackEntries = (groups = []) => {
+            if (!currentLineSkuKey) return [];
+
+            const matchedGroup = (Array.isArray(groups) ? groups : []).find((group) => (
+                (Array.isArray(group?.items) ? group.items : []).some((item) => (
+                    normalizeProductSearchText(getProductReplacementDeclarationSku(item)) === currentLineSkuKey
+                ))
+            ));
+            if (!matchedGroup) return [];
+
+            return mergeActualProductReplacementEntries(matchedGroup.items || [])
+                .filter((entry) => normalizeProductSearchText(getProductReplacementDeclarationSku(entry)) !== currentLineSkuKey)
+                .map((entry) => withActualReplacementLineContext(entry, currentLine, {
+                    declared: true,
+                    groupId: matchedGroup.id || null,
+                }));
+        };
+
+        if (!canLookupDeclaredReplacements && !hasSearchTerm) {
             setActualProductPickerResults([]);
             setActualProductPickerLoading(false);
             return undefined;
@@ -7628,29 +8041,326 @@ const OrderForm = () => {
         let cancelled = false;
         setActualProductPickerLoading(true);
 
-        const timerId = window.setTimeout(() => {
-            productApi.getAll(appendCrossSellSourceParams({ picker: 1, per_page: 20, search: actualProductPickerSearchTerm.trim() }))
-                .then((response) => {
-                    if (cancelled) return;
-                    setActualProductPickerResults(buildSourceAwareOrderAiPickerEntries(response.data?.data || []));
-                })
-                .catch((error) => {
-                    if (cancelled) return;
-                    console.error('Error fetching actual shipped products', error);
-                    setActualProductPickerResults([]);
-                })
-                .finally(() => {
-                    if (!cancelled) {
-                        setActualProductPickerLoading(false);
+        const timerId = window.setTimeout(async () => {
+            const declaredReplacementRequest = canLookupDeclaredReplacements
+                ? (async () => {
+                    try {
+                        const response = await productReplacementApi.lookup({
+                            product_id: currentLineSku ? undefined : (currentLineProductId || undefined),
+                            sku: currentLineSku || undefined,
+                            locked_price: parseMoneyNumber(currentLine?.price, 0) || 0,
+                            quantity: parseQuantityNumber(currentLine?.quantity, 1) || 1,
+                        });
+                        const payload = response.data?.data || {};
+                        const suggestions = Array.isArray(payload.suggestions)
+                            ? payload.suggestions
+                            : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
+                        if (suggestions.length > 0) {
+                            return suggestions.map((entry) => withActualReplacementLineContext(entry, currentLine, {
+                                declared: true,
+                                groupId: payload.group?.id || entry?.replacement_group_id || null,
+                            }));
+                        }
+                    } catch (error) {
+                        console.error('Error fetching declared replacement products', error);
                     }
-                });
-        }, 200);
+
+                    if (!currentLineSku) {
+                        return [];
+                    }
+
+                    try {
+                        const response = await productReplacementApi.getAll({
+                            per_page: 10,
+                            search: currentLineSku,
+                        });
+                        return buildDeclaredReplacementFallbackEntries(response.data?.data || []);
+                    } catch (error) {
+                        console.error('Error fetching declared replacement groups fallback', error);
+                        return [];
+                    }
+                })()
+                : Promise.resolve([]);
+            const manualSearchRequest = hasSearchTerm
+                ? productApi.getAll(appendCrossSellSourceParams({ picker: 1, per_page: 20, search: searchTerm }))
+                    .then((response) => buildSourceAwareOrderAiPickerEntries(response.data?.data || []))
+                    .catch((error) => {
+                        console.error('Error fetching actual shipped products', error);
+                        return [];
+                    })
+                : Promise.resolve([]);
+
+            try {
+                const [declaredReplacementEntries, manualSearchEntries] = await Promise.all([
+                    declaredReplacementRequest,
+                    manualSearchRequest,
+                ]);
+                if (cancelled) return;
+
+                setActualProductPickerResults(mergeActualProductReplacementEntries(
+                    declaredReplacementEntries,
+                    manualSearchEntries
+                ));
+            } finally {
+                if (!cancelled) {
+                    setActualProductPickerLoading(false);
+                }
+            }
+        }, hasSearchTerm ? 200 : 80);
 
         return () => {
             cancelled = true;
             window.clearTimeout(timerId);
         };
-    }, [actualProductPickerLineId, actualProductPickerSearchTerm, appendCrossSellSourceParams, buildSourceAwareOrderAiPickerEntries]);
+    }, [
+        actualProductPickerLineId,
+        actualProductPickerSearchTerm,
+        activeActualProductPickerLine,
+        appendCrossSellSourceParams,
+        buildSourceAwareOrderAiPickerEntries,
+    ]);
+    useEffect(() => {
+        if (!showReplacementDeclarationModal || !replacementDeclarationSourceKey) {
+            setReplacementDeclarationGroupId(null);
+            setReplacementDeclarationLookupLoading(false);
+            return undefined;
+        }
+
+        replacementDeclarationLookupAbortRef.current?.abort();
+        const controller = new AbortController();
+        replacementDeclarationLookupAbortRef.current = controller;
+        setReplacementDeclarationLookupLoading(true);
+        const sourceSku = getProductReplacementDeclarationSku(replacementDeclarationSource);
+
+        productReplacementApi.lookup({
+            product_id: Number(
+                sourceSku
+                    ? 0
+                    : (
+                        replacementDeclarationSource?.target_product_id
+                        ?? replacementDeclarationSource?.product_id
+                        ?? replacementDeclarationSource?.id
+                        ?? 0
+                    )
+            ) || undefined,
+            sku: sourceSku || undefined,
+        }, controller.signal)
+            .then((response) => {
+                if (controller.signal.aborted) return;
+                const payload = response.data?.data || {};
+                const group = payload.group || null;
+                const existingEntries = Array.isArray(group?.items)
+                    ? group.items
+                    : (Array.isArray(payload.suggestions) ? payload.suggestions : []);
+                const nextSelected = mergeActualProductReplacementEntries(existingEntries)
+                    .filter((entry) => getActualReplacementEntryKey(entry) !== replacementDeclarationSourceKey)
+                    .filter((entry) => getProductReplacementDeclarationSku(entry));
+
+                setReplacementDeclarationGroupId(group?.id || null);
+                setReplacementDeclarationSelected(nextSelected);
+            })
+            .catch((error) => {
+                if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                console.error('Error loading replacement declaration group', error);
+                setReplacementDeclarationGroupId(null);
+                setReplacementDeclarationSelected([]);
+            })
+            .finally(() => {
+                if (replacementDeclarationLookupAbortRef.current === controller) {
+                    replacementDeclarationLookupAbortRef.current = null;
+                    setReplacementDeclarationLookupLoading(false);
+                }
+            });
+
+        return () => {
+            controller.abort();
+        };
+    }, [
+        replacementDeclarationSource,
+        replacementDeclarationSourceKey,
+        showReplacementDeclarationModal,
+    ]);
+    useEffect(() => {
+        const term = replacementDeclarationSourceSearchTerm.trim();
+        const shouldUseQuickModeRows = showReplacementDeclarationModal
+            && isProductQuickModeActive
+            && !hasEnabledCrossSellSources;
+        const shouldFetch = showReplacementDeclarationModal
+            && (term.length >= 2 || hasActiveProductQuickFilter || shouldUseQuickModeRows);
+        if (!shouldFetch) {
+            replacementDeclarationSourceAbortRef.current?.abort();
+            setReplacementDeclarationSourceResults([]);
+            setReplacementDeclarationSourceLoading(false);
+            return undefined;
+        }
+
+        if (shouldUseQuickModeRows) {
+            replacementDeclarationSourceAbortRef.current?.abort();
+            setReplacementDeclarationSourceResults(
+                normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows(term))
+            );
+            setReplacementDeclarationSourceLoading(false);
+            return undefined;
+        }
+
+        replacementDeclarationSourceAbortRef.current?.abort();
+        const controller = new AbortController();
+        replacementDeclarationSourceAbortRef.current = controller;
+        setReplacementDeclarationSourceLoading(true);
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll(buildReplacementDeclarationSearchParams(term), controller.signal)
+                .then((response) => {
+                    if (controller.signal.aborted) return;
+                    setReplacementDeclarationSourceResults(
+                        normalizeReplacementDeclarationResults(response.data?.data || [])
+                    );
+                })
+                .catch((error) => {
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error searching replacement source products', error);
+                    setReplacementDeclarationSourceResults([]);
+                })
+                .finally(() => {
+                    if (replacementDeclarationSourceAbortRef.current === controller) {
+                        replacementDeclarationSourceAbortRef.current = null;
+                        setReplacementDeclarationSourceLoading(false);
+                    }
+                });
+        }, 220);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [
+        buildReplacementDeclarationSearchParams,
+        getReplacementDeclarationQuickModeRows,
+        hasActiveProductQuickFilter,
+        hasEnabledCrossSellSources,
+        isProductQuickModeActive,
+        normalizeReplacementDeclarationResults,
+        replacementDeclarationSourceSearchTerm,
+        showReplacementDeclarationModal,
+    ]);
+    useEffect(() => {
+        const term = replacementDeclarationSearchTerm.trim();
+        const shouldUseQuickModeRows = showReplacementDeclarationModal
+            && Boolean(replacementDeclarationSourceKey)
+            && isProductQuickModeActive
+            && !hasEnabledCrossSellSources;
+        const shouldFetch = showReplacementDeclarationModal
+            && Boolean(replacementDeclarationSourceKey)
+            && (term.length >= 2 || hasActiveProductQuickFilter || shouldUseQuickModeRows);
+        if (!shouldFetch) {
+            replacementDeclarationSearchAbortRef.current?.abort();
+            setReplacementDeclarationResults([]);
+            setReplacementDeclarationSearchLoading(false);
+            return undefined;
+        }
+
+        if (shouldUseQuickModeRows) {
+            replacementDeclarationSearchAbortRef.current?.abort();
+            setReplacementDeclarationResults(
+                normalizeReplacementDeclarationResults(getReplacementDeclarationQuickModeRows(term), {
+                    excludeSource: true,
+                    excludeSelected: true,
+                })
+            );
+            setReplacementDeclarationSearchLoading(false);
+            return undefined;
+        }
+
+        replacementDeclarationSearchAbortRef.current?.abort();
+        const controller = new AbortController();
+        replacementDeclarationSearchAbortRef.current = controller;
+        setReplacementDeclarationSearchLoading(true);
+
+        const timerId = window.setTimeout(() => {
+            productApi.getAll(buildReplacementDeclarationSearchParams(term), controller.signal)
+                .then((response) => {
+                    if (controller.signal.aborted) return;
+                    setReplacementDeclarationResults(
+                        normalizeReplacementDeclarationResults(response.data?.data || [], {
+                            excludeSource: true,
+                            excludeSelected: true,
+                        })
+                    );
+                })
+                .catch((error) => {
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error searching replacement products', error);
+                    setReplacementDeclarationResults([]);
+                })
+                .finally(() => {
+                    if (replacementDeclarationSearchAbortRef.current === controller) {
+                        replacementDeclarationSearchAbortRef.current = null;
+                        setReplacementDeclarationSearchLoading(false);
+                    }
+                });
+        }, 220);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [
+        buildReplacementDeclarationSearchParams,
+        getReplacementDeclarationQuickModeRows,
+        hasActiveProductQuickFilter,
+        hasEnabledCrossSellSources,
+        isProductQuickModeActive,
+        normalizeReplacementDeclarationResults,
+        replacementDeclarationSearchTerm,
+        replacementDeclarationSourceKey,
+        showReplacementDeclarationModal,
+    ]);
+    useEffect(() => {
+        if (!showReplacementDeclarationModal) {
+            replacementDeclarationGroupsAbortRef.current?.abort();
+            setReplacementDeclarationGroupsLoading(false);
+            return undefined;
+        }
+
+        replacementDeclarationGroupsAbortRef.current?.abort();
+        const controller = new AbortController();
+        replacementDeclarationGroupsAbortRef.current = controller;
+        const search = replacementDeclarationGroupsSearchTerm.trim();
+
+        setReplacementDeclarationGroupsLoading(true);
+        const timerId = window.setTimeout(() => {
+            productReplacementApi.getAll({
+                per_page: 30,
+                search: search || undefined,
+            }, controller.signal)
+                .then((response) => {
+                    if (controller.signal.aborted) return;
+                    setReplacementDeclarationGroups(
+                        Array.isArray(response.data?.data) ? response.data.data : []
+                    );
+                })
+                .catch((error) => {
+                    if (error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                    console.error('Error loading replacement declaration groups', error);
+                    setReplacementDeclarationGroups([]);
+                })
+                .finally(() => {
+                    if (replacementDeclarationGroupsAbortRef.current === controller) {
+                        replacementDeclarationGroupsAbortRef.current = null;
+                        setReplacementDeclarationGroupsLoading(false);
+                    }
+                });
+        }, search ? 220 : 80);
+
+        return () => {
+            controller.abort();
+            window.clearTimeout(timerId);
+        };
+    }, [
+        replacementDeclarationGroupsReloadKey,
+        replacementDeclarationGroupsSearchTerm,
+        showReplacementDeclarationModal,
+    ]);
 
     const persistOrderFormColumnLayout = useCallback(({
         order = columnOrder,
@@ -7859,6 +8569,123 @@ const OrderForm = () => {
         normalizedProductQuickFilterValues,
         normalizedProductQuickFilterValues2,
     ]);
+    const handleSelectReplacementDeclarationSource = useCallback((entry) => {
+        const sourceEntry = normalizeProductPickerEntry(entry);
+        if (!sourceEntry || !getProductReplacementDeclarationSku(sourceEntry)) {
+            showTransientNotification('error', 'Sản phẩm gốc cần có mã SKU để khai báo thay thế.');
+            return;
+        }
+
+        setReplacementDeclarationSource(sourceEntry);
+        setReplacementDeclarationGroupId(null);
+        setReplacementDeclarationSelected([]);
+        setReplacementDeclarationSourceSearchTerm('');
+        setReplacementDeclarationSourceResults([]);
+        setReplacementDeclarationSearchTerm('');
+        setReplacementDeclarationResults([]);
+    }, [showTransientNotification]);
+    const handleAddReplacementDeclarationProduct = useCallback((entry) => {
+        const replacementEntry = normalizeProductPickerEntry(entry);
+        const sku = getProductReplacementDeclarationSku(replacementEntry);
+        const entryKey = getActualReplacementEntryKey(replacementEntry);
+        if (!sku || !entryKey) {
+            showTransientNotification('error', 'Sản phẩm thay thế cần có mã SKU.');
+            return;
+        }
+
+        if (entryKey === replacementDeclarationSourceKey) {
+            showTransientNotification('error', 'Mã thay thế phải khác mã sản phẩm gốc.');
+            return;
+        }
+
+        setReplacementDeclarationSelected((prev) => (
+            prev.some((item) => getActualReplacementEntryKey(item) === entryKey)
+                ? prev
+                : [...prev, replacementEntry]
+        ));
+        setReplacementDeclarationSearchTerm('');
+        setReplacementDeclarationResults([]);
+    }, [replacementDeclarationSourceKey, showTransientNotification]);
+    const handleRemoveReplacementDeclarationProduct = useCallback((entryKey) => {
+        const normalizedKey = normalizeCanvasText(entryKey);
+        setReplacementDeclarationSelected((prev) => (
+            prev.filter((entry) => getActualReplacementEntryKey(entry) !== normalizedKey)
+        ));
+    }, []);
+    const handleEditReplacementDeclarationGroup = useCallback((group) => {
+        const groupEntries = mergeActualProductReplacementEntries(group?.items || [])
+            .filter((entry) => getProductReplacementDeclarationSku(entry));
+        if (groupEntries.length < 2) {
+            showTransientNotification('error', 'Nhóm này chưa đủ 2 mã sản phẩm để sửa nhanh.');
+            return;
+        }
+
+        const nextSource = groupEntries[0];
+        setReplacementDeclarationSource(nextSource);
+        setReplacementDeclarationGroupId(group?.id || null);
+        setReplacementDeclarationSelected(groupEntries.slice(1));
+        setReplacementDeclarationSourceSearchTerm('');
+        setReplacementDeclarationSourceResults([]);
+        setReplacementDeclarationSearchTerm('');
+        setReplacementDeclarationResults([]);
+        setReplacementDeclarationLookupLoading(false);
+    }, [showTransientNotification]);
+    const handleSaveReplacementDeclaration = useCallback(async (eventOrOptions = {}) => {
+        eventOrOptions?.preventDefault?.();
+        const closeAfterSave = eventOrOptions?.closeAfterSave === true;
+        const sourceSku = getProductReplacementDeclarationSku(replacementDeclarationSource);
+        const selectedSkus = replacementDeclarationSelectedSkus;
+        const skus = Array.from(new Set([sourceSku, ...selectedSkus].map(normalizeCanvasText).filter(Boolean)));
+
+        if (skus.length < 2) {
+            showTransientNotification('error', 'Chọn ít nhất 1 sản phẩm thay thế khác mã gốc.');
+            return;
+        }
+
+        setReplacementDeclarationSaving(true);
+        try {
+            const payload = { skus };
+            let response;
+            if (replacementDeclarationGroupId) {
+                response = await productReplacementApi.update(replacementDeclarationGroupId, payload);
+            } else {
+                response = await productReplacementApi.create(payload);
+            }
+            const savedGroup = response?.data?.data || null;
+            if (savedGroup?.id) {
+                const currentSourceKey = getActualReplacementEntryKey(replacementDeclarationSource);
+                const savedEntries = mergeActualProductReplacementEntries(savedGroup.items || [])
+                    .filter((entry) => getProductReplacementDeclarationSku(entry));
+                setReplacementDeclarationGroupId(savedGroup.id);
+                if (savedEntries.length > 0 && currentSourceKey) {
+                    setReplacementDeclarationSelected(
+                        savedEntries.filter((entry) => getActualReplacementEntryKey(entry) !== currentSourceKey)
+                    );
+                }
+            }
+
+            showTransientNotification('success', 'Đã lưu khai báo sản phẩm thay thế.');
+            setReplacementDeclarationGroupsReloadKey((prev) => prev + 1);
+            if (closeAfterSave) {
+                closeReplacementDeclarationModal();
+            }
+        } catch (error) {
+            console.error('Error saving product replacements from order form', error);
+            showTransientNotification(
+                'error',
+                resolveApiErrorMessage(error, 'Không thể lưu khai báo sản phẩm thay thế.'),
+                3200
+            );
+        } finally {
+            setReplacementDeclarationSaving(false);
+        }
+    }, [
+        closeReplacementDeclarationModal,
+        replacementDeclarationGroupId,
+        replacementDeclarationSelectedSkus,
+        replacementDeclarationSource,
+        showTransientNotification,
+    ]);
 
     const pushSearchHistory = useCallback((term) => {
         const trimmedTerm = normalizeCanvasText(term);
@@ -7958,6 +8785,62 @@ const OrderForm = () => {
             window.localStorage.removeItem(productQuickFilterAttribute2MapStorageKey);
         }
     }, [productQuickFilterStorageKey, productQuickModeDefaultEnabled]);
+    const handleReplacementDeclarationQuickFilterAttributeChange = useCallback((nextAttributeId) => {
+        setProductQuickFilterAttributeId(nextAttributeId);
+        setProductQuickFilterValues([]);
+        setProductQuickFilterValues2([]);
+        setProductQuickFilterAttributeId2('');
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+    }, []);
+    const handleReplacementDeclarationQuickFilterAttributeChange2 = useCallback((nextAttributeId) => {
+        setProductQuickFilterAttributeId2(nextAttributeId);
+        setProductQuickFilterValues2([]);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+    }, []);
+    const toggleReplacementDeclarationQuickFilterValue = useCallback((value) => {
+        const normalizedValue = normalizeQuickFilterOptionValue(value);
+        if (!normalizedValue) return;
+
+        const nextValues = normalizedProductQuickFilterValues[0] === normalizedValue ? [] : [normalizedValue];
+        setProductQuickFilterValues(nextValues);
+        if (nextValues.length === 0) {
+            setProductQuickFilterValues2([]);
+            setProductQuickFilterAttributeId2('');
+        }
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+    }, [normalizedProductQuickFilterValues]);
+    const toggleReplacementDeclarationQuickFilterValue2 = useCallback((value) => {
+        const normalizedValue = normalizeQuickFilterOptionValue(value);
+        if (!normalizedValue) return;
+
+        setProductQuickFilterValues2(
+            normalizedProductQuickFilterValues2[0] === normalizedValue ? [] : [normalizedValue]
+        );
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+    }, [normalizedProductQuickFilterValues2]);
+    const clearReplacementDeclarationQuickFilterValues = useCallback(() => {
+        setProductQuickFilterValues([]);
+        setProductQuickFilterValues2([]);
+        setProductQuickFilterAttributeId2('');
+        setProductQuickModeEnabled(productQuickModeDefaultEnabled);
+        setShowSearchDropdown(false);
+        setShowSearchHistory(false);
+        setShowProductQuickSetupPanel(false);
+        setShowProductQuickFilterPanel(false);
+        productSearchCacheRef.current.clear();
+    }, [productQuickModeDefaultEnabled]);
 
     const saveCurrentProductQuickSetupItems = useCallback((items) => {
         if (!currentProductQuickSetupKey || !productQuickSetupNamespace) return;
@@ -8763,6 +9646,10 @@ const OrderForm = () => {
         productQuickFilterScopeAbortRef.current?.abort();
         productQuickSetupAbortRef.current?.abort();
         productQuickSetupRefreshAbortRef.current?.abort();
+        replacementDeclarationSourceAbortRef.current?.abort();
+        replacementDeclarationSearchAbortRef.current?.abort();
+        replacementDeclarationLookupAbortRef.current?.abort();
+        replacementDeclarationGroupsAbortRef.current?.abort();
     }, []);
 
     const fetchOrderAiTrainingRules = useCallback(async () => {
@@ -11801,6 +12688,590 @@ const OrderForm = () => {
         );
     };
 
+    const renderReplacementDeclarationQuickFilterControls = () => {
+        if (!productQuickFilterAttributes.length || !activeProductQuickFilterAttribute) {
+            return null;
+        }
+
+        return (
+            <div className="rounded-sm border border-primary/10 bg-white px-3 py-3 shadow-sm">
+                <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <div className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/45">
+                            <span className="material-symbols-outlined text-[14px]">tune</span>
+                            Lọc nhanh
+                        </div>
+                        <select
+                            value={productQuickFilterAttributeId || ''}
+                            onChange={(event) => handleReplacementDeclarationQuickFilterAttributeChange(event.target.value)}
+                            className="h-9 min-w-[160px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                        >
+                            {productQuickFilterAttributes.map((attribute) => (
+                                <option key={attribute.id} value={attribute.id}>
+                                    Lọc 1: {attribute.name}
+                                </option>
+                            ))}
+                        </select>
+                        {normalizedProductQuickFilterValues[0] && (
+                            <select
+                                value={productQuickFilterAttributeId2 || ''}
+                                onChange={(event) => handleReplacementDeclarationQuickFilterAttributeChange2(event.target.value)}
+                                className="h-9 min-w-[160px] rounded-sm border border-primary/15 bg-white px-2.5 text-[12px] font-semibold text-[#0F172A] focus:border-primary/30 focus:outline-none"
+                            >
+                                <option value="">-- Lọc 2 --</option>
+                                {productQuickFilterAttributes
+                                    .filter(attr => String(attr.id) !== String(productQuickFilterAttributeId))
+                                    .map((attribute) => (
+                                        <option key={attribute.id} value={attribute.id}>
+                                            {attribute.name}
+                                        </option>
+                                    ))}
+                            </select>
+                        )}
+                        {hasActiveProductQuickFilter && (
+                            <button
+                                type="button"
+                                onClick={clearReplacementDeclarationQuickFilterValues}
+                                className="inline-flex h-9 items-center gap-1 rounded-sm border border-primary/10 bg-primary/[0.03] px-3 text-[10px] font-black uppercase tracking-[0.12em] text-primary/50 transition-all hover:border-brick/20 hover:text-brick"
+                            >
+                                <span className="material-symbols-outlined text-[13px]">close</span>
+                                Xóa lọc
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={toggleProductQuickMode}
+                            disabled={isProductQuickModeToggleDisabled}
+                            title={isProductQuickModeToggleDisabled ? 'Chưa có DS lọc nhanh để bật' : 'Bật/tắt lọc nhanh hơn'}
+                            className={`inline-flex h-9 items-center gap-1 rounded-sm border px-3 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 ${isProductQuickModeActive ? 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-green-100' : 'border-primary/10 bg-white text-primary/45 hover:border-primary/25 hover:text-primary'}`}
+                        >
+                            <span className="material-symbols-outlined text-[13px]">{isProductQuickModeActive ? 'flash_on' : 'flash_off'}</span>
+                            {isProductQuickModeActive ? 'Đang bật' : 'Đang tắt'}
+                            {activeProductQuickSetupItems.length > 0 ? (
+                                <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[9px] leading-none ${isProductQuickModeActive ? 'bg-green-700 text-white' : 'bg-primary/10 text-primary/45'}`}>
+                                    {activeProductQuickSetupItems.length}
+                                </span>
+                            ) : null}
+                        </button>
+                    </div>
+                    {hasActiveProductQuickFilter && activeProductQuickFilterSummary ? (
+                        <div className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-primary/10 bg-primary/[0.03] px-3 py-1 text-[11px] font-semibold text-primary/60">
+                            <span className="material-symbols-outlined text-[13px]">bolt</span>
+                            <span className="truncate">{activeProductQuickFilterSummary}</span>
+                        </div>
+                    ) : null}
+                </div>
+
+                {activeProductQuickFilterAttribute.options?.length > 0 && (
+                    <div className="custom-scrollbar mt-2 flex gap-1.5 overflow-x-auto pb-1">
+                        {activeProductQuickFilterAttribute.options.map((option) => {
+                            const isSelected = normalizedProductQuickFilterValues.includes(option.value);
+
+                            return (
+                                <button
+                                    key={`${activeProductQuickFilterAttribute.id}-${option.id || option.value}`}
+                                    type="button"
+                                    onClick={() => toggleReplacementDeclarationQuickFilterValue(option.value)}
+                                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-all ${isSelected ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-primary/25 hover:bg-primary/5'}`}
+                                >
+                                    <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                    <span>{option.label || option.value}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
+
+                {normalizedProductQuickFilterValues[0] && activeProductQuickFilterAttribute2Options.length > 0 && (
+                    <div className="custom-scrollbar mt-2 flex gap-1.5 overflow-x-auto border-t border-primary/5 pt-2 pb-1">
+                        {activeProductQuickFilterAttribute2Options.map((option) => {
+                            const isSelected = normalizedProductQuickFilterValues2.includes(option.value);
+
+                            return (
+                                <button
+                                    key={`${activeProductQuickFilterAttribute2.id}-${option.id || option.value}`}
+                                    type="button"
+                                    onClick={() => toggleReplacementDeclarationQuickFilterValue2(option.value)}
+                                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] font-semibold transition-all ${isSelected ? 'border-brick bg-brick text-white shadow-sm' : 'border-primary/10 bg-white text-primary/70 hover:border-brick/25 hover:bg-brick/5'}`}
+                                >
+                                    <span className="material-symbols-outlined text-[12px]">{isSelected ? 'check' : 'add'}</span>
+                                    <span>{option.label || option.value}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderReplacementDeclarationProductRow = (entry, {
+        actionLabel = 'Chọn',
+        disabled = false,
+        onSelect = () => {},
+        selected = false,
+    } = {}) => {
+        const sku = getProductReplacementDeclarationSku(entry);
+        const name = getProductReplacementDeclarationName(entry);
+        const stockValue = parseQuantityNumber(entry?.available_to_sell, parseQuantityNumber(entry?.stock_quantity));
+        const hasStockValue = stockValue !== null;
+        const entryKind = String(entry?.entry_kind || SEARCH_ENTRY_PRODUCT);
+        const isBundleOption = entryKind === SEARCH_ENTRY_BUNDLE_OPTION;
+        const isVariation = entryKind === SEARCH_ENTRY_VARIATION;
+
+        return (
+            <button
+                type="button"
+                onClick={() => {
+                    if (!disabled) onSelect(entry);
+                }}
+                disabled={disabled}
+                className={`group flex w-full items-start justify-between gap-3 border-b border-primary/5 px-3 py-3 text-left transition-all last:border-b-0 disabled:cursor-not-allowed disabled:opacity-55 ${selected ? 'bg-emerald-50 text-emerald-800' : 'hover:bg-primary/[0.03]'}`}
+            >
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-black leading-[1.35] text-primary">
+                        {name}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
+                        {sku && (
+                            <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5">
+                                {sku}
+                            </span>
+                        )}
+                        {isVariation && entry?.option_label ? (
+                            <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                {entry.option_label}
+                            </span>
+                        ) : null}
+                        {isBundleOption && entry?.bundle_option_title ? (
+                            <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                Bundle: {entry.bundle_option_title}
+                            </span>
+                        ) : null}
+                        {hasStockValue ? (
+                            <span className={`rounded-full border border-primary/10 bg-white px-2 py-0.5 font-black ${getAvailableToSellTextClass(stockValue)}`}>
+                                Còn {formatOrderFormQuantity(stockValue)}
+                            </span>
+                        ) : null}
+                    </div>
+                </div>
+                <div className="shrink-0 text-right">
+                    <div className="text-[12px] font-black text-blue-600">
+                        {formatQuoteMoney(resolveMoneyValue(entry?.price, 0))}
+                    </div>
+                    <div className={`mt-1 text-[10px] font-black uppercase tracking-[0.12em] ${selected ? 'text-emerald-700' : 'text-primary/35 group-hover:text-primary/60'}`}>
+                        {actionLabel}
+                    </div>
+                </div>
+            </button>
+        );
+    };
+
+    const canSaveReplacementDeclaration = Boolean(replacementDeclarationSourceKey)
+        && replacementDeclarationSelectedSkus.length > 0
+        && !replacementDeclarationLookupLoading
+        && !replacementDeclarationSaving;
+    const replacementDeclarationModal = showReplacementDeclarationModal && typeof document !== 'undefined'
+        ? createPortal((
+            <>
+                <div
+                    className="fixed inset-0 z-[2520] bg-slate-950/35 backdrop-blur-[1px]"
+                    onClick={closeReplacementDeclarationModal}
+                />
+                <div className="fixed inset-0 z-[2530] flex items-center justify-center p-3 md:p-6">
+                    <div
+                        className="flex max-h-[calc(100vh-32px)] w-full max-w-[1180px] flex-col overflow-hidden rounded-sm border border-primary/10 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.25)]"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-primary/10 bg-[#F8FAFC] px-4 py-3 md:px-5">
+                            <div className="min-w-0">
+                                <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Khai báo kho</div>
+                                <h3 className="mt-1 text-[16px] font-black leading-tight text-primary">Khai báo sản phẩm thay thế</h3>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={handleOpenProductReplacementManager}
+                                    className="hidden h-9 items-center gap-2 rounded-sm border border-primary/10 bg-white px-3 text-[11px] font-black uppercase tracking-[0.12em] text-primary/60 transition-all hover:border-primary/25 hover:text-primary sm:inline-flex"
+                                >
+                                    <span className="material-symbols-outlined text-[15px]">table_rows</span>
+                                    Bảng mã thay thế
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={closeReplacementDeclarationModal}
+                                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/35 transition-all hover:border-brick/20 hover:text-brick"
+                                    title="Đóng"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">close</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="border-b border-primary/10 px-4 py-3 md:px-5">
+                            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                                <div className="min-w-0">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Sản phẩm gốc đang khai báo</div>
+                                    <div className="mt-1 truncate text-[14px] font-black leading-[1.35] text-primary">
+                                        {getProductReplacementDeclarationName(replacementDeclarationSource)}
+                                    </div>
+                                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/45">
+                                        {getProductReplacementDeclarationSku(replacementDeclarationSource) ? (
+                                            <span className="rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5">
+                                                {getProductReplacementDeclarationSku(replacementDeclarationSource)}
+                                            </span>
+                                        ) : null}
+                                        <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 font-black text-sky-700">
+                                            {replacementDeclarationGroupId ? `Đang sửa nhóm #${replacementDeclarationGroupId}` : 'Nhóm mới'}
+                                        </span>
+                                        {replacementDeclarationLookupLoading ? (
+                                            <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 font-black text-primary/40">
+                                                Đang tải nhóm cũ
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                </div>
+                                <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-4 py-2 text-right">
+                                    <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/40">Trong nhóm</div>
+                                    <div className="mt-1 text-[20px] font-black leading-none text-primary">
+                                        {replacementDeclarationSelectedSkus.length + (replacementDeclarationSourceKey ? 1 : 0)}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="custom-scrollbar flex-1 overflow-y-auto bg-[#F8FAFC] p-4 md:p-5">
+                            <div className="space-y-3">
+                                {renderProductSourceQuickControls({ fill: true })}
+                                {renderReplacementDeclarationQuickFilterControls()}
+
+                                <div className="grid gap-3 xl:grid-cols-2">
+                                    <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
+                                        <div className="border-b border-primary/10 px-3 py-3">
+                                            <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Tìm sản phẩm gốc</div>
+                                            <div className="flex h-10 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 transition-all focus-within:border-primary/30 focus-within:bg-white">
+                                                <span className="material-symbols-outlined mr-2 text-[16px] text-primary/35">search</span>
+                                                <input
+                                                    type="text"
+                                                    value={replacementDeclarationSourceSearchTerm}
+                                                    onChange={(event) => setReplacementDeclarationSourceSearchTerm(event.target.value)}
+                                                    placeholder="Gõ mã hoặc tên sản phẩm gốc..."
+                                                    className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#0F172A] placeholder:text-primary/30 focus:outline-none"
+                                                />
+                                                {replacementDeclarationSourceSearchTerm ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setReplacementDeclarationSourceSearchTerm('');
+                                                            setReplacementDeclarationSourceResults([]);
+                                                        }}
+                                                        className="ml-2 text-primary/30 transition-all hover:text-brick"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                        <div className="custom-scrollbar max-h-[300px] overflow-y-auto">
+                                            {replacementDeclarationSourceLoading ? (
+                                                <div className="px-3 py-5 text-center text-[12px] font-semibold text-primary/40">Đang tìm sản phẩm...</div>
+                                            ) : replacementDeclarationSourceResults.length > 0 ? (
+                                                replacementDeclarationSourceResults.slice(0, 12).map((entry, index) => {
+                                                    const entryKey = getActualReplacementEntryKey(entry);
+                                                    const isCurrentSource = entryKey && entryKey === replacementDeclarationSourceKey;
+
+                                                    return (
+                                                        <React.Fragment key={`${entryKey || getProductReplacementDeclarationSku(entry) || 'source'}-${index}`}>
+                                                            {renderReplacementDeclarationProductRow(entry, {
+                                                                actionLabel: isCurrentSource ? 'Đang chọn' : 'Chọn gốc',
+                                                                disabled: isCurrentSource,
+                                                                onSelect: handleSelectReplacementDeclarationSource,
+                                                                selected: isCurrentSource,
+                                                            })}
+                                                        </React.Fragment>
+                                                    );
+                                                })
+                                            ) : (
+                                                <div className="px-3 py-8 text-center text-[12px] font-semibold leading-[1.45] text-primary/35">
+                                                    Gõ từ khóa hoặc chọn lọc nhanh để đổi sản phẩm gốc.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="overflow-hidden rounded-sm border border-primary/10 bg-white shadow-sm">
+                                        <div className="border-b border-primary/10 px-3 py-3">
+                                            <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Tìm sản phẩm thay thế</div>
+                                            <div className="flex h-10 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 transition-all focus-within:border-primary/30 focus-within:bg-white">
+                                                <span className="material-symbols-outlined mr-2 text-[16px] text-primary/35">search</span>
+                                                <input
+                                                    type="text"
+                                                    value={replacementDeclarationSearchTerm}
+                                                    onChange={(event) => setReplacementDeclarationSearchTerm(event.target.value)}
+                                                    disabled={!replacementDeclarationSourceKey}
+                                                    placeholder="Gõ mã hoặc tên sản phẩm thay thế..."
+                                                    className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#0F172A] placeholder:text-primary/30 focus:outline-none disabled:cursor-not-allowed"
+                                                />
+                                                {replacementDeclarationSearchTerm ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setReplacementDeclarationSearchTerm('');
+                                                            setReplacementDeclarationResults([]);
+                                                        }}
+                                                        className="ml-2 text-primary/30 transition-all hover:text-brick"
+                                                    >
+                                                        <span className="material-symbols-outlined text-[14px]">close</span>
+                                                    </button>
+                                                ) : null}
+                                            </div>
+                                        </div>
+                                        <div className="custom-scrollbar max-h-[300px] overflow-y-auto">
+                                            {replacementDeclarationSearchLoading ? (
+                                                <div className="px-3 py-5 text-center text-[12px] font-semibold text-primary/40">Đang tìm mã thay thế...</div>
+                                            ) : replacementDeclarationResults.length > 0 ? (
+                                                replacementDeclarationResults.slice(0, 12).map((entry, index) => {
+                                                    const entryKey = getActualReplacementEntryKey(entry);
+
+                                                    return (
+                                                        <React.Fragment key={`${entryKey || getProductReplacementDeclarationSku(entry) || 'replacement'}-${index}`}>
+                                                            {renderReplacementDeclarationProductRow(entry, {
+                                                                actionLabel: 'Thêm vào nhóm',
+                                                                onSelect: handleAddReplacementDeclarationProduct,
+                                                            })}
+                                                        </React.Fragment>
+                                                    );
+                                                })
+                                            ) : (
+                                                <div className="px-3 py-8 text-center text-[12px] font-semibold leading-[1.45] text-primary/35">
+                                                    Chọn sản phẩm gốc rồi gõ mã, tên hoặc dùng lọc nhanh để thêm mã thay thế.
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-primary/10 bg-white p-3 shadow-sm">
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Các mã thay qua lại</div>
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <div className="text-[11px] font-semibold text-primary/40">
+                                                Gốc + {replacementDeclarationSelectedSkus.length} mã thay thế
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleSaveReplacementDeclaration}
+                                                disabled={!canSaveReplacementDeclaration}
+                                                className="inline-flex h-8 items-center gap-1 rounded-sm bg-primary px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white shadow-sm transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-45"
+                                            >
+                                                <span className={`material-symbols-outlined text-[13px] ${replacementDeclarationSaving ? 'animate-refresh-spin' : ''}`}>
+                                                    {replacementDeclarationSaving ? 'progress_activity' : 'save'}
+                                                </span>
+                                                Lưu nhóm
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="grid gap-2 lg:grid-cols-2">
+                                        <div className="rounded-sm border border-primary/10 bg-primary/[0.03] px-3 py-2">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.12em] text-primary/35">Mã gốc</div>
+                                            <div className="mt-1 truncate text-[13px] font-black text-primary">
+                                                {getProductReplacementDeclarationName(replacementDeclarationSource)}
+                                            </div>
+                                            <div className="mt-1 text-[11px] font-semibold text-primary/45">
+                                                {getProductReplacementDeclarationSku(replacementDeclarationSource) || 'Chưa có SKU'}
+                                            </div>
+                                        </div>
+
+                                        {replacementDeclarationSelected.length > 0 ? (
+                                            replacementDeclarationSelected.map((entry, index) => {
+                                                const entryKey = getActualReplacementEntryKey(entry);
+
+                                                return (
+                                                    <div
+                                                        key={`${entryKey || getProductReplacementDeclarationSku(entry) || 'selected'}-${index}`}
+                                                        className="flex min-w-0 items-start justify-between gap-3 rounded-sm border border-emerald-200 bg-emerald-50 px-3 py-2"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[13px] font-black text-emerald-900">
+                                                                {getProductReplacementDeclarationName(entry)}
+                                                            </div>
+                                                            <div className="mt-1 text-[11px] font-semibold text-emerald-800/60">
+                                                                {getProductReplacementDeclarationSku(entry)}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveReplacementDeclarationProduct(entryKey)}
+                                                            className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm border border-emerald-300/70 bg-white text-emerald-700 transition-all hover:border-brick/30 hover:text-brick"
+                                                            title="Bỏ khỏi nhóm"
+                                                        >
+                                                            <span className="material-symbols-outlined text-[14px]">close</span>
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })
+                                        ) : (
+                                            <div className="rounded-sm border border-dashed border-primary/10 bg-white px-3 py-6 text-center text-[12px] font-semibold text-primary/35">
+                                                Chưa thêm mã thay thế.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-primary/10 bg-white p-3 shadow-sm">
+                                    <div className="mb-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)_auto] lg:items-center">
+                                        <div className="min-w-0">
+                                            <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Nhóm đã tạo</div>
+                                            <div className="mt-1 text-[11px] font-semibold text-primary/40">
+                                                Bấm Sửa để nạp nhóm lên trên rồi thêm/bớt mã.
+                                            </div>
+                                        </div>
+                                        <div className="flex h-9 min-w-0 items-center rounded-sm border border-primary/10 bg-primary/[0.03] px-3 transition-all focus-within:border-primary/30 focus-within:bg-white">
+                                            <span className="material-symbols-outlined mr-2 text-[15px] text-primary/35">search</span>
+                                            <input
+                                                type="text"
+                                                value={replacementDeclarationGroupsSearchTerm}
+                                                onChange={(event) => setReplacementDeclarationGroupsSearchTerm(event.target.value)}
+                                                placeholder="Tìm nhóm hoặc mã..."
+                                                className="min-w-0 flex-1 bg-transparent text-[12px] font-semibold text-primary placeholder:text-primary/30 focus:outline-none"
+                                            />
+                                            {replacementDeclarationGroupsSearchTerm ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setReplacementDeclarationGroupsSearchTerm('')}
+                                                    className="ml-2 text-primary/30 transition-all hover:text-brick"
+                                                >
+                                                    <span className="material-symbols-outlined text-[13px]">close</span>
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={handleSaveReplacementDeclaration}
+                                            disabled={!canSaveReplacementDeclaration}
+                                            className="inline-flex h-9 items-center justify-center gap-1 rounded-sm bg-primary px-3 text-[10px] font-black uppercase tracking-[0.12em] text-white shadow-sm transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-45"
+                                        >
+                                            <span className={`material-symbols-outlined text-[14px] ${replacementDeclarationSaving ? 'animate-refresh-spin' : ''}`}>
+                                                {replacementDeclarationSaving ? 'progress_activity' : 'save'}
+                                            </span>
+                                            Lưu nhóm
+                                        </button>
+                                    </div>
+
+                                    <div className="custom-scrollbar max-h-[220px] overflow-y-auto rounded-sm border border-primary/10">
+                                        {replacementDeclarationGroupsLoading ? (
+                                            <div className="px-3 py-5 text-center text-[12px] font-semibold text-primary/40">Đang tải nhóm đã tạo...</div>
+                                        ) : replacementDeclarationGroups.length > 0 ? (
+                                            replacementDeclarationGroups.map((group) => {
+                                                const groupItems = Array.isArray(group?.items) ? group.items : [];
+                                                const isEditingGroup = Number(replacementDeclarationGroupId || 0) === Number(group?.id || 0);
+                                                const expression = normalizeCanvasText(group?.expression)
+                                                    || groupItems.map(getProductReplacementDeclarationSku).filter(Boolean).join(' = ');
+
+                                                return (
+                                                    <div
+                                                        key={`replacement-declaration-group-${group?.id}`}
+                                                        className={`grid gap-3 border-b border-primary/5 px-3 py-3 last:border-b-0 lg:grid-cols-[minmax(150px,0.9fr)_minmax(0,2fr)_auto] lg:items-start ${isEditingGroup ? 'bg-amber-50/70' : 'bg-white'}`}
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[13px] font-black text-primary">
+                                                                {group?.name || `Nhóm #${group?.id}`}
+                                                            </div>
+                                                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-primary/40">
+                                                                <span>{groupItems.length || group?.items_count || 0} mã</span>
+                                                                {isEditingGroup ? (
+                                                                    <span className="rounded-full border border-amber-200 bg-white px-2 py-0.5 font-black text-amber-700">
+                                                                        Đang sửa
+                                                                    </span>
+                                                                ) : null}
+                                                            </div>
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <div className="truncate text-[12px] font-semibold text-primary/55" title={expression}>
+                                                                {expression || 'Chưa có mã'}
+                                                            </div>
+                                                            <div className="mt-2 flex flex-wrap gap-1.5">
+                                                                {groupItems.slice(0, 8).map((item) => {
+                                                                    const sku = getProductReplacementDeclarationSku(item);
+                                                                    const stockValue = parseQuantityNumber(item?.available_to_sell, parseQuantityNumber(item?.stock_quantity));
+
+                                                                    return (
+                                                                        <span
+                                                                            key={`${group?.id}-${sku || item?.product_id || item?.id}`}
+                                                                            className="inline-flex max-w-[190px] items-center gap-1 rounded-full border border-primary/10 bg-primary/[0.03] px-2 py-0.5 text-[10px] font-bold text-primary/60"
+                                                                            title={getProductReplacementDeclarationName(item)}
+                                                                        >
+                                                                            <span className="truncate">{sku || 'N/A'}</span>
+                                                                            {stockValue !== null ? (
+                                                                                <span className={getAvailableToSellTextClass(stockValue)}>
+                                                                                    {formatOrderFormQuantity(stockValue)}
+                                                                                </span>
+                                                                            ) : null}
+                                                                        </span>
+                                                                    );
+                                                                })}
+                                                                {groupItems.length > 8 ? (
+                                                                    <span className="rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/35">
+                                                                        +{groupItems.length - 8}
+                                                                    </span>
+                                                                ) : null}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex shrink-0 items-center justify-end gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleEditReplacementDeclarationGroup(group)}
+                                                                disabled={groupItems.length < 2}
+                                                                className={`inline-flex h-8 items-center gap-1 rounded-sm border px-3 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-45 ${isEditingGroup ? 'border-amber-200 bg-white text-amber-700' : 'border-primary/10 bg-white text-primary/60 hover:border-primary/25 hover:text-primary'}`}
+                                                            >
+                                                                <span className="material-symbols-outlined text-[13px]">edit</span>
+                                                                Sửa
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                        ) : (
+                                            <div className="px-3 py-8 text-center text-[12px] font-semibold text-primary/35">
+                                                Chưa có nhóm mã thay thế phù hợp.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col gap-2 border-t border-primary/10 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
+                            <div className="text-[11px] font-semibold leading-[1.45] text-primary/40">
+                                Sau khi lưu, các mã trong nhóm có thể thay thế 2 chiều khi gửi hàng.
+                            </div>
+                            <div className="flex shrink-0 items-center justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={closeReplacementDeclarationModal}
+                                    className="inline-flex h-10 items-center justify-center rounded-sm border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary/50 transition-all hover:border-primary/25 hover:text-primary"
+                                >
+                                    Hủy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleSaveReplacementDeclaration}
+                                    disabled={!canSaveReplacementDeclaration}
+                                    className="inline-flex h-10 items-center justify-center gap-2 rounded-sm bg-primary px-4 text-[12px] font-black uppercase tracking-[0.12em] text-white shadow-sm transition-all hover:bg-brick disabled:cursor-not-allowed disabled:opacity-45"
+                                >
+                                    <span className={`material-symbols-outlined text-[16px] ${replacementDeclarationSaving ? 'animate-refresh-spin' : ''}`}>
+                                        {replacementDeclarationSaving ? 'progress_activity' : 'save'}
+                                    </span>
+                                    Lưu nhóm
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </>
+        ), document.body)
+        : null;
+
     if (loading) return <div className="p-8 text-center text-[14px] italic leading-[1.55] text-primary">Đang tải dữ liệu...</div>;
 
     return (
@@ -12537,6 +14008,14 @@ const OrderForm = () => {
                                             </button>
                                             <button
                                                 type="button"
+                                                onClick={() => handleOpenReplacementDeclarationModal(actualProductSectionLine)}
+                                                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100"
+                                            >
+                                                <span className="material-symbols-outlined text-[14px]">rule</span>
+                                                Khai báo thay thế
+                                            </button>
+                                            <button
+                                                type="button"
                                                 onClick={handleToggleActualProductSection}
                                                 className="inline-flex items-center gap-1 rounded-full border border-primary/10 bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] text-primary/55 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
                                             >
@@ -12601,7 +14080,7 @@ const OrderForm = () => {
                                             type="button"
                                             onClick={(event) => handleOpenActualProductPicker(
                                                 selectedOrderLine.line_id,
-                                                getOrderItemActualNameLabel(selectedOrderLine) || selectedOrderLine.name || selectedOrderLine.sku || '',
+                                                '',
                                                 event.currentTarget
                                             )}
                                             className={`inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${hasActualOrderProductOverride(selectedOrderLine) ? 'border-rose-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50' : 'border-primary/10 bg-white text-primary/55 hover:border-primary/25 hover:text-primary'}`}
@@ -12718,8 +14197,21 @@ const OrderForm = () => {
                                                                     </button>
                                                                 </div>
                                                             ) : (
-                                                                <div className="flex min-w-0 items-start gap-1.5">
+                                                                <div className="group/name-actions flex min-w-0 items-start gap-1.5">
                                                                     <div className={`min-w-0 flex-1 text-[14px] font-black leading-[1.35] ${hasActualOverride ? 'text-rose-700' : 'text-primary'}`}>{item.name || 'Sản phẩm'}</div>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={(event) => handleToggleActualProductPicker(item, event.currentTarget)}
+                                                                        className={`inline-flex size-7 shrink-0 items-center justify-center rounded-[10px] border bg-white transition-all hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 ${
+                                                                            hasActualOverride
+                                                                                ? 'border-rose-200 text-rose-700'
+                                                                                : 'border-primary/10 text-primary/30 opacity-0 group-hover/name-actions:opacity-100'
+                                                                        }`}
+                                                                        title={hasActualOverride ? 'Đổi sản phẩm thực gửi' : 'Thay sản phẩm khác'}
+                                                                        aria-label={hasActualOverride ? 'Đổi sản phẩm thực gửi' : 'Thay sản phẩm khác'}
+                                                                    >
+                                                                        <span className="material-symbols-outlined text-[14px]">local_shipping</span>
+                                                                    </button>
                                                                     <button
                                                                         type="button"
                                                                         onClick={(event) => openOrderLineNameEditor(item, event)}
@@ -13267,6 +14759,16 @@ const OrderForm = () => {
                                                                             <button
                                                                                 type="button"
                                                                                 onPointerDown={(e) => e.stopPropagation()}
+                                                                                onClick={(e) => handleToggleActualProductPicker(item, e.currentTarget)}
+                                                                                className={`${hasActualOrderProductOverride(item) ? 'text-rose-700 opacity-100' : 'text-primary/20 opacity-0 group-hover/cell:opacity-100'} hover:text-amber-700 p-0.5 rounded transition-all shrink-0`}
+                                                                                title={hasActualOrderProductOverride(item) ? 'Đổi sản phẩm thực gửi' : 'Thay sản phẩm khác'}
+                                                                                aria-label={hasActualOrderProductOverride(item) ? 'Đổi sản phẩm thực gửi' : 'Thay sản phẩm khác'}
+                                                                            >
+                                                                                <span className="order-form-cell-copy-icon material-symbols-outlined">local_shipping</span>
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onPointerDown={(e) => e.stopPropagation()}
                                                                                 onClick={(e) => openOrderLineNameEditor(item, e)}
                                                                                 className="p-0.5 text-primary/20 opacity-0 transition-all hover:text-primary group-hover/cell:opacity-100"
                                                                                 title="Sửa tên trong đơn này"
@@ -13455,24 +14957,45 @@ const OrderForm = () => {
                                         type="button"
                                         onClick={handleToggleActualProductSection}
                                         disabled={formData.items.length === 0}
-                                        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] shadow-sm transition-all ${showActualProductSection ? 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100/70' : 'border-primary/10 bg-white text-primary/60 hover:border-primary/25 hover:text-primary'} disabled:cursor-not-allowed disabled:opacity-40`}
+                                        title={showActualProductSection ? 'Tắt gửi SP khác' : 'Gửi SP khác'}
+                                        aria-label={showActualProductSection ? 'Tắt gửi SP khác' : 'Gửi SP khác'}
+                                        className={`inline-flex size-10 items-center justify-center rounded-full border shadow-sm transition-all ${showActualProductSection ? 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100/70' : 'border-primary/10 bg-white text-primary/60 hover:border-primary/25 hover:text-primary'} disabled:cursor-not-allowed disabled:opacity-40`}
                                     >
-                                        <span className="material-symbols-outlined text-[16px]">
+                                        <span className="material-symbols-outlined text-[18px]">
                                             {showActualProductSection ? 'close' : 'local_shipping'}
                                         </span>
-                                        {showActualProductSection ? 'Tắt gửi SP khác' : 'Gửi SP khác'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleOpenReplacementDeclarationModal()}
+                                        disabled={formData.items.length === 0}
+                                        title="Khai báo SP thay thế"
+                                        aria-label="Khai báo SP thay thế"
+                                        className="inline-flex size-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">rule</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleOpenProductReplacementManager}
+                                        title="Bảng mã thay thế"
+                                        aria-label="Bảng mã thay thế"
+                                        className="inline-flex size-10 items-center justify-center rounded-full border border-primary/10 bg-white text-primary/60 shadow-sm transition-all hover:border-primary/25 hover:text-primary"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">table_rows</span>
                                     </button>
                                     <button
                                         type="button"
                                         onClick={handleOpenPriceMultiplierModal}
                                         disabled={!hasPriceMultiplierTarget}
-                                        className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-emerald-700 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                        title="Nhân hệ số"
+                                        aria-label="Nhân hệ số"
+                                        className="relative inline-flex size-10 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
                                         data-screenshot-hide="true"
                                     >
-                                        <span className="material-symbols-outlined text-[16px]">percent</span>
-                                        Nhân hệ số
+                                        <span className="material-symbols-outlined text-[18px]">percent</span>
                                         {hasPriceMultiplierTarget ? (
-                                            <span className="rounded-full bg-emerald-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                            <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-emerald-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-white">
                                                 {priceMultiplierTargetItems.length}
                                             </span>
                                         ) : null}
@@ -13481,14 +15004,14 @@ const OrderForm = () => {
                                         type="button"
                                         onClick={handleRestoreLastDeletedLineItems}
                                         disabled={!hasDeletedLineItemRestore}
-                                        className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                        className="relative inline-flex size-10 items-center justify-center rounded-full border border-sky-200 bg-sky-50 text-sky-700 shadow-sm transition-all hover:border-sky-300 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-40"
                                         title={hasDeletedLineItemRestore ? `Khôi phục ${deletedLineItemRestoreCount} sản phẩm vừa xóa` : 'Chưa có sản phẩm vừa xóa để khôi phục'}
+                                        aria-label="Khôi phục xóa"
                                         data-screenshot-hide="true"
                                     >
-                                        <span className="material-symbols-outlined text-[16px]">undo</span>
-                                        Khôi phục xóa
+                                        <span className="material-symbols-outlined text-[18px]">undo</span>
                                         {hasDeletedLineItemRestore ? (
-                                            <span className="rounded-full bg-sky-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                            <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-sky-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-white">
                                                 {deletedLineItemRestoreCount}
                                             </span>
                                         ) : null}
@@ -13497,12 +15020,13 @@ const OrderForm = () => {
                                         <button
                                             type="button"
                                             onClick={handleRemoveSelectedLineItems}
-                                            className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-white px-4 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
+                                            title="Xóa đã chọn"
+                                            aria-label="Xóa đã chọn"
+                                            className="relative inline-flex size-10 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-700 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50"
                                             data-screenshot-hide="true"
                                         >
-                                            <span className="material-symbols-outlined text-[16px]">delete_outline</span>
-                                            Xóa đã chọn
-                                            <span className="rounded-full bg-rose-700 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                                            <span className="material-symbols-outlined text-[18px]">delete_outline</span>
+                                            <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-700 px-1 text-[10px] font-black leading-none text-white shadow-sm ring-2 ring-white">
                                                 {selectedOrderLineItems.length}
                                             </span>
                                         </button>
@@ -14053,7 +15577,7 @@ const OrderForm = () => {
                     </div>
                 </div>
 
-                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-7' : 'grid-cols-6'}`}>
+                <div className={`mt-3 grid gap-2 ${mobileFooterSecondaryAction ? 'grid-cols-8' : 'grid-cols-7'}`}>
                     <button
                         type="button"
                         onClick={() => handleSubmit(null)}
@@ -14078,6 +15602,16 @@ const OrderForm = () => {
                             <span className="material-symbols-outlined text-[18px]">{mobileFooterSecondaryAction.icon}</span>
                         </button>
                     )}
+                    <button
+                        type="button"
+                        onClick={() => handleOpenReplacementDeclarationModal()}
+                        disabled={formData.items.length === 0 || saving}
+                        title="Khai báo SP thay thế"
+                        aria-label="Khai báo SP thay thế"
+                        className="inline-flex min-h-[52px] items-center justify-center rounded-[16px] border border-amber-200 bg-amber-50 px-2 text-amber-700 transition-all hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">rule</span>
+                    </button>
                     <button
                         type="button"
                         onClick={() => setShowBulkReplaceModal(true)}
@@ -14143,6 +15677,8 @@ const OrderForm = () => {
                 </div>
             </div>
 
+            {replacementDeclarationModal}
+
             <OrderAiLineReplacePanel
                 show={Boolean(orderAiReplaceLineId)}
                 currentLine={activeOrderAiReplaceLine}
@@ -14169,9 +15705,10 @@ const OrderForm = () => {
                 heading="Gửi sản phẩm khác"
                 currentLabel={activeActualProductPickerLine?.name || selectedOrderLine?.name || ''}
                 searchPlaceholder="Tìm sản phẩm thực gửi..."
+                preserveCurrentLinePrice
                 emptyMessage={actualProductPickerSearchTerm.trim().length >= 2
                     ? 'Không thấy sản phẩm thực gửi phù hợp, thử đổi từ khóa.'
-                    : 'Gõ ít nhất 2 ký tự để chọn sản phẩm thực gửi.'}
+                    : 'Chưa có mã thay thế đã khai báo. Có thể gõ mã hoặc tên để tìm thủ công.'}
             />
 
             <OrderSupplementItemsSection

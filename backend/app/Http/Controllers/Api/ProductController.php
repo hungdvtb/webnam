@@ -38,6 +38,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -1098,7 +1099,7 @@ class ProductController extends Controller
             }
         }
 
-        $products = $productQuery->get(['id', 'account_id', 'type', 'name', 'sku', 'slug']);
+        $products = $productQuery->get(['id', 'account_id', 'type', 'name', 'sku', 'slug', 'price', 'expected_cost', 'cost_price']);
         $posts = $postQuery->get(['id', 'account_id', 'title', 'slug']);
 
         return [
@@ -2437,11 +2438,15 @@ class ProductController extends Controller
 
         $codeSeed = $mode === 'code' ? $needle : $name;
 
+        $code = $mode === 'code'
+            ? $this->generateUniqueImportedAttributeCode($codeSeed !== '' ? $codeSeed : 'thuoc-tinh')
+            : $this->generateUniqueAttributeCode($codeSeed !== '' ? $codeSeed : 'thuoc-tinh');
+
         return Attribute::query()->create([
             'account_id' => $accountId,
             'name' => $name !== '' ? $name : 'Thuộc tính mới',
             'entity_type' => 'product',
-            'code' => $this->generateUniqueAttributeCode($codeSeed !== '' ? $codeSeed : 'thuoc-tinh'),
+            'code' => $code,
             'frontend_type' => (is_array($normalizedValue) && !$forVariant) ? 'multiselect' : 'select',
             'swatch_type' => null,
             'is_filterable' => false,
@@ -2452,6 +2457,27 @@ class ProductController extends Controller
             'status' => true,
             'sort_order' => Attribute::nextSortOrderFor('product', $accountId),
         ]);
+    }
+
+    private function generateUniqueImportedAttributeCode(string $seed): string
+    {
+        $base = Str::of((string) $seed)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '-')
+            ->trim('-')
+            ->toString();
+
+        $base = $base !== '' ? $base : 'thuoc-tinh';
+        $candidate = Str::limit($base, 64, '');
+        $suffix = 1;
+
+        while (Attribute::query()->where('code', $candidate)->exists()) {
+            $candidate = Str::limit($base, max(1, 64 - strlen((string) $suffix) - 1), '') . '-' . $suffix;
+            $suffix++;
+        }
+
+        return $candidate;
     }
 
     private function normalizeImportedAttributeValueForStorageV2(mixed $value, ?Attribute $attribute = null, bool $forVariant = false): mixed
@@ -3225,8 +3251,10 @@ class ProductController extends Controller
                 'option_post_id' => $optionPost instanceof Post ? (int) $optionPost->id : null,
                 'bundle_option_uid' => $this->normalizeBundleOptionUid($item['bundle_option_uid'] ?? null),
                 'is_default' => !empty($item['is_default']),
-                'price' => array_key_exists('price', $item) && $item['price'] !== null ? (float) $item['price'] : null,
-                'cost_price' => array_key_exists('cost_price', $item) && $item['cost_price'] !== null ? (float) $item['cost_price'] : null,
+                'price' => array_key_exists('price', $item) && $item['price'] !== null ? (float) $item['price'] : (float) ($product->price ?? 0),
+                'cost_price' => array_key_exists('cost_price', $item) && $item['cost_price'] !== null
+                    ? (float) $item['cost_price']
+                    : (float) ($product->expected_cost ?? $product->cost_price ?? 0),
             ],
             'errors' => [],
         ];
@@ -3394,7 +3422,7 @@ class ProductController extends Controller
             'suppliers:id,name,code',
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
-            'parentConfigurable:id,name,sku,type',
+            'parentConfigurable:id,name,sku,type,warehouse_sequence',
             'account:id,name,site_code,public_domain_id',
             'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
@@ -3407,7 +3435,7 @@ class ProductController extends Controller
             'attributeValues:id,product_id,attribute_id,value',
             'attributeValues.attribute:' . $attributeResourceColumns,
             'linkedProducts' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id', 'products.status'])
+                $q->select(['products.id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id', 'products.status', 'products.warehouse_sequence'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'is_default'])
                     ->with([
                         'unit:id,name',
@@ -3417,7 +3445,7 @@ class ProductController extends Controller
                     ]);
             },
             'groupedItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
+                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -3429,7 +3457,7 @@ class ProductController extends Controller
                     ]);
             },
             'bundleItems' => function ($q) use ($attributeSummaryColumns) {
-                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id'])
+                $q->select(['products.id', 'products.account_id', 'products.sku', 'products.name', 'products.price', 'products.expected_cost', 'products.cost_price', 'products.stock_quantity', 'products.type', 'products.weight', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence'])
                     ->withPivot(['link_type', 'position', 'quantity', 'is_required', 'option_title', 'option_post_id', 'bundle_option_uid', 'bundle_option_status', 'option_image_url', 'option_video_url', 'option_video_source', 'is_default', 'variant_id', 'price', 'cost_price'])
                     ->with([
                         'unit:id,name',
@@ -3846,7 +3874,30 @@ class ProductController extends Controller
     {
         $product = $this->appendSupplierMeta($product->load($this->productResourceRelations()));
 
-        return $this->syncProductResourceInventoryStocks(request(), $product);
+        return $this->maskNonPickProductWarehouseSequences(
+            $this->syncProductResourceInventoryStocks(request(), $product)
+        );
+    }
+
+    protected function maskNonPickProductWarehouseSequences(Product $product): Product
+    {
+        if (!$this->productUsesWarehouseSequenceForDisplay($product)) {
+            $product->setAttribute('warehouse_sequence', null);
+        }
+
+        foreach (['variations', 'linkedProducts', 'groupedItems', 'bundleItems'] as $relation) {
+            if (!$product->relationLoaded($relation)) {
+                continue;
+            }
+
+            $product->{$relation}->each(function (Product $relatedProduct): void {
+                if (!$this->productUsesWarehouseSequenceForDisplay($relatedProduct)) {
+                    $relatedProduct->setAttribute('warehouse_sequence', null);
+                }
+            });
+        }
+
+        return $product;
     }
 
     protected function syncProductResourceInventoryStocks(Request $request, Product $product): Product
@@ -4138,7 +4189,119 @@ class ProductController extends Controller
         $validated['sku'] = $normalizedSku;
     }
 
-    protected function prepareVariantPayloads(array $incomingVariants, string $parentSku, ?Product $product = null): array
+    protected function normalizeWarehouseSequenceValue($value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+        }
+
+        if ($value === '' || !is_numeric($value)) {
+            return null;
+        }
+
+        $sequence = (int) $value;
+
+        return $sequence > 0 ? $sequence : null;
+    }
+
+    protected function productTypeUsesWarehouseSequence(?string $type): bool
+    {
+        return Product::usesWarehouseSequence($type);
+    }
+
+    protected function productUsesWarehouseSequenceForDisplay(Product $product): bool
+    {
+        return $product->usesWarehouseSequenceForDisplay();
+    }
+
+    protected function productWarehouseSequenceForDisplay(?Product $product): ?int
+    {
+        if (!$product || !$this->productUsesWarehouseSequenceForDisplay($product)) {
+            return null;
+        }
+
+        return $this->normalizeWarehouseSequenceValue($product->warehouse_sequence);
+    }
+
+    protected function applyWarehouseSequenceSearchConstraint(
+        Builder $query,
+        int $sequence,
+        string $sequenceColumn = 'warehouse_sequence',
+        string $typeColumn = 'type'
+    ): Builder {
+        return $query
+            ->where($sequenceColumn, $sequence)
+            ->whereNotIn($typeColumn, ['configurable', 'bundle'])
+            ->whereDoesntHave('variations');
+    }
+
+    protected function prepareProductWarehouseSequence(
+        array &$payload,
+        ?Product $product = null,
+        ?int $accountId = null,
+        array $reserved = [],
+        string $field = 'warehouse_sequence',
+        ?string $errorField = null
+    ): ?int {
+        $errorField ??= $field;
+        $accountId ??= $product?->account_id !== null ? (int) $product->account_id : null;
+        $resolvedType = (string) ($payload['type'] ?? $product?->type ?? 'simple');
+
+        if (!$this->productTypeUsesWarehouseSequence($resolvedType) || ($product?->hasVariantChildren() ?? false)) {
+            $payload[$field] = null;
+            return null;
+        }
+
+        $hasField = array_key_exists($field, $payload);
+        $existingSequence = $this->normalizeWarehouseSequenceValue($product?->warehouse_sequence);
+
+        if (!$hasField) {
+            if ($existingSequence !== null) {
+                return $existingSequence;
+            }
+
+            $payload[$field] = Product::nextWarehouseSequence($accountId, $reserved, $product?->id);
+
+            return (int) $payload[$field];
+        }
+
+        $sequence = $this->normalizeWarehouseSequenceValue($payload[$field] ?? null);
+        if ($sequence === null) {
+            $sequence = Product::nextWarehouseSequence($accountId, $reserved, $product?->id);
+        }
+
+        $reservedValues = collect($reserved)
+            ->map(fn ($value) => is_numeric($value) ? (int) $value : null)
+            ->filter(fn ($value) => $value !== null && $value > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (
+            in_array($sequence, $reservedValues, true)
+            || Product::warehouseSequenceExists($accountId, $sequence, $product?->id)
+        ) {
+            throw ValidationException::withMessages([
+                $errorField => ["Số thứ tự kho {$sequence} đã được sử dụng bởi sản phẩm khác."],
+            ]);
+        }
+
+        $payload[$field] = $sequence;
+
+        return $sequence;
+    }
+
+    protected function prepareVariantPayloads(
+        array $incomingVariants,
+        string $parentSku,
+        ?Product $product = null,
+        ?int $accountId = null,
+        array $reservedWarehouseSequences = []
+    ): array
     {
         $preparedVariants = [];
         $messages = [];
@@ -4160,12 +4323,20 @@ class ProductController extends Controller
                 ->flip()
                 ->all()
             : [];
+        $ownedVariantsById = ($product && !empty($ownedVariantIds))
+            ? Product::withoutGlobalScope('account_id')
+                ->whereIn('id', array_keys($ownedVariantIds))
+                ->get()
+                ->keyBy('id')
+            : collect();
+        $accountId ??= $product?->account_id !== null ? (int) $product->account_id : null;
 
         foreach ($incomingVariants as $index => $variantData) {
             $variantId = isset($variantData['id']) && is_numeric($variantData['id'])
                 ? (int) $variantData['id']
                 : null;
             $isExistingVariant = $variantId !== null;
+            $existingVariant = $isExistingVariant ? $ownedVariantsById->get($variantId) : null;
 
             if ($isExistingVariant && !isset($ownedVariantIds[$variantId])) {
                 $messages["variants.{$index}.id"][] = 'Biến thể này không thuộc sản phẩm hiện tại.';
@@ -4205,6 +4376,30 @@ class ProductController extends Controller
             }
 
             $variantData['sku'] = $normalizedSku;
+
+            if (array_key_exists('warehouse_sequence', $variantData) || !$isExistingVariant) {
+                $sequencePayload = [];
+                if (array_key_exists('warehouse_sequence', $variantData)) {
+                    $sequencePayload['warehouse_sequence'] = $variantData['warehouse_sequence'];
+                }
+
+                $sequence = $this->prepareProductWarehouseSequence(
+                    $sequencePayload,
+                    $existingVariant,
+                    $accountId,
+                    $reservedWarehouseSequences,
+                    'warehouse_sequence',
+                    "variants.{$index}.warehouse_sequence"
+                );
+
+                $variantData['warehouse_sequence'] = $sequence;
+                if ($sequence !== null) {
+                    $reservedWarehouseSequences[] = $sequence;
+                }
+            } elseif ($existingVariant?->warehouse_sequence !== null) {
+                $reservedWarehouseSequences[] = (int) $existingVariant->warehouse_sequence;
+            }
+
             if (array_key_exists('stock_quantity', $variantData) && $variantData['stock_quantity'] !== null && $variantData['stock_quantity'] !== '') {
                 $variantData['stock_quantity'] = InventoryQuantity::normalize($variantData['stock_quantity']);
             }
@@ -4253,6 +4448,15 @@ class ProductController extends Controller
             ])) {
                 throw ValidationException::withMessages([
                     'sku' => [$message ?? 'Mã SKU này đã được sử dụng bởi một sản phẩm khác.'],
+                ]);
+            }
+
+            if (Str::contains($normalizedMessage, [
+                'products_account_warehouse_sequence_unique',
+                'warehouse_sequence',
+            ])) {
+                throw ValidationException::withMessages([
+                    'warehouse_sequence' => ['Số thứ tự kho này đã được sử dụng bởi sản phẩm khác.'],
                 ]);
             }
         }
@@ -5148,6 +5352,7 @@ class ProductController extends Controller
         $compactCode = $this->compactSearchText($rawSearch);
         $includeNameMatches = $this->shouldIncludeNameMatchesInCodeSearch($rawSearch);
         $normalizedName = $includeNameMatches ? $this->normalizeNameSearchText($rawSearch) : '';
+        $warehouseSequenceSearch = ctype_digit($compactCode) ? (int) $compactCode : null;
 
         if ($normalizedCode === '' && $compactCode === '') {
             return [null, []];
@@ -5157,27 +5362,44 @@ class ProductController extends Controller
         $compactSkuExpr = $this->compactSearchExpression('products.sku');
         $nameExpr = $includeNameMatches ? $this->normalizedWordsExpression('products.name') : null;
         $compactNameExpr = $includeNameMatches ? $this->compactSearchExpression('products.name') : null;
-        $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $includeVariationMatches) {
+        $exactCodeSearch = function (Builder $searchQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $warehouseSequenceSearch, $includeVariationMatches) {
             $searchQuery
-                ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode) {
+                ->where(function (Builder $directQuery) use ($skuExpr, $compactSkuExpr, $normalizedCode, $compactCode, $warehouseSequenceSearch) {
                     $directQuery->whereRaw("{$skuExpr} = ?", [$normalizedCode]);
 
                     if ($compactCode !== '') {
                         $directQuery->orWhereRaw("{$compactSkuExpr} = ?", [$compactCode]);
                     }
+
+                    if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+                        $directQuery->orWhere(function (Builder $sequenceQuery) use ($warehouseSequenceSearch) {
+                            $this->applyWarehouseSequenceSearchConstraint(
+                                $sequenceQuery,
+                                $warehouseSequenceSearch,
+                                'products.warehouse_sequence',
+                                'products.type'
+                            );
+                        });
+                    }
                 });
 
             if ($includeVariationMatches) {
-                $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode) {
+                $searchQuery->orWhereHas('variations', function (Builder $variationQuery) use ($normalizedCode, $compactCode, $warehouseSequenceSearch) {
                     $variationSkuExpr = $this->loweredSearchExpression('sku');
                     $variationCompactSkuExpr = $this->compactSearchExpression('sku');
 
                     $variationQuery->where('status', true)
-                        ->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $normalizedCode, $compactCode) {
+                        ->where(function (Builder $directVariationQuery) use ($variationSkuExpr, $variationCompactSkuExpr, $normalizedCode, $compactCode, $warehouseSequenceSearch) {
                             $directVariationQuery->whereRaw("{$variationSkuExpr} = ?", [$normalizedCode]);
 
                             if ($compactCode !== '') {
                                 $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} = ?", [$compactCode]);
+                            }
+
+                            if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+                                $directVariationQuery->orWhere(function (Builder $sequenceQuery) use ($warehouseSequenceSearch) {
+                                    $this->applyWarehouseSequenceSearchConstraint($sequenceQuery, $warehouseSequenceSearch);
+                                });
                             }
                         });
                 });
@@ -5206,6 +5428,11 @@ class ProductController extends Controller
                 $searchRankingBindings[] = $compactCode;
             }
 
+            if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+                $searchRankingParts[] = "CASE WHEN products.warehouse_sequence = ? AND products.type NOT IN ('configurable', 'bundle') THEN 4800 ELSE 0 END";
+                $searchRankingBindings[] = $warehouseSequenceSearch;
+            }
+
             $searchRankingSql = '(' . implode(' + ', $searchRankingParts) . ')';
             $query->selectRaw("{$searchRankingSql} AS search_score", $searchRankingBindings);
             $query->where($exactCodeSearch);
@@ -5227,6 +5454,11 @@ class ProductController extends Controller
         if ($compactCode !== '') {
             $searchRankingParts[] = "CASE WHEN {$compactSkuExpr} = ? THEN 4900 ELSE 0 END";
             $searchRankingBindings[] = $compactCode;
+        }
+
+        if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+            $searchRankingParts[] = "CASE WHEN products.warehouse_sequence = ? AND products.type NOT IN ('configurable', 'bundle') THEN 4800 ELSE 0 END";
+            $searchRankingBindings[] = $warehouseSequenceSearch;
         }
 
         if ($compactCodePrefixLike !== null) {
@@ -5270,6 +5502,7 @@ class ProductController extends Controller
             $codeContainsLike,
             $compactCodeContainsLike,
             $compactCodeLooseLike,
+            $warehouseSequenceSearch,
             $includeNameMatches,
             $nameExpr,
             $compactNameExpr,
@@ -5298,6 +5531,7 @@ class ProductController extends Controller
                     $codeContainsLike,
                     $compactCodeContainsLike,
                     $compactCodeLooseLike,
+                    $warehouseSequenceSearch,
                     $includeNameMatches,
                     $nameExpr,
                     $compactNameExpr,
@@ -5312,6 +5546,17 @@ class ProductController extends Controller
 
                     if ($compactCodeLooseLike !== null) {
                         $directQuery->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeLooseLike]);
+                    }
+
+                    if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+                        $directQuery->orWhere(function (Builder $sequenceQuery) use ($warehouseSequenceSearch) {
+                            $this->applyWarehouseSequenceSearchConstraint(
+                                $sequenceQuery,
+                                $warehouseSequenceSearch,
+                                'products.warehouse_sequence',
+                                'products.type'
+                            );
+                        });
                     }
 
                     if ($includeNameMatches && $nameExpr !== null && $nameContainsLike !== null) {
@@ -5338,6 +5583,7 @@ class ProductController extends Controller
                     $codeContainsLike,
                     $compactCodeContainsLike,
                     $compactCodeLooseLike,
+                    $warehouseSequenceSearch,
                     $includeNameMatches,
                     $nameContainsLike,
                     $nameAliasConstraints
@@ -5356,6 +5602,7 @@ class ProductController extends Controller
                             $codeContainsLike,
                             $compactCodeContainsLike,
                             $compactCodeLooseLike,
+                            $warehouseSequenceSearch,
                             $includeNameMatches,
                             $nameContainsLike,
                             $nameAliasConstraints
@@ -5368,6 +5615,12 @@ class ProductController extends Controller
 
                             if ($compactCodeLooseLike !== null) {
                                 $directVariationQuery->orWhereRaw("{$variationCompactSkuExpr} LIKE ? ESCAPE '\\'", [$compactCodeLooseLike]);
+                            }
+
+                            if ($warehouseSequenceSearch !== null && $warehouseSequenceSearch > 0) {
+                                $directVariationQuery->orWhere(function (Builder $sequenceQuery) use ($warehouseSequenceSearch) {
+                                    $this->applyWarehouseSequenceSearchConstraint($sequenceQuery, $warehouseSequenceSearch);
+                                });
                             }
 
                             if ($includeNameMatches && $variationNameExpr !== null && $nameContainsLike !== null) {
@@ -6803,7 +7056,7 @@ class ProductController extends Controller
     protected function buildAdminProductListBaseQuery(Request $request, bool $includeNestedProducts = true): array
     {
         $hasLegacySupplierId = $this->productTableHasColumn('supplier_id');
-        $nestedProductColumns = 'id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id,store_id,profit_center_id';
+        $nestedProductColumns = 'id,account_id,sku,name,slug,price,expected_cost,cost_price,stock_quantity,type,inventory_unit_id,site_domain_id,store_id,profit_center_id,warehouse_sequence';
         if ($hasLegacySupplierId) {
             $nestedProductColumns .= ',supplier_id';
         }
@@ -6814,7 +7067,7 @@ class ProductController extends Controller
             'suppliers:id,name,code',
             'profitCenter:id,name,code,manager_user_id',
             'profitCenter.manager:id,name',
-            'parentConfigurable:id,name,sku,type',
+            'parentConfigurable:id,name,sku,type,warehouse_sequence',
             'account:id,name,site_code,public_domain_id',
             'account.publicDomain:id,domain,is_active,is_default',
             'unit:id,name',
@@ -6834,7 +7087,7 @@ class ProductController extends Controller
         if ($includeNestedProducts) {
             $nestedRelations = [
                 'variations' => fn ($variationQuery) => $variationQuery->where('products.status', true),
-                'variations.parentConfigurable:id,name,sku,type',
+                'variations.parentConfigurable:id,name,sku,type,warehouse_sequence',
                 'variations.account:id,name,site_code,public_domain_id',
                 'variations.account.publicDomain:id,domain,is_active,is_default',
                 'variations.category:id,name,code,slug',
@@ -6885,7 +7138,7 @@ class ProductController extends Controller
 
         $selectColumns = [
             'id', 'account_id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity',
-            'inventory_unit_id', 'profit_center_id', 'sort_order',
+            'inventory_unit_id', 'profit_center_id', 'sort_order', 'warehouse_sequence',
             'type', 'category_id', 'is_featured', 'is_new', 'created_at', 'status', 'specifications', 'video_url', 'video_urls', 'bundle_title', 'site_domain_id', 'store_id', 'meta_title', 'meta_description',
             'google_merchant_sync_status', 'google_merchant_last_synced_at', 'google_merchant_last_attempted_at',
             'google_merchant_last_error', 'google_merchant_offer_id', 'google_merchant_last_action',
@@ -7176,6 +7429,7 @@ class ProductController extends Controller
                     'products.price',
                     'products.cost_price',
                     'products.expected_cost',
+                    'products.warehouse_sequence',
                     'products.type',
                     'products.category_id',
                     'products.inventory_unit_id',
@@ -7229,6 +7483,7 @@ class ProductController extends Controller
                 'products.price',
                 'products.cost_price',
                 'products.expected_cost',
+                'products.warehouse_sequence',
                 'products.type',
                 'products.category_id',
                 'products.inventory_unit_id',
@@ -7387,6 +7642,7 @@ class ProductController extends Controller
                         'sku' => $resolvedProduct->sku,
                         'display_name' => $resolvedProduct->name,
                         'display_sku' => $resolvedProduct->sku,
+                        'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($resolvedProduct),
                         'category_id' => $resolvedProduct->category_id !== null ? (int) $resolvedProduct->category_id : null,
                         'profit_center_id' => $resolvedProduct->profit_center_id !== null
                             ? (int) $resolvedProduct->profit_center_id
@@ -7462,7 +7718,9 @@ class ProductController extends Controller
             'products.category_id',
             'products.inventory_unit_id',
             'products.profit_center_id',
+            'products.warehouse_sequence',
         ]);
+        $query->withExists('variations');
 
         if (!empty($sourceCatalogAccountIds)) {
             $query->whereIn('products.account_id', $sourceCatalogAccountIds);
@@ -7541,7 +7799,7 @@ class ProductController extends Controller
             'parentConfigurable' => fn ($parentQuery) => $parentQuery
                 ->withoutGlobalScope('account_id')
                 ->when(!empty($sourceCatalogAccountIds), fn ($query) => $query->whereIn('products.account_id', $sourceCatalogAccountIds))
-                ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id')
+                ->select('products.id', 'products.account_id', 'products.name', 'products.sku', 'products.inventory_unit_id', 'products.profit_center_id', 'products.warehouse_sequence')
                 ->with(['unit:id,name']),
             'variations' => function ($variationQuery) use ($pickerAttributeFilters, $sourceCatalogAccountIds) {
                 $variationQuery->withoutGlobalScope('account_id');
@@ -7549,6 +7807,7 @@ class ProductController extends Controller
                     $variationQuery->whereIn('products.account_id', $sourceCatalogAccountIds);
                 }
                 $variationQuery->where('products.status', true);
+                $variationQuery->withExists('variations');
                 $this->applyVariationAttributeFilters($variationQuery, $pickerAttributeFilters);
             },
             'variations.unit:id,name',
@@ -7594,6 +7853,7 @@ class ProductController extends Controller
 
         $pickerPayload = $pageProducts->map(function (Product $product) use ($selectedBundleVariantMap, $sourceContexts) {
             $parentProduct = $product->parentConfigurable->first();
+            $hasVariantChildren = $product->hasVariantChildren();
             $attributeSummary = $this->pickerAttributeSummary($product);
             $displayName = $this->buildOrderItemDisplayName($product, $parentProduct);
             $displayName = trim($displayName) !== '' ? $displayName : $product->name;
@@ -7605,6 +7865,7 @@ class ProductController extends Controller
                 'slug' => $product->slug,
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
+                'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($product),
                 'name' => $product->name,
                 'display_name' => $displayName,
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
@@ -7629,7 +7890,7 @@ class ProductController extends Controller
                 'main_image' => $this->pickerPrimaryImage($product),
                 'attribute_values' => $this->pickerAttributePayload($product),
                 'attribute_summary' => $attributeSummary,
-                'has_variations' => $product->variations->isNotEmpty(),
+                'has_variations' => $hasVariantChildren,
                 'variation_count' => $product->variations->count(),
                 'variations' => $product->variations
                     ->map(function (Product $variation) use ($product, $sourceContexts) {
@@ -7646,6 +7907,7 @@ class ProductController extends Controller
                             'slug' => $variation->slug,
                             'sku' => $variation->sku,
                             'display_sku' => $variation->sku,
+                            'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($variation),
                             'name' => $variation->name,
                             'display_name' => $variationDisplayName,
                             'entry_kind' => 'variation',
@@ -7784,14 +8046,38 @@ class ProductController extends Controller
         }
 
         if ($request->filled('category_ids')) {
-            $catIds = is_array($request->category_ids) ? $request->category_ids : explode(',', $request->category_ids);
-            $query->where(function ($q) use ($catIds) {
-                $q->whereIn('category_id', $catIds)
-                    ->orWhereHas('categories', function ($sub) use ($catIds) {
-                    $sub->whereIn('categories.id', $catIds);
-                }
-                );
-            });
+            $rawCategoryIds = is_array($request->category_ids) ? $request->category_ids : explode(',', $request->category_ids);
+            $includeUncategorized = collect($rawCategoryIds)
+                ->contains(fn ($value) => trim(strtolower((string) $value)) === 'uncategorized');
+            $catIds = collect($rawCategoryIds)
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (!empty($catIds) || $includeUncategorized) {
+                $query->where(function ($q) use ($catIds, $includeUncategorized) {
+                    if (!empty($catIds)) {
+                        $q->where(function ($categoryQuery) use ($catIds) {
+                            $categoryQuery
+                                ->whereIn('category_id', $catIds)
+                                ->orWhereHas('categories', function ($sub) use ($catIds) {
+                                    $sub->whereIn('categories.id', $catIds);
+                                });
+                        });
+                    }
+
+                    if ($includeUncategorized) {
+                        $method = !empty($catIds) ? 'orWhere' : 'where';
+                        $q->{$method}(function ($uncategorizedQuery) {
+                            $uncategorizedQuery
+                                ->whereNull('category_id')
+                                ->doesntHave('categories');
+                        });
+                    }
+                });
+            }
         }
 
         if ($request->filled('store_id')) {
@@ -8341,6 +8627,10 @@ class ProductController extends Controller
 
     public function exportExcel(Request $request)
     {
+        if ($this->isWarehouseLabelProductExport($request)) {
+            return $this->exportWarehouseLabelExcel($request);
+        }
+
         $columns = $this->resolveProductExportColumns($request->input('columns'));
 
         if (empty($columns)) {
@@ -8372,6 +8662,451 @@ class ProductController extends Controller
                 'rows' => $rows,
             ]]
         );
+    }
+
+    private function isWarehouseLabelProductExport(Request $request): bool
+    {
+        $mode = trim(strtolower((string) $request->input('export_mode', $request->input('mode', ''))));
+        $mode = str_replace(['-', ' '], '_', $mode);
+
+        return $request->boolean('warehouse_labels')
+            || in_array($mode, ['warehouse_labels', 'stock_labels', 'label', 'labels', 'tem_kho', 'tem_nhan'], true);
+    }
+
+    private function exportWarehouseLabelExcel(Request $request)
+    {
+        $products = $this->collectProductsForExcelExportV2($request, ['product_link', 'special_price']);
+        $domains = $this->resolveScopedSiteDomains($request);
+        $fallbackBaseUrl = $this->resolveProductLinkFallbackBaseUrl($request);
+        $selectedCategoryIds = $this->resolveWarehouseLabelSelectedCategoryIds($request);
+        $includeParentRows = ! $request->has('include_parent_rows')
+            || filter_var($request->input('include_parent_rows'), FILTER_VALIDATE_BOOLEAN);
+
+        $entries = $this->buildWarehouseLabelExportEntries(
+            $products,
+            $domains,
+            $fallbackBaseUrl,
+            $selectedCategoryIds,
+            $includeParentRows
+        );
+
+        $mainHeaders = $this->warehouseLabelExportHeaders();
+        $editHeaders = $this->warehouseLabelEditHeaders();
+        $mainRows = array_merge([$mainHeaders], array_map(
+            fn (array $entry) => $this->formatWarehouseLabelExportRow($entry),
+            $entries
+        ));
+        $editRows = array_merge([$editHeaders], array_map(
+            fn (array $entry) => $this->formatWarehouseLabelEditRow($entry),
+            $entries
+        ));
+        $missingRows = array_merge([$editHeaders], array_map(
+            fn (array $entry) => $this->formatWarehouseLabelEditRow($entry),
+            array_values(array_filter($entries, fn (array $entry) => !empty($entry['is_missing_category'])))
+        ));
+
+        $sheetOptions = [
+            'freeze_top_row' => true,
+            'auto_filter' => true,
+            'auto_width' => true,
+        ];
+
+        return $this->xlsxDownloadResponse(
+            'tem-nhan-kho-' . now()->format('Ymd-His') . '.xlsx',
+            [
+                array_merge([
+                    'name' => 'Tem kho',
+                    'rows' => $mainRows,
+                    'column_widths' => [8, 28, 32, 16, 30, 22, 34, 34, 14, 12, 14, 12, 12, 18, 42, 28],
+                ], $sheetOptions),
+                array_merge([
+                    'name' => 'Du lieu sua ten',
+                    'rows' => $editRows,
+                    'column_widths' => [20, 36, 36, 18, 30, 32, 14, 12, 14, 12, 28],
+                ], $sheetOptions),
+                array_merge([
+                    'name' => 'Chua danh muc',
+                    'rows' => $missingRows,
+                    'column_widths' => [20, 36, 36, 18, 30, 32, 14, 12, 14, 12, 28],
+                ], $sheetOptions),
+            ]
+        );
+    }
+
+    private function warehouseLabelExportHeaders(): array
+    {
+        return [
+            'STT',
+            'Nhóm danh mục',
+            'Danh mục',
+            'Mã SP cha',
+            'Tên SP cha',
+            'SKU tem',
+            'Tên gốc',
+            'Tên in tem',
+            'Loại dòng',
+            'ĐVT',
+            'Giá bán',
+            'Tồn kho',
+            'SL dòng',
+            'Số tem',
+            'Link sản phẩm',
+            'Ghi chú kho',
+        ];
+    }
+
+    private function warehouseLabelEditHeaders(): array
+    {
+        return [
+            'SKU tem',
+            'Tên in tem',
+            'Tên gốc',
+            'Mã SP cha',
+            'Tên SP cha',
+            'Danh mục',
+            'Loại dòng',
+            'ĐVT',
+            'Giá bán',
+            'Số tem',
+            'Ghi chú kho',
+        ];
+    }
+
+    private function resolveWarehouseLabelSelectedCategoryIds(Request $request): array
+    {
+        $values = [];
+
+        foreach (['category_id', 'category_ids'] as $key) {
+            $value = $request->input($key);
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $values = array_merge($values, is_array($value) ? $value : explode(',', (string) $value));
+        }
+
+        return collect($values)
+            ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function buildWarehouseLabelExportEntries(
+        array $products,
+        Collection $domains,
+        ?string $fallbackBaseUrl,
+        array $selectedCategoryIds,
+        bool $includeParentRows
+    ): array {
+        $entries = [];
+
+        foreach (array_values($products) as $productIndex => $product) {
+            if (!is_array($product)) {
+                continue;
+            }
+
+            if (!$this->shouldIncludeProductInWarehouseLabelExport($product)) {
+                continue;
+            }
+
+            $categoryInfo = $this->resolveWarehouseLabelCategoryInfo($product, $selectedCategoryIds);
+            $childRows = $this->resolveWarehouseLabelChildRows($product);
+            $hasChildren = !empty($childRows);
+            $sourceProductKey = (string) ($product['id'] ?? ('row_' . $productIndex));
+
+            if ($includeParentRows || !$hasChildren) {
+                $entries[] = $this->makeWarehouseLabelExportEntry(
+                    $product,
+                    $product,
+                    $categoryInfo,
+                    $domains,
+                    $fallbackBaseUrl,
+                    $hasChildren ? 'Cha' : 'Sản phẩm',
+                    $productIndex,
+                    0,
+                    $sourceProductKey,
+                    1,
+                    $hasChildren ? 'Dòng cha để đối chiếu biến thể' : ''
+                );
+            }
+
+            foreach ($childRows as $childIndex => $childRow) {
+                $entries[] = $this->makeWarehouseLabelExportEntry(
+                    $product,
+                    $childRow['product'],
+                    $categoryInfo,
+                    $domains,
+                    $fallbackBaseUrl,
+                    'Con',
+                    $productIndex,
+                    $childIndex + 1,
+                    $sourceProductKey,
+                    $childRow['quantity'] ?? 1,
+                    $childRow['note'] ?? ''
+                );
+            }
+        }
+
+        usort($entries, function (array $left, array $right) {
+            return [
+                $left['category_rank'],
+                $left['category_name_sort'],
+                $left['source_product_index'],
+                $left['child_index'],
+            ] <=> [
+                $right['category_rank'],
+                $right['category_name_sort'],
+                $right['source_product_index'],
+                $right['child_index'],
+            ];
+        });
+
+        $displayProductIndexes = [];
+        $displayProductCounter = 0;
+
+        foreach ($entries as &$entry) {
+            $key = (string) $entry['source_product_key'];
+            if (!array_key_exists($key, $displayProductIndexes)) {
+                $displayProductCounter++;
+                $displayProductIndexes[$key] = $displayProductCounter;
+            }
+
+            $baseIndex = $displayProductIndexes[$key];
+            $entry['stt'] = $entry['child_index'] > 0
+                ? ($baseIndex . '.' . $entry['child_index'])
+                : (string) $baseIndex;
+        }
+        unset($entry);
+
+        return $entries;
+    }
+
+    private function shouldIncludeProductInWarehouseLabelExport(array $product): bool
+    {
+        return in_array(strtolower(trim((string) ($product['type'] ?? ''))), ['simple', 'configurable'], true);
+    }
+
+    private function resolveWarehouseLabelChildRows(array $product): array
+    {
+        $type = (string) ($product['type'] ?? '');
+
+        if ($type === 'configurable') {
+            return collect($product['variations'] ?? [])
+                ->filter(fn ($variant) => is_array($variant))
+                ->map(fn (array $variant) => [
+                    'product' => $variant,
+                    'quantity' => 1,
+                    'note' => 'Biến thể của sản phẩm cha',
+                ])
+                ->values()
+                ->all();
+        }
+
+        return [];
+    }
+
+    private function makeWarehouseLabelExportEntry(
+        array $parentProduct,
+        array $rowProduct,
+        array $categoryInfo,
+        Collection $domains,
+        ?string $fallbackBaseUrl,
+        string $rowType,
+        int $sourceProductIndex,
+        int $childIndex,
+        string $sourceProductKey,
+        mixed $componentQuantity = 1,
+        string $note = ''
+    ): array {
+        $categoryNames = $this->resolveWarehouseLabelCategoryNames($parentProduct);
+        $isMissingCategory = !empty($categoryInfo['is_missing']);
+        $noteParts = array_filter([
+            trim($note),
+            $isMissingCategory ? 'Cần gắn danh mục trước khi in' : '',
+        ]);
+        $originalName = trim((string) ($rowProduct['name'] ?? ''));
+
+        return [
+            'stt' => '',
+            'category_group' => $categoryInfo['name'],
+            'category' => $isMissingCategory ? 'Chưa có' : ($categoryNames !== '' ? $categoryNames : $categoryInfo['name']),
+            'parent_sku' => trim((string) ($parentProduct['sku'] ?? '')),
+            'parent_name' => trim((string) ($parentProduct['name'] ?? '')),
+            'sku' => trim((string) ($rowProduct['sku'] ?? '')),
+            'original_name' => $originalName,
+            'label_name' => $originalName,
+            'row_type' => $rowType,
+            'unit' => $this->resolveWarehouseLabelUnitName($rowProduct, $parentProduct),
+            'price' => $this->resolveWarehouseLabelPrice($rowProduct, $parentProduct),
+            'stock' => $this->resolveWarehouseLabelStock($rowProduct),
+            'component_quantity' => $componentQuantity,
+            'label_quantity' => $this->resolveWarehouseLabelStock($rowProduct),
+            'product_link' => $this->buildProductPageUrlFromArray(
+                (!empty($rowProduct['slug']) || !empty($rowProduct['id'])) ? $rowProduct : $parentProduct,
+                $domains,
+                $fallbackBaseUrl
+            ),
+            'note' => implode(' | ', $noteParts),
+            'is_missing_category' => $isMissingCategory,
+            'category_rank' => (int) $categoryInfo['rank'],
+            'category_name_sort' => $categoryInfo['sort_name'],
+            'source_product_index' => $sourceProductIndex,
+            'source_product_key' => $sourceProductKey,
+            'child_index' => $childIndex,
+        ];
+    }
+
+    private function formatWarehouseLabelExportRow(array $entry): array
+    {
+        return [
+            $entry['stt'],
+            $entry['category_group'],
+            $entry['category'],
+            $entry['parent_sku'],
+            $entry['parent_name'],
+            $entry['sku'],
+            $entry['original_name'],
+            $entry['label_name'],
+            $entry['row_type'],
+            $entry['unit'],
+            $entry['price'],
+            $entry['stock'],
+            $entry['component_quantity'],
+            $entry['label_quantity'],
+            $entry['product_link'],
+            $entry['note'],
+        ];
+    }
+
+    private function formatWarehouseLabelEditRow(array $entry): array
+    {
+        return [
+            $entry['sku'],
+            $entry['label_name'],
+            $entry['original_name'],
+            $entry['parent_sku'],
+            $entry['parent_name'],
+            $entry['category'],
+            $entry['row_type'],
+            $entry['unit'],
+            $entry['price'],
+            $entry['label_quantity'],
+            $entry['note'],
+        ];
+    }
+
+    private function resolveWarehouseLabelCategoryInfo(array $product, array $selectedCategoryIds): array
+    {
+        $categories = $this->collectWarehouseLabelCategories($product);
+
+        if (empty($categories)) {
+            return [
+                'id' => null,
+                'name' => 'Chưa gắn danh mục',
+                'rank' => 999999,
+                'sort_name' => 'zzzzzz_chua_gan_danh_muc',
+                'is_missing' => true,
+            ];
+        }
+
+        if (!empty($selectedCategoryIds)) {
+            foreach (array_values($selectedCategoryIds) as $rank => $categoryId) {
+                foreach ($categories as $category) {
+                    if ((int) ($category['id'] ?? 0) === (int) $categoryId) {
+                        return [
+                            'id' => (int) $categoryId,
+                            'name' => $category['name'],
+                            'rank' => $rank,
+                            'sort_name' => $this->normalizeImportLookupValue($category['name']),
+                            'is_missing' => false,
+                        ];
+                    }
+                }
+            }
+        }
+
+        $category = $categories[0];
+
+        return [
+            'id' => $category['id'],
+            'name' => $category['name'],
+            'rank' => 1000,
+            'sort_name' => $this->normalizeImportLookupValue($category['name']),
+            'is_missing' => false,
+        ];
+    }
+
+    private function collectWarehouseLabelCategories(array $product): array
+    {
+        $primaryCategory = data_get($product, 'category');
+
+        return collect($product['categories'] ?? [])
+            ->prepend($primaryCategory)
+            ->filter(fn ($category) => is_array($category))
+            ->map(function (array $category) {
+                $id = is_numeric($category['id'] ?? null) ? (int) $category['id'] : null;
+                $name = trim((string) ($category['name'] ?? ''));
+
+                if ($name === '' && $id !== null) {
+                    $name = 'ID:' . $id;
+                }
+
+                return [
+                    'id' => $id,
+                    'name' => $name,
+                ];
+            })
+            ->filter(fn (array $category) => $category['name'] !== '')
+            ->unique(function (array $category) {
+                return $category['id'] !== null
+                    ? 'id:' . $category['id']
+                    : 'name:' . $this->normalizeImportLookupValue($category['name']);
+            })
+            ->values()
+            ->all();
+    }
+
+    private function resolveWarehouseLabelCategoryNames(array $product): string
+    {
+        return collect($this->collectWarehouseLabelCategories($product))
+            ->pluck('name')
+            ->filter()
+            ->implode(' | ');
+    }
+
+    private function resolveWarehouseLabelUnitName(array $product, array $parentProduct): string
+    {
+        return trim((string) (
+            data_get($product, 'unit.name')
+            ?: data_get($parentProduct, 'unit.name')
+            ?: ''
+        ));
+    }
+
+    private function resolveWarehouseLabelPrice(array $product, array $parentProduct): mixed
+    {
+        $candidates = [
+            $product['special_price'] ?? null,
+            data_get($product, 'pivot.price'),
+            $product['price'] ?? null,
+            $parentProduct['special_price'] ?? null,
+            $parentProduct['price'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate !== null && $candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveWarehouseLabelStock(array $product): mixed
+    {
+        return InventoryQuantity::normalize($product['actual_stock'] ?? $product['stock_quantity'] ?? 0);
     }
 
     public function importExcel(Request $request)
@@ -9194,13 +9929,15 @@ class ProductController extends Controller
 
         return Product::withTrashed()
             ->whereIn('id', $variantIds)
-            ->get(['id', 'sku', 'name', 'price', 'expected_cost', 'cost_price', 'stock_quantity'])
+            ->get(['id', 'sku', 'name', 'slug', 'price', 'expected_cost', 'cost_price', 'stock_quantity', 'inventory_unit_id'])
             ->mapWithKeys(function (Product $variant) {
                 return [
                     (int) $variant->id => [
                         'id' => (int) $variant->id,
                         'sku' => trim((string) ($variant->sku ?? '')),
                         'name' => trim((string) ($variant->name ?? '')),
+                        'slug' => trim((string) ($variant->slug ?? '')),
+                        'inventory_unit_id' => $variant->inventory_unit_id !== null ? (int) $variant->inventory_unit_id : null,
                         'price' => $variant->price,
                         'expected_cost' => $variant->expected_cost ?? $variant->cost_price,
                         'stock_quantity' => InventoryQuantity::normalize($variant->stock_quantity ?? 0),
@@ -10972,6 +11709,7 @@ class ProductController extends Controller
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|max:120',
+            'warehouse_sequence' => 'nullable|integer|min:1',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
             'meta_keywords' => 'nullable|string',
@@ -11014,6 +11752,7 @@ class ProductController extends Controller
             'variants' => 'nullable|array',
             'variants.*.id' => 'nullable|integer',
             'variants.*.sku' => 'nullable|string|max:120',
+            'variants.*.warehouse_sequence' => 'nullable|integer|min:1',
             'variants.*.name' => 'nullable|string|max:255',
             'variants.*.price' => 'nullable|numeric|min:0',
             'variants.*.expected_cost' => 'nullable|numeric|min:0',
@@ -11065,8 +11804,19 @@ class ProductController extends Controller
             $product = DB::transaction(function () use ($request, $validated, $categoryIds, $supplierIds) {
                 $accountId = $this->catalogAccountId($request);
                 $this->prepareProductSku($validated);
+                $parentWarehouseSequence = $this->prepareProductWarehouseSequence(
+                    $validated,
+                    null,
+                    is_numeric($accountId) ? (int) $accountId : null
+                );
                 $preparedVariants = $validated['type'] === 'configurable'
-                    ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'])
+                    ? $this->prepareVariantPayloads(
+                        $request->input('variants', []),
+                        $validated['sku'],
+                        null,
+                        is_numeric($accountId) ? (int) $accountId : null,
+                        [$parentWarehouseSequence]
+                    )
                     : [];
                 $defaultVariantIndex = $this->resolveDefaultVariantIndex($preparedVariants);
 
@@ -11205,6 +11955,7 @@ class ProductController extends Controller
                             'expected_cost' => $vData['expected_cost'] ?? null,
                             'weight' => $vData['weight'] ?? null,
                             'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
+                            'warehouse_sequence' => $vData['warehouse_sequence'] ?? null,
                             'supplier_id' => $product->supplier_id,
                             'stock_quantity' => $vData['stock_quantity'] ?? 0,
                             'category_id' => $product->category_id,
@@ -11445,6 +12196,7 @@ class ProductController extends Controller
             'account_id' => (int) ($parentProduct->account_id ?? 0),
             'sku' => $parentProduct->sku,
             'display_sku' => $parentProduct->sku,
+            'warehouse_sequence' => null,
             'name' => $parentProduct->name,
             'display_name' => trim((string) $parentProduct->name . ' - ' . (string) ($option['option_title'] ?? '')),
             'price' => $optionPrice,
@@ -11599,14 +12351,14 @@ class ProductController extends Controller
 
         $products = Product::withTrashed()
             ->withoutGlobalScope('account_id')
-            ->select(['id', 'account_id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'status', 'deleted_at', 'inventory_unit_id', 'type', 'bundle_title', 'category_id', 'profit_center_id'])
+            ->select(['id', 'account_id', 'sku', 'name', 'price', 'cost_price', 'expected_cost', 'warehouse_sequence', 'status', 'deleted_at', 'inventory_unit_id', 'type', 'bundle_title', 'category_id', 'profit_center_id'])
             ->with([
                 'unit:id,name',
                 'attributeValues:id,product_id,attribute_id,value',
                 'parentConfigurable' => fn ($query) => $query
                     ->withoutGlobalScope('account_id')
                     ->withTrashed()
-                    ->select('products.id', 'products.account_id', 'products.name', 'products.inventory_unit_id')
+                    ->select('products.id', 'products.account_id', 'products.name', 'products.inventory_unit_id', 'products.warehouse_sequence')
                     ->with(['unit:id,name']),
             ])
             ->whereIn('id', $productIdsToLoad)
@@ -11763,6 +12515,7 @@ class ProductController extends Controller
                 'account_id' => (int) ($product->account_id ?? 0),
                 'sku' => $product->sku,
                 'display_sku' => $product->sku,
+                'warehouse_sequence' => $this->productWarehouseSequenceForDisplay($product),
                 'name' => $product->name,
                 'display_name' => $displayName,
                 'entry_kind' => $parentProduct ? 'variation' : 'product',
@@ -12052,6 +12805,7 @@ class ProductController extends Controller
             'weight' => 'nullable|string',
             'inventory_unit_id' => 'nullable|exists:inventory_units,id',
             'sku' => 'nullable|string|max:120',
+            'warehouse_sequence' => 'nullable|integer|min:1',
             'status' => 'nullable|boolean',
             'meta_title' => 'nullable|string',
             'meta_description' => 'nullable|string',
@@ -12099,6 +12853,7 @@ class ProductController extends Controller
             'variants' => 'nullable|array',
             'variants.*.id' => 'nullable|integer',
             'variants.*.sku' => 'nullable|string|max:120',
+            'variants.*.warehouse_sequence' => 'nullable|integer|min:1',
             'variants.*.name' => 'nullable|string|max:255',
             'variants.*.price' => 'nullable|numeric|min:0',
             'variants.*.expected_cost' => 'nullable|numeric|min:0',
@@ -12184,9 +12939,20 @@ class ProductController extends Controller
         try {
             $product = DB::transaction(function () use ($request, $validated, $product, $incomingCategoryIds, $categoryIds, $incomingSupplierIds, $supplierIds, $originalRetailPrice) {
                 $this->prepareProductSku($validated, $product);
+                $parentWarehouseSequence = $this->prepareProductWarehouseSequence(
+                    $validated,
+                    $product,
+                    $product->account_id !== null ? (int) $product->account_id : null
+                );
                 $resolvedType = $validated['type'] ?? $product->type;
                 $preparedVariants = ($request->has('variants') && $resolvedType === 'configurable')
-                    ? $this->prepareVariantPayloads($request->input('variants', []), $validated['sku'], $product)
+                    ? $this->prepareVariantPayloads(
+                        $request->input('variants', []),
+                        $validated['sku'],
+                        $product,
+                        $product->account_id !== null ? (int) $product->account_id : null,
+                        [$parentWarehouseSequence]
+                    )
                     : [];
                 $defaultVariantIndex = $this->resolveDefaultVariantIndex($preparedVariants);
 
@@ -12417,6 +13183,10 @@ class ProductController extends Controller
                         $variantPayload['stock_quantity'] = $vData['stock_quantity'];
                     }
 
+                    if (array_key_exists('warehouse_sequence', $vData)) {
+                        $variantPayload['warehouse_sequence'] = $vData['warehouse_sequence'];
+                    }
+
                     $variant->update($variantPayload);
 
                     if ($incomingSupplierIds) {
@@ -12488,6 +13258,7 @@ class ProductController extends Controller
                         'expected_cost' => $vData['expected_cost'] ?? null,
                         'weight' => $vData['weight'] ?? null,
                         'inventory_unit_id' => $vData['inventory_unit_id'] ?? $product->inventory_unit_id,
+                        'warehouse_sequence' => $vData['warehouse_sequence'] ?? null,
                         'supplier_id' => $product->supplier_id,
                         'stock_quantity' => $vData['stock_quantity'] ?? 0,
                         'category_id' => $product->category_id,

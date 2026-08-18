@@ -439,6 +439,19 @@ export const productApi = {
     reorder: (productIds) => api.post('/products/reorder', { product_ids: productIds }),
 };
 
+export const productCategoryCloneApi = {
+    preview: (data) => api.post('/products/category-clone/preview', data),
+    apply: (data) => api.post('/products/category-clone/apply', data),
+};
+
+export const productReplacementApi = {
+    getAll: (params, signal) => api.get('/product-replacements', { params, signal }),
+    create: (data) => api.post('/product-replacements', data),
+    update: (id, data) => api.put(`/product-replacements/${id}`, data),
+    destroy: (id) => api.delete(`/product-replacements/${id}`),
+    lookup: (params, signal) => api.get('/product-replacements/lookup', { params, signal }),
+};
+
 export const productGroupApi = {
     getAll: () => api.get('/product-groups'),
     getOne: (id) => api.get(`/product-groups/${id}`),
@@ -592,6 +605,17 @@ export const warehouseApi = {
     destroy: (id) => api.delete(`/warehouses/${id}`),
     getInventory: (id) => api.get(`/warehouses/${id}/inventory`),
     updateInventory: (id, data) => api.post(`/warehouses/${id}/inventory`, data),
+};
+
+export const warehouseShelfApi = {
+    getAll: (params, signal) => api.get('/warehouse-shelves', { params, signal }),
+    search: (params, signal) => api.get('/warehouse-shelves/search', { params, signal }),
+    getOne: (id) => api.get(`/warehouse-shelves/${id}`),
+    create: (data) => api.post('/warehouse-shelves', data),
+    update: (id, data) => api.put(`/warehouse-shelves/${id}`, data),
+    destroy: (id) => api.delete(`/warehouse-shelves/${id}`),
+    assign: (id, data) => api.post(`/warehouse-shelves/${id}/assign`, data),
+    removeLocation: (id) => api.delete(`/warehouse-shelf-locations/${id}`),
 };
 
 export const orderApi = {

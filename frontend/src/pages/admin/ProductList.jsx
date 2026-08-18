@@ -15,6 +15,7 @@ import ProductSortModal from '../../components/admin/ProductSortModal';
 import ProductImageBulkAppendModal from '../../components/admin/ProductImageBulkAppendModal';
 import ProductImageRefreshModal from '../../components/admin/ProductImageRefreshModal';
 import ProductCategoryImageManagerModal from '../../components/admin/ProductCategoryImageManagerModal';
+import ProductCategoryCloneModal from '../../components/admin/ProductCategoryCloneModal';
 import ProductSeoBulkModal from '../../components/admin/ProductSeoBulkModal';
 import { ACTIVE_PRODUCT_TYPE_KEYS, ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_META, sanitizeActiveProductTypeValues } from '../../config/productTypes';
 import {
@@ -291,6 +292,8 @@ const DEFAULT_EXPORT_COLUMN_IDS = ['name', 'product_link'];
 const CONTENT_ONLY_EXPORT_COLUMN_IDS = ['sku', 'name', 'child_names', 'description', 'specifications', 'meta_title', 'meta_description'];
 const CONTENT_ONLY_IMPORT_FIELD_IDS = ['description', 'specifications', 'seo'];
 const LOCAL_STRUCTURE_EXPORT_COLUMN_IDS = ['sku', 'name', 'type', 'bundle_title', 'child_names', 'variant_data', 'component_data', 'description', 'specifications', 'meta_title', 'meta_description'];
+const STANDARD_PRODUCT_EXPORT_MODE = 'standard';
+const WAREHOUSE_LABEL_EXPORT_MODE = 'warehouse_labels';
 const EXPORT_EXCLUDED_COLUMN_IDS = new Set(['actions', 'images', 'unit']);
 const DEFAULT_IMPORT_MODE = 'replace_all';
 const DEFAULT_IMPORT_MISSING_PRODUCT_ACTION = 'create';
@@ -1447,8 +1450,11 @@ const ProductList = () => {
         [loadingExpandedIds],
     );
     const [exportColumnIds, setExportColumnIds] = useState(DEFAULT_EXPORT_COLUMN_IDS);
+    const [exportMode, setExportMode] = useState(STANDARD_PRODUCT_EXPORT_MODE);
+    const [exportIncludeParentRows, setExportIncludeParentRows] = useState(true);
     const [exportOnlySelected, setExportOnlySelected] = useState(false);
     const [isExportingExcel, setIsExportingExcel] = useState(false);
+    const [isSelectingAllFilteredProducts, setIsSelectingAllFilteredProducts] = useState(false);
     const [isImportingExcel, setIsImportingExcel] = useState(false);
     const [pendingImportFile, setPendingImportFile] = useState(null);
     const [importMode, setImportMode] = useState(DEFAULT_IMPORT_MODE);
@@ -1516,6 +1522,7 @@ const ProductList = () => {
     const [showBulkImageAppendModal, setShowBulkImageAppendModal] = useState(false);
     const [showBulkImageRefreshModal, setShowBulkImageRefreshModal] = useState(false);
     const [showCategoryImageManagerModal, setShowCategoryImageManagerModal] = useState(false);
+    const [showCategoryCloneModal, setShowCategoryCloneModal] = useState(false);
     const [showBulkSeoModal, setShowBulkSeoModal] = useState(false);
     const [bulkSeoAutoStartToken, setBulkSeoAutoStartToken] = useState(null);
     const [bulkUpdateData, setBulkUpdateData] = useState({});
@@ -3371,6 +3378,25 @@ const ProductList = () => {
 
     const handleRefresh = () => fetchProducts(1);
 
+    const categoryCloneInitialSourceId = useMemo(() => {
+        const categoryIds = Array.isArray(filters.category_id)
+            ? filters.category_id.filter((id) => id && id !== 'uncategorized')
+            : [];
+
+        return categoryIds.length === 1 ? String(categoryIds[0]) : '';
+    }, [filters.category_id]);
+
+    const handleCategoryCloneCopied = (payload) => {
+        setShowCategoryCloneModal(false);
+        setNotification({
+            type: 'success',
+            message: payload?.message || 'Đã copy danh mục sản phẩm.',
+        });
+        setTimeout(() => setNotification(null), 4000);
+        fetchInitialData();
+        fetchProducts(1);
+    };
+
     const closeImportErrorModal = () => {
         setImportExcelErrors([]);
         setImportExcelErrorMessage('');
@@ -3398,18 +3424,26 @@ const ProductList = () => {
     };
 
     const applyContentOnlyExportPreset = () => {
+        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
         setExportColumnIds(
             CONTENT_ONLY_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id))
         );
     };
 
     const applyLocalStructureExportPreset = () => {
+        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
         setExportColumnIds(
             LOCAL_STRUCTURE_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id))
         );
     };
 
+    const applyWarehouseLabelExportPreset = () => {
+        setExportMode(WAREHOUSE_LABEL_EXPORT_MODE);
+        setExportIncludeParentRows(true);
+    };
+
     const toggleExportColumn = (columnId) => {
+        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
         setExportColumnIds((prev) => (
             prev.includes(columnId)
                 ? prev.filter((id) => id !== columnId)
@@ -3418,11 +3452,14 @@ const ProductList = () => {
     };
 
     const handleSelectAllExportColumns = () => {
+        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
         setExportColumnIds(exportFieldOptions.map((option) => option.id));
     };
 
     const handleDownloadExportExcel = async () => {
-        if (exportColumnIds.length === 0) {
+        const isWarehouseLabelExport = exportMode === WAREHOUSE_LABEL_EXPORT_MODE;
+
+        if (!isWarehouseLabelExport && exportColumnIds.length === 0) {
             setNotification({ type: 'error', message: 'Hãy chọn ít nhất 1 cột để xuất Excel.' });
             setTimeout(() => setNotification(null), 3000);
             return;
@@ -3432,21 +3469,27 @@ const ProductList = () => {
         try {
             const params = {
                 ...buildQueryParams(1, filters, sortConfig, pagination.per_page),
-                columns: exportColumnIds.join(','),
             };
+
+            if (isWarehouseLabelExport) {
+                params.export_mode = WAREHOUSE_LABEL_EXPORT_MODE;
+                params.include_parent_rows = exportIncludeParentRows ? 1 : 0;
+            } else {
+                params.columns = exportColumnIds.join(',');
+            }
 
             if (exportOnlySelected && selectedIds.length > 0) {
                 params.selected_ids = selectedIds.join(',');
             }
 
             const response = await productApi.downloadExcel(params);
-            downloadBlobResponse(response, 'san-pham.xlsx');
+            downloadBlobResponse(response, isWarehouseLabelExport ? 'tem-nhan-kho.xlsx' : 'san-pham.xlsx');
             setShowExportModal(false);
         } catch (error) {
             console.error('Product export error:', error);
             setNotification({
                 type: 'error',
-                message: error?.response?.data?.message || 'KhÃ´ng thá»ƒ xuáº¥t Excel sáº£n pháº©m.',
+                message: error?.response?.data?.message || 'Không thể xuất Excel sản phẩm.',
             });
             setTimeout(() => setNotification(null), 3500);
         } finally {
@@ -3664,6 +3707,67 @@ const ProductList = () => {
         }
 
         fetchProducts(1, filters, sortConfig, pagination.per_page);
+    };
+
+    const handleSelectAllFilteredProducts = async () => {
+        if (isSelectingAllFilteredProducts || pagination.total <= 0) {
+            return;
+        }
+
+        setIsSelectingAllFilteredProducts(true);
+        try {
+            const nextSelectedIdMap = new Map();
+            let page = 1;
+            let lastPage = 1;
+
+            do {
+                const params = {
+                    ...buildQueryParams(page, filters, sortConfig, 100, allAttributes),
+                    page,
+                    per_page: 100,
+                    summary: 1,
+                };
+
+                delete params.selected_ids;
+
+                const response = await productApi.getAll(params);
+                const rows = Array.isArray(response.data?.data) ? response.data.data : [];
+
+                rows.forEach((product) => {
+                    const id = normalizeStoredId(product?.id);
+                    if (id !== null) {
+                        nextSelectedIdMap.set(String(id), id);
+                    }
+                });
+
+                const responseLastPage = Number(response.data?.last_page);
+                lastPage = Number.isFinite(responseLastPage) && responseLastPage > 0 ? responseLastPage : page;
+                page += 1;
+            } while (page <= lastPage);
+
+            const nextSelectedIds = Array.from(nextSelectedIdMap.values());
+            setSelectedIds(nextSelectedIds);
+            setExportOnlySelected(nextSelectedIds.length > 0);
+
+            if (showSelectedOnlyRef.current) {
+                fetchProducts(1, filters, sortConfig, pagination.per_page);
+            }
+
+            setNotification({
+                type: 'success',
+                message: `Đã chọn ${nextSelectedIds.length} sản phẩm theo bộ lọc hiện tại.`,
+            });
+            setTimeout(() => setNotification(null), 3000);
+        } catch (error) {
+            console.error('Select all filtered products error:', error);
+            setNotification({
+                type: 'error',
+                message: error?.response?.data?.message || 'Không thể chọn toàn bộ sản phẩm.',
+            });
+            setTimeout(() => setNotification(null), 3500);
+        } finally {
+            setIsSelectingAllFilteredProducts(false);
+        }
     };
 
     const toggleSelectProduct = (id) => {
@@ -5649,7 +5753,7 @@ const ProductList = () => {
                                 </h2>
                                 <p className="mt-2 text-[13px] text-primary/65">
                                     Chọn đúng các cột cần tải. Nếu cần dựng dữ liệu web sang local có cả biến thể và bundle/grouped, hãy dùng preset <strong>Dựng local</strong>.
-                                    Nếu chỉ cần biên tập nội dung rồi import ngược lại web, hãy dùng preset <strong>Nội dung web</strong>.
+                                    Nếu chỉ cần biên tập nội dung rồi import ngược lại web, hãy dùng preset <strong>Nội dung web</strong>. Khi làm tem kho, chọn preset <strong>Tem kho</strong>.
                                 </p>
                             </div>
                             <button
@@ -5665,7 +5769,15 @@ const ProductList = () => {
                         <div className="sticky top-0 z-10 border-b border-primary/10 bg-white/95 backdrop-blur px-6 py-3 shrink-0">
                             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                 <p className="text-[12px] text-primary/60">
-                                    Đang chọn <strong>{exportColumnIds.length}</strong> cột để xuất.
+                                    {exportMode === WAREHOUSE_LABEL_EXPORT_MODE ? (
+                                        <>
+                                            Đang chọn mẫu <strong>Tem kho</strong>, file dùng bộ cột cố định để sửa tên và in nhãn.
+                                        </>
+                                    ) : (
+                                        <>
+                                            Đang chọn <strong>{exportColumnIds.length}</strong> cột để xuất.
+                                        </>
+                                    )}
                                 </p>
                                 <div className="flex justify-end gap-3">
                                     <button
@@ -5692,7 +5804,7 @@ const ProductList = () => {
                         <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 pr-5 custom-scrollbar space-y-4">
                             <div className="rounded-sm border border-primary/10 p-4">
                                 <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Preset tiện dùng</div>
-                                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
                                     <div className="rounded-sm border border-primary/10 bg-primary/[0.03] p-4">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -5731,10 +5843,71 @@ const ProductList = () => {
                                             </button>
                                         </div>
                                     </div>
+                                    <div className={`rounded-sm border p-4 ${exportMode === WAREHOUSE_LABEL_EXPORT_MODE ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-emerald-50/70'}`}>
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div>
+                                                <div className="text-[13px] font-bold text-primary">Tem kho</div>
+                                                <p className="mt-2 text-[12px] leading-5 text-primary/65">
+                                                    Xuất <strong>sản phẩm đơn</strong> và <strong>sản phẩm có biến thể</strong> theo nhóm danh mục,
+                                                    bung từng SKU biến thể, có cột <strong>Tên in tem</strong>, freeze header, filter sẵn và sheet riêng cho hàng chưa danh mục.
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={applyWarehouseLabelExportPreset}
+                                                className="shrink-0 rounded-sm border border-primary/20 px-3 py-2 text-[12px] font-bold text-primary hover:bg-primary/5"
+                                            >
+                                                Chọn
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-3">
+                            {exportMode === WAREHOUSE_LABEL_EXPORT_MODE && (
+                                <div className="rounded-sm border border-primary/10 p-4">
+                                    <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Tùy chọn tem kho</div>
+                                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        {[
+                                            {
+                                                value: true,
+                                                label: 'Xuất cả dòng cha và sản phẩm con',
+                                                description: 'Có dòng sản phẩm cha để đối chiếu biến thể, bên dưới là từng SKU con để sửa tên tem.',
+                                            },
+                                            {
+                                                value: false,
+                                                label: 'Chỉ sản phẩm con và sản phẩm đơn',
+                                                description: 'Ẩn dòng cha của sản phẩm có biến thể, giữ từng SKU in tem và các sản phẩm đơn.',
+                                            },
+                                        ].map((option) => {
+                                            const checked = exportIncludeParentRows === option.value;
+                                            return (
+                                                <button
+                                                    key={String(option.value)}
+                                                    type="button"
+                                                    onClick={() => setExportIncludeParentRows(option.value)}
+                                                    className={`rounded-sm border px-4 py-3 text-left transition-all ${checked ? 'border-primary bg-primary/[0.06] shadow-sm' : 'border-primary/10 bg-white hover:border-primary/25 hover:bg-primary/[0.03]'}`}
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <div className="text-[13px] font-bold text-primary">{option.label}</div>
+                                                            <div className="mt-1 text-[12px] leading-5 text-primary/60">{option.description}</div>
+                                                        </div>
+                                                        <span className={`material-symbols-outlined text-[18px] ${checked ? 'text-primary' : 'text-primary/20'}`}>
+                                                            {checked ? 'check_circle' : 'radio_button_unchecked'}
+                                                        </span>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                    <p className="mt-3 rounded-sm border border-emerald-100 bg-emerald-50 px-4 py-3 text-[12px] leading-5 text-primary/65">
+                                        File tem kho gồm 3 sheet: <strong>Tem kho</strong>, <strong>Dữ liệu sửa tên</strong> và <strong>Chưa danh mục</strong>. Sản phẩm chưa gắn danh mục luôn được đẩy xuống cuối.
+                                    </p>
+                                </div>
+                            )}
+
+                            {exportMode !== WAREHOUSE_LABEL_EXPORT_MODE && <div className="flex flex-wrap items-center gap-3">
                                 <button
                                     type="button"
                                     onClick={handleSelectAllExportColumns}
@@ -5744,7 +5917,10 @@ const ProductList = () => {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setExportColumnIds(DEFAULT_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id)))}
+                                    onClick={() => {
+                                        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
+                                        setExportColumnIds(DEFAULT_EXPORT_COLUMN_IDS.filter((id) => exportFieldOptions.some((option) => option.id === id)));
+                                    }}
                                     className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-primary hover:bg-primary/5"
                                 >
                                     Chọn nhanh: Tên + Link
@@ -5765,12 +5941,15 @@ const ProductList = () => {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => setExportColumnIds([])}
+                                    onClick={() => {
+                                        setExportMode(STANDARD_PRODUCT_EXPORT_MODE);
+                                        setExportColumnIds([]);
+                                    }}
                                     className="px-3 py-1.5 rounded-sm border border-primary/20 text-[12px] font-bold text-brick hover:bg-brick/5"
                                 >
                                     Bỏ chọn hết
                                 </button>
-                            </div>
+                            </div>}
 
                             <div className="rounded-sm border border-primary/10 p-4">
                                 <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Phạm vi xuất</div>
@@ -5816,7 +5995,7 @@ const ProductList = () => {
                                 )}
                             </div>
 
-                            <div className="rounded-sm border border-primary/10 p-4">
+                            {exportMode !== WAREHOUSE_LABEL_EXPORT_MODE && <div className="rounded-sm border border-primary/10 p-4">
                                 <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between border-b border-primary/10 pb-3">
                                     <div>
                                         <div className="text-[12px] font-bold uppercase tracking-[0.16em] text-primary/40">Danh sách cột</div>
@@ -5854,7 +6033,7 @@ const ProductList = () => {
                                         })}
                                     </div>
                                 </div>
-                            </div>
+                            </div>}
                         </div>
                     </div>
                 </div>
@@ -5908,6 +6087,17 @@ const ProductList = () => {
                             >
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                                 <span className="hidden sm:inline">Tạo mới</span>
+                            </button>
+                        )}
+                        {!isTrashView && canCreateProducts && (
+                            <button
+                                type="button"
+                                onClick={() => setShowCategoryCloneModal(true)}
+                                className="h-9 rounded-sm border border-primary/20 bg-white px-3 text-primary shadow-sm transition-all hover:bg-primary hover:text-white"
+                                title="Copy sản phẩm theo danh mục"
+                                aria-label="Copy sản phẩm theo danh mục"
+                            >
+                                <span className="material-symbols-outlined text-[18px]">library_add</span>
                             </button>
                         )}
                         <button onClick={handleRefresh} disabled={loading} className="p-1.5 border border-primary/10 bg-white text-primary rounded-sm w-9 h-9 hover:bg-primary/5 transition-all" title="Tải lại dữ liệu"><span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span></button>
@@ -6758,13 +6948,25 @@ const ProductList = () => {
                         ) : null}
                     </div>
                     {products.length > 0 ? (
-                        <button
-                            type="button"
-                            onClick={toggleSelectAll}
-                            className="shrink-0 rounded-sm border border-primary/15 bg-white px-3 py-2 text-[11px] font-black text-primary shadow-sm"
-                        >
-                            {areAllVisibleProductsSelected ? 'Bỏ chọn' : 'Chọn trang'}
-                        </button>
+                        <div className="flex shrink-0 items-center gap-2">
+                            {pagination.total > products.length ? (
+                                <button
+                                    type="button"
+                                    onClick={handleSelectAllFilteredProducts}
+                                    disabled={isSelectingAllFilteredProducts}
+                                    className="rounded-sm border border-primary/15 bg-primary px-3 py-2 text-[11px] font-black text-white shadow-sm disabled:cursor-wait disabled:opacity-70"
+                                >
+                                    {isSelectingAllFilteredProducts ? 'Đang chọn...' : `Chọn ${pagination.total} SP`}
+                                </button>
+                            ) : null}
+                            <button
+                                type="button"
+                                onClick={toggleSelectAll}
+                                className="rounded-sm border border-primary/15 bg-white px-3 py-2 text-[11px] font-black text-primary shadow-sm"
+                            >
+                                {areAllVisibleProductsSelected ? 'Bỏ chọn' : 'Chọn trang'}
+                            </button>
+                        </div>
                     ) : null}
                 </div>
 
@@ -7467,6 +7669,20 @@ const ProductList = () => {
                         </select>
                     </div>
                     <span className="text-[#111] font-bold italic">Tổng cộng: {pagination.total} sản phẩm</span>
+                    {pagination.total > products.length && (
+                        <button
+                            type="button"
+                            onClick={handleSelectAllFilteredProducts}
+                            disabled={isSelectingAllFilteredProducts}
+                            className="inline-flex items-center gap-1.5 rounded-sm border border-primary/20 bg-white px-3 py-1.5 text-[12px] font-bold text-primary shadow-sm transition-colors hover:bg-primary hover:text-white disabled:cursor-wait disabled:opacity-70"
+                            title="Chọn toàn bộ sản phẩm theo bộ lọc hiện tại, kể cả các trang chưa hiển thị"
+                        >
+                            <span className={`material-symbols-outlined text-[16px] ${isSelectingAllFilteredProducts ? 'animate-refresh-spin' : ''}`}>
+                                {isSelectingAllFilteredProducts ? 'sync' : 'select_all'}
+                            </span>
+                            {isSelectingAllFilteredProducts ? 'Đang chọn...' : `Chọn toàn bộ ${pagination.total} SP`}
+                        </button>
+                    )}
                 </div>
                 <Pagination pagination={pagination} onPageChange={(page) => fetchProducts(page)} />
             </div>
@@ -7910,6 +8126,14 @@ const ProductList = () => {
                 listQueryParams={imageManagerScopeQueryParams}
                 onClose={handleCloseCategoryImageManager}
                 onChanged={handleCategoryImageManagerChanged}
+            />
+
+            <ProductCategoryCloneModal
+                open={showCategoryCloneModal}
+                categories={categories}
+                initialSourceCategoryId={categoryCloneInitialSourceId}
+                onClose={() => setShowCategoryCloneModal(false)}
+                onCopied={handleCategoryCloneCopied}
             />
 
             {showBulkSeoModal && (

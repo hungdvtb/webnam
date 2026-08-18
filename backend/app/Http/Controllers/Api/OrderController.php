@@ -15,6 +15,8 @@ use App\Models\Invoice;
 use App\Models\Lead;
 use App\Models\OrderStatus;
 use App\Models\Product;
+use App\Models\ProductReplacementItem;
+use App\Models\ProductStorageLocation;
 use App\Models\ProfitCenter;
 use App\Models\QuoteTemplate;
 use App\Models\Shipment;
@@ -980,6 +982,7 @@ class OrderController extends Controller
                     'account_id',
                     'product_id',
                     'actual_product_id',
+                    'inventory_source_account_id',
                     'product_name_snapshot',
                     'actual_product_name_snapshot',
                     'product_sku_snapshot',
@@ -993,11 +996,11 @@ class OrderController extends Controller
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'name', 'sku', 'inventory_unit_id'])
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'inventory_unit_id', 'warehouse_sequence'])
                         ->with(['unit:id,name']),
                     'actualProduct' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'name', 'sku']),
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence']),
                 ]),
         ];
     }
@@ -4296,10 +4299,310 @@ class OrderController extends Controller
         return implode(', ', $parts);
     }
 
+    private function printableStorageLocationMap(Order $order, array $extraRefs = []): array
+    {
+        if (!$order->relationLoaded('items')) {
+            return [];
+        }
+
+        $refs = $order->items
+            ->map(function (OrderItem $item) use ($order) {
+                $productId = $this->printableProductIdForStorageLookup($item);
+                if ($productId <= 0) {
+                    return null;
+                }
+
+                return [
+                    'product_id' => $productId,
+                    'account_id' => (int) ($item->inventory_source_account_id ?: $order->account_id),
+                ];
+            })
+            ->filter()
+            ->values();
+
+        if (!empty($extraRefs)) {
+            $refs = $refs
+                ->concat(collect($extraRefs)
+                    ->map(function (array $ref) {
+                        $productId = (int) ($ref['product_id'] ?? 0);
+                        if ($productId <= 0) {
+                            return null;
+                        }
+
+                        return [
+                            'product_id' => $productId,
+                            'account_id' => (int) ($ref['account_id'] ?? 0),
+                        ];
+                    })
+                    ->filter())
+                ->values();
+        }
+
+        if ($refs->isEmpty()) {
+            return [];
+        }
+
+        $productIds = $refs
+            ->pluck('product_id')
+            ->unique()
+            ->values()
+            ->all();
+        $accountIds = $refs
+            ->pluck('account_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($productIds) || empty($accountIds)) {
+            return [];
+        }
+
+        $locations = ProductStorageLocation::withoutGlobalScope('account_id')
+            ->whereIn('account_id', $accountIds)
+            ->whereIn('product_id', $productIds)
+            ->with([
+                'product:id,account_id,name,sku,type,warehouse_sequence',
+                'shelf:id,account_id,warehouse_id,name,code,floor_count,is_active',
+                'shelf.warehouse:id,name,code',
+            ])
+            ->get();
+
+        $map = [];
+        foreach ($locations as $location) {
+            $locationAccountId = (int) $location->account_id;
+            $locationProductId = (int) $location->product_id;
+            $map[$locationAccountId][$locationProductId] = $location;
+            $map[0][$locationProductId] ??= $location;
+        }
+
+        return $map;
+    }
+
+    private function printableProductIdForStorageLookup(OrderItem $item): int
+    {
+        $actualProductId = (int) ($item->actual_product_id ?? 0);
+
+        return $actualProductId > 0 ? $actualProductId : (int) ($item->product_id ?? 0);
+    }
+
+    private function printableStorageLocationForItem(Order $order, OrderItem $item, array $storageLocationMap): ?ProductStorageLocation
+    {
+        $productId = $this->printableProductIdForStorageLookup($item);
+        if ($productId <= 0) {
+            return null;
+        }
+
+        $accountCandidates = collect([
+            $item->inventory_source_account_id,
+            $order->account_id,
+            $item->actualProduct?->account_id,
+            $item->product?->account_id,
+        ])
+            ->map(fn ($accountId) => (int) $accountId)
+            ->filter()
+            ->unique()
+            ->values();
+
+        foreach ($accountCandidates as $accountId) {
+            if (isset($storageLocationMap[$accountId][$productId])) {
+                return $storageLocationMap[$accountId][$productId];
+            }
+        }
+
+        return $storageLocationMap[0][$productId] ?? null;
+    }
+
+    private function printableStorageLocationForProduct(Product $product, array $storageLocationMap): ?ProductStorageLocation
+    {
+        $productId = (int) $product->id;
+        if ($productId <= 0) {
+            return null;
+        }
+
+        $accountId = (int) ($product->account_id ?? 0);
+        if ($accountId > 0 && isset($storageLocationMap[$accountId][$productId])) {
+            return $storageLocationMap[$accountId][$productId];
+        }
+
+        return $storageLocationMap[0][$productId] ?? null;
+    }
+
+    private function printableReplacementProductMap(Order $order): array
+    {
+        if (!$order->relationLoaded('items')) {
+            return [];
+        }
+
+        $productIds = $order->items
+            ->pluck('product_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($productIds->isEmpty()) {
+            return [];
+        }
+
+        $memberships = ProductReplacementItem::withoutGlobalScope('account_id')
+            ->whereIn('product_id', $productIds->all())
+            ->with([
+                'group' => fn ($groupQuery) => $groupQuery
+                    ->withoutGlobalScope('account_id')
+                    ->with([
+                        'items' => fn ($itemQuery) => $itemQuery
+                            ->withoutGlobalScope('account_id')
+                            ->orderBy('sort_order')
+                            ->orderBy('id')
+                            ->with([
+                                'product' => fn ($productQuery) => $productQuery
+                                    ->withoutGlobalScope('account_id')
+                                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence']),
+                            ]),
+                    ]),
+            ])
+            ->get()
+            ->keyBy(fn (ProductReplacementItem $item) => (int) $item->product_id);
+
+        $map = [];
+
+        foreach ($productIds as $productId) {
+            $membership = $memberships->get((int) $productId);
+            $replacementItem = $membership?->group?->items
+                ?->first(fn (ProductReplacementItem $item) => (int) $item->product_id !== (int) $productId && $item->product);
+
+            if (!$replacementItem?->product) {
+                continue;
+            }
+
+            $map[(int) $productId] = $replacementItem->product;
+        }
+
+        return $map;
+    }
+
+    private function warehouseSequenceForProduct(?Product $product): ?int
+    {
+        if (!$product || !Product::usesWarehouseSequence($product->type)) {
+            return null;
+        }
+
+        $sequence = $product->warehouse_sequence !== null ? (int) $product->warehouse_sequence : null;
+
+        return $sequence !== null && $sequence > 0 ? $sequence : null;
+    }
+
+    private function formatWarehouseLocationLabel(?string $shelfName, ?int $floor, ?int $warehouseSequence): ?string
+    {
+        $parts = [];
+        $shelfName = trim((string) $shelfName);
+
+        if ($shelfName !== '') {
+            $parts[] = $shelfName;
+        }
+
+        if ($floor !== null && $floor > 0) {
+            $parts[] = "Tầng {$floor}";
+        }
+
+        if ($warehouseSequence !== null && $warehouseSequence > 0) {
+            $parts[] = "STT kho {$warehouseSequence}";
+        }
+
+        return !empty($parts) ? implode(' - ', $parts) : null;
+    }
+
+    private function printableStorageLocationPayload(?ProductStorageLocation $location): ?array
+    {
+        if (!$location) {
+            return null;
+        }
+
+        $shelf = $location->shelf;
+        $product = $location->product;
+        $floor = (int) $location->floor_number;
+        $shelfName = trim((string) ($shelf?->name ?: $shelf?->code ?: 'Kệ'));
+        $shelfCode = trim((string) ($shelf?->code ?: $shelf?->name ?: 'KE'));
+        $warehouseSequence = $this->warehouseSequenceForProduct($product);
+
+        return [
+            'id' => (int) $location->id,
+            'product_id' => (int) $location->product_id,
+            'product_name' => $product?->name,
+            'product_sku' => $product?->sku,
+            'product_warehouse_sequence' => $warehouseSequence,
+            'warehouse_sequence' => $warehouseSequence,
+            'warehouse_pick_label' => $this->formatWarehousePickLabel($product),
+            'warehouse_shelf_id' => (int) $location->warehouse_shelf_id,
+            'shelf_id' => (int) $location->warehouse_shelf_id,
+            'shelf_name' => $shelf?->name,
+            'shelf_code' => $shelf?->code,
+            'warehouse_name' => $shelf?->warehouse?->name,
+            'warehouse_code' => $shelf?->warehouse?->code,
+            'floor_number' => $floor,
+            'position_note' => $location->position_note,
+            'location_code' => "{$shelfCode}-T{$floor}",
+            'location_label' => "{$shelfName} - Tầng {$floor}",
+            'warehouse_location_label' => $this->formatWarehouseLocationLabel($shelfName, $floor, $warehouseSequence),
+        ];
+    }
+
+    private function printableReplacementProductPayload(?Product $product, array $storageLocationMap): ?array
+    {
+        if (!$product) {
+            return null;
+        }
+
+        $storageLocationPayload = $this->printableStorageLocationPayload(
+            $this->printableStorageLocationForProduct($product, $storageLocationMap)
+        );
+        $warehouseSequence = $this->warehouseSequenceForProduct($product);
+
+        return [
+            'product_id' => (int) $product->id,
+            'name' => $product->name,
+            'warehouse_sequence' => $warehouseSequence,
+            'storage_location' => $storageLocationPayload,
+            'location_label' => $storageLocationPayload['warehouse_location_label']
+                ?? $this->formatWarehouseLocationLabel(null, null, $warehouseSequence),
+        ];
+    }
+
+    private function formatWarehousePickLabel(?Product $product): ?string
+    {
+        if (!$product) {
+            return null;
+        }
+
+        $name = trim((string) $product->name);
+        $sequence = $this->warehouseSequenceForProduct($product);
+
+        if ($sequence !== null && $sequence > 0 && $name !== '') {
+            return "{$sequence} - {$name}";
+        }
+
+        if ($sequence !== null && $sequence > 0) {
+            return (string) $sequence;
+        }
+
+        return $name !== '' ? $name : null;
+    }
+
     private function transformPrintableOrders(Collection $orders): array
     {
         return $orders
             ->map(function (Order $order) {
+                $replacementProductMap = $this->printableReplacementProductMap($order);
+                $replacementProductRefs = collect($replacementProductMap)
+                    ->map(fn (Product $product) => [
+                        'product_id' => (int) $product->id,
+                        'account_id' => (int) ($product->account_id ?? 0),
+                    ])
+                    ->values()
+                    ->all();
+                $storageLocationMap = $this->printableStorageLocationMap($order, $replacementProductRefs);
+
                 return [
                     'id' => (int) $order->id,
                     'order_number' => $order->order_number,
@@ -4310,18 +4613,47 @@ class OrderController extends Controller
                     'total_payment' => (float) $order->total_price,
                     'created_at' => $this->resolveOrderDisplayedAt($order)?->toISOString(),
                     'items' => $order->items
-                        ->map(function (OrderItem $item) {
+                        ->map(function (OrderItem $item) use ($order, $replacementProductMap, $storageLocationMap) {
                             $productName = trim((string) ($item->product_name_snapshot ?: $item->product?->name ?: ('Sản phẩm #' . $item->product_id)));
                             $productSku = trim((string) ($item->product_sku_snapshot ?: $item->product?->sku ?: ''));
                             $unitName = trim((string) ($item->product?->unit?->name ?: ''));
                             $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
                             $unitPrice = (float) $item->price;
+                            $storageLocationPayload = $this->printableStorageLocationPayload(
+                                $this->printableStorageLocationForItem($order, $item, $storageLocationMap)
+                            );
+                            $pickProduct = $item->actualProduct ?: $item->product;
+                            $warehouseSequence = $this->warehouseSequenceForProduct($pickProduct);
+                            $replacementProductPayload = $this->printableReplacementProductPayload(
+                                $replacementProductMap[(int) $item->product_id] ?? null,
+                                $storageLocationMap
+                            );
 
                             return [
                                 'id' => (int) $item->id,
+                                'product_id' => (int) $item->product_id,
+                                'actual_product_id' => $item->actual_product_id ? (int) $item->actual_product_id : null,
                                 'name' => $productName,
                                 'sku' => $productSku !== '' ? $productSku : null,
+                                'product_name_snapshot' => $item->product_name_snapshot,
+                                'product_sku_snapshot' => $item->product_sku_snapshot,
+                                'actual_product_name_snapshot' => $item->actual_product_name_snapshot,
+                                'actual_product_sku_snapshot' => $item->actual_product_sku_snapshot,
+                                'current_product_name' => $item->product?->name,
+                                'current_product_sku' => $item->product?->sku,
+                                'current_actual_product_name' => $item->actualProduct?->name,
+                                'current_actual_product_sku' => $item->actualProduct?->sku,
+                                'warehouse_sequence' => $warehouseSequence,
+                                'warehouse_pick_label' => $storageLocationPayload['warehouse_pick_label']
+                                    ?? $this->formatWarehousePickLabel($pickProduct),
+                                'actual_display_name' => $item->actual_display_name,
+                                'actual_display_sku' => $item->actual_display_sku,
+                                'has_actual_product_override' => (bool) $item->has_actual_product_override,
                                 'unit_name' => $unitName !== '' ? $unitName : null,
+                                'storage_location' => $storageLocationPayload,
+                                'storage_location_label' => $storageLocationPayload['location_label'] ?? null,
+                                'storage_location_code' => $storageLocationPayload['location_code'] ?? null,
+                                'replacement_product' => $replacementProductPayload,
                                 'quantity' => $quantity,
                                 'unit_price' => $unitPrice,
                                 'line_total' => round($quantity * $unitPrice, 2),
@@ -5466,6 +5798,7 @@ class OrderController extends Controller
             ->whereIn('id', $ids->all())
             ->select([
                 'id',
+                'account_id',
                 'order_number',
                 'customer_name',
                 'customer_phone',

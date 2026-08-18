@@ -1,3 +1,9 @@
+import {
+    getOrderItemActualDisplayName,
+    getOrderItemActualDisplaySku,
+    hasOrderItemActualProductOverride,
+} from './orderItemDisplay';
+
 const PRINT_RESOURCE_TIMEOUT_MS = 12_000;
 const PRINT_DIALOG_TIMEOUT_MS = 90_000;
 
@@ -7,16 +13,59 @@ const PAGE_MARGIN_TOP_MM = 10;
 const PAGE_MARGIN_RIGHT_MM = 9;
 const PAGE_MARGIN_BOTTOM_MM = 12;
 const PAGE_MARGIN_LEFT_MM = 9;
-const CONTENT_WIDTH_MM = A4_WIDTH_MM - PAGE_MARGIN_LEFT_MM - PAGE_MARGIN_RIGHT_MM;
-const CONTENT_HEIGHT_MM = A4_HEIGHT_MM - PAGE_MARGIN_TOP_MM - PAGE_MARGIN_BOTTOM_MM;
 const MM_TO_PX_FACTOR = 96 / 25.4;
-const CONTENT_WIDTH_PX = Math.floor(CONTENT_WIDTH_MM * MM_TO_PX_FACTOR);
-const CONTENT_HEIGHT_PX = Math.floor(CONTENT_HEIGHT_MM * MM_TO_PX_FACTOR);
 const PAGE_FIT_BUFFER_PX = 8;
 
 const PRINT_FRAME_ID = '__order_print_frame__';
 const PDF_FRAME_ID = '__order_pdf_frame__';
 const MEASURE_FRAME_ID = '__order_measure_frame__';
+
+export const ORDER_PRINT_TEMPLATE_WAREHOUSE = 'warehouse';
+export const ORDER_PRINT_TEMPLATE_CUSTOMER = 'customer';
+export const DEFAULT_ORDER_PRINT_TEMPLATE = ORDER_PRINT_TEMPLATE_WAREHOUSE;
+
+const PRINT_TEMPLATE_CONFIGS = {
+    [ORDER_PRINT_TEMPLATE_CUSTOMER]: {
+        orientation: 'portrait',
+        pageWidthMm: A4_WIDTH_MM,
+        pageHeightMm: A4_HEIGHT_MM,
+        marginTopMm: PAGE_MARGIN_TOP_MM,
+        marginRightMm: PAGE_MARGIN_RIGHT_MM,
+        marginBottomMm: PAGE_MARGIN_BOTTOM_MM,
+        marginLeftMm: PAGE_MARGIN_LEFT_MM,
+    },
+    [ORDER_PRINT_TEMPLATE_WAREHOUSE]: {
+        orientation: 'landscape',
+        pageWidthMm: A4_HEIGHT_MM,
+        pageHeightMm: A4_WIDTH_MM,
+        marginTopMm: PAGE_MARGIN_TOP_MM,
+        marginRightMm: PAGE_MARGIN_RIGHT_MM,
+        marginBottomMm: PAGE_MARGIN_BOTTOM_MM,
+        marginLeftMm: PAGE_MARGIN_LEFT_MM,
+    },
+};
+
+const resolvePrintTemplate = (template) => (
+    template === ORDER_PRINT_TEMPLATE_CUSTOMER
+        ? ORDER_PRINT_TEMPLATE_CUSTOMER
+        : ORDER_PRINT_TEMPLATE_WAREHOUSE
+);
+
+const getPrintTemplateConfig = (template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
+    const resolvedTemplate = resolvePrintTemplate(template);
+    const base = PRINT_TEMPLATE_CONFIGS[resolvedTemplate];
+    const contentWidthMm = base.pageWidthMm - base.marginLeftMm - base.marginRightMm;
+    const contentHeightMm = base.pageHeightMm - base.marginTopMm - base.marginBottomMm;
+
+    return {
+        ...base,
+        template: resolvedTemplate,
+        contentWidthMm,
+        contentHeightMm,
+        contentWidthPx: Math.floor(contentWidthMm * MM_TO_PX_FACTOR),
+        contentHeightPx: Math.floor(contentHeightMm * MM_TO_PX_FACTOR),
+    };
+};
 
 const formatCurrency = (value) =>
     new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' })
@@ -90,6 +139,112 @@ const getPrintItemSku = (item = {}) => (
     || ''
 );
 
+const getPrintItemActualName = (item = {}) => {
+    if (!hasOrderItemActualProductOverride(item)) {
+        return '';
+    }
+
+    return (
+        getOrderItemActualDisplayName(item)
+        || normalizeText(item.actual_name)
+        || normalizeText(item.actual_display_name)
+        || normalizeText(item.current_actual_product_name)
+        || normalizeText(item.actual_product?.name)
+        || normalizeText(item.actual_product_name_snapshot)
+        || ''
+    );
+};
+
+const getPrintItemActualSku = (item = {}) => {
+    if (!hasOrderItemActualProductOverride(item)) {
+        return '';
+    }
+
+    return (
+        getOrderItemActualDisplaySku(item)
+        || normalizeText(item.actual_sku)
+        || normalizeText(item.actual_display_sku)
+        || normalizeText(item.current_actual_product_sku)
+        || normalizeText(item.actual_product?.sku)
+        || normalizeText(item.actual_product_sku_snapshot)
+        || ''
+    );
+};
+
+const getWarehouseSequenceText = (item = {}) => {
+    const sequence = item.warehouse_sequence
+        ?? item.storage_location?.product_warehouse_sequence
+        ?? item.storage_location?.warehouse_sequence;
+
+    if (sequence === null || sequence === undefined || sequence === '') {
+        return '';
+    }
+
+    const number = Number(sequence);
+    if (!Number.isFinite(number) || number <= 0) {
+        return '';
+    }
+
+    return String(Math.trunc(number));
+};
+
+const getPrintItemStorageLocation = (item = {}) => {
+    const location = normalizeText(item.storage_location_label)
+        || normalizeText(item.storage_location?.location_label)
+        || normalizeText(item.storage_location_code)
+        || normalizeText(item.storage_location?.location_code)
+        || '';
+    const sequence = getWarehouseSequenceText(item);
+
+    if (location && sequence) {
+        return `${location} | STT ${sequence}`;
+    }
+
+    return location || (sequence ? `STT ${sequence}` : '');
+};
+
+const getPrintItemStorageShelf = (item = {}) => (
+    normalizeText(item.storage_location?.shelf_name)
+    || normalizeText(item.storage_location?.shelf_code)
+    || ''
+);
+
+const getPrintItemStorageFloor = (item = {}) => {
+    const floor = item.storage_location?.floor_number;
+    if (floor === null || floor === undefined || floor === '') {
+        return '';
+    }
+
+    const number = Number(floor);
+    if (!Number.isFinite(number) || number <= 0) {
+        return '';
+    }
+
+    return String(Math.trunc(number));
+};
+
+const getReplacementProductPayload = (item = {}) => {
+    const replacement = item.replacement_product || item.replacementProduct || null;
+    if (!replacement || typeof replacement !== 'object') {
+        return null;
+    }
+
+    const name = normalizeText(replacement.name)
+        || normalizeText(replacement.display_name)
+        || normalizeText(replacement.product_name)
+        || '';
+    const location = normalizeText(replacement.location_label)
+        || normalizeText(replacement.storage_location?.warehouse_location_label)
+        || normalizeText(replacement.storage_location?.location_label)
+        || '';
+
+    if (!name && !location) {
+        return null;
+    }
+
+    return { name, location };
+};
+
 const getPrintItemOriginalName = (item = {}, displayName = '') => {
     const currentName = getPrintItemCurrentName(item);
     const resolvedDisplayName = normalizeText(displayName) || getPrintItemName(item);
@@ -113,13 +268,27 @@ const getOrderItems = (order = {}) =>
     (Array.isArray(order.items) ? order.items : []).map((item) => {
         const quantity = Number(item?.quantity ?? 0);
         const unitPrice = Number(item?.unit_price ?? item?.price ?? 0);
-        const lineTotal = Number(item?.line_total ?? (quantity * unitPrice) ?? 0);
+        const lineTotal = Number(item?.line_total ?? (quantity * unitPrice));
         const unitName = String(item?.unit_name ?? item?.unit?.name ?? item?.product?.unit?.name ?? '').trim();
+        const name = getPrintItemName(item);
+        const actualName = getPrintItemActualName(item);
+        const actualSku = getPrintItemActualSku(item);
+        const hasActualProductOverride = Boolean(actualName || actualSku);
+        const storageLocation = getPrintItemStorageLocation(item);
+        const replacementProduct = getReplacementProductPayload(item);
 
         return {
-            name: getPrintItemName(item),
-            original_name: getPrintItemOriginalName(item, getPrintItemName(item)),
+            name,
+            original_name: getPrintItemOriginalName(item, name),
             sku: getPrintItemSku(item),
+            actual_name: actualName,
+            actual_sku: actualSku,
+            has_actual_product_override: hasActualProductOverride,
+            storage_location: storageLocation,
+            storage_shelf: getPrintItemStorageShelf(item),
+            storage_floor: getPrintItemStorageFloor(item),
+            warehouse_sequence: getWarehouseSequenceText(item),
+            replacement_product: replacementProduct,
             unit_name: unitName,
             quantity,
             unit_price: unitPrice,
@@ -179,7 +348,7 @@ const waitForPaint = (targetWindow) =>
         raf(() => raf(resolve));
     });
 
-const createHiddenIframe = (frameId) => {
+const createHiddenIframe = (frameId, config = getPrintTemplateConfig()) => {
     const iframe = document.createElement('iframe');
     iframe.id = frameId;
     iframe.setAttribute('aria-hidden', 'true');
@@ -187,8 +356,8 @@ const createHiddenIframe = (frameId) => {
         'position:fixed',
         'left:-10000px',
         'top:0',
-        `width:${Math.max(CONTENT_WIDTH_PX + 64, 820)}px`,
-        `height:${Math.max(CONTENT_HEIGHT_PX + 64, 1180)}px`,
+        `width:${Math.max(config.contentWidthPx + 64, 820)}px`,
+        `height:${Math.max(config.contentHeightPx + 64, 820)}px`,
         'border:0',
         'opacity:0',
         'pointer-events:none',
@@ -245,31 +414,88 @@ const loadHtmlIntoIframe = async (iframe, html) => {
     return { iframeDoc, iframeWin };
 };
 
-const renderOrderRows = (items = [], startIndex = 0, measurement = false) => {
+const renderCustomerOrderRows = (items = [], startIndex = 0, measurement = false) => {
     if (!items.length) {
         return `<tr><td colspan="6" class="empty-state">Don hang khong co san pham.</td></tr>`;
     }
 
     return items
-        .map((item, index) => `
+        .map((item, index) => {
+            const hasActualProductOverride = Boolean(item.has_actual_product_override && (item.actual_name || item.actual_sku));
+
+            return `
         <tr${measurement ? ' data-measure-row="true"' : ''}>
             <td class="col-index"><div class="cell-center"><span class="cell-text">${startIndex + index + 1}</span></div></td>
             <td class="col-name">
                 <div class="product-cell">
-                    <div class="product-name"><span class="product-text">${escapeHtml(item.name || '-')}</span></div>
+                    <div class="product-name${hasActualProductOverride ? ' product-name--ordered' : ''}"><span class="product-text">${hasActualProductOverride ? '<span class="product-inline-label">SP g&#7889;c:</span> ' : ''}${escapeHtml(item.name || '-')}</span></div>
                     ${item.original_name ? `<div class="product-original"><span class="product-original-text">T&#234;n g&#7889;c: ${escapeHtml(item.original_name)}</span></div>` : ''}
-                    ${item.sku ? `<div class="product-sku"><span class="product-sku-text">SKU: ${escapeHtml(item.sku)}</span></div>` : ''}
+                    ${item.sku ? `<div class="product-sku"><span class="product-sku-text">${hasActualProductOverride ? 'SKU g&#7889;c' : 'SKU'}: ${escapeHtml(item.sku)}</span></div>` : ''}
+                    ${hasActualProductOverride ? `<div class="product-actual"><span class="product-actual-text"><span class="product-inline-label">Th&#7921;c g&#7917;i:</span> ${escapeHtml(item.actual_name || 'San pham thay the')}</span></div>` : ''}
+                    ${hasActualProductOverride && item.actual_sku ? `<div class="product-sku product-sku--actual"><span class="product-sku-text">SKU th&#7921;c g&#7917;i: ${escapeHtml(item.actual_sku)}</span></div>` : ''}
+                    ${item.storage_location ? `<div class="product-location"><span class="product-location-text">V&#7883; tr&#237;: ${escapeHtml(item.storage_location)}</span></div>` : ''}
                 </div>
             </td>
             <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
             <td class="col-unit"><div class="cell-center"><span class="cell-text">${escapeHtml(item.unit_name || '-')}</span></div></td>
             <td class="col-money"><div class="cell-money"><span class="cell-text">${escapeHtml(formatCurrency(item.unit_price))}</span></div></td>
             <td class="col-money"><div class="cell-money cell-money--total"><span class="cell-text">${escapeHtml(formatCurrency(item.line_total))}</span></div></td>
-        </tr>`)
+        </tr>`;
+        })
         .join('');
 };
 
-const renderTableHead = (measurement = false) => `
+const renderWarehouseReplacementCell = (replacementProduct) => {
+    if (!replacementProduct) {
+        return '';
+    }
+
+    return `
+        <div class="replacement-cell">
+            ${replacementProduct.name ? `<div class="replacement-name"><span class="replacement-label">SP thay th&#7871;:</span> ${escapeHtml(replacementProduct.name)}</div>` : ''}
+            ${replacementProduct.location ? `<div class="replacement-location"><span class="replacement-label">V&#7883; tr&#237;:</span> ${escapeHtml(replacementProduct.location)}</div>` : ''}
+        </div>`;
+};
+
+const renderWarehouseOrderRows = (items = [], startIndex = 0, measurement = false) => {
+    if (!items.length) {
+        return `<tr><td colspan="8" class="empty-state">Don hang khong co san pham.</td></tr>`;
+    }
+
+    return items
+        .map((item, index) => {
+            const hasActualProductOverride = Boolean(item.has_actual_product_override && (item.actual_name || item.actual_sku));
+
+            return `
+        <tr${measurement ? ' data-measure-row="true"' : ''}>
+            <td class="col-index"><div class="cell-center"><span class="cell-text">${startIndex + index + 1}</span></div></td>
+            <td class="col-name">
+                <div class="product-cell">
+                    <div class="product-name${hasActualProductOverride ? ' product-name--ordered' : ''}"><span class="product-text">${hasActualProductOverride ? '<span class="product-inline-label">SP g&#7889;c:</span> ' : ''}${escapeHtml(item.name || '-')}</span></div>
+                    ${item.original_name ? `<div class="product-original"><span class="product-original-text">T&#234;n g&#7889;c: ${escapeHtml(item.original_name)}</span></div>` : ''}
+                    ${item.sku ? `<div class="product-sku"><span class="product-sku-text">${hasActualProductOverride ? 'SKU g&#7889;c' : 'SKU'}: ${escapeHtml(item.sku)}</span></div>` : ''}
+                    ${hasActualProductOverride ? `<div class="product-actual"><span class="product-actual-text"><span class="product-inline-label">Th&#7921;c g&#7917;i:</span> ${escapeHtml(item.actual_name || 'San pham thay the')}</span></div>` : ''}
+                    ${hasActualProductOverride && item.actual_sku ? `<div class="product-sku product-sku--actual"><span class="product-sku-text">SKU th&#7921;c g&#7917;i: ${escapeHtml(item.actual_sku)}</span></div>` : ''}
+                </div>
+            </td>
+            <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
+            <td class="col-unit"><div class="cell-center"><span class="cell-text">${escapeHtml(item.unit_name || '-')}</span></div></td>
+            <td class="col-warehouse-sequence"><div class="cell-center cell-center--warehouse">${item.warehouse_sequence ? `<span class="warehouse-sequence-badge">${escapeHtml(item.warehouse_sequence)}</span>` : ''}</div></td>
+            <td class="col-shelf"><div class="cell-center cell-center--warehouse"><span class="warehouse-location-text">${escapeHtml(item.storage_shelf || '')}</span></div></td>
+            <td class="col-floor"><div class="cell-center cell-center--warehouse"><span class="warehouse-location-text">${escapeHtml(item.storage_floor || '')}</span></div></td>
+            <td class="col-replacement">${renderWarehouseReplacementCell(item.replacement_product)}</td>
+        </tr>`;
+        })
+        .join('');
+};
+
+const renderOrderRows = (items = [], startIndex = 0, measurement = false, template = DEFAULT_ORDER_PRINT_TEMPLATE) => (
+    resolvePrintTemplate(template) === ORDER_PRINT_TEMPLATE_CUSTOMER
+        ? renderCustomerOrderRows(items, startIndex, measurement)
+        : renderWarehouseOrderRows(items, startIndex, measurement)
+);
+
+const renderCustomerTableHead = (measurement = false) => `
     <thead${measurement ? ' data-measure-table-head="true"' : ''}>
         <tr>
             <th class="col-index"><div class="head-cell"><span class="head-text">STT</span></div></th>
@@ -281,12 +507,36 @@ const renderTableHead = (measurement = false) => `
         </tr>
     </thead>`;
 
-const renderFullHeader = (order, printedAt, pageNumber, pageCount, measurement = false) => `
+const renderWarehouseTableHead = (measurement = false) => `
+    <thead${measurement ? ' data-measure-table-head="true"' : ''}>
+        <tr>
+            <th class="col-index"><div class="head-cell"><span class="head-text">STT</span></div></th>
+            <th class="col-name"><div class="head-cell"><span class="head-text">San pham</span></div></th>
+            <th class="col-qty"><div class="head-cell"><span class="head-text">SL</span></div></th>
+            <th class="col-unit"><div class="head-cell"><span class="head-text">&#272;VT</span></div></th>
+            <th class="col-warehouse-sequence"><div class="head-cell"><span class="head-text">STT kho</span></div></th>
+            <th class="col-shelf"><div class="head-cell"><span class="head-text">K&#7879;</span></div></th>
+            <th class="col-floor"><div class="head-cell"><span class="head-text">T&#7847;ng</span></div></th>
+            <th class="col-replacement"><div class="head-cell"><span class="head-text">Thay th&#7871; n&#7871;u h&#7871;t h&#224;ng</span></div></th>
+        </tr>
+    </thead>`;
+
+const renderTableHead = (measurement = false, template = DEFAULT_ORDER_PRINT_TEMPLATE) => (
+    resolvePrintTemplate(template) === ORDER_PRINT_TEMPLATE_CUSTOMER
+        ? renderCustomerTableHead(measurement)
+        : renderWarehouseTableHead(measurement)
+);
+
+const renderFullHeader = (order, printedAt, pageNumber, pageCount, measurement = false, template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
+    const isWarehouseTemplate = resolvePrintTemplate(template) === ORDER_PRINT_TEMPLATE_WAREHOUSE;
+
+    return `
     <div class="page-top page-top--full"${measurement ? ' data-measure-top="first"' : ''}>
         <div class="page-header">
             <div class="page-header__main">
-                <div class="page-kicker">IN DON HANG</div>
+                <div class="page-kicker">${isWarehouseTemplate ? 'IN KHO' : 'IN DON HANG'}</div>
                 <h1 class="page-order-code">Don #${escapeHtml(order.order_number || '-')}</h1>
+                ${isWarehouseTemplate ? '<div class="warehouse-print-tag">Ban kho nhat hang</div>' : ''}
             </div>
             <div class="page-header__meta">
                 <div class="page-meta-block">
@@ -325,6 +575,7 @@ const renderFullHeader = (order, printedAt, pageNumber, pageCount, measurement =
             </div>
         </div>
     </div>`;
+};
 
 const renderContinuationHeader = (order, pageNumber, pageCount, measurement = false) => `
     <div class="page-top page-top--continuation"${measurement ? ' data-measure-top="continuation"' : ''}>
@@ -351,6 +602,7 @@ const renderOrderPage = ({
     pageCount,
     isDocumentLast,
     measurementPageType = '',
+    template = DEFAULT_ORDER_PRINT_TEMPLATE,
 }) => {
     const measurement = Boolean(measurementPageType);
     const pageClasses = [
@@ -366,13 +618,13 @@ const renderOrderPage = ({
         <section class="${pageClasses}"${pageAttrs}>
             <div class="page-shell">
                 ${isFirstPage
-                    ? renderFullHeader(order, printedAt, pageNumber, pageCount, measurement)
+                    ? renderFullHeader(order, printedAt, pageNumber, pageCount, measurement, template)
                     : renderContinuationHeader(order, pageNumber, pageCount, measurement)}
                 <div class="table-wrap">
                     <table class="items-table">
-                        ${renderTableHead(measurement)}
+                        ${renderTableHead(measurement, template)}
                         <tbody>
-                            ${renderOrderRows(items, startIndex, measurement)}
+                            ${renderOrderRows(items, startIndex, measurement, template)}
                         </tbody>
                     </table>
                 </div>
@@ -381,11 +633,11 @@ const renderOrderPage = ({
         </section>`;
 };
 
-const getOrderPrintStyles = () => `
+const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     :root {
         color-scheme: light;
-        --page-width: ${CONTENT_WIDTH_MM}mm;
-        --page-height: ${CONTENT_HEIGHT_MM}mm;
+        --page-width: ${config.contentWidthMm}mm;
+        --page-height: ${config.contentHeightMm}mm;
         --page-bg: #ffffff;
         --page-text: #0f172a;
         --page-muted: #64748b;
@@ -498,6 +750,21 @@ const getOrderPrintStyles = () => `
         letter-spacing: -0.03em;
         white-space: nowrap;
         overflow: visible;
+    }
+
+    .warehouse-print-tag {
+        display: inline-flex;
+        align-items: center;
+        margin-top: 5px;
+        border: 1px solid #86efac;
+        border-radius: 2px;
+        background: #ecfdf5;
+        color: #047857;
+        padding: 2px 8px;
+        font-size: 8px;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
     }
 
     .page-header__meta {
@@ -742,6 +1009,43 @@ const getOrderPrintStyles = () => `
         white-space: nowrap;
     }
 
+    body.template-warehouse .col-index {
+        width: 5%;
+    }
+
+    body.template-warehouse .col-name {
+        width: 34%;
+    }
+
+    body.template-warehouse .col-qty {
+        width: 5.5%;
+        text-align: center;
+    }
+
+    body.template-warehouse .col-unit {
+        width: 6.5%;
+        text-align: center;
+    }
+
+    .col-warehouse-sequence {
+        width: 8%;
+        text-align: center;
+    }
+
+    .col-shelf {
+        width: 7.5%;
+        text-align: center;
+    }
+
+    .col-floor {
+        width: 6.5%;
+        text-align: center;
+    }
+
+    .col-replacement {
+        width: 27%;
+    }
+
     .head-cell {
         display: flex;
         align-items: center;
@@ -789,6 +1093,35 @@ const getOrderPrintStyles = () => `
         font-weight: 800;
     }
 
+    .cell-center--warehouse {
+        min-height: 34px;
+        padding: 5px 4px;
+    }
+
+    .warehouse-sequence-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 28px;
+        min-height: 20px;
+        border: 0.35mm solid #fdba74;
+        border-radius: 2px;
+        background: #fff7ed;
+        color: #ea580c;
+        padding: 1px 4px;
+        font-size: 10px;
+        font-weight: 850;
+        line-height: 1;
+    }
+
+    .warehouse-location-text {
+        color: #0f2f63;
+        font-size: 10px;
+        font-weight: 800;
+        line-height: 1.08;
+        overflow-wrap: anywhere;
+    }
+
     .product-cell {
         display: flex;
         width: 100%;
@@ -805,10 +1138,22 @@ const getOrderPrintStyles = () => `
         overflow-wrap: anywhere;
     }
 
+    .product-name--ordered {
+        color: var(--page-text);
+    }
+
     .product-text {
         display: block;
         line-height: 1.16;
         transform: translateY(-0.04em);
+    }
+
+    .product-inline-label {
+        font-size: 8.1px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #475569;
     }
 
     .product-original {
@@ -819,6 +1164,21 @@ const getOrderPrintStyles = () => `
         overflow-wrap: anywhere;
     }
 
+    .product-actual {
+        margin-top: 2px;
+        color: #9f1239;
+        font-size: 9.4px;
+        font-weight: 800;
+        line-height: 1.14;
+        overflow-wrap: anywhere;
+    }
+
+    .product-actual-text {
+        display: block;
+        line-height: 1.16;
+        transform: translateY(-0.03em);
+    }
+
     .product-sku {
         font-size: 8.1px;
         line-height: 1.15;
@@ -826,10 +1186,62 @@ const getOrderPrintStyles = () => `
         overflow-wrap: anywhere;
     }
 
+    .product-sku--actual {
+        color: #9f1239;
+        font-weight: 700;
+    }
+
+    .product-location {
+        display: inline-block;
+        margin-top: 3px;
+        border: 0.35mm solid #f59e0b;
+        background: #fff7ed;
+        color: #9a3412;
+        font-size: 8.7px;
+        font-weight: 850;
+        line-height: 1.1;
+        padding: 1.1px 4px;
+        border-radius: 2px;
+        overflow-wrap: anywhere;
+    }
+
+    .product-location-text {
+        display: block;
+        line-height: 1.08;
+    }
+
     .product-sku-text {
         display: block;
         line-height: 1.05;
         transform: translateY(-0.03em);
+    }
+
+    .replacement-cell {
+        min-height: 34px;
+        margin: 5px;
+        padding: 6px 7px;
+        border: 0.35mm solid #fdba74;
+        border-radius: 2px;
+        background: #fff7ed;
+        color: var(--page-text);
+        font-size: 9.3px;
+        line-height: 1.18;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+    }
+
+    .replacement-name {
+        color: #b91c1c;
+    }
+
+    .replacement-location {
+        margin-top: 3px;
+        color: var(--page-text);
+    }
+
+    .replacement-label {
+        color: var(--page-text);
+        font-weight: 850;
     }
 
     .empty-state {
@@ -892,8 +1304,8 @@ const getOrderPrintStyles = () => `
     }
 
     @page {
-        size: A4 portrait;
-        margin: ${PAGE_MARGIN_TOP_MM}mm ${PAGE_MARGIN_RIGHT_MM}mm ${PAGE_MARGIN_BOTTOM_MM}mm ${PAGE_MARGIN_LEFT_MM}mm;
+        size: A4 ${config.orientation};
+        margin: ${config.marginTopMm}mm ${config.marginRightMm}mm ${config.marginBottomMm}mm ${config.marginLeftMm}mm;
     }
 
     @media print {
@@ -970,7 +1382,11 @@ const getOrderPrintStyles = () => `
         .col-name,
         .col-qty,
         .col-unit,
-        .col-money {
+        .col-money,
+        .col-warehouse-sequence,
+        .col-shelf,
+        .col-floor,
+        .col-replacement {
             width: auto;
         }
 
@@ -981,24 +1397,33 @@ const getOrderPrintStyles = () => `
     }
 `;
 
-const buildHtmlDocument = (pages = [], { measurement = false } = {}) => `<!DOCTYPE html>
+const buildHtmlDocument = (pages = [], { measurement = false, template = DEFAULT_ORDER_PRINT_TEMPLATE } = {}) => {
+    const resolvedTemplate = resolvePrintTemplate(template);
+    const config = getPrintTemplateConfig(resolvedTemplate);
+
+    return `<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>In don hang</title>
-    <style>${getOrderPrintStyles()}</style>
+    <style>${getOrderPrintStyles(config, resolvedTemplate)}</style>
 </head>
-<body class="${measurement ? 'measurement-mode' : ''}">
+<body class="${[
+    measurement ? 'measurement-mode' : '',
+    `template-${resolvedTemplate}`,
+].filter(Boolean).join(' ')}">
     <main class="print-document">
         ${pages.join('')}
     </main>
 </body>
 </html>`;
+};
 
-const measureOrderLayout = async (order, printedAt) => {
+const measureOrderLayout = async (order, printedAt, template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
     removeIframe(MEASURE_FRAME_ID);
-    const iframe = createHiddenIframe(MEASURE_FRAME_ID);
+    const config = getPrintTemplateConfig(template);
+    const iframe = createHiddenIframe(MEASURE_FRAME_ID, config);
 
     try {
         const items = getOrderItems(order);
@@ -1014,6 +1439,7 @@ const measureOrderLayout = async (order, printedAt) => {
                 pageCount: 1,
                 isDocumentLast: false,
                 measurementPageType: 'first',
+                template,
             }),
             renderOrderPage({
                 order,
@@ -1026,8 +1452,9 @@ const measureOrderLayout = async (order, printedAt) => {
                 pageCount: 2,
                 isDocumentLast: true,
                 measurementPageType: 'continuation',
+                template,
             }),
-        ], { measurement: true });
+        ], { measurement: true, template });
 
         const { iframeDoc } = await loadHtmlIntoIframe(iframe, measurementHtml);
 
@@ -1064,7 +1491,7 @@ const measureOrderLayout = async (order, printedAt) => {
 
 const sumRange = (prefix, start, end) => prefix[end + 1] - prefix[start];
 
-const paginateOrder = (order, metrics, printedAt) => {
+const paginateOrder = (order, metrics, printedAt, config = getPrintTemplateConfig()) => {
     const items = getOrderItems(order);
     if (!items.length) {
         return [{
@@ -1085,19 +1512,19 @@ const paginateOrder = (order, metrics, printedAt) => {
 
     const safeSinglePageCapacity = Math.max(
         1,
-        CONTENT_HEIGHT_PX - metrics.fullHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
     );
     const safeFirstPageCapacity = Math.max(
         1,
-        CONTENT_HEIGHT_PX - metrics.fullHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
     );
     const safeContinuationCapacity = Math.max(
         1,
-        CONTENT_HEIGHT_PX - metrics.continuationHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
     );
     const safeLastContinuationCapacity = Math.max(
         1,
-        CONTENT_HEIGHT_PX - metrics.continuationHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
     );
 
     const prefix = [0];
@@ -1176,34 +1603,37 @@ const paginateOrder = (order, metrics, printedAt) => {
     }));
 };
 
-const buildPaginatedPages = async (orders = []) => {
+const buildPaginatedPages = async (orders = [], template = DEFAULT_ORDER_PRINT_TEMPLATE) => {
     const printedAt = formatDateTime(new Date().toISOString());
     const allPages = [];
+    const config = getPrintTemplateConfig(template);
 
     for (const order of orders) {
-        const metrics = await measureOrderLayout(order, printedAt);
-        const orderPages = paginateOrder(order, metrics, printedAt);
+        const metrics = await measureOrderLayout(order, printedAt, template);
+        const orderPages = paginateOrder(order, metrics, printedAt, config);
         allPages.push(...orderPages);
     }
 
     return allPages;
 };
 
-export const buildOrderPrintDocument = async (orders = []) => {
-    const pages = await buildPaginatedPages(orders);
+export const buildOrderPrintDocument = async (orders = [], options = {}) => {
+    const template = resolvePrintTemplate(options.template || DEFAULT_ORDER_PRINT_TEMPLATE);
+    const pages = await buildPaginatedPages(orders, template);
     const htmlPages = pages.map((page, index) =>
         renderOrderPage({
             ...page,
             isDocumentLast: index === pages.length - 1,
+            template,
         })
     );
 
-    return buildHtmlDocument(htmlPages);
+    return buildHtmlDocument(htmlPages, { template });
 };
 
-const printWithIframe = async (html) => {
+const printWithIframe = async (html, config = getPrintTemplateConfig()) => {
     removeIframe(PRINT_FRAME_ID);
-    const iframe = createHiddenIframe(PRINT_FRAME_ID);
+    const iframe = createHiddenIframe(PRINT_FRAME_ID, config);
 
     try {
         const { iframeWin } = await loadHtmlIntoIframe(iframe, html);
@@ -1218,7 +1648,7 @@ const printWithIframe = async (html) => {
                 clearTimeout(timeoutId);
                 try {
                     iframeWin.removeEventListener('afterprint', handleAfterPrint);
-                } catch (_) {
+                } catch {
                     // Ignore cleanup errors.
                 }
                 resolve({ reason });
@@ -1233,7 +1663,7 @@ const printWithIframe = async (html) => {
                 try {
                     iframeWin.focus();
                     iframeWin.print();
-                } catch (_) {
+                } catch {
                     finish('print-error');
                 }
             }, 0);
@@ -1259,8 +1689,10 @@ export const printOrders = async (orders = [], options = {}) => {
         // The current implementation always prints from the active browser window.
     }
 
-    const html = await buildOrderPrintDocument(orders);
-    return printWithIframe(html);
+    const template = resolvePrintTemplate(options.template || DEFAULT_ORDER_PRINT_TEMPLATE);
+    const config = getPrintTemplateConfig(template);
+    const html = await buildOrderPrintDocument(orders, { template });
+    return printWithIframe(html, config);
 };
 
 export const closePrintSession = (session) => {
@@ -1283,7 +1715,7 @@ export const printCurrentPage = async (sourceWindow = window) => {
 
 export const preparePrintPopupWindow = () => null;
 
-export const exportOrderPdf = async (orders = [], filename) => {
+export const exportOrderPdf = async (orders = [], filename, options = {}) => {
     if (!Array.isArray(orders) || orders.length === 0) {
         throw new Error('Khong co du lieu don hang de xuat PDF.');
     }
@@ -1293,10 +1725,12 @@ export const exportOrderPdf = async (orders = [], filename) => {
         import('html2canvas'),
     ]);
 
-    const html = await buildOrderPrintDocument(orders);
+    const template = resolvePrintTemplate(options.template || ORDER_PRINT_TEMPLATE_CUSTOMER);
+    const config = getPrintTemplateConfig(template);
+    const html = await buildOrderPrintDocument(orders, { template });
 
     removeIframe(PDF_FRAME_ID);
-    const iframe = createHiddenIframe(PDF_FRAME_ID);
+    const iframe = createHiddenIframe(PDF_FRAME_ID, config);
 
     try {
         const { iframeDoc } = await loadHtmlIntoIframe(iframe, html);
@@ -1306,7 +1740,7 @@ export const exportOrderPdf = async (orders = [], filename) => {
             throw new Error('Khong tim thay noi dung don hang de xuat PDF.');
         }
 
-        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: config.orientation });
 
         for (let index = 0; index < pages.length; index += 1) {
             const page = pages[index];
@@ -1314,13 +1748,13 @@ export const exportOrderPdf = async (orders = [], filename) => {
                 Math.ceil(page.offsetWidth || 0),
                 Math.ceil(page.clientWidth || 0),
                 Math.ceil(page.scrollWidth || 0),
-                CONTENT_WIDTH_PX
+                config.contentWidthPx
             );
             const renderHeightPx = Math.max(
                 Math.ceil(page.offsetHeight || 0),
                 Math.ceil(page.clientHeight || 0),
                 Math.ceil(page.scrollHeight || 0),
-                CONTENT_HEIGHT_PX
+                config.contentHeightPx
             );
             const canvas = await html2canvas(page, {
                 scale: 2,
@@ -1342,16 +1776,16 @@ export const exportOrderPdf = async (orders = [], filename) => {
             }
 
             const renderHeightMm = Math.min(
-                CONTENT_HEIGHT_MM,
-                (canvas.height * CONTENT_WIDTH_MM) / canvas.width
+                config.contentHeightMm,
+                (canvas.height * config.contentWidthMm) / canvas.width
             );
 
             pdf.addImage(
                 canvas.toDataURL('image/png'),
                 'PNG',
-                PAGE_MARGIN_LEFT_MM,
-                PAGE_MARGIN_TOP_MM,
-                CONTENT_WIDTH_MM,
+                config.marginLeftMm,
+                config.marginTopMm,
+                config.contentWidthMm,
                 renderHeightMm,
                 undefined,
                 'FAST'

@@ -2,6 +2,9 @@ export const DEFAULT_INVENTORY_SECTION_KEY = 'products';
 
 export const INVENTORY_NAV_ITEMS = [
     { key: 'products', slug: 'ton-kho', label: 'Tồn kho', icon: 'inventory_2' },
+    { key: 'shelfLocations', slug: 'vi-tri-ke', label: 'Vị trí kệ', icon: 'shelves' },
+    { key: 'replacements', slug: 'ma-thay-the', label: 'Mã thay thế', icon: 'rule' },
+    { key: 'replacementLookup', slug: 'tra-ma-kho', label: 'Tra mã kho', icon: 'qr_code_scanner' },
     { key: 'suppliers', slug: 'nha-cung-cap', label: 'Nhà cung cấp', icon: 'storefront' },
     { key: 'supplierPrices', slug: 'gia-nhap-tung-nha', label: 'Giá nhập từng nhà', icon: 'request_quote' },
     { key: 'imports', slug: 'phieu-nhap', label: 'Phiếu nhập', icon: 'inventory_2' },

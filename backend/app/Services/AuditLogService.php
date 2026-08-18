@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AuditLog;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 
 class AuditLogService
 {
@@ -24,6 +25,18 @@ class AuditLogService
 
     public function sanitizePayload(mixed $value): mixed
     {
+        if ($value instanceof UploadedFile) {
+            return [
+                'name' => $value->getClientOriginalName(),
+                'size' => $value->getSize(),
+                'mime_type' => $value->getMimeType(),
+            ];
+        }
+
+        if (is_object($value) || is_resource($value)) {
+            return is_object($value) ? $value::class : '[resource]';
+        }
+
         if (!is_array($value)) {
             return $value;
         }

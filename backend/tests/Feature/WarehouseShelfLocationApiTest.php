@@ -240,7 +240,7 @@ class WarehouseShelfLocationApiTest extends TestCase
             ])
             ->assertOk()
             ->assertJsonPath('data.0.items.0.replacement_product.name', 'Sản phẩm thay thế để nhặt')
-            ->assertJsonPath('data.0.items.0.replacement_product.location_label', 'Kệ thay thế - Tầng 3 - STT kho 247')
+            ->assertJsonPath('data.0.items.0.replacement_product.location_label', 'Kệ thay thế - Tầng 3 - STT 247')
             ->assertJsonPath('data.0.items.0.replacement_product.storage_location.product_warehouse_sequence', 247);
     }
 

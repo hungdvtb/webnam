@@ -56,12 +56,23 @@ class ProductCategoryCloneService
             $targetCategory = $this->resolveTargetCategory($payload, $sourceCategory);
             $idMap = [];
             $createdProducts = [];
+            $createdRootCount = 0;
+            $createdChildCount = 0;
 
             foreach ($graph['clone_order'] as $sourceProduct) {
                 $sourceId = (int) $sourceProduct->id;
+                if (!isset($preparedRows[$sourceId])) {
+                    continue;
+                }
+
                 $clone = $this->cloneProduct($sourceProduct, $preparedRows[$sourceId], $sourceCategory, $targetCategory, $graph);
                 $idMap[$sourceId] = (int) $clone->id;
                 $createdProducts[] = $clone;
+                if (isset($graph['root_id_set'][$sourceId])) {
+                    $createdRootCount++;
+                } else {
+                    $createdChildCount++;
+                }
 
                 $this->copyProductImages($sourceProduct, $clone);
                 $this->copyAttributeValues($sourceProduct, $clone);
@@ -78,8 +89,9 @@ class ProductCategoryCloneService
                 'target_category' => $this->categoryPayload($targetCategory->fresh() ?: $targetCategory),
                 'summary' => [
                     'created_products' => count($createdProducts),
-                    'root_products' => count($graph['root_ids']),
-                    'child_products' => count($graph['all_product_ids']) - count($graph['root_ids']),
+                    'root_products' => $createdRootCount,
+                    'child_products' => $createdChildCount,
+                    'removed_products' => max(0, count($graph['all_product_ids']) - count($preparedRows)),
                     'skipped_products' => count($graph['skipped_root_ids'] ?? []),
                 ],
                 'created_products' => collect($createdProducts)
@@ -290,11 +302,8 @@ class ProductCategoryCloneService
             $rowIndexBySourceId[$sourceId] = $index;
         }
 
-        foreach ($graph['all_product_ids'] as $sourceId) {
-            if (!isset($rowsBySourceId[$sourceId])) {
-                $messages['rows'][] = 'Bảng copy thiếu một số sản phẩm cha/con từ danh mục nguồn.';
-                break;
-            }
+        if (empty($rowsBySourceId)) {
+            $messages['rows'][] = 'Chọn ít nhất một sản phẩm để copy.';
         }
 
         $preparedRows = [];
@@ -648,6 +657,7 @@ class ProductCategoryCloneService
         ], $columns));
         $now = now();
         $rootIds = $graph['root_ids'];
+        $graphProductIdSet = array_fill_keys($graph['all_product_ids'], true);
 
         $links = DB::table('product_links')
             ->whereIn('product_id', $rootIds)
@@ -666,6 +676,14 @@ class ProductCategoryCloneService
             $variantId = isset($link->variant_id) && is_numeric($link->variant_id)
                 ? (int) $link->variant_id
                 : null;
+
+            if (isset($graphProductIdSet[$linkedProductId]) && !isset($idMap[$linkedProductId])) {
+                continue;
+            }
+
+            if ($variantId && isset($graphProductIdSet[$variantId]) && !isset($idMap[$variantId])) {
+                continue;
+            }
 
             $insert = [
                 'product_id' => $idMap[$sourceParentId],

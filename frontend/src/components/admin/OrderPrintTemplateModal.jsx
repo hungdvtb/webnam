@@ -9,7 +9,7 @@ const printTemplateOptions = [
         key: ORDER_PRINT_TEMPLATE_WAREHOUSE,
         icon: 'inventory_2',
         title: 'In kho nhặt hàng',
-        description: 'Mẫu mặc định, có vị trí kho và hàng thay thế.',
+        description: 'Mẫu mặc định A4 dọc, có vị trí kho và hàng thay thế.',
     },
     {
         key: ORDER_PRINT_TEMPLATE_CUSTOMER,

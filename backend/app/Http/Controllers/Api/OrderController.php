@@ -4507,7 +4507,7 @@ class OrderController extends Controller
         }
 
         if ($warehouseSequence !== null && $warehouseSequence > 0) {
-            $parts[] = "STT kho {$warehouseSequence}";
+            $parts[] = "STT {$warehouseSequence}";
         }
 
         return !empty($parts) ? implode(' - ', $parts) : null;

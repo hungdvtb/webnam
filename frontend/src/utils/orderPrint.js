@@ -33,15 +33,17 @@ const PRINT_TEMPLATE_CONFIGS = {
         marginRightMm: PAGE_MARGIN_RIGHT_MM,
         marginBottomMm: PAGE_MARGIN_BOTTOM_MM,
         marginLeftMm: PAGE_MARGIN_LEFT_MM,
+        pageFitBufferPx: PAGE_FIT_BUFFER_PX,
     },
     [ORDER_PRINT_TEMPLATE_WAREHOUSE]: {
-        orientation: 'landscape',
-        pageWidthMm: A4_HEIGHT_MM,
-        pageHeightMm: A4_WIDTH_MM,
+        orientation: 'portrait',
+        pageWidthMm: A4_WIDTH_MM,
+        pageHeightMm: A4_HEIGHT_MM,
         marginTopMm: PAGE_MARGIN_TOP_MM,
         marginRightMm: PAGE_MARGIN_RIGHT_MM,
         marginBottomMm: PAGE_MARGIN_BOTTOM_MM,
         marginLeftMm: PAGE_MARGIN_LEFT_MM,
+        pageFitBufferPx: 18,
     },
 };
 
@@ -188,6 +190,25 @@ const getWarehouseSequenceText = (item = {}) => {
     return String(Math.trunc(number));
 };
 
+const formatWarehouseShelfText = (value) => {
+    const shelf = normalizeText(value);
+    if (!shelf) {
+        return '';
+    }
+
+    return shelf.toLocaleLowerCase('vi-VN').startsWith('kệ') ? shelf : `Kệ ${shelf}`;
+};
+
+const formatWarehouseSequenceText = (value) => {
+    const sequence = normalizeText(value);
+    return sequence ? `STT ${sequence.replace(/^STT\s*kho\s*/i, '').replace(/^STT\s*/i, '')}` : '';
+};
+
+const normalizeWarehouseLocationText = (value) => normalizeText(value)
+    .replace(/\bSTT\s+kho\b/gi, 'STT')
+    .replace(/\s+-\s+/g, ' - ')
+    .trim();
+
 const getPrintItemStorageLocation = (item = {}) => {
     const location = normalizeText(item.storage_location_label)
         || normalizeText(item.storage_location?.location_label)
@@ -233,9 +254,9 @@ const getReplacementProductPayload = (item = {}) => {
         || normalizeText(replacement.display_name)
         || normalizeText(replacement.product_name)
         || '';
-    const location = normalizeText(replacement.location_label)
-        || normalizeText(replacement.storage_location?.warehouse_location_label)
-        || normalizeText(replacement.storage_location?.location_label)
+    const location = normalizeWarehouseLocationText(replacement.location_label)
+        || normalizeWarehouseLocationText(replacement.storage_location?.warehouse_location_label)
+        || normalizeWarehouseLocationText(replacement.storage_location?.location_label)
         || '';
 
     if (!name && !location) {
@@ -457,9 +478,26 @@ const renderWarehouseReplacementCell = (replacementProduct) => {
         </div>`;
 };
 
+const renderWarehouseStorageCell = (item = {}) => {
+    const locationParts = [
+        item.storage_shelf ? escapeHtml(formatWarehouseShelfText(item.storage_shelf)) : '',
+        item.storage_floor ? `T&#7847;ng ${escapeHtml(item.storage_floor)}` : '',
+        item.warehouse_sequence ? escapeHtml(formatWarehouseSequenceText(item.warehouse_sequence)) : '',
+    ].filter(Boolean);
+
+    if (!locationParts.length) {
+        return '';
+    }
+
+    return `
+        <div class="warehouse-storage-cell">
+            <span class="warehouse-storage-text">${locationParts.join(' - ')}</span>
+        </div>`;
+};
+
 const renderWarehouseOrderRows = (items = [], startIndex = 0, measurement = false) => {
     if (!items.length) {
-        return `<tr><td colspan="8" class="empty-state">Don hang khong co san pham.</td></tr>`;
+        return `<tr><td colspan="6" class="empty-state">Don hang khong co san pham.</td></tr>`;
     }
 
     return items
@@ -480,9 +518,7 @@ const renderWarehouseOrderRows = (items = [], startIndex = 0, measurement = fals
             </td>
             <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
             <td class="col-unit"><div class="cell-center"><span class="cell-text">${escapeHtml(item.unit_name || '-')}</span></div></td>
-            <td class="col-warehouse-sequence"><div class="cell-center cell-center--warehouse">${item.warehouse_sequence ? `<span class="warehouse-sequence-badge">${escapeHtml(item.warehouse_sequence)}</span>` : ''}</div></td>
-            <td class="col-shelf"><div class="cell-center cell-center--warehouse"><span class="warehouse-location-text">${escapeHtml(item.storage_shelf || '')}</span></div></td>
-            <td class="col-floor"><div class="cell-center cell-center--warehouse"><span class="warehouse-location-text">${escapeHtml(item.storage_floor || '')}</span></div></td>
+            <td class="col-warehouse-location">${renderWarehouseStorageCell(item)}</td>
             <td class="col-replacement">${renderWarehouseReplacementCell(item.replacement_product)}</td>
         </tr>`;
         })
@@ -514,9 +550,7 @@ const renderWarehouseTableHead = (measurement = false) => `
             <th class="col-name"><div class="head-cell"><span class="head-text">San pham</span></div></th>
             <th class="col-qty"><div class="head-cell"><span class="head-text">SL</span></div></th>
             <th class="col-unit"><div class="head-cell"><span class="head-text">&#272;VT</span></div></th>
-            <th class="col-warehouse-sequence"><div class="head-cell"><span class="head-text">STT kho</span></div></th>
-            <th class="col-shelf"><div class="head-cell"><span class="head-text">K&#7879;</span></div></th>
-            <th class="col-floor"><div class="head-cell"><span class="head-text">T&#7847;ng</span></div></th>
+            <th class="col-warehouse-location"><div class="head-cell"><span class="head-text">K&#7879; / T&#7847;ng / STT</span></div></th>
             <th class="col-replacement"><div class="head-cell"><span class="head-text">Thay th&#7871; n&#7871;u h&#7871;t h&#224;ng</span></div></th>
         </tr>
     </thead>`;
@@ -1010,20 +1044,25 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     body.template-warehouse .col-index {
-        width: 5%;
+        width: 5.5%;
     }
 
     body.template-warehouse .col-name {
-        width: 34%;
+        width: 43.5%;
     }
 
     body.template-warehouse .col-qty {
-        width: 5.5%;
+        width: 6%;
         text-align: center;
     }
 
     body.template-warehouse .col-unit {
-        width: 6.5%;
+        width: 7%;
+        text-align: center;
+    }
+
+    .col-warehouse-location {
+        width: 18%;
         text-align: center;
     }
 
@@ -1043,7 +1082,7 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     .col-replacement {
-        width: 27%;
+        width: 20%;
     }
 
     .head-cell {
@@ -1096,6 +1135,29 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     .cell-center--warehouse {
         min-height: 34px;
         padding: 5px 4px;
+    }
+
+    .warehouse-storage-cell {
+        display: flex;
+        min-height: 28px;
+        margin: 3px;
+        padding: 4px 5px;
+        box-sizing: border-box;
+        align-items: center;
+        justify-content: center;
+        border: 0.35mm solid #cbd5e1;
+        border-radius: 2px;
+        background: #f8fafc;
+        color: #0f2f63;
+        font-size: 8.9px;
+        font-weight: 850;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+    }
+
+    .warehouse-storage-text {
+        display: block;
+        line-height: 1.15;
     }
 
     .warehouse-sequence-badge {
@@ -1303,6 +1365,143 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
         transform: translateY(-0.04em);
     }
 
+    body.template-warehouse {
+        font-size: 10px;
+        line-height: 1.24;
+    }
+
+    body.template-warehouse .page-top--full {
+        margin-bottom: 6px;
+    }
+
+    body.template-warehouse .page-header {
+        gap: 9px;
+        padding-bottom: 6px;
+    }
+
+    body.template-warehouse .page-kicker {
+        font-size: 7.4px;
+    }
+
+    body.template-warehouse .page-order-code {
+        margin-top: 2px;
+        padding-bottom: 1px;
+        font-size: 18px;
+        line-height: 1.08;
+    }
+
+    body.template-warehouse .warehouse-print-tag {
+        margin-top: 3px;
+        padding: 1px 6px;
+        font-size: 7.2px;
+    }
+
+    body.template-warehouse .detail-stack {
+        gap: 3px;
+        margin-top: 5px;
+    }
+
+    body.template-warehouse .detail-row {
+        min-height: 22px;
+        padding: 3px 6px;
+    }
+
+    body.template-warehouse .detail-label {
+        font-size: 7.6px;
+    }
+
+    body.template-warehouse .detail-value {
+        font-size: 9.8px;
+    }
+
+    body.template-warehouse .page-top--continuation {
+        margin-bottom: 5px;
+        padding-bottom: 4px;
+    }
+
+    body.template-warehouse .continue-code {
+        font-size: 12px;
+    }
+
+    body.template-warehouse .items-table th {
+        font-size: 7.1px;
+        letter-spacing: 0.08em;
+    }
+
+    body.template-warehouse .items-table td {
+        font-size: 9.5px;
+        line-height: 1.13;
+    }
+
+    body.template-warehouse .head-cell {
+        min-height: 20px;
+        padding: 3px 4px;
+    }
+
+    body.template-warehouse .cell-center {
+        min-height: 25px;
+        padding: 3px 4px;
+    }
+
+    body.template-warehouse .product-cell {
+        min-height: 25px;
+        gap: 1px;
+        padding: 3px 5px;
+    }
+
+    body.template-warehouse .product-text {
+        line-height: 1.12;
+    }
+
+    body.template-warehouse .product-original {
+        font-size: 7.5px;
+        line-height: 1.08;
+    }
+
+    body.template-warehouse .product-sku {
+        font-size: 7.4px;
+        line-height: 1.08;
+    }
+
+    body.template-warehouse .product-inline-label {
+        font-size: 7.3px;
+    }
+
+    body.template-warehouse .product-actual {
+        margin-top: 1px;
+        font-size: 8.4px;
+        line-height: 1.08;
+    }
+
+    body.template-warehouse .replacement-cell {
+        min-height: 26px;
+        margin: 3px;
+        padding: 4px 5px;
+        font-size: 8.3px;
+        line-height: 1.12;
+    }
+
+    body.template-warehouse .replacement-location {
+        margin-top: 2px;
+    }
+
+    body.template-warehouse .summary-row {
+        padding-top: 8px;
+    }
+
+    body.template-warehouse .summary-box {
+        min-height: 31px;
+        padding: 6px 10px;
+    }
+
+    body.template-warehouse .summary-label {
+        font-size: 9px;
+    }
+
+    body.template-warehouse .summary-value {
+        font-size: 17px;
+    }
+
     @page {
         size: A4 ${config.orientation};
         margin: ${config.marginTopMm}mm ${config.marginRightMm}mm ${config.marginBottomMm}mm ${config.marginLeftMm}mm;
@@ -1383,6 +1582,7 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
         .col-qty,
         .col-unit,
         .col-money,
+        .col-warehouse-location,
         .col-warehouse-sequence,
         .col-shelf,
         .col-floor,
@@ -1493,6 +1693,8 @@ const sumRange = (prefix, start, end) => prefix[end + 1] - prefix[start];
 
 const paginateOrder = (order, metrics, printedAt, config = getPrintTemplateConfig()) => {
     const items = getOrderItems(order);
+    const fitBufferPx = Number(config.pageFitBufferPx || PAGE_FIT_BUFFER_PX);
+
     if (!items.length) {
         return [{
             order,
@@ -1512,19 +1714,19 @@ const paginateOrder = (order, metrics, printedAt, config = getPrintTemplateConfi
 
     const safeSinglePageCapacity = Math.max(
         1,
-        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - fitBufferPx
     );
     const safeFirstPageCapacity = Math.max(
         1,
-        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.fullHeaderHeight - metrics.tableHeadHeight - fitBufferPx
     );
     const safeContinuationCapacity = Math.max(
         1,
-        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - fitBufferPx
     );
     const safeLastContinuationCapacity = Math.max(
         1,
-        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - PAGE_FIT_BUFFER_PX
+        config.contentHeightPx - metrics.continuationHeaderHeight - metrics.tableHeadHeight - metrics.summaryHeight - fitBufferPx
     );
 
     const prefix = [0];

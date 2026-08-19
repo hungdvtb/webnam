@@ -9,6 +9,9 @@ const PRODUCT_TYPE_LABELS = {
     grouped: 'Nhóm',
 };
 
+const EDITABLE_FIELDS = ['name', 'sku', 'expected_cost', 'price'];
+const MONEY_FIELDS = new Set(['expected_cost', 'price']);
+
 const cloneName = (value = '') => String(value)
     .replace(/M2/g, 'M3')
     .replace(/m2/g, 'm3')
@@ -62,6 +65,8 @@ const ProductCategoryCloneModal = ({
     const [replaceFind, setReplaceFind] = useState('');
     const [replaceWith, setReplaceWith] = useState('');
     const [replaceScope, setReplaceScope] = useState('both');
+    const [cellSelection, setCellSelection] = useState(null);
+    const [isSelectingCells, setIsSelectingCells] = useState(false);
 
     const sourceCategory = useMemo(
         () => categories.find((category) => String(category.id) === String(sourceCategoryId)),
@@ -91,7 +96,20 @@ const ProductCategoryCloneModal = ({
         setReplaceFind('');
         setReplaceWith('');
         setReplaceScope('both');
+        setCellSelection(null);
+        setIsSelectingCells(false);
     }, [categories, initialSourceCategoryId, open]);
+
+    useEffect(() => {
+        if (!isSelectingCells) {
+            return undefined;
+        }
+
+        const stopSelecting = () => setIsSelectingCells(false);
+        window.addEventListener('mouseup', stopSelecting);
+
+        return () => window.removeEventListener('mouseup', stopSelecting);
+    }, [isSelectingCells]);
 
     useEffect(() => {
         if (!open || !sourceCategory || targetCategoryName) {
@@ -113,6 +131,8 @@ const ProductCategoryCloneModal = ({
         setErrorMessage('');
         setNoticeMessage('');
         setRowErrors({});
+        setCellSelection(null);
+        setIsSelectingCells(false);
 
         try {
             const response = await productCategoryCloneApi.preview({
@@ -130,6 +150,7 @@ const ProductCategoryCloneModal = ({
             setRows([]);
             setSelectedProductIds(new Set(nextRows.map((row) => String(row.source_product_id))));
             setViewStep('select');
+            setCellSelection(null);
             if (nextPreview.target_category?.name) {
                 setTargetCategoryName(nextPreview.target_category.name);
             }
@@ -142,6 +163,7 @@ const ProductCategoryCloneModal = ({
             setRows([]);
             setSelectedProductIds(new Set());
             setViewStep('idle');
+            setCellSelection(null);
             setNoticeMessage('');
             setErrorMessage(error?.response?.data?.message || 'Không tải được danh sách copy.');
         } finally {
@@ -257,6 +279,7 @@ const ProductCategoryCloneModal = ({
         setReplaceWith('');
         setReplaceScope('both');
         setRowErrors({});
+        setCellSelection(null);
         setErrorMessage('');
         setNoticeMessage('');
     };
@@ -266,8 +289,177 @@ const ProductCategoryCloneModal = ({
         setViewStep('select');
         setSearch('');
         setRowErrors({});
+        setCellSelection(null);
         setErrorMessage('');
         setNoticeMessage('');
+    };
+
+    const formatCellForClipboard = (row, field) => (
+        MONEY_FIELDS.has(field) ? formatWholeMoneyInput(row[field]) : String(row[field] ?? '')
+    );
+
+    const normalizePastedCell = (field, value) => (
+        MONEY_FIELDS.has(field) ? normalizeWholeMoneyDraft(value) : String(value ?? '')
+    );
+
+    const parseClipboardGrid = (text) => {
+        const lines = String(text || '').replace(/\r/g, '').split('\n');
+
+        while (lines.length > 1 && lines[lines.length - 1] === '') {
+            lines.pop();
+        }
+
+        return lines.map((line) => line.split('\t'));
+    };
+
+    const getCellRange = (selection = cellSelection, sourceRows = rows) => {
+        if (!selection) {
+            return null;
+        }
+
+        const anchorRowIndex = sourceRows.findIndex((row) => String(row.source_product_id) === String(selection.anchorRowId));
+        const focusRowIndex = sourceRows.findIndex((row) => String(row.source_product_id) === String(selection.focusRowId));
+        const anchorFieldIndex = EDITABLE_FIELDS.indexOf(selection.anchorField);
+        const focusFieldIndex = EDITABLE_FIELDS.indexOf(selection.focusField);
+
+        if (anchorRowIndex < 0 || focusRowIndex < 0 || anchorFieldIndex < 0 || focusFieldIndex < 0) {
+            return null;
+        }
+
+        const rowStart = Math.min(anchorRowIndex, focusRowIndex);
+        const rowEnd = Math.max(anchorRowIndex, focusRowIndex);
+        const fieldStart = Math.min(anchorFieldIndex, focusFieldIndex);
+        const fieldEnd = Math.max(anchorFieldIndex, focusFieldIndex);
+
+        return { rowStart, rowEnd, fieldStart, fieldEnd };
+    };
+
+    const isCellSelected = (row, field) => {
+        const range = getCellRange();
+        if (!range) {
+            return false;
+        }
+
+        const rowIndex = rows.findIndex((item) => String(item.source_product_id) === String(row.source_product_id));
+        const fieldIndex = EDITABLE_FIELDS.indexOf(field);
+
+        return rowIndex >= range.rowStart
+            && rowIndex <= range.rowEnd
+            && fieldIndex >= range.fieldStart
+            && fieldIndex <= range.fieldEnd;
+    };
+
+    const startCellSelection = (event, row, field) => {
+        if (event.button !== 0 || viewStep !== 'edit' || submitting) {
+            return;
+        }
+
+        const sourceId = String(row.source_product_id);
+        setCellSelection({
+            anchorRowId: sourceId,
+            anchorField: field,
+            focusRowId: sourceId,
+            focusField: field,
+        });
+        setIsSelectingCells(true);
+    };
+
+    const extendCellSelection = (row, field) => {
+        if (!isSelectingCells || viewStep !== 'edit' || submitting) {
+            return;
+        }
+
+        setCellSelection((currentSelection) => {
+            if (!currentSelection) {
+                return null;
+            }
+
+            return {
+                ...currentSelection,
+                focusRowId: String(row.source_product_id),
+                focusField: field,
+            };
+        });
+    };
+
+    const handleCellPaste = (event, targetRow, targetField) => {
+        const text = event.clipboardData?.getData('text/plain') ?? '';
+        if (!text || (!text.includes('\n') && !text.includes('\t'))) {
+            return;
+        }
+
+        const grid = parseClipboardGrid(text);
+        const startRowIndex = rows.findIndex((row) => String(row.source_product_id) === String(targetRow.source_product_id));
+        const startFieldIndex = EDITABLE_FIELDS.indexOf(targetField);
+
+        if (startRowIndex < 0 || startFieldIndex < 0 || grid.length === 0) {
+            return;
+        }
+
+        const nextRows = rows.map((row) => ({ ...row }));
+        let appliedCount = 0;
+        let lastRowIndex = startRowIndex;
+        let lastFieldIndex = startFieldIndex;
+
+        grid.forEach((clipboardRow, rowOffset) => {
+            const targetRowIndex = startRowIndex + rowOffset;
+            if (!nextRows[targetRowIndex]) {
+                return;
+            }
+
+            clipboardRow.forEach((cellValue, fieldOffset) => {
+                const targetFieldForCell = EDITABLE_FIELDS[startFieldIndex + fieldOffset];
+                if (!targetFieldForCell) {
+                    return;
+                }
+
+                nextRows[targetRowIndex][targetFieldForCell] = normalizePastedCell(targetFieldForCell, cellValue);
+                appliedCount++;
+                lastRowIndex = targetRowIndex;
+                lastFieldIndex = startFieldIndex + fieldOffset;
+            });
+        });
+
+        if (appliedCount === 0) {
+            return;
+        }
+
+        event.preventDefault();
+        setRows(nextRows);
+        setRowErrors({});
+        setErrorMessage('');
+        setNoticeMessage(`Đã dán ${appliedCount} ô.`);
+        setCellSelection({
+            anchorRowId: String(targetRow.source_product_id),
+            anchorField: targetField,
+            focusRowId: String(nextRows[lastRowIndex].source_product_id),
+            focusField: EDITABLE_FIELDS[lastFieldIndex],
+        });
+    };
+
+    const handleModalCopy = (event) => {
+        if (viewStep !== 'edit' || !cellSelection) {
+            return;
+        }
+
+        const range = getCellRange();
+        if (!range || (range.rowStart === range.rowEnd && range.fieldStart === range.fieldEnd)) {
+            return;
+        }
+
+        const clipboardRows = [];
+        for (let rowIndex = range.rowStart; rowIndex <= range.rowEnd; rowIndex += 1) {
+            const clipboardCells = [];
+            for (let fieldIndex = range.fieldStart; fieldIndex <= range.fieldEnd; fieldIndex += 1) {
+                clipboardCells.push(formatCellForClipboard(rows[rowIndex], EDITABLE_FIELDS[fieldIndex]));
+            }
+            clipboardRows.push(clipboardCells.join('\t'));
+        }
+
+        event.clipboardData.setData('text/plain', clipboardRows.join('\n'));
+        event.preventDefault();
+        setNoticeMessage(`Đã copy ${(range.rowEnd - range.rowStart + 1) * (range.fieldEnd - range.fieldStart + 1)} ô.`);
+        setErrorMessage('');
     };
 
     const applyFindReplace = () => {
@@ -332,6 +524,7 @@ const ProductCategoryCloneModal = ({
 
         setRows(nextRows);
         setRowErrors({});
+        setCellSelection(null);
         setErrorMessage('');
         setNoticeMessage(removedCount > 1
             ? `Đã bỏ ${removedCount} dòng khỏi bản copy.`
@@ -464,6 +657,8 @@ const ProductCategoryCloneModal = ({
             <div
                 className="flex max-h-[94vh] w-full max-w-[1380px] flex-col overflow-hidden rounded bg-white shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
+                onCopy={handleModalCopy}
+                onMouseUp={() => setIsSelectingCells(false)}
             >
                 <div className="flex items-start justify-between gap-4 border-b border-primary/10 px-5 py-4">
                     <div>
@@ -492,6 +687,7 @@ const ProductCategoryCloneModal = ({
                                     setRows([]);
                                     setViewStep('idle');
                                     setSelectedProductIds(new Set());
+                                    setCellSelection(null);
                                     setErrorMessage('');
                                     setNoticeMessage('');
                                     setRowErrors({});
@@ -736,6 +932,10 @@ const ProductCategoryCloneModal = ({
                                     const skuError = rowErrors[`${sourceIndex}.sku`] || (duplicateSku ? 'SKU bị trùng trong bảng.' : '');
                                     const expectedCostError = rowErrors[`${sourceIndex}.expected_cost`];
                                     const priceError = rowErrors[`${sourceIndex}.price`];
+                                    const nameCellSelected = isCellSelected(row, 'name');
+                                    const skuCellSelected = isCellSelected(row, 'sku');
+                                    const expectedCostCellSelected = isCellSelected(row, 'expected_cost');
+                                    const priceCellSelected = isCellSelected(row, 'price');
 
                                     return (
                                         <tr key={row.row_key || row.source_product_id} className={`${row.level === 'parent' ? 'bg-primary/[0.025]' : 'bg-white'} border-b border-primary/5`}>
@@ -760,8 +960,11 @@ const ProductCategoryCloneModal = ({
                                                     type="text"
                                                     value={row.name || ''}
                                                     onChange={(event) => updateRow(row.source_product_id, 'name', event.target.value)}
+                                                    onMouseDown={(event) => startCellSelection(event, row, 'name')}
+                                                    onMouseEnter={() => extendCellSelection(row, 'name')}
+                                                    onPaste={(event) => handleCellPaste(event, row, 'name')}
                                                     disabled={submitting}
-                                                    className={`h-9 w-full rounded-sm border px-3 text-[13px] font-semibold outline-none focus:border-primary ${nameError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'}`}
+                                                    className={`h-9 w-full rounded-sm border px-3 text-[13px] font-semibold outline-none focus:border-primary ${nameError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'} ${nameCellSelected ? 'ring-2 ring-primary ring-offset-1' : ''}`}
                                                 />
                                                 {nameError && <div className="mt-1 text-[11px] font-semibold text-red-600">{nameError}</div>}
                                             </td>
@@ -770,8 +973,11 @@ const ProductCategoryCloneModal = ({
                                                     type="text"
                                                     value={row.sku || ''}
                                                     onChange={(event) => updateRow(row.source_product_id, 'sku', event.target.value)}
+                                                    onMouseDown={(event) => startCellSelection(event, row, 'sku')}
+                                                    onMouseEnter={() => extendCellSelection(row, 'sku')}
+                                                    onPaste={(event) => handleCellPaste(event, row, 'sku')}
                                                     disabled={submitting}
-                                                    className={`h-9 w-full rounded-sm border px-3 font-mono text-[12px] font-semibold outline-none focus:border-primary ${skuError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'}`}
+                                                    className={`h-9 w-full rounded-sm border px-3 font-mono text-[12px] font-semibold outline-none focus:border-primary ${skuError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'} ${skuCellSelected ? 'ring-2 ring-primary ring-offset-1' : ''}`}
                                                 />
                                                 {skuError && <div className="mt-1 text-[11px] font-semibold text-red-600">{skuError}</div>}
                                             </td>
@@ -780,9 +986,12 @@ const ProductCategoryCloneModal = ({
                                                     type="text"
                                                     value={formatWholeMoneyInput(row.expected_cost)}
                                                     onChange={(event) => updateRow(row.source_product_id, 'expected_cost', normalizeWholeMoneyDraft(event.target.value))}
+                                                    onMouseDown={(event) => startCellSelection(event, row, 'expected_cost')}
+                                                    onMouseEnter={() => extendCellSelection(row, 'expected_cost')}
+                                                    onPaste={(event) => handleCellPaste(event, row, 'expected_cost')}
                                                     inputMode="numeric"
                                                     disabled={submitting}
-                                                    className={`h-9 w-full rounded-sm border px-3 text-right text-[13px] font-semibold outline-none focus:border-primary ${expectedCostError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'}`}
+                                                    className={`h-9 w-full rounded-sm border px-3 text-right text-[13px] font-semibold outline-none focus:border-primary ${expectedCostError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'} ${expectedCostCellSelected ? 'ring-2 ring-primary ring-offset-1' : ''}`}
                                                 />
                                                 {expectedCostError && <div className="mt-1 text-right text-[11px] font-semibold text-red-600">{expectedCostError}</div>}
                                             </td>
@@ -791,9 +1000,12 @@ const ProductCategoryCloneModal = ({
                                                     type="text"
                                                     value={formatWholeMoneyInput(row.price)}
                                                     onChange={(event) => updateRow(row.source_product_id, 'price', normalizeWholeMoneyDraft(event.target.value))}
+                                                    onMouseDown={(event) => startCellSelection(event, row, 'price')}
+                                                    onMouseEnter={() => extendCellSelection(row, 'price')}
+                                                    onPaste={(event) => handleCellPaste(event, row, 'price')}
                                                     inputMode="numeric"
                                                     disabled={submitting}
-                                                    className={`h-9 w-full rounded-sm border px-3 text-right text-[13px] font-semibold outline-none focus:border-primary ${priceError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'}`}
+                                                    className={`h-9 w-full rounded-sm border px-3 text-right text-[13px] font-semibold outline-none focus:border-primary ${priceError ? 'border-red-300 bg-red-50' : 'border-primary/15 bg-white'} ${priceCellSelected ? 'ring-2 ring-primary ring-offset-1' : ''}`}
                                                 />
                                                 {priceError && <div className="mt-1 text-right text-[11px] font-semibold text-red-600">{priceError}</div>}
                                             </td>

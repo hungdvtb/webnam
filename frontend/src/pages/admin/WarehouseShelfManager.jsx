@@ -744,7 +744,7 @@ const SequenceManagerModal = ({
                                             <input
                                                 type="checkbox"
                                                 checked={allVisibleSelected}
-                                                onChange={() => onToggleAllRows(visibleKeys)}
+                                                onChange={() => onToggleAllRows(visibleKeys, rows)}
                                                 disabled={visibleKeys.length === 0}
                                                 className="size-4 accent-primary"
                                                 title="Chọn tất cả dòng đang hiển thị"
@@ -778,7 +778,7 @@ const SequenceManagerModal = ({
                                                     <input
                                                         type="checkbox"
                                                         checked={isSelected}
-                                                        onChange={() => onToggleRow(key)}
+                                                        onChange={() => onToggleRow(key, product)}
                                                         className="size-4 accent-primary"
                                                         title="Chọn để in"
                                                     />
@@ -1003,6 +1003,7 @@ const WarehouseShelfManager = () => {
     const [sequenceRowErrors, setSequenceRowErrors] = useState({});
     const [sequenceFilters, setSequenceFilters] = useState(sequenceProductSearchDefaultFilters);
     const [sequenceSelectedKeys, setSequenceSelectedKeys] = useState([]);
+    const [sequenceSelectedRowsByKey, setSequenceSelectedRowsByKey] = useState({});
     const [sequenceQuickSetupOpen, setSequenceQuickSetupOpen] = useState(false);
 
     const loadShelves = useCallback(async (params = {}, signal) => {
@@ -1371,14 +1372,35 @@ const WarehouseShelfManager = () => {
             const locationData = extractPayload(locationResponse) || {};
             const locations = Array.isArray(locationData.locations) ? locationData.locations : [];
             const rows = buildSequenceManagerRows(productEntries, locations, activeSequenceFilterCount === 0).slice(0, 200);
-            const rowKeySet = new Set(rows.map((row) => row.sequence_key || buildSequenceRowKey(row)));
+            const rowByKey = rows.reduce((map, row) => {
+                const key = row.sequence_key || buildSequenceRowKey(row);
+                if (key) {
+                    map[key] = { ...row, sequence_key: key };
+                }
+                return map;
+            }, {});
 
             setSequenceRows(rows);
-            setSequenceDrafts(rows.reduce((drafts, row) => {
-                drafts[row.sequence_key] = String(resolveProductWarehouseSequence(row) || '');
+            setSequenceDrafts((previous) => rows.reduce((drafts, row) => {
+                const key = row.sequence_key || buildSequenceRowKey(row);
+                if (key) {
+                    drafts[key] = String(resolveProductWarehouseSequence(row) || '');
+                }
                 return drafts;
-            }, {}));
-            setSequenceSelectedKeys((previous) => previous.filter((key) => rowKeySet.has(key)));
+            }, { ...previous }));
+            setSequenceSelectedRowsByKey((previous) => {
+                const next = { ...previous };
+                let changed = false;
+
+                Object.keys(next).forEach((key) => {
+                    if (rowByKey[key]) {
+                        next[key] = rowByKey[key];
+                        changed = true;
+                    }
+                });
+
+                return changed ? next : previous;
+            });
             setSequenceRowErrors({});
         } catch (error) {
             if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') return;
@@ -1418,6 +1440,7 @@ const WarehouseShelfManager = () => {
         setSequenceError('');
         setSequenceRowErrors({});
         setSequenceSelectedKeys([]);
+        setSequenceSelectedRowsByKey({});
         setSequenceQuickSetupOpen(false);
         setSequenceManagerOpen(true);
     }, [search]);
@@ -1453,41 +1476,84 @@ const WarehouseShelfManager = () => {
             attributeId: previous.attributeId || String(productQuickFilterAttributes[0]?.id || ''),
         }));
         setSequenceSelectedKeys([]);
+        setSequenceSelectedRowsByKey({});
     }, [productQuickFilterAttributes]);
 
-    const toggleSequenceRowSelection = useCallback((key) => {
-        setSequenceSelectedKeys((previous) => (
-            previous.includes(key)
-                ? previous.filter((item) => item !== key)
-                : [...previous, key]
-        ));
-    }, []);
+    const toggleSequenceRowSelection = useCallback((key, row) => {
+        if (!key) return;
 
-    const toggleAllSequenceRows = useCallback((keys = []) => {
+        const isSelected = sequenceSelectedKeys.includes(key);
+
+        setSequenceSelectedKeys((previous) => (
+            isSelected
+                ? previous.filter((item) => item !== key)
+                : (previous.includes(key) ? previous : [...previous, key])
+        ));
+        setSequenceSelectedRowsByKey((previous) => {
+            if (isSelected) {
+                const next = { ...previous };
+                delete next[key];
+                return next;
+            }
+
+            return row ? { ...previous, [key]: { ...row, sequence_key: key } } : previous;
+        });
+    }, [sequenceSelectedKeys]);
+
+    const toggleAllSequenceRows = useCallback((keys = [], visibleRows = []) => {
         const normalizedKeys = Array.from(new Set(keys.filter(Boolean)));
         if (normalizedKeys.length === 0) return;
 
-        setSequenceSelectedKeys((previous) => {
-            const previousSet = new Set(previous);
-            const allSelected = normalizedKeys.every((key) => previousSet.has(key));
+        const rowByKey = (Array.isArray(visibleRows) ? visibleRows : []).reduce((map, row) => {
+            const key = row.sequence_key || buildSequenceRowKey(row);
+            if (key) {
+                map[key] = { ...row, sequence_key: key };
+            }
+            return map;
+        }, {});
+        const selectedSet = new Set(sequenceSelectedKeys);
+        const allSelected = normalizedKeys.every((key) => selectedSet.has(key));
 
+        setSequenceSelectedKeys((previous) => {
             if (allSelected) {
                 return previous.filter((key) => !normalizedKeys.includes(key));
             }
 
+            const previousSet = new Set(previous);
             normalizedKeys.forEach((key) => previousSet.add(key));
             return Array.from(previousSet);
         });
-    }, []);
+        setSequenceSelectedRowsByKey((previous) => {
+            if (allSelected) {
+                const next = { ...previous };
+                normalizedKeys.forEach((key) => {
+                    delete next[key];
+                });
+                return next;
+            }
+
+            return normalizedKeys.reduce((next, key) => {
+                if (rowByKey[key]) {
+                    next[key] = rowByKey[key];
+                }
+                return next;
+            }, { ...previous });
+        });
+    }, [sequenceSelectedKeys]);
 
     const getSelectedSequenceRows = useCallback(() => {
-        const selectedSet = new Set(sequenceSelectedKeys);
-
-        return sequenceRows.filter((row) => {
+        const visibleRowByKey = sequenceRows.reduce((map, row) => {
             const key = row.sequence_key || buildSequenceRowKey(row);
-            return selectedSet.has(key);
-        });
-    }, [sequenceRows, sequenceSelectedKeys]);
+            if (key) {
+                map[key] = row;
+            }
+            return map;
+        }, {});
+
+        return sequenceSelectedKeys
+            .map((key) => visibleRowByKey[key] || sequenceSelectedRowsByKey[key])
+            .filter(Boolean);
+    }, [sequenceRows, sequenceSelectedKeys, sequenceSelectedRowsByKey]);
 
     const printSelectedSequenceRows = useCallback(() => {
         const rowsToPrint = getSelectedSequenceRows();
@@ -1730,6 +1796,20 @@ const WarehouseShelfManager = () => {
 
                     return resolveProductSku(left).localeCompare(resolveProductSku(right), 'vi');
                 }));
+            setSequenceSelectedRowsByKey((previous) => {
+                if (!previous[key]) return previous;
+
+                const row = previous[key];
+                return {
+                    ...previous,
+                    [key]: {
+                        ...row,
+                        warehouse_sequence: savedSequence,
+                        product_warehouse_sequence: savedSequence,
+                        warehouse_pick_label: `${savedSequence} - ${resolveProductName(row) || resolveProductSku(row) || 'Sản phẩm'}`,
+                    },
+                };
+            });
             setSequenceDrafts((previous) => ({
                 ...previous,
                 [key]: String(savedSequence),

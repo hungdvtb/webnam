@@ -7749,6 +7749,54 @@ class ProductController extends Controller
             }
         }
 
+        if ($request->filled('category_id')) {
+            if ($request->category_id === 'uncategorized') {
+                $query->whereNull('products.category_id')->doesntHave('categories');
+            } else {
+                $query->where(function ($q) use ($request) {
+                    $q->where('products.category_id', $request->category_id)
+                        ->orWhereHas('categories', function ($sub) use ($request) {
+                            $sub->where('categories.id', $request->category_id);
+                        });
+                });
+            }
+        }
+
+        if ($request->filled('category_ids')) {
+            $rawCategoryIds = is_array($request->category_ids) ? $request->category_ids : explode(',', $request->category_ids);
+            $includeUncategorized = collect($rawCategoryIds)
+                ->contains(fn ($value) => trim(strtolower((string) $value)) === 'uncategorized');
+            $catIds = collect($rawCategoryIds)
+                ->map(fn ($id) => is_numeric($id) ? (int) $id : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if (!empty($catIds) || $includeUncategorized) {
+                $query->where(function ($q) use ($catIds, $includeUncategorized) {
+                    if (!empty($catIds)) {
+                        $q->where(function ($categoryQuery) use ($catIds) {
+                            $categoryQuery
+                                ->whereIn('products.category_id', $catIds)
+                                ->orWhereHas('categories', function ($sub) use ($catIds) {
+                                    $sub->whereIn('categories.id', $catIds);
+                                });
+                        });
+                    }
+
+                    if ($includeUncategorized) {
+                        $method = !empty($catIds) ? 'orWhere' : 'where';
+                        $q->{$method}(function ($uncategorizedQuery) {
+                            $uncategorizedQuery
+                                ->whereNull('products.category_id')
+                                ->doesntHave('categories');
+                        });
+                    }
+                });
+            }
+        }
+
         // Apply parent variation filter if requested
         if ($request->filled('parent_id')) {
             $parentId = (int) $request->parent_id;

@@ -662,6 +662,64 @@ class ProductSearchBehaviorTest extends TestCase
             ->assertJsonPath('data.0.sku', 'DEMO-GOM-0060-ALT');
     }
 
+    public function test_picker_search_respects_category_filter(): void
+    {
+        $account = $this->authenticate();
+        $menRan = $this->createCategory($account, 'Bo do tho men ran Bat Trang');
+        $menLam = $this->createCategory($account, 'Bo do tho men lam Bat Trang');
+
+        $lamParent = $this->createProduct($account, [
+            'name' => 'Lo hoa men LAM',
+            'sku' => 'ML80-LOHOALAM',
+            'type' => 'configurable',
+            'category_id' => $menLam->id,
+        ]);
+        $lamVariant = $this->createProduct($account, [
+            'name' => 'Lo hoa men LAM cao 20cm',
+            'sku' => 'ML80-LOHOALAM-20',
+        ]);
+        $this->attachVariation($lamParent, $lamVariant);
+
+        $ranParent = $this->createProduct($account, [
+            'name' => 'Lo hoa men RAN',
+            'sku' => 'MR70-LOHOARAN',
+            'type' => 'configurable',
+            'category_id' => $menRan->id,
+        ]);
+        $ranVariant = $this->createProduct($account, [
+            'name' => 'Lo hoa men RAN cao 25cm',
+            'sku' => 'MR70-LOHOARAN-25',
+        ]);
+        $this->attachVariation($ranParent, $ranVariant);
+
+        $response = $this
+            ->withHeaders($this->headers($account))
+            ->getJson('/api/products?' . http_build_query([
+                'picker' => 1,
+                'fast_picker' => 1,
+                'allow_variants' => 1,
+                'search' => 'lo hoa',
+                'category_id' => $menRan->id,
+                'per_page' => 20,
+            ]));
+
+        $response->assertOk();
+
+        $skus = collect($response->json('data') ?? [])
+            ->flatMap(function (array $product) {
+                return collect([$product['sku'] ?? null])
+                    ->merge(collect($product['variations'] ?? [])->pluck('sku'));
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        $this->assertContains('MR70-LOHOARAN', $skus);
+        $this->assertContains('MR70-LOHOARAN-25', $skus);
+        $this->assertNotContains('ML80-LOHOALAM', $skus);
+        $this->assertNotContains('ML80-LOHOALAM-20', $skus);
+    }
+
     public function test_attribute_filter_can_be_combined_with_search(): void
     {
         $account = $this->authenticate();

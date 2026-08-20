@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { orderApi, productApi, warehouseApi, warehouseShelfApi } from '../../services/api';
+import { categoryApi, orderApi, productApi, warehouseApi, warehouseShelfApi } from '../../services/api';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS, PRODUCT_TYPE_LABELS } from '../../config/productTypes';
 
 const panelClass = 'rounded-sm border border-primary/10 bg-white shadow-sm';
@@ -21,7 +21,10 @@ const shelfProductSearchDefaultFilters = {
     attributeId2: '',
     attributeValue2: '',
 };
-const sequenceProductSearchDefaultFilters = { ...shelfProductSearchDefaultFilters };
+const sequenceProductSearchDefaultFilters = {
+    ...shelfProductSearchDefaultFilters,
+    categoryId: '',
+};
 const shelfProductTypeOptions = [
     { value: '', label: 'Tất cả loại' },
     { value: 'variation', label: 'Biến thể con' },
@@ -250,6 +253,14 @@ const extractProductRows = (response) => {
     return [];
 };
 
+const extractCategoryRows = (response) => {
+    const payload = response?.data;
+    if (Array.isArray(payload?.data)) return payload.data;
+    if (Array.isArray(payload)) return payload;
+
+    return [];
+};
+
 const flattenProductPickerRows = (rows = []) => {
     const seen = new Set();
     const entries = [];
@@ -433,6 +444,7 @@ const SequenceManagerModal = ({
     error,
     rowErrors,
     selectedKeys,
+    categoryOptions = [],
     filterAttributes,
     filters,
     filterPills,
@@ -554,6 +566,19 @@ const SequenceManagerModal = ({
                             {shelfStockFilterOptions.map((option) => (
                                 <option key={option.value || 'all-sequence-stock'} value={option.value}>
                                     {option.label}
+                                </option>
+                            ))}
+                        </select>
+                        <select
+                            value={filters.categoryId || ''}
+                            onChange={(event) => onFilterChange('categoryId', event.target.value)}
+                            className={`${inputClass} min-w-[190px] flex-1 xl:flex-none`}
+                        >
+                            <option value="">Tất cả danh mục</option>
+                            <option value="uncategorized">Chưa gắn danh mục</option>
+                            {categoryOptions.map((category) => (
+                                <option key={category.id} value={category.id}>
+                                    {category.name}
                                 </option>
                             ))}
                         </select>
@@ -944,6 +969,7 @@ const ShelfFormModal = ({
 
 const WarehouseShelfManager = () => {
     const [warehouses, setWarehouses] = useState([]);
+    const [categories, setCategories] = useState([]);
     const [shelves, setShelves] = useState([]);
     const [selectedShelfId, setSelectedShelfId] = useState(null);
     const [selectedShelf, setSelectedShelf] = useState(null);
@@ -1008,6 +1034,16 @@ const WarehouseShelfManager = () => {
         }
     }, []);
 
+    const loadCategories = useCallback(async () => {
+        try {
+            const response = await categoryApi.getAll();
+            setCategories(extractCategoryRows(response));
+        } catch (error) {
+            console.error('Error loading shelf sequence categories', error);
+            setCategories([]);
+        }
+    }, []);
+
     const loadShelfDetail = useCallback(async (id) => {
         if (!id) {
             setSelectedShelf(null);
@@ -1034,8 +1070,9 @@ const WarehouseShelfManager = () => {
 
     useEffect(() => {
         loadWarehouses();
+        loadCategories();
         loadShelves();
-    }, [loadShelves, loadWarehouses]);
+    }, [loadCategories, loadShelves, loadWarehouses]);
 
     useEffect(() => {
         let cancelled = false;
@@ -1198,6 +1235,7 @@ const WarehouseShelfManager = () => {
     const activeSequenceFilterCount = useMemo(() => ([
         sequenceFilters.type,
         sequenceFilters.stock,
+        sequenceFilters.categoryId,
         sequenceFilters.attributeValue,
         sequenceFilters.attributeValue2,
     ].filter(Boolean).length), [sequenceFilters]);
@@ -1224,6 +1262,13 @@ const WarehouseShelfManager = () => {
             });
         }
 
+        if (sequenceFilters.categoryId) {
+            const categoryLabel = sequenceFilters.categoryId === 'uncategorized'
+                ? 'Chưa gắn danh mục'
+                : (categories.find((category) => String(category.id) === String(sequenceFilters.categoryId))?.name || 'Danh mục');
+            pills.push({ key: 'category', label: `Danh mục: ${categoryLabel}` });
+        }
+
         if (sequenceFilters.attributeValue && activeSequenceFilterAttribute) {
             pills.push({
                 key: 'attribute-1',
@@ -1242,6 +1287,7 @@ const WarehouseShelfManager = () => {
     }, [
         activeSequenceFilterAttribute,
         activeSequenceFilterAttribute2,
+        categories,
         sequenceFilters,
         sequenceSearch,
     ]);
@@ -1275,6 +1321,10 @@ const WarehouseShelfManager = () => {
 
             if (sequenceFilters.stock === 'out_of_stock') {
                 productParams.max_stock = 0;
+            }
+
+            if (sequenceFilters.categoryId) {
+                productParams.category_id = sequenceFilters.categoryId;
             }
 
             appendShelfProductQuickFilterParams(productParams, activeSequenceFilterAttribute, sequenceFilters.attributeValue);
@@ -2631,6 +2681,7 @@ const WarehouseShelfManager = () => {
                 error={sequenceError}
                 rowErrors={sequenceRowErrors}
                 selectedKeys={sequenceSelectedKeys}
+                categoryOptions={categories}
                 filterAttributes={productQuickFilterAttributes}
                 filters={sequenceFilters}
                 filterPills={activeSequenceFilterPills}

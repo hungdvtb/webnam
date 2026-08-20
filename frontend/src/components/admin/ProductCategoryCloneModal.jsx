@@ -653,7 +653,7 @@ const ProductCategoryCloneModal = ({
     }
 
     return (
-        <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/60 p-3" onClick={() => !submitting && onClose?.()}>
+        <div className="fixed inset-0 z-[145] flex items-center justify-center bg-black/60 p-3">
             <div
                 className="flex max-h-[94vh] w-full max-w-[1380px] flex-col overflow-hidden rounded bg-white shadow-2xl"
                 onClick={(event) => event.stopPropagation()}

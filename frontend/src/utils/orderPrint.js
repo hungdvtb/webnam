@@ -451,10 +451,9 @@ const renderCustomerOrderRows = (items = [], startIndex = 0, measurement = false
                 <div class="product-cell">
                     <div class="product-name${hasActualProductOverride ? ' product-name--ordered' : ''}"><span class="product-text">${hasActualProductOverride ? '<span class="product-inline-label">SP g&#7889;c:</span> ' : ''}${escapeHtml(item.name || '-')}</span></div>
                     ${item.original_name ? `<div class="product-original"><span class="product-original-text">T&#234;n g&#7889;c: ${escapeHtml(item.original_name)}</span></div>` : ''}
-                    ${item.sku ? `<div class="product-sku"><span class="product-sku-text">${hasActualProductOverride ? 'SKU g&#7889;c' : 'SKU'}: ${escapeHtml(item.sku)}</span></div>` : ''}
+                    ${renderProductSkuLocationLine(item, hasActualProductOverride)}
                     ${hasActualProductOverride ? `<div class="product-actual"><span class="product-actual-text"><span class="product-inline-label">Th&#7921;c g&#7917;i:</span> ${escapeHtml(item.actual_name || 'San pham thay the')}</span></div>` : ''}
                     ${hasActualProductOverride && item.actual_sku ? `<div class="product-sku product-sku--actual"><span class="product-sku-text">SKU th&#7921;c g&#7917;i: ${escapeHtml(item.actual_sku)}</span></div>` : ''}
-                    ${item.storage_location ? `<div class="product-location"><span class="product-location-text">V&#7883; tr&#237;: ${escapeHtml(item.storage_location)}</span></div>` : ''}
                 </div>
             </td>
             <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
@@ -466,15 +465,32 @@ const renderCustomerOrderRows = (items = [], startIndex = 0, measurement = false
         .join('');
 };
 
+const renderProductSkuLocationLine = (item = {}, hasActualProductOverride = false) => {
+    const parts = [
+        item.sku ? `${hasActualProductOverride ? 'SKU g&#7889;c' : 'SKU'}: ${escapeHtml(item.sku)}` : '',
+        item.storage_location ? `V&#7883; tr&#237;: ${escapeHtml(item.storage_location)}` : '',
+    ].filter(Boolean);
+
+    if (!parts.length) {
+        return '';
+    }
+
+    return `<div class="product-sku product-sku-location"><span class="product-sku-text">${parts.join(' - ')}</span></div>`;
+};
+
 const renderWarehouseReplacementCell = (replacementProduct) => {
     if (!replacementProduct) {
         return '';
     }
 
+    const parts = [
+        replacementProduct.name ? escapeHtml(replacementProduct.name) : '',
+        replacementProduct.location ? `<span class="replacement-label">V&#7883; tr&#237;:</span> ${escapeHtml(replacementProduct.location)}` : '',
+    ].filter(Boolean);
+
     return `
         <div class="replacement-cell">
-            ${replacementProduct.name ? `<div class="replacement-name"><span class="replacement-label">SP thay th&#7871;:</span> ${escapeHtml(replacementProduct.name)}</div>` : ''}
-            ${replacementProduct.location ? `<div class="replacement-location"><span class="replacement-label">V&#7883; tr&#237;:</span> ${escapeHtml(replacementProduct.location)}</div>` : ''}
+            <span class="replacement-text">${parts.join(' - ')}</span>
         </div>`;
 };
 
@@ -497,7 +513,7 @@ const renderWarehouseStorageCell = (item = {}) => {
 
 const renderWarehouseOrderRows = (items = [], startIndex = 0, measurement = false) => {
     if (!items.length) {
-        return `<tr><td colspan="6" class="empty-state">Don hang khong co san pham.</td></tr>`;
+        return `<tr><td colspan="7" class="empty-state">Don hang khong co san pham.</td></tr>`;
     }
 
     return items
@@ -518,6 +534,7 @@ const renderWarehouseOrderRows = (items = [], startIndex = 0, measurement = fals
             </td>
             <td class="col-qty"><div class="cell-center"><span class="cell-text">${escapeHtml(item.quantity ?? 0)}</span></div></td>
             <td class="col-unit"><div class="cell-center"><span class="cell-text">${escapeHtml(item.unit_name || '-')}</span></div></td>
+            <td class="col-sale-price"><div class="cell-money cell-money--warehouse"><span class="cell-text">${escapeHtml(formatCurrency(item.unit_price))}</span></div></td>
             <td class="col-warehouse-location">${renderWarehouseStorageCell(item)}</td>
             <td class="col-replacement">${renderWarehouseReplacementCell(item.replacement_product)}</td>
         </tr>`;
@@ -550,6 +567,7 @@ const renderWarehouseTableHead = (measurement = false) => `
             <th class="col-name"><div class="head-cell"><span class="head-text">San pham</span></div></th>
             <th class="col-qty"><div class="head-cell"><span class="head-text">SL</span></div></th>
             <th class="col-unit"><div class="head-cell"><span class="head-text">&#272;VT</span></div></th>
+            <th class="col-sale-price"><div class="head-cell"><span class="head-text">Gia ban</span></div></th>
             <th class="col-warehouse-location"><div class="head-cell"><span class="head-text">K&#7879; / T&#7847;ng / STT</span></div></th>
             <th class="col-replacement"><div class="head-cell"><span class="head-text">Thay th&#7871; n&#7871;u h&#7871;t h&#224;ng</span></div></th>
         </tr>
@@ -1044,21 +1062,27 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     body.template-warehouse .col-index {
-        width: 5.5%;
+        width: 5%;
     }
 
     body.template-warehouse .col-name {
-        width: 43.5%;
+        width: 35%;
     }
 
     body.template-warehouse .col-qty {
-        width: 6%;
+        width: 5.5%;
         text-align: center;
     }
 
     body.template-warehouse .col-unit {
-        width: 7%;
+        width: 6%;
         text-align: center;
+    }
+
+    .col-sale-price {
+        width: 12.5%;
+        text-align: right;
+        white-space: nowrap;
     }
 
     .col-warehouse-location {
@@ -1082,7 +1106,7 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     .col-replacement {
-        width: 20%;
+        width: 18%;
     }
 
     .head-cell {
@@ -1140,14 +1164,13 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     .warehouse-storage-cell {
         display: flex;
         min-height: 28px;
-        margin: 3px;
-        padding: 4px 5px;
+        margin: 0;
+        padding: 3px 4px;
         box-sizing: border-box;
         align-items: center;
         justify-content: center;
-        border: 0.35mm solid #cbd5e1;
-        border-radius: 2px;
-        background: #f8fafc;
+        border: 0;
+        background: transparent;
         color: #0f2f63;
         font-size: 8.9px;
         font-weight: 850;
@@ -1254,16 +1277,15 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     .product-location {
-        display: inline-block;
+        display: block;
         margin-top: 3px;
-        border: 0.35mm solid #f59e0b;
-        background: #fff7ed;
+        border: 0;
+        background: transparent;
         color: #9a3412;
         font-size: 8.7px;
         font-weight: 850;
         line-height: 1.1;
-        padding: 1.1px 4px;
-        border-radius: 2px;
+        padding: 0;
         overflow-wrap: anywhere;
     }
 
@@ -1279,12 +1301,11 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     .replacement-cell {
-        min-height: 34px;
-        margin: 5px;
-        padding: 6px 7px;
-        border: 0.35mm solid #fdba74;
-        border-radius: 2px;
-        background: #fff7ed;
+        min-height: 24px;
+        margin: 0;
+        padding: 3px 4px;
+        border: 0;
+        background: transparent;
         color: var(--page-text);
         font-size: 9.3px;
         line-height: 1.18;
@@ -1294,6 +1315,11 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
 
     .replacement-name {
         color: #b91c1c;
+    }
+
+    .replacement-text {
+        display: block;
+        line-height: 1.16;
     }
 
     .replacement-location {
@@ -1443,6 +1469,14 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
         padding: 3px 4px;
     }
 
+    body.template-warehouse .cell-money--warehouse {
+        min-height: 25px;
+        padding: 3px 4px;
+        font-size: 8.4px;
+        font-weight: 800;
+        line-height: 1.05;
+    }
+
     body.template-warehouse .product-cell {
         min-height: 25px;
         gap: 1px;
@@ -1474,9 +1508,9 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
     }
 
     body.template-warehouse .replacement-cell {
-        min-height: 26px;
-        margin: 3px;
-        padding: 4px 5px;
+        min-height: 22px;
+        margin: 0;
+        padding: 3px 4px;
         font-size: 8.3px;
         line-height: 1.12;
     }
@@ -1582,6 +1616,7 @@ const getOrderPrintStyles = (config = getPrintTemplateConfig()) => `
         .col-qty,
         .col-unit,
         .col-money,
+        .col-sale-price,
         .col-warehouse-location,
         .col-warehouse-sequence,
         .col-shelf,

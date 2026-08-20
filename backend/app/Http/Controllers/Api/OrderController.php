@@ -996,11 +996,11 @@ class OrderController extends Controller
                 ->with([
                     'product' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'inventory_unit_id', 'warehouse_sequence'])
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'inventory_unit_id', 'warehouse_sequence', 'stock_quantity'])
                         ->with(['unit:id,name']),
                     'actualProduct' => fn ($productQuery) => $productQuery
                         ->withoutGlobalScope('account_id')
-                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence']),
+                        ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence', 'stock_quantity']),
                 ]),
         ];
     }
@@ -4458,7 +4458,7 @@ class OrderController extends Controller
                             ->with([
                                 'product' => fn ($productQuery) => $productQuery
                                     ->withoutGlobalScope('account_id')
-                                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence']),
+                                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'warehouse_sequence', 'stock_quantity']),
                             ]),
                     ]),
             ])
@@ -4469,8 +4469,29 @@ class OrderController extends Controller
 
         foreach ($productIds as $productId) {
             $membership = $memberships->get((int) $productId);
-            $replacementItem = $membership?->group?->items
-                ?->first(fn (ProductReplacementItem $item) => (int) $item->product_id !== (int) $productId && $item->product);
+            if (!$membership?->group) {
+                continue;
+            }
+
+            $orderedProduct = $order->items
+                ->first(fn (OrderItem $item) => (int) $item->product_id === (int) $productId)
+                ?->product;
+
+            if ($this->printableProductHasStock($orderedProduct)) {
+                continue;
+            }
+
+            $replacementItems = $membership->group->items
+                ->filter(fn (ProductReplacementItem $item) => (int) $item->product_id !== (int) $productId && $item->product)
+                ->values();
+
+            if ($replacementItems->isEmpty()) {
+                continue;
+            }
+
+            $replacementItem = $replacementItems
+                ->first(fn (ProductReplacementItem $item) => $this->printableProductHasStock($item->product))
+                ?: $replacementItems->first();
 
             if (!$replacementItem?->product) {
                 continue;
@@ -4480,6 +4501,15 @@ class OrderController extends Controller
         }
 
         return $map;
+    }
+
+    private function printableProductHasStock(?Product $product): bool
+    {
+        if (!$product) {
+            return false;
+        }
+
+        return InventoryQuantity::normalize($product->stock_quantity ?? 0) > 0;
     }
 
     private function warehouseSequenceForProduct(?Product $product): ?int

@@ -244,6 +244,137 @@ class WarehouseShelfLocationApiTest extends TestCase
             ->assertJsonPath('data.0.items.0.replacement_product.storage_location.product_warehouse_sequence', 247);
     }
 
+    public function test_order_print_data_hides_replacement_when_ordered_product_has_stock(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $orderedProduct = $this->createProduct($account, [
+            'sku' => 'SKU-CON-HANG',
+            'name' => 'Sản phẩm chính còn hàng',
+            'stock_quantity' => 3,
+            'warehouse_sequence' => 51,
+        ]);
+        $replacementProduct = $this->createProduct($account, [
+            'sku' => 'SKU-THAY-THE-CON-HANG',
+            'name' => 'Sản phẩm thay thế không cần hiện',
+            'stock_quantity' => 8,
+            'warehouse_sequence' => 251,
+        ]);
+        $this->createReplacementGroup($account, [$orderedProduct, $replacementProduct]);
+
+        $order = $this->createOrder($account, $user);
+        OrderItem::query()->create([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'product_id' => $orderedProduct->id,
+            'inventory_source_account_id' => $account->id,
+            'product_name_snapshot' => $orderedProduct->name,
+            'product_sku_snapshot' => $orderedProduct->sku,
+            'quantity' => 1,
+            'price' => 120000,
+            'sort_order' => 1,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/print-data', [
+                'ids' => [$order->id],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.0.items.0.replacement_product', null);
+    }
+
+    public function test_order_print_data_uses_next_in_stock_replacement_when_priority_is_out(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $orderedProduct = $this->createProduct($account, [
+            'sku' => 'SKU-CHINH-HET',
+            'name' => 'Sản phẩm chính hết hàng',
+            'stock_quantity' => 0,
+            'warehouse_sequence' => 52,
+        ]);
+        $priorityReplacement = $this->createProduct($account, [
+            'sku' => 'SKU-UU-TIEN-HET',
+            'name' => 'Sản phẩm ưu tiên nhưng hết',
+            'stock_quantity' => 0,
+            'warehouse_sequence' => 252,
+        ]);
+        $availableReplacement = $this->createProduct($account, [
+            'sku' => 'SKU-THAY-THE-CON',
+            'name' => 'Sản phẩm thay thế còn hàng',
+            'stock_quantity' => 5,
+            'warehouse_sequence' => 253,
+        ]);
+        $this->createReplacementGroup($account, [$orderedProduct, $priorityReplacement, $availableReplacement]);
+
+        $order = $this->createOrder($account, $user);
+        OrderItem::query()->create([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'product_id' => $orderedProduct->id,
+            'inventory_source_account_id' => $account->id,
+            'product_name_snapshot' => $orderedProduct->name,
+            'product_sku_snapshot' => $orderedProduct->sku,
+            'quantity' => 1,
+            'price' => 120000,
+            'sort_order' => 1,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/print-data', [
+                'ids' => [$order->id],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.0.items.0.replacement_product.name', 'Sản phẩm thay thế còn hàng')
+            ->assertJsonPath('data.0.items.0.replacement_product.location_label', 'STT 253');
+    }
+
+    public function test_order_print_data_falls_back_to_priority_replacement_when_all_replacements_are_out(): void
+    {
+        [$account, $user] = $this->authenticate();
+        $orderedProduct = $this->createProduct($account, [
+            'sku' => 'SKU-CHINH-HET-ALL',
+            'name' => 'Sản phẩm chính hết toàn bộ thay thế',
+            'stock_quantity' => 0,
+            'warehouse_sequence' => 53,
+        ]);
+        $priorityReplacement = $this->createProduct($account, [
+            'sku' => 'SKU-UU-TIEN-FALLBACK',
+            'name' => 'Sản phẩm ưu tiên fallback',
+            'stock_quantity' => 0,
+            'warehouse_sequence' => 254,
+        ]);
+        $secondReplacement = $this->createProduct($account, [
+            'sku' => 'SKU-THAY-THE-CUNG-HET',
+            'name' => 'Sản phẩm thay thế cũng hết',
+            'stock_quantity' => 0,
+            'warehouse_sequence' => 255,
+        ]);
+        $this->createReplacementGroup($account, [$orderedProduct, $priorityReplacement, $secondReplacement]);
+
+        $order = $this->createOrder($account, $user);
+        OrderItem::query()->create([
+            'account_id' => $account->id,
+            'order_id' => $order->id,
+            'product_id' => $orderedProduct->id,
+            'inventory_source_account_id' => $account->id,
+            'product_name_snapshot' => $orderedProduct->name,
+            'product_sku_snapshot' => $orderedProduct->sku,
+            'quantity' => 1,
+            'price' => 120000,
+            'sort_order' => 1,
+        ]);
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/orders/print-data', [
+                'ids' => [$order->id],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.0.items.0.replacement_product.name', 'Sản phẩm ưu tiên fallback')
+            ->assertJsonPath('data.0.items.0.replacement_product.location_label', 'STT 254');
+    }
+
     public function test_configurable_parent_and_bundle_do_not_show_warehouse_sequence(): void
     {
         [$account] = $this->authenticate();
@@ -427,6 +558,30 @@ class WarehouseShelfLocationApiTest extends TestCase
             'stock_quantity' => 0,
             'status' => true,
         ], $overrides));
+    }
+
+    /**
+     * @param list<Product> $products
+     */
+    private function createReplacementGroup(Account $account, array $products): ProductReplacementGroup
+    {
+        $group = ProductReplacementGroup::query()->create([
+            'account_id' => $account->id,
+            'name' => 'Nhóm thay thế ' . Str::upper(Str::random(4)),
+        ]);
+
+        foreach (array_values($products) as $index => $product) {
+            ProductReplacementItem::query()->create([
+                'account_id' => $account->id,
+                'group_id' => $group->id,
+                'product_id' => $product->id,
+                'product_sku_snapshot' => $product->sku,
+                'product_name_snapshot' => $product->name,
+                'sort_order' => $index + 1,
+            ]);
+        }
+
+        return $group;
     }
 
     private function createOrder(Account $account, User $user): Order

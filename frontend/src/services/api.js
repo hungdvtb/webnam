@@ -796,6 +796,14 @@ export const leadApi = {
     deleteTagRule: (id) => api.delete(`/lead-tag-rules/${id}`),
 };
 
+export const telesalesApi = {
+    bootstrap: () => api.get('/telesales/bootstrap'),
+    getAll: (params, signal) => api.get('/telesales/leads', { params, signal }),
+    getOne: (id) => api.get(`/telesales/leads/${id}`),
+    importLeads: (data) => api.post('/telesales/leads/import', data),
+    update: (id, data) => api.put(`/telesales/leads/${id}`, data),
+};
+
 export const orderStatusApi = {
     getAll: (params) => api.get('/order-statuses', params ? { params } : {}),
     getOne: (id) => api.get(`/order-statuses/${id}`),

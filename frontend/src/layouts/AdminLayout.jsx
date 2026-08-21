@@ -42,7 +42,8 @@ const AdminLayout = () => {
         location.pathname.startsWith('/admin/customers') ||
         location.pathname.startsWith('/admin/shipments') ||
         location.pathname.startsWith('/admin/pending-orders') ||
-        location.pathname.startsWith('/admin/leads');
+        location.pathname.startsWith('/admin/leads') ||
+        location.pathname.startsWith('/admin/telesales');
     const isDesignRoute =
         location.pathname.startsWith('/admin/categories') ||
         location.pathname.startsWith('/admin/reviews') ||
@@ -287,6 +288,7 @@ const AdminLayout = () => {
 
     const canAccessLeadBoard = canAccess('orders') || canAccess('customers') || canAccess('leads');
     const isLeadRoute = location.pathname === '/admin/leads' || location.pathname === '/admin/pending-orders';
+    const isTelesalesRoute = location.pathname === '/admin/telesales';
     const sidebarCollapsedWidth = '5.75rem';
     const sidebarExpandedWidth = '19rem';
     const mobileSidebarWidth = 'min(19rem, calc(100vw - 1rem))';
@@ -303,6 +305,8 @@ const AdminLayout = () => {
         if (path.startsWith('/admin/reviews')) return 'products';
         if (path.startsWith('/admin/product-faqs')) return 'products';
         if (path.startsWith('/admin/categories')) return 'categories';
+        if (path.startsWith('/admin/telesales')) return 'leads';
+        if (path.startsWith('/admin/leads')) return 'leads';
         if (path.startsWith('/admin/orders')) return 'orders';
         if (path.startsWith('/admin/customers')) return 'customers';
         if (path.startsWith('/admin/inventory')) return 'inventory';
@@ -576,6 +580,18 @@ const AdminLayout = () => {
                                             <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isLeadRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>pending_actions</span>
                                             <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
                                                 Xử lý lead
+                                            </SidebarText>
+                                        </Link>
+                                    )}
+                                    {canAccessLeadBoard && (
+                                        <Link
+                                            to="/admin/telesales"
+                                            title="CRM Telesales"
+                                            className={`group flex items-center gap-4 rounded-sm p-3 transition-colors ${isTelesalesRoute ? 'bg-gold/10 text-gold' : 'text-stone hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <span className={`material-symbols-outlined w-6 shrink-0 text-center text-[20px] ${isTelesalesRoute ? 'text-gold' : 'text-stone group-hover:text-gold'}`}>support_agent</span>
+                                            <SidebarText isExpanded={isSidebarExpanded} className={submenuLabelClass}>
+                                                CRM Telesales
                                             </SidebarText>
                                         </Link>
                                     )}
@@ -907,7 +923,7 @@ const AdminLayout = () => {
                         </button>
                     </div>
                 )}
-                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
+                <div className={`relative flex-grow min-h-0 ${isOrderForm ? 'h-full overflow-auto p-0' : location.pathname === '/admin/leads' || location.pathname === '/admin/telesales' ? 'overflow-auto p-0' : location.pathname === '/admin/finance/funds' ? 'overflow-auto p-0 sm:p-4 md:p-6 lg:p-8' : isInventoryRoute ? 'overflow-auto p-4 md:p-5' : 'overflow-auto p-8'}`}>
                     {(() => {
                         const permNeeded = getCurrentPermId();
                         if (permNeeded && !canAccess(permNeeded)) {

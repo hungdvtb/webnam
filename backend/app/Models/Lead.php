@@ -15,6 +15,13 @@ class Lead extends Model
         'account_id',
         'lead_number',
         'lead_status_id',
+        'assigned_staff_id',
+        'potential_level',
+        'next_follow_up_at',
+        'follow_up_script',
+        'follow_up_interval_days',
+        'last_contacted_at',
+        'do_not_call',
         'customer_name',
         'phone',
         'email',
@@ -55,6 +62,9 @@ class Lead extends Model
         'converted_at' => 'datetime',
         'status_changed_at' => 'datetime',
         'last_noted_at' => 'datetime',
+        'next_follow_up_at' => 'datetime',
+        'last_contacted_at' => 'datetime',
+        'do_not_call' => 'boolean',
         'is_draft' => 'boolean',
         'payload_snapshot' => 'array',
         'conversion_data' => 'array',
@@ -68,6 +78,11 @@ class Lead extends Model
     public function statusConfig()
     {
         return $this->belongsTo(LeadStatus::class, 'lead_status_id');
+    }
+
+    public function assignedStaff()
+    {
+        return $this->belongsTo(LeadStaff::class, 'assigned_staff_id');
     }
 
     public function items()

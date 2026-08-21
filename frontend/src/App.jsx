@@ -51,6 +51,7 @@ import AiTrainingManager from './pages/admin/AiTrainingManager';
 import UserList from './pages/admin/UserList';
 import OrderStatusSettings from './pages/admin/OrderStatusSettings';
 import LeadList from './pages/admin/LeadList';
+import TelesalesCrm from './pages/admin/TelesalesCrm';
 import FixedCostTracker from './pages/admin/FixedCostTracker';
 import FundManagement from './pages/admin/FundManagement';
 import DebtManagement from './pages/admin/DebtManagement';
@@ -189,6 +190,7 @@ function App() {
                 <Route path="inventory/:section" element={<InventoryMovement />} />
                 <Route path="customers" element={<CustomerManagement />} />
                 <Route path="leads" element={<LeadList />} />
+                <Route path="telesales" element={<TelesalesCrm />} />
                 <Route path="blog" element={<BlogList />} />
                 <Route path="blog/new" element={<BlogForm />} />
                 <Route path="blog/edit/:id" element={<BlogForm />} />

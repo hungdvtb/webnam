@@ -294,6 +294,11 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/leads/notification-settings', [\App\Http\Controllers\Api\LeadController::class , 'storeNotificationSettings']);
     Route::post('/leads/bulk-delete', [\App\Http\Controllers\Api\LeadController::class , 'bulkDelete']);
     Route::post('/leads/bulk-restore', [\App\Http\Controllers\Api\LeadController::class , 'bulkRestore']);
+    Route::get('/telesales/bootstrap', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'bootstrap']);
+    Route::get('/telesales/leads', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'index']);
+    Route::post('/telesales/leads/import', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'import']);
+    Route::get('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'show'])->whereNumber('id');
+    Route::put('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'update'])->whereNumber('id');
     Route::get('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'show']);
     Route::get('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'notes']);
     Route::post('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'storeNote']);

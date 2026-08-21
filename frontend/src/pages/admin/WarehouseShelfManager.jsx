@@ -1643,22 +1643,30 @@ const WarehouseShelfManager = () => {
         }
 
         const printedAt = new Date().toLocaleString('vi-VN');
-        const labels = rowsToPrint.map((row) => {
+        const labelRows = rowsToPrint.map((row) => {
             const key = row.sequence_key || buildSequenceRowKey(row);
             const draftSequence = normalizeWarehouseSequenceDraft(sequenceDrafts[key]);
             const sequence = draftSequence || String(resolveProductWarehouseSequence(row) || '');
             const name = resolveProductName(row) || 'Sản phẩm chưa đặt tên';
-            const labelText = sequence ? `${sequence} - ${name}` : name;
-            const textClass = labelText.length > 64
-                ? 'label-text tiny'
-                : (labelText.length > 44 ? 'label-text compact' : 'label-text');
+            const sequenceClass = sequence.length >= 4
+                ? 'many'
+                : (sequence.length >= 3 ? 'triple' : (sequence.length >= 2 ? 'double' : 'single'));
+            const textClass = name.length > 92
+                ? 'label-name dense'
+                : (name.length > 72 ? 'label-name tight' : (name.length > 52 ? 'label-name compact' : 'label-name'));
 
             return `
-                <section class="label">
-                    <div class="${textClass}">${escapePrintHtml(labelText)}</div>
+                <section class="label ${sequence ? `has-sequence sequence-${sequenceClass}` : 'no-sequence'}">
+                    ${sequence ? `<div class="label-sequence ${sequenceClass}">${escapePrintHtml(sequence)}</div>` : ''}
+                    <div class="${textClass}">${escapePrintHtml(name)}</div>
                 </section>
             `;
-        }).join('');
+        });
+        const sheetHtml = [];
+
+        for (let index = 0; index < labelRows.length; index += 5) {
+            sheetHtml.push(`<main class="sheet">${labelRows.slice(index, index + 5).join('')}</main>`);
+        }
 
         const printWindow = window.open('', '_blank', 'width=980,height=720');
         if (!printWindow) {
@@ -1674,33 +1682,93 @@ const WarehouseShelfManager = () => {
                     <title>In tem nhãn kệ</title>
                     <style>
                         * { box-sizing: border-box; }
-                        body { margin: 0; color: #111827; font-family: Arial, sans-serif; }
+                        html, body { margin: 0; color: #111827; font-family: Arial, sans-serif; background: #fff; }
                         .toolbar { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; color: #667085; font-size: 12px; }
-                        .sheet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4mm; padding: 9mm; }
+                        .sheet {
+                            width: 100mm;
+                            height: 150mm;
+                            display: grid;
+                            grid-template-columns: minmax(0, 1fr);
+                            grid-template-rows: repeat(5, minmax(0, 1fr));
+                            gap: 1.7mm;
+                            padding: 4mm 3.5mm;
+                            page-break-after: always;
+                            break-after: page;
+                            background: #fff;
+                        }
+                        .sheet:last-child {
+                            page-break-after: auto;
+                            break-after: auto;
+                        }
                         .label {
-                            min-height: 30mm;
-                            border: 1.3px solid #111827;
-                            display: flex;
+                            min-width: 0;
+                            min-height: 0;
+                            border: 1.5px solid #111827;
+                            display: grid;
+                            grid-template-columns: var(--sequence-width, 17mm) minmax(0, 1fr);
+                            column-gap: 2mm;
                             align-items: center;
-                            justify-content: center;
-                            padding: 4mm 5mm;
+                            padding: 2.2mm 3.4mm 2.2mm 2.6mm;
                             page-break-inside: avoid;
                             break-inside: avoid;
+                            overflow: hidden;
+                        }
+                        .label.sequence-single { --sequence-width: 21mm; --sequence-badge-width: 18mm; }
+                        .label.sequence-double { --sequence-width: 27mm; --sequence-badge-width: 23mm; }
+                        .label.sequence-triple { --sequence-width: 34mm; --sequence-badge-width: 30mm; }
+                        .label.sequence-many { --sequence-width: 38mm; --sequence-badge-width: 34mm; }
+                        .label.no-sequence {
+                            grid-template-columns: minmax(0, 1fr);
+                            padding-left: 3.4mm;
                             text-align: center;
                         }
-                        .label-text { font-size: 20pt; font-weight: 800; line-height: 1.12; }
-                        .label-text.compact { font-size: 16pt; line-height: 1.12; }
-                        .label-text.tiny { font-size: 13.5pt; line-height: 1.12; }
-                        @page { size: A4 portrait; margin: 0; }
+                        .label-sequence {
+                            display: flex;
+                            min-width: 0;
+                            width: var(--sequence-badge-width, 18mm);
+                            height: 18mm;
+                            align-items: center;
+                            justify-content: center;
+                            border: 1.7px solid #111827;
+                            border-radius: 999px;
+                            font-family: Arial, Helvetica, sans-serif;
+                            font-weight: 900;
+                            line-height: 1;
+                            letter-spacing: 0;
+                            white-space: nowrap;
+                        }
+                        .label-sequence.single { font-size: 42pt; }
+                        .label-sequence.double { font-size: 32pt; }
+                        .label-sequence.triple { font-size: 25pt; }
+                        .label-sequence.many { font-size: 22pt; }
+                        .label-name {
+                            max-width: 100%;
+                            min-width: 0;
+                            font-family: Arial, Helvetica, sans-serif;
+                            font-size: 16pt;
+                            font-weight: 700;
+                            line-height: 1.24;
+                            letter-spacing: 0.01em;
+                            text-align: left;
+                            text-wrap: balance;
+                            font-kerning: normal;
+                            font-variant-ligatures: none;
+                            text-rendering: geometricPrecision;
+                        }
+                        .label.no-sequence .label-name { text-align: center; }
+                        .label-name.compact { font-size: 14.8pt; line-height: 1.25; }
+                        .label-name.tight { font-size: 13.6pt; line-height: 1.25; }
+                        .label-name.dense { font-size: 12.6pt; line-height: 1.26; }
+                        @page { size: 100mm 150mm; margin: 0; }
                         @media print {
                             .toolbar { display: none; }
-                            .sheet { padding: 9mm; }
+                            .sheet { margin: 0; }
                         }
                     </style>
                 </head>
                 <body>
-                    <div class="toolbar">Tem nhãn kệ | Số tem: ${rowsToPrint.length} | In lúc: ${escapePrintHtml(printedAt)}</div>
-                    <main class="sheet">${labels}</main>
+                    <div class="toolbar">Tem nhãn kệ | 5 sản phẩm/tờ | Số tem: ${rowsToPrint.length} | In lúc: ${escapePrintHtml(printedAt)}</div>
+                    ${sheetHtml.join('')}
                 </body>
             </html>`);
         printWindow.document.close();

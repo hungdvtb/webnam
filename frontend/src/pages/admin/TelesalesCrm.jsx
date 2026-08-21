@@ -30,6 +30,8 @@ const emptyPagination = {
 
 const inputClassName = 'h-10 w-full rounded-sm border border-slate-200 bg-white px-3 text-[13px] text-slate-900 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10';
 const selectClassName = `${inputClassName} pr-8`;
+const inlineInputClassName = 'h-9 w-full min-w-0 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10 disabled:cursor-wait disabled:bg-slate-50 disabled:text-slate-400';
+const inlineSelectClassName = `${inlineInputClassName} pr-7`;
 const iconButtonClassName = 'inline-flex size-10 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700';
 const primaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 rounded-sm bg-teal-700 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50';
 const secondaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 rounded-sm border border-slate-200 bg-white px-4 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-50';
@@ -62,9 +64,71 @@ const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(val
 
 const isCanceledRequest = (error) => error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError';
 
+const createImportRow = (overrides = {}) => ({
+    local_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    customer_name: '',
+    phone: '',
+    zalo_same_as_phone: true,
+    zalo_phone: '',
+    ...overrides,
+});
+
+const normalizePhoneDigits = (value) => String(value || '').replace(/\D+/g, '');
+
+const normalizeVietnameseText = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const stopFollowUpStatusPatterns = [
+    'khong co nhu cau',
+    'khong nhu cau',
+    'chua co nhu cau',
+    'chi tham khao',
+    'tham khao',
+    'khong tiem nang',
+    'khong goi nua',
+    'tu choi',
+    'huy',
+    'sai sdt',
+    'sai so',
+    'so rac',
+    'spam',
+];
+
+const statusStopsFollowUp = (status) => {
+    const normalized = normalizeVietnameseText(`${status?.code || ''} ${status?.name || ''}`);
+    return stopFollowUpStatusPatterns.some((pattern) => normalized.includes(pattern));
+};
+
+const nextAutomaticFollowUpInterval = (previousIntervalDays) => (
+    Number(previousIntervalDays || 0) >= 3 ? 7 : 3
+);
+
+const scriptForFollowUpInterval = (intervalDays) => (
+    Number(intervalDays) === 7 ? '7_days' : '3_days'
+);
+
 const addDaysAtNine = (days) => {
     const date = new Date();
-    date.setDate(date.getDate() + Number(days || 0));
+    const dayCount = Number(days || 0);
+
+    if (dayCount <= 0) {
+        date.setMinutes(date.getMinutes() + 30);
+        const roundedMinutes = Math.ceil(date.getMinutes() / 15) * 15;
+        if (roundedMinutes >= 60) {
+            date.setHours(date.getHours() + 1, 0, 0, 0);
+        } else {
+            date.setMinutes(roundedMinutes, 0, 0);
+        }
+
+        return toDateTimeLocalValue(date);
+    }
+
+    date.setDate(date.getDate() + dayCount);
     date.setHours(9, 0, 0, 0);
     return toDateTimeLocalValue(date);
 };
@@ -77,6 +141,21 @@ const toDateTimeLocalValue = (value) => {
 
     const timezoneOffset = date.getTimezoneOffset() * 60000;
     return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+};
+
+const formatDateTimeLocalLabel = (value) => {
+    if (!value) return '';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    return new Intl.DateTimeFormat('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(date);
 };
 
 const resolveApiMessage = (error, fallback) => (
@@ -123,18 +202,21 @@ const TelesalesCrm = () => {
     const [loading, setLoading] = useState(true);
     const [detailLoading, setDetailLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [inlineSavingIds, setInlineSavingIds] = useState({});
+    const [inlineNoteDrafts, setInlineNoteDrafts] = useState({});
+    const [inlineFollowUpDrafts, setInlineFollowUpDrafts] = useState({});
     const [errorMessage, setErrorMessage] = useState('');
     const [toast, setToast] = useState('');
     const [importOpen, setImportOpen] = useState(false);
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState(null);
+    const [importRows, setImportRows] = useState(() => [createImportRow()]);
     const [importForm, setImportForm] = useState({
-        phones_text: '',
         source: 'telesales',
         tag: 'Telesales',
         assigned_staff_id: '',
         potential_level: '',
-        follow_up_script: 'same_day',
+        follow_up_script: '3_days',
         note: '',
     });
     const [careForm, setCareForm] = useState({
@@ -145,6 +227,8 @@ const TelesalesCrm = () => {
         follow_up_interval_days: 3,
         next_follow_up_at: addDaysAtNine(3),
         do_not_call: false,
+        zalo_same_as_phone: true,
+        zalo_phone: '',
         activity_type: 'call',
         note: '',
     });
@@ -152,6 +236,21 @@ const TelesalesCrm = () => {
     const selectedStatus = useMemo(
         () => bootstrap.statuses.find((status) => Number(status.id) === Number(careForm.lead_status_id)) || null,
         [bootstrap.statuses, careForm.lead_status_id]
+    );
+    const followUpPreview = useMemo(() => {
+        if (careForm.do_not_call || statusStopsFollowUp(selectedStatus)) {
+            return 'Khách sẽ dừng nhắc lại và không hiện trong Việc hôm nay.';
+        }
+
+        const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead?.follow_up_interval_days);
+        const dateLabel = formatDateTimeLocalLabel(addDaysAtNine(nextIntervalDays));
+
+        return `Sau khi bấm Lưu chăm sóc, hệ thống tự hẹn lại sau ${nextIntervalDays} ngày và đưa khách lên Việc hôm nay vào ${dateLabel}.`;
+    }, [careForm.do_not_call, selectedLead?.follow_up_interval_days, selectedStatus]);
+    const canSubmitImport = useMemo(
+        () => importRows.some((row) => row.phone.trim())
+            && importRows.every((row) => !row.phone.trim() || row.zalo_same_as_phone || row.zalo_phone.trim()),
+        [importRows]
     );
 
     const fetchBootstrap = useCallback(async () => {
@@ -244,19 +343,24 @@ const TelesalesCrm = () => {
 
     useEffect(() => {
         if (!selectedLead?.id) return;
+        const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(selectedLead.lead_status_id)) || selectedLead.status_config;
+        const shouldStopFollowUp = Boolean(selectedLead.do_not_call) || statusStopsFollowUp(nextStatus);
+        const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days);
 
         setCareForm((prev) => ({
             ...prev,
             assigned_staff_id: selectedLead.assigned_staff_id ? String(selectedLead.assigned_staff_id) : '',
             lead_status_id: selectedLead.lead_status_id ? String(selectedLead.lead_status_id) : '',
             potential_level: selectedLead.potential_level || '',
-            follow_up_script: selectedLead.follow_up_script || prev.follow_up_script || '3_days',
-            follow_up_interval_days: selectedLead.follow_up_interval_days ?? prev.follow_up_interval_days ?? 3,
-            next_follow_up_at: toDateTimeLocalValue(selectedLead.next_follow_up_at) || prev.next_follow_up_at,
-            do_not_call: Boolean(selectedLead.do_not_call),
+            follow_up_script: scriptForFollowUpInterval(nextIntervalDays),
+            follow_up_interval_days: nextIntervalDays,
+            next_follow_up_at: shouldStopFollowUp ? '' : (toDateTimeLocalValue(selectedLead.next_follow_up_at) || addDaysAtNine(nextIntervalDays)),
+            do_not_call: shouldStopFollowUp,
+            zalo_same_as_phone: !selectedLead.zalo_phone || normalizePhoneDigits(selectedLead.zalo_phone) === normalizePhoneDigits(selectedLead.phone),
+            zalo_phone: selectedLead.zalo_phone || selectedLead.phone || '',
             note: '',
         }));
-    }, [selectedLead]);
+    }, [bootstrap.statuses, selectedLead]);
 
     const handleQueueChange = (nextQueue) => {
         setQueue(nextQueue);
@@ -268,18 +372,6 @@ const TelesalesCrm = () => {
         setSelectedLead(lead);
     };
 
-    const handleScriptChange = (scriptValue) => {
-        const script = bootstrap.follow_up_scripts.find((item) => item.value === scriptValue);
-        const days = script?.days;
-
-        setCareForm((prev) => ({
-            ...prev,
-            follow_up_script: scriptValue,
-            follow_up_interval_days: days ?? null,
-            next_follow_up_at: days === null ? prev.next_follow_up_at : addDaysAtNine(days),
-        }));
-    };
-
     const handleSaveCare = async (activityType = careForm.activity_type) => {
         if (!selectedLead?.id) return;
 
@@ -288,14 +380,19 @@ const TelesalesCrm = () => {
         setToast('');
 
         try {
+            const selectedStatusForSave = bootstrap.statuses.find((status) => Number(status.id) === Number(careForm.lead_status_id)) || null;
+            const shouldStopFollowUp = careForm.do_not_call || statusStopsFollowUp(selectedStatusForSave);
+            const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days);
+
             const response = await telesalesApi.update(selectedLead.id, {
                 assigned_staff_id: careForm.assigned_staff_id || null,
                 lead_status_id: careForm.lead_status_id || null,
                 potential_level: careForm.potential_level || null,
-                follow_up_script: careForm.follow_up_script || null,
-                follow_up_interval_days: careForm.follow_up_interval_days,
-                next_follow_up_at: careForm.do_not_call ? null : (careForm.next_follow_up_at || null),
-                do_not_call: careForm.do_not_call,
+                follow_up_script: shouldStopFollowUp ? null : scriptForFollowUpInterval(nextIntervalDays),
+                follow_up_interval_days: shouldStopFollowUp ? null : nextIntervalDays,
+                next_follow_up_at: shouldStopFollowUp ? null : addDaysAtNine(nextIntervalDays),
+                do_not_call: shouldStopFollowUp,
+                zalo_phone: careForm.zalo_same_as_phone ? selectedLead.phone : careForm.zalo_phone,
                 activity_type: activityType,
                 note: careForm.note.trim(),
             });
@@ -318,6 +415,134 @@ const TelesalesCrm = () => {
         }
     };
 
+    const setInlineSaving = (leadId, isSaving) => {
+        setInlineSavingIds((prev) => ({
+            ...prev,
+            [leadId]: isSaving,
+        }));
+    };
+
+    const handleInlineLeadUpdate = async (lead, payload, successMessage = 'Đã cập nhật khách.') => {
+        if (!lead?.id) return null;
+
+        setInlineSaving(lead.id, true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            const response = await telesalesApi.update(lead.id, payload);
+            const nextLead = response.data?.lead;
+
+            if (nextLead) {
+                setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
+                setSelectedLead((current) => Number(current?.id) === Number(nextLead.id) ? nextLead : current);
+            }
+
+            setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
+            setToast(successMessage);
+
+            if (nextLead && Number(selectedId) === Number(nextLead.id)) {
+                await fetchLeadDetail(nextLead.id);
+            }
+
+            await fetchLeads(page);
+
+            return nextLead || null;
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không lưu được cập nhật trực tiếp.'));
+            return null;
+        } finally {
+            setInlineSaving(lead.id, false);
+        }
+    };
+
+    const handleInlineStatusChange = (lead, nextStatusId) => {
+        const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(nextStatusId)) || null;
+        const shouldStopFollowUp = statusStopsFollowUp(nextStatus);
+
+        handleInlineLeadUpdate(lead, {
+            lead_status_id: nextStatusId || null,
+            do_not_call: shouldStopFollowUp,
+            activity_type: 'status',
+        }, 'Đã cập nhật trạng thái khách.');
+    };
+
+    const handleInlinePotentialChange = (lead, nextPotential) => {
+        if ((lead.potential_level || '') === nextPotential) return;
+
+        handleInlineLeadUpdate(lead, {
+            potential_level: nextPotential || null,
+            activity_type: 'note',
+        }, 'Đã cập nhật mức tiềm năng.');
+    };
+
+    const saveInlineFollowUp = async (lead) => {
+        const draftValue = inlineFollowUpDrafts[lead.id] ?? toDateTimeLocalValue(lead.next_follow_up_at);
+        const currentValue = toDateTimeLocalValue(lead.next_follow_up_at);
+
+        if (draftValue === currentValue) return;
+
+        const nextLead = await handleInlineLeadUpdate(lead, {
+            next_follow_up_at: draftValue || null,
+            follow_up_script: draftValue ? 'custom' : null,
+            follow_up_interval_days: null,
+            do_not_call: false,
+            activity_type: 'schedule',
+        }, draftValue ? 'Đã cập nhật lịch hẹn gọi lại.' : 'Đã xóa lịch hẹn gọi lại.');
+
+        if (nextLead) {
+            setInlineFollowUpDrafts((prev) => {
+                const next = { ...prev };
+                delete next[lead.id];
+                return next;
+            });
+        }
+    };
+
+    const saveInlineNote = async (lead) => {
+        const draftValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
+        const content = draftValue.trim();
+        const currentContent = String(lead.latest_note_content ?? lead.latest_note_excerpt ?? '').trim();
+
+        if (!content || content === currentContent) return;
+
+        const nextLead = await handleInlineLeadUpdate(lead, {
+            note: content,
+            activity_type: 'note',
+        }, 'Đã thêm ghi chú mới.');
+
+        if (nextLead) {
+            setInlineNoteDrafts((prev) => ({
+                ...prev,
+                [lead.id]: nextLead.latest_note_content || nextLead.latest_note_excerpt || '',
+            }));
+        }
+    };
+
+    const updateImportRow = (rowId, updates) => {
+        setImportRows((prev) => prev.map((row) => {
+            if (row.local_id !== rowId) return row;
+
+            const nextRow = { ...row, ...updates };
+            if (Object.prototype.hasOwnProperty.call(updates, 'phone') && nextRow.zalo_same_as_phone) {
+                nextRow.zalo_phone = '';
+            }
+
+            return nextRow;
+        }));
+    };
+
+    const addImportRow = () => {
+        setImportRows((prev) => [...prev, createImportRow()]);
+    };
+
+    const removeImportRow = (rowId) => {
+        setImportRows((prev) => {
+            if (prev.length <= 1) return [createImportRow()];
+            return prev.filter((row) => row.local_id !== rowId);
+        });
+    };
+
     const handleImportSubmit = async (event) => {
         event.preventDefault();
         setImporting(true);
@@ -325,15 +550,26 @@ const TelesalesCrm = () => {
         setImportResult(null);
 
         try {
+            const importPayloadRows = importRows
+                .map((row) => ({
+                    customer_name: row.customer_name.trim(),
+                    phone: row.phone.trim(),
+                    zalo_same_as_phone: row.zalo_same_as_phone,
+                    zalo_phone: row.zalo_same_as_phone ? row.phone.trim() : row.zalo_phone.trim(),
+                }))
+                .filter((row) => row.phone);
+
             const response = await telesalesApi.importLeads({
                 ...importForm,
+                phones: importPayloadRows,
                 assigned_staff_id: importForm.assigned_staff_id || null,
                 potential_level: importForm.potential_level || null,
             });
             const result = response.data || {};
             setImportResult(result);
             setToast(`Đã nhập ${formatNumber(result.created_count)} khách, bỏ qua ${formatNumber(result.duplicate_count)} số trùng.`);
-            setImportForm((prev) => ({ ...prev, phones_text: '', note: '' }));
+            setImportRows([createImportRow()]);
+            setImportForm((prev) => ({ ...prev, note: '' }));
             setQueue('today');
             setPage(1);
 
@@ -355,7 +591,7 @@ const TelesalesCrm = () => {
     };
 
     const handleOpenZalo = () => {
-        const url = buildZaloUrl(selectedLead?.phone_for_zalo || selectedLead?.phone);
+        const url = buildZaloUrl(selectedLead?.zalo_phone_for_zalo || selectedLead?.phone_for_zalo || selectedLead?.phone);
         if (!url) return;
         window.open(url, '_blank', 'noopener,noreferrer');
     };
@@ -395,7 +631,7 @@ const TelesalesCrm = () => {
                     <div className="flex flex-wrap items-center gap-2">
                         <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
                             <span className="material-symbols-outlined text-[18px]">upload_file</span>
-                            Nhập SĐT
+                            Nhập khách
                         </button>
                         <button type="button" onClick={() => fetchLeads(page)} className={iconButtonClassName} title="Làm mới">
                             <span className="material-symbols-outlined text-[19px]">refresh</span>
@@ -536,6 +772,12 @@ const TelesalesCrm = () => {
                                         </tr>
                                     ) : leads.map((lead) => {
                                         const selected = Number(selectedId) === Number(lead.id);
+                                        const inlineSaving = Boolean(inlineSavingIds[lead.id]);
+                                        const statusValue = lead.lead_status_id ? String(lead.lead_status_id) : '';
+                                        const potentialValue = lead.potential_level || '';
+                                        const followUpValue = inlineFollowUpDrafts[lead.id] ?? toDateTimeLocalValue(lead.next_follow_up_at);
+                                        const noteValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
+                                        const potentialOption = bootstrap.potentials.find((potential) => potential.value === potentialValue);
 
                                         return (
                                             <tr
@@ -558,26 +800,102 @@ const TelesalesCrm = () => {
                                                 <td className="px-4 py-3 align-top font-semibold text-slate-800">{lead.phone || '-'}</td>
                                                 <td className="px-4 py-3 align-top text-slate-700">{lead.assigned_staff?.name || 'Chưa gán'}</td>
                                                 <td className="px-4 py-3 align-top">
-                                                    <span
-                                                        className="inline-flex max-w-full items-center rounded-full border px-2 py-1 text-[12px] font-semibold"
+                                                    <select
+                                                        value={statusValue}
+                                                        disabled={inlineSaving}
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onChange={(event) => handleInlineStatusChange(lead, event.target.value)}
+                                                        className={inlineSelectClassName}
                                                         style={{
-                                                            borderColor: `${lead.status_config?.color || '#64748b'}33`,
+                                                            borderColor: `${lead.status_config?.color || '#64748b'}55`,
                                                             color: lead.status_config?.color || '#475569',
-                                                            backgroundColor: `${lead.status_config?.color || '#64748b'}12`,
                                                         }}
+                                                        aria-label={`Sửa trạng thái ${lead.customer_name || lead.phone || lead.id}`}
                                                     >
-                                                        <span className="truncate">{lead.status_config?.name || lead.status || '-'}</span>
-                                                    </span>
+                                                        <option value="">Chưa chọn</option>
+                                                        {bootstrap.statuses.map((status) => (
+                                                            <option key={status.id} value={status.id}>{status.name}</option>
+                                                        ))}
+                                                    </select>
                                                 </td>
-                                                <td className="px-4 py-3 align-top">{renderPotentialBadge(lead)}</td>
+                                                <td className="px-4 py-3 align-top">
+                                                    <select
+                                                        value={potentialValue}
+                                                        disabled={inlineSaving}
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
+                                                        className={inlineSelectClassName}
+                                                        style={{
+                                                            borderColor: `${potentialOption?.color || '#94a3b8'}55`,
+                                                            color: potentialOption?.color || '#475569',
+                                                        }}
+                                                        aria-label={`Sửa tiềm năng ${lead.customer_name || lead.phone || lead.id}`}
+                                                    >
+                                                        <option value="">Chưa phân loại</option>
+                                                        {bootstrap.potentials.map((potential) => (
+                                                            <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                                        ))}
+                                                    </select>
+                                                </td>
                                                 <td className="px-4 py-3 align-top">
                                                     <div className="flex flex-col gap-1">
                                                         {renderDueBadge(lead)}
-                                                        <span className="text-[12px] font-semibold text-slate-500">{lead.next_follow_up_label || '-'}</span>
+                                                        <input
+                                                            type="datetime-local"
+                                                            value={followUpValue}
+                                                            disabled={inlineSaving}
+                                                            onClick={(event) => event.stopPropagation()}
+                                                            onChange={(event) => setInlineFollowUpDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
+                                                            onBlur={() => saveInlineFollowUp(lead)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key === 'Enter') {
+                                                                    event.preventDefault();
+                                                                    event.currentTarget.blur();
+                                                                }
+
+                                                                if (event.key === 'Escape') {
+                                                                    event.preventDefault();
+                                                                    setInlineFollowUpDrafts((prev) => {
+                                                                        const next = { ...prev };
+                                                                        delete next[lead.id];
+                                                                        return next;
+                                                                    });
+                                                                    event.currentTarget.blur();
+                                                                }
+                                                            }}
+                                                            className={`${inlineInputClassName} text-[11px]`}
+                                                            aria-label={`Sửa ngày hẹn gọi lại ${lead.customer_name || lead.phone || lead.id}`}
+                                                        />
                                                     </div>
                                                 </td>
                                                 <td className="px-4 py-3 align-top">
-                                                    <div className="line-clamp-2 text-slate-600">{lead.latest_note_excerpt || 'Chưa có ghi chú'}</div>
+                                                    <input
+                                                        type="text"
+                                                        value={noteValue}
+                                                        disabled={inlineSaving}
+                                                        placeholder="Nhập ghi chú..."
+                                                        onClick={(event) => event.stopPropagation()}
+                                                        onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
+                                                        onBlur={() => saveInlineNote(lead)}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Enter') {
+                                                                event.preventDefault();
+                                                                event.currentTarget.blur();
+                                                            }
+
+                                                            if (event.key === 'Escape') {
+                                                                event.preventDefault();
+                                                                setInlineNoteDrafts((prev) => {
+                                                                    const next = { ...prev };
+                                                                    delete next[lead.id];
+                                                                    return next;
+                                                                });
+                                                                event.currentTarget.blur();
+                                                            }
+                                                        }}
+                                                        className={inlineInputClassName}
+                                                        aria-label={`Sửa ghi chú ${lead.customer_name || lead.phone || lead.id}`}
+                                                    />
                                                 </td>
                                             </tr>
                                         );
@@ -632,6 +950,32 @@ const TelesalesCrm = () => {
                                             Nhắn Zalo
                                         </button>
                                     </div>
+
+                                    <div className="mt-3 grid grid-cols-1 gap-2">
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={careForm.zalo_same_as_phone}
+                                                onChange={(event) => setCareForm((prev) => ({
+                                                    ...prev,
+                                                    zalo_same_as_phone: event.target.checked,
+                                                    zalo_phone: event.target.checked ? (selectedLead.phone || '') : prev.zalo_phone,
+                                                }))}
+                                                className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                                            />
+                                            SĐT khách là Zalo
+                                        </label>
+                                        <label className="block">
+                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">SĐT Zalo</span>
+                                            <input
+                                                value={careForm.zalo_same_as_phone ? (selectedLead.phone || '') : careForm.zalo_phone}
+                                                onChange={(event) => setCareForm((prev) => ({ ...prev, zalo_phone: event.target.value }))}
+                                                disabled={careForm.zalo_same_as_phone}
+                                                className={inputClassName}
+                                                placeholder="Nhập SĐT Zalo nếu khác SĐT khách"
+                                            />
+                                        </label>
+                                    </div>
                                 </div>
 
                                 <div className="border-b border-slate-200 p-4">
@@ -654,7 +998,21 @@ const TelesalesCrm = () => {
                                             <span className="mb-1 block text-[12px] font-bold text-slate-500">Trạng thái</span>
                                             <select
                                                 value={careForm.lead_status_id}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, lead_status_id: event.target.value }))}
+                                                onChange={(event) => {
+                                                    const nextStatusId = event.target.value;
+                                                    const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(nextStatusId));
+                                                    const shouldStopFollowUp = statusStopsFollowUp(nextStatus);
+                                                    const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead?.follow_up_interval_days);
+
+                                                    setCareForm((prev) => ({
+                                                        ...prev,
+                                                        lead_status_id: nextStatusId,
+                                                        do_not_call: shouldStopFollowUp ? true : false,
+                                                        follow_up_script: scriptForFollowUpInterval(nextIntervalDays),
+                                                        follow_up_interval_days: nextIntervalDays,
+                                                        next_follow_up_at: shouldStopFollowUp ? '' : addDaysAtNine(nextIntervalDays),
+                                                    }));
+                                                }}
                                                 className={selectClassName}
                                             >
                                                 <option value="">Chưa có</option>
@@ -692,42 +1050,24 @@ const TelesalesCrm = () => {
                                         </label>
                                     </div>
 
-                                    <div className="mt-3">
-                                        <span className="mb-2 block text-[12px] font-bold text-slate-500">Kịch bản gọi lại</span>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {bootstrap.follow_up_scripts.map((script) => (
-                                                <button
-                                                    key={script.value}
-                                                    type="button"
-                                                    onClick={() => handleScriptChange(script.value)}
-                                                    className={`h-10 rounded-sm border px-3 text-[13px] font-semibold transition ${
-                                                        careForm.follow_up_script === script.value
-                                                            ? 'border-teal-500 bg-teal-50 text-teal-800'
-                                                            : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'
-                                                    }`}
-                                                >
-                                                    {script.label}
-                                                </button>
-                                            ))}
+                                    <div className="mt-3 rounded-sm border border-teal-200 bg-teal-50 px-3 py-3">
+                                        <div className="flex items-start gap-2">
+                                            <span className="material-symbols-outlined mt-0.5 text-[18px] text-teal-700">event_repeat</span>
+                                            <div className="min-w-0">
+                                                <div className="text-[13px] font-black text-teal-900">
+                                                    Tự động nhắc lại sau {nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days)} ngày
+                                                </div>
+                                                <div className="mt-1 text-[12px] font-semibold leading-5 text-teal-800">{followUpPreview}</div>
+                                                {selectedLead.next_follow_up_label ? (
+                                                    <div className="mt-1 text-[12px] font-semibold text-teal-700/75">
+                                                        Lịch hiện tại: {selectedLead.next_follow_up_label}
+                                                    </div>
+                                                ) : null}
+                                            </div>
                                         </div>
                                     </div>
 
-                                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Ngày giờ gọi lại</span>
-                                            <input
-                                                type="datetime-local"
-                                                value={careForm.next_follow_up_at}
-                                                onChange={(event) => setCareForm((prev) => ({
-                                                    ...prev,
-                                                    next_follow_up_at: event.target.value,
-                                                    follow_up_script: prev.follow_up_script === 'custom' ? 'custom' : prev.follow_up_script,
-                                                }))}
-                                                disabled={careForm.do_not_call}
-                                                className={inputClassName}
-                                            />
-                                        </label>
-
+                                    <div className="mt-3">
                                         <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
                                             <input
                                                 type="checkbox"
@@ -735,7 +1075,7 @@ const TelesalesCrm = () => {
                                                 onChange={(event) => setCareForm((prev) => ({ ...prev, do_not_call: event.target.checked }))}
                                                 className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
                                             />
-                                            Không gọi nữa
+                                            Dừng nhắc lại cho khách này
                                         </label>
                                     </div>
 
@@ -810,11 +1150,11 @@ const TelesalesCrm = () => {
 
             {importOpen ? (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                    <form onSubmit={handleImportSubmit} className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-sm bg-white shadow-2xl">
+                    <form onSubmit={handleImportSubmit} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-sm bg-white shadow-2xl">
                         <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
                             <div>
                                 <h2 className="text-xl font-black text-slate-950">Nhập khách telesales</h2>
-                                <p className="mt-1 text-[13px] font-medium text-slate-500">Dán mỗi dòng một số, có thể kèm tên khách phía trước hoặc phía sau.</p>
+                                <p className="mt-1 text-[13px] font-medium text-slate-500">Mỗi dòng là một khách, mặc định SĐT khách cũng là SĐT Zalo.</p>
                             </div>
                             <button type="button" onClick={() => setImportOpen(false)} className={iconButtonClassName} title="Đóng">
                                 <span className="material-symbols-outlined text-[19px]">close</span>
@@ -822,15 +1162,76 @@ const TelesalesCrm = () => {
                         </div>
 
                         <div className="space-y-4 p-4">
-                            <label className="block">
-                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Danh sách số điện thoại</span>
-                                <textarea
-                                    value={importForm.phones_text}
-                                    onChange={(event) => setImportForm((prev) => ({ ...prev, phones_text: event.target.value }))}
-                                    className="min-h-[220px] w-full resize-y rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] leading-6 text-slate-900 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
-                                    placeholder={`Nguyễn Văn An - 0912 345 678\n0987 654 321 - Trần Thị Mai\n0901234567`}
-                                />
-                            </label>
+                            <div className="rounded-sm border border-slate-200">
+                                <div className="grid grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-black text-slate-500">
+                                    <span>Tên khách</span>
+                                    <span>SĐT khách</span>
+                                    <span>SĐT là Zalo</span>
+                                    <span>SĐT Zalo</span>
+                                    <span />
+                                </div>
+
+                                <div className="divide-y divide-slate-100">
+                                    {importRows.map((row, index) => (
+                                        <div key={row.local_id} className="grid grid-cols-1 gap-2 px-3 py-3 lg:grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] lg:items-center">
+                                            <label className="block">
+                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">Tên khách</span>
+                                                <input
+                                                    value={row.customer_name}
+                                                    onChange={(event) => updateImportRow(row.local_id, { customer_name: event.target.value })}
+                                                    className={inputClassName}
+                                                    placeholder={`Khách ${index + 1}`}
+                                                />
+                                            </label>
+
+                                            <label className="block">
+                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT khách</span>
+                                                <input
+                                                    value={row.phone}
+                                                    onChange={(event) => updateImportRow(row.local_id, { phone: event.target.value })}
+                                                    className={inputClassName}
+                                                    placeholder="09xx xxx xxx"
+                                                />
+                                            </label>
+
+                                            <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={row.zalo_same_as_phone}
+                                                    onChange={(event) => updateImportRow(row.local_id, {
+                                                        zalo_same_as_phone: event.target.checked,
+                                                        zalo_phone: event.target.checked ? '' : row.zalo_phone,
+                                                    })}
+                                                    className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                                                />
+                                                Có
+                                            </label>
+
+                                            <label className="block">
+                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT Zalo</span>
+                                                <input
+                                                    value={row.zalo_same_as_phone ? row.phone : row.zalo_phone}
+                                                    onChange={(event) => updateImportRow(row.local_id, { zalo_phone: event.target.value })}
+                                                    disabled={row.zalo_same_as_phone}
+                                                    className={inputClassName}
+                                                    placeholder="Nhập nếu khác SĐT khách"
+                                                />
+                                            </label>
+
+                                            <button type="button" onClick={() => removeImportRow(row.local_id)} className={iconButtonClassName} title="Xóa dòng">
+                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="border-t border-slate-200 p-3">
+                                    <button type="button" onClick={addImportRow} className={secondaryButtonClassName}>
+                                        <span className="material-symbols-outlined text-[18px]">add</span>
+                                        Thêm khách
+                                    </button>
+                                </div>
+                            </div>
 
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                 <label className="block">
@@ -879,18 +1280,9 @@ const TelesalesCrm = () => {
                                     />
                                 </label>
 
-                                <label className="block md:col-span-2">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Kịch bản sau khi nhập</span>
-                                    <select
-                                        value={importForm.follow_up_script}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, follow_up_script: event.target.value }))}
-                                        className={selectClassName}
-                                    >
-                                        {bootstrap.follow_up_scripts.map((script) => (
-                                            <option key={script.value} value={script.value}>{script.label}</option>
-                                        ))}
-                                    </select>
-                                </label>
+                                <div className="rounded-sm border border-teal-200 bg-teal-50 px-3 py-3 text-[13px] font-semibold leading-6 text-teal-800 md:col-span-2">
+                                    Sau khi nhập, khách sẽ tự hiện lại trong Việc hôm nay sau 3 ngày. Nếu sale chăm tiếp mà khách chưa dừng, lịch tiếp theo tự chuyển sang 7 ngày.
+                                </div>
 
                                 <label className="block md:col-span-2">
                                     <span className="mb-1 block text-[12px] font-bold text-slate-500">Ghi chú nhập</span>
@@ -912,7 +1304,7 @@ const TelesalesCrm = () => {
 
                         <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
                             <button type="button" onClick={() => setImportOpen(false)} className={secondaryButtonClassName}>Đóng</button>
-                            <button type="submit" disabled={importing || !importForm.phones_text.trim()} className={primaryButtonClassName}>
+                            <button type="submit" disabled={importing || !canSubmitImport} className={primaryButtonClassName}>
                                 <span className="material-symbols-outlined text-[18px]">add</span>
                                 {importing ? 'Đang nhập...' : 'Nhập khách'}
                             </button>

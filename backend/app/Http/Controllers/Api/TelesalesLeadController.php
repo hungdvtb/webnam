@@ -11,6 +11,7 @@ use App\Services\Leads\LeadCaptureService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 
@@ -39,6 +40,38 @@ class TelesalesLeadController extends Controller
         ['value' => 'schedule', 'label' => 'Đặt lịch'],
         ['value' => 'status', 'label' => 'Đổi trạng thái'],
         ['value' => 'import', 'label' => 'Nhập khách'],
+    ];
+
+    private const STOP_FOLLOW_UP_STATUS_PATTERNS = [
+        'khong co nhu cau',
+        'khong nhu cau',
+        'chua co nhu cau',
+        'chi tham khao',
+        'tham khao',
+        'khong tiem nang',
+        'khong goi nua',
+        'tu choi',
+        'huy',
+        'sai sdt',
+        'sai so',
+        'so rac',
+        'spam',
+    ];
+
+    private const STOP_FOLLOW_UP_STATUS_CODE_PATTERNS = [
+        'khong-co-nhu-cau',
+        'khong-nhu-cau',
+        'chua-co-nhu-cau',
+        'chi-tham-khao',
+        'tham-khao',
+        'khong-tiem-nang',
+        'khong-goi-nua',
+        'tu-choi',
+        'huy',
+        'sai-sdt',
+        'sai-so',
+        'so-rac',
+        'spam',
     ];
 
     public function __construct(private readonly LeadCaptureService $leadCaptureService)
@@ -104,6 +137,7 @@ class TelesalesLeadController extends Controller
             ->with([
                 'statusConfig',
                 'assignedStaff',
+                'latestNote',
                 'notesTimeline.statusConfig',
                 'notesTimeline.assignedStaff',
                 'notesTimeline.user',
@@ -126,6 +160,7 @@ class TelesalesLeadController extends Controller
             'phones' => 'nullable|array',
             'phones.*' => 'nullable',
             'customer_name' => 'nullable|string|max:255',
+            'zalo_phone' => 'nullable|string|max:20',
             'source' => 'nullable|string|max:50',
             'tag' => 'nullable|string|max:120',
             'assigned_staff_id' => [
@@ -182,7 +217,7 @@ class TelesalesLeadController extends Controller
                 continue;
             }
 
-            $script = $validated['follow_up_script'] ?? 'same_day';
+            $script = '3_days';
             $intervalDays = $this->daysForScript($script);
 
             $lead = Lead::withoutGlobalScopes()->create([
@@ -196,6 +231,7 @@ class TelesalesLeadController extends Controller
                 'follow_up_interval_days' => $intervalDays,
                 'customer_name' => $row['customer_name'] ?: ($validated['customer_name'] ?? 'Khách telesales'),
                 'phone' => $normalizedPhone,
+                'zalo_phone' => $row['normalized_zalo_phone'] ?: $normalizedPhone,
                 'product_name' => 'Tư vấn telesales',
                 'product_summary' => 'Khách nhập thủ công từ telesales',
                 'product_summary_short' => 'Tư vấn telesales',
@@ -206,6 +242,7 @@ class TelesalesLeadController extends Controller
                 'payload_snapshot' => [
                     'manual_telesales_import' => true,
                     'raw_phone' => $row['phone'],
+                    'raw_zalo_phone' => $row['zalo_phone'],
                     'raw_line' => $row['raw_line'],
                 ],
                 'conversion_data' => [],
@@ -234,6 +271,7 @@ class TelesalesLeadController extends Controller
         $lead = $this->scopedLeadQuery($request)
             ->with(['statusConfig', 'assignedStaff'])
             ->findOrFail($id);
+        $previousFollowUpInterval = (int) ($lead->follow_up_interval_days ?: 0);
 
         $validated = $request->validate([
             'lead_status_id' => [
@@ -253,10 +291,14 @@ class TelesalesLeadController extends Controller
             'do_not_call' => 'nullable|boolean',
             'note' => 'nullable|string|max:5000',
             'activity_type' => ['nullable', Rule::in($this->activityTypeValues())],
+            'customer_name' => 'nullable|string|max:255',
+            'phone' => 'nullable|string|max:20',
+            'zalo_phone' => 'nullable|string|max:20',
         ]);
 
         $activityType = (string) ($validated['activity_type'] ?? 'note');
         $status = null;
+        $hasExplicitFollowUpAt = array_key_exists('next_follow_up_at', $validated);
 
         if (array_key_exists('lead_status_id', $validated)) {
             $status = !empty($validated['lead_status_id'])
@@ -270,10 +312,18 @@ class TelesalesLeadController extends Controller
             $lead->status_changed_at = now();
         }
 
-        foreach (['assigned_staff_id', 'potential_level', 'follow_up_script', 'follow_up_interval_days'] as $field) {
+        foreach (['assigned_staff_id', 'potential_level', 'follow_up_script', 'follow_up_interval_days', 'customer_name'] as $field) {
             if (array_key_exists($field, $validated)) {
                 $lead->{$field} = $validated[$field];
             }
+        }
+
+        if (array_key_exists('phone', $validated)) {
+            $lead->phone = $this->normalizePhone($validated['phone']);
+        }
+
+        if (array_key_exists('zalo_phone', $validated)) {
+            $lead->zalo_phone = $this->normalizePhone($validated['zalo_phone']) ?: null;
         }
 
         if (array_key_exists('next_follow_up_at', $validated)) {
@@ -292,10 +342,32 @@ class TelesalesLeadController extends Controller
             }
         }
 
-        if (array_key_exists('do_not_call', $validated)) {
-            $lead->do_not_call = (bool) $validated['do_not_call'];
-            if ($lead->do_not_call) {
-                $lead->next_follow_up_at = null;
+        $explicitDoNotCall = array_key_exists('do_not_call', $validated)
+            ? (bool) $validated['do_not_call']
+            : (bool) $lead->do_not_call;
+        $statusForFollowUp = array_key_exists('lead_status_id', $validated)
+            ? $status
+            : $lead->statusConfig;
+        $statusStopsFollowUp = $this->statusStopsFollowUp($statusForFollowUp);
+
+        if ($explicitDoNotCall || $statusStopsFollowUp) {
+            $lead->do_not_call = true;
+            $lead->next_follow_up_at = null;
+            $lead->follow_up_script = null;
+            $lead->follow_up_interval_days = null;
+        } else {
+            $lead->do_not_call = false;
+
+            if (in_array($activityType, ['call', 'zalo', 'status', 'note', 'schedule'], true)) {
+                if ($hasExplicitFollowUpAt) {
+                    $lead->follow_up_script = $lead->next_follow_up_at ? ($validated['follow_up_script'] ?? 'custom') : null;
+                    $lead->follow_up_interval_days = $lead->next_follow_up_at ? ($validated['follow_up_interval_days'] ?? null) : null;
+                } else {
+                    $nextIntervalDays = $this->nextAutomaticFollowUpInterval($previousFollowUpInterval);
+                    $lead->follow_up_script = $this->scriptForFollowUpInterval($nextIntervalDays);
+                    $lead->follow_up_interval_days = $nextIntervalDays;
+                    $lead->next_follow_up_at = $this->followUpDateFromDays($nextIntervalDays);
+                }
             }
         }
 
@@ -344,6 +416,7 @@ class TelesalesLeadController extends Controller
             $query->where(function (Builder $builder) use ($search) {
                 $builder->where('customer_name', 'like', "%{$search}%")
                     ->orWhere('phone', 'like', "%{$search}%")
+                    ->orWhere('zalo_phone', 'like', "%{$search}%")
                     ->orWhere('lead_number', 'like', "%{$search}%")
                     ->orWhere('product_summary', 'like', "%{$search}%")
                     ->orWhere('latest_note_excerpt', 'like', "%{$search}%");
@@ -376,7 +449,7 @@ class TelesalesLeadController extends Controller
         }
 
         if (!$request->boolean('include_stopped')) {
-            $query->where('do_not_call', false);
+            $this->applyActiveFollowUpScope($query);
         }
     }
 
@@ -402,11 +475,27 @@ class TelesalesLeadController extends Controller
         };
     }
 
+    private function applyActiveFollowUpScope(Builder $query): void
+    {
+        $query->where('do_not_call', false)
+            ->where(function (Builder $builder) {
+                $builder->whereNull('lead_status_id')
+                    ->orWhereDoesntHave('statusConfig', function (Builder $statusQuery) {
+                        $statusQuery->where(function (Builder $stopStatusQuery) {
+                            foreach (self::STOP_FOLLOW_UP_STATUS_CODE_PATTERNS as $pattern) {
+                                $stopStatusQuery->orWhereRaw('LOWER(code) LIKE ?', ["%{$pattern}%"]);
+                            }
+                        });
+                    });
+            });
+    }
+
     private function stats(Request $request): array
     {
         $todayStart = now()->startOfDay();
         $todayEnd = now()->endOfDay();
-        $base = $this->scopedLeadQuery($request)->where('do_not_call', false);
+        $base = $this->scopedLeadQuery($request);
+        $this->applyActiveFollowUpScope($base);
 
         $todayDue = clone $base;
         $newToday = clone $base;
@@ -453,6 +542,10 @@ class TelesalesLeadController extends Controller
                 $row = $this->parsePhoneLine($line);
                 if ($row) {
                     $row['customer_name'] = trim((string) ($item['customer_name'] ?? $item['name'] ?? $row['customer_name']));
+                    $zaloSameAsPhone = ($item['zalo_same_as_phone'] ?? true) !== false;
+                    $rawZaloPhone = $zaloSameAsPhone ? $line : trim((string) ($item['zalo_phone'] ?? ''));
+                    $row['zalo_phone'] = $rawZaloPhone;
+                    $row['normalized_zalo_phone'] = $this->normalizePhone($rawZaloPhone);
                     $rows->push($row);
                 }
             } else {
@@ -491,6 +584,8 @@ class TelesalesLeadController extends Controller
         return [
             'phone' => $rawPhone,
             'normalized_phone' => $normalizedPhone,
+            'zalo_phone' => $rawPhone,
+            'normalized_zalo_phone' => $normalizedPhone,
             'customer_name' => $customerName,
             'raw_line' => $line,
         ];
@@ -560,7 +655,9 @@ class TelesalesLeadController extends Controller
             'lead_number' => $lead->lead_number,
             'customer_name' => $lead->customer_name,
             'phone' => $lead->phone,
-            'phone_for_zalo' => $this->normalizePhone($lead->phone),
+            'zalo_phone' => $lead->zalo_phone,
+            'phone_for_zalo' => $this->normalizePhone($lead->zalo_phone ?: $lead->phone),
+            'zalo_phone_for_zalo' => $this->normalizePhone($lead->zalo_phone ?: $lead->phone),
             'email' => $lead->email,
             'address' => $lead->address,
             'source' => $lead->source,
@@ -584,6 +681,7 @@ class TelesalesLeadController extends Controller
             'due_bucket' => $this->dueBucket($lead),
             'days_until_follow_up' => $daysUntilFollowUp,
             'latest_note_excerpt' => $lead->latest_note_excerpt,
+            'latest_note_content' => $lead->latestNote?->content,
             'notes_count' => (int) ($lead->notes_timeline_count ?? 0),
             'placed_at' => $this->isoDateTime($lead->placed_at),
             'placed_label' => $this->dateTimeLabel($lead->placed_at),
@@ -675,6 +773,20 @@ class TelesalesLeadController extends Controller
         return $matched['days'] ?? null;
     }
 
+    private function nextAutomaticFollowUpInterval(int $previousIntervalDays): int
+    {
+        return $previousIntervalDays >= 3 ? 7 : 3;
+    }
+
+    private function scriptForFollowUpInterval(int $intervalDays): string
+    {
+        return match ($intervalDays) {
+            7 => '7_days',
+            30 => '30_days',
+            default => '3_days',
+        };
+    }
+
     private function labelForPotential(?string $value): ?string
     {
         $matched = collect(self::POTENTIAL_OPTIONS)->firstWhere('value', $value);
@@ -687,6 +799,28 @@ class TelesalesLeadController extends Controller
         $matched = collect(self::ACTIVITY_TYPES)->firstWhere('value', $value ?: 'note');
 
         return $matched['label'] ?? 'Ghi chú';
+    }
+
+    private function statusStopsFollowUp(?LeadStatus $status): bool
+    {
+        if (!$status) {
+            return false;
+        }
+
+        $normalized = Str::of(trim(($status->code ?? '') . ' ' . ($status->name ?? '')))
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish()
+            ->toString();
+
+        foreach (self::STOP_FOLLOW_UP_STATUS_PATTERNS as $pattern) {
+            if (str_contains($normalized, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function defaultActivityContent(string $activityType): string

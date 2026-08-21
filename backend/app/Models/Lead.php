@@ -24,6 +24,7 @@ class Lead extends Model
         'do_not_call',
         'customer_name',
         'phone',
+        'zalo_phone',
         'email',
         'address',
         'product_id',

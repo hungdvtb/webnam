@@ -2582,7 +2582,7 @@ class InventoryController extends Controller
         $product->setAttribute('total_exported', $totalExported);
         $product->setAttribute('computed_stock', $computedStock);
         $product->setAttribute('actual_stock', $actualStock);
-        $product->setAttribute('inventory_value', round($actualStock * $displayCost, 2));
+        $product->setAttribute('inventory_value', round(max($actualStock, 0) * $displayCost, 2));
     }
 
     private function transformExportOrderRow(Order $order, array $overview = []): array
@@ -3265,7 +3265,7 @@ class InventoryController extends Controller
             . $adjustmentQtySql
             . ')';
         $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
-        $inventoryValueSql = '(' . $actualStockSql . ' * COALESCE(products.cost_price, products.expected_cost, 0))';
+        $inventoryValueSql = '(GREATEST(' . $actualStockSql . ', 0) * COALESCE(products.cost_price, products.expected_cost, 0))';
 
         if ($compact) {
             $query = $query
@@ -3938,7 +3938,7 @@ class InventoryController extends Controller
             if ($categoryId === 'uncategorized') {
                 $query->whereNull('products.category_id');
             } else {
-                $query->where('products.category_id', (int) $categoryId);
+                $this->whereInventoryProductOrParentMatchesCategory($query, (int) $categoryId);
             }
         }
 
@@ -4000,6 +4000,56 @@ class InventoryController extends Controller
         }
     }
 
+    private function whereInventoryProductOrParentMatchesCategory($query, int $categoryId): void
+    {
+        $query->where(function ($categoryQuery) use ($categoryId) {
+            $categoryQuery
+                ->where(function ($directCategoryQuery) use ($categoryId) {
+                    $directCategoryQuery
+                        ->whereNotExists(function ($parentLinkQuery) {
+                            $parentLinkQuery
+                                ->select(DB::raw(1))
+                                ->from('product_links as inventory_own_parent_links')
+                                ->whereColumn('inventory_own_parent_links.linked_product_id', 'products.id')
+                                ->where('inventory_own_parent_links.link_type', 'super_link');
+                        })
+                        ->where(function ($ownCategoryQuery) use ($categoryId) {
+                            $ownCategoryQuery
+                                ->where('products.category_id', $categoryId)
+                                ->orWhereExists(function ($pivotQuery) use ($categoryId) {
+                                    $pivotQuery
+                                        ->select(DB::raw(1))
+                                        ->from('category_product')
+                                        ->whereColumn('category_product.product_id', 'products.id')
+                                        ->where('category_product.item_type', 'product')
+                                        ->where('category_product.category_id', $categoryId);
+                                });
+                        });
+                })
+                ->orWhereExists(function ($parentQuery) use ($categoryId) {
+                    $parentQuery
+                        ->select(DB::raw(1))
+                        ->from('product_links as inventory_parent_links')
+                        ->join('products as inventory_parent_products', 'inventory_parent_products.id', '=', 'inventory_parent_links.product_id')
+                        ->whereColumn('inventory_parent_links.linked_product_id', 'products.id')
+                        ->where('inventory_parent_links.link_type', 'super_link')
+                        ->whereNull('inventory_parent_products.deleted_at')
+                        ->where(function ($parentCategoryQuery) use ($categoryId) {
+                            $parentCategoryQuery
+                                ->where('inventory_parent_products.category_id', $categoryId)
+                                ->orWhereExists(function ($parentPivotQuery) use ($categoryId) {
+                                    $parentPivotQuery
+                                        ->select(DB::raw(1))
+                                        ->from('category_product as inventory_parent_category_product')
+                                        ->whereColumn('inventory_parent_category_product.product_id', 'inventory_parent_products.id')
+                                        ->where('inventory_parent_category_product.item_type', 'product')
+                                        ->where('inventory_parent_category_product.category_id', $categoryId);
+                                });
+                        });
+                });
+        });
+    }
+
     private function inventoryProductSummary($query): array
     {
         $summary = DB::query()
@@ -4010,10 +4060,10 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(total_returned), 0) as total_returned')
             ->selectRaw('COALESCE(SUM(total_damaged), 0) as total_damaged')
             ->selectRaw('COALESCE(SUM(total_adjusted), 0) as total_adjusted')
-            ->selectRaw('COALESCE(SUM(computed_stock), 0) as total_stock')
+            ->selectRaw('COALESCE(SUM(GREATEST(computed_stock, 0)), 0) as total_stock')
             ->selectRaw('COALESCE(SUM(pending_export_quantity), 0) as total_pending_export')
             ->selectRaw('COALESCE(SUM(pending_return_quantity), 0) as total_pending_return')
-            ->selectRaw('COALESCE(SUM(actual_stock), 0) as total_actual_stock')
+            ->selectRaw('COALESCE(SUM(GREATEST(actual_stock, 0)), 0) as total_actual_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
             ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
             ->first();
@@ -4478,7 +4528,7 @@ class InventoryController extends Controller
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
         $inventoryValue = $product->inventory_value !== null
             ? round((float) $product->inventory_value, 2)
-            : round($actualStock * $displayCost, 2);
+            : round(max($actualStock, 0) * $displayCost, 2);
         $stockAlert = $actualStock <= 0
             ? 'out'
             : ($actualStock <= 5 ? 'low' : 'available');

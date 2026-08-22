@@ -43,19 +43,22 @@ class LeadStatusController extends Controller
 
         $code = Str::slug($validated['code'] ?: $validated['name']);
 
-        $status = LeadStatus::create([
+        $status = LeadStatus::withoutGlobalScopes()->create([
             'account_id' => $accountId,
             'name' => $validated['name'],
             'code' => $code,
             'color' => $validated['color'] ?? '#475569',
-            'sort_order' => $validated['sort_order'] ?? (LeadStatus::query()->max('sort_order') + 1),
+            'sort_order' => $validated['sort_order'] ?? ((int) LeadStatus::withoutGlobalScopes()->where('account_id', $accountId)->max('sort_order') + 1),
             'is_default' => (bool) ($validated['is_default'] ?? false),
             'blocks_order_create' => (bool) ($validated['blocks_order_create'] ?? false),
             'is_active' => (bool) ($validated['is_active'] ?? true),
         ]);
 
         if ($status->is_default) {
-            LeadStatus::query()->where('id', '!=', $status->id)->update(['is_default' => false]);
+            LeadStatus::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->where('id', '!=', $status->id)
+                ->update(['is_default' => false]);
         }
 
         return response()->json($status, 201);
@@ -63,7 +66,11 @@ class LeadStatusController extends Controller
 
     public function update(Request $request, int $id)
     {
-        $status = LeadStatus::query()->findOrFail($id);
+        $accountId = (int) $request->header('X-Account-Id');
+        $status = LeadStatus::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->findOrFail($id);
+
         $validated = $request->validate([
             'name' => 'required|string|max:120',
             'code' => 'nullable|string|max:80',
@@ -85,7 +92,10 @@ class LeadStatusController extends Controller
         ]);
 
         if ($status->is_default) {
-            LeadStatus::query()->where('id', '!=', $status->id)->update(['is_default' => false]);
+            LeadStatus::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->where('id', '!=', $status->id)
+                ->update(['is_default' => false]);
         }
 
         return response()->json($status);
@@ -93,13 +103,17 @@ class LeadStatusController extends Controller
 
     public function reorder(Request $request)
     {
+        $accountId = (int) $request->header('X-Account-Id');
         $validated = $request->validate([
             'ids' => 'required|array|min:1',
-            'ids.*' => 'integer|exists:lead_statuses,id',
+            'ids.*' => 'integer',
         ]);
 
         foreach ($validated['ids'] as $index => $id) {
-            LeadStatus::query()->where('id', $id)->update(['sort_order' => $index + 1]);
+            LeadStatus::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->where('id', $id)
+                ->update(['sort_order' => $index + 1]);
         }
 
         return response()->json(['message' => 'Reordered']);
@@ -107,15 +121,23 @@ class LeadStatusController extends Controller
 
     public function destroy(Request $request, int $id)
     {
-        $status = LeadStatus::query()->withCount('leads')->findOrFail($id);
+        $accountId = (int) $request->header('X-Account-Id');
+        $status = LeadStatus::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->withCount('leads')
+            ->findOrFail($id);
+
         if ($status->leads_count > 0) {
             return response()->json(['message' => 'Khong the xoa trang thai dang duoc lead su dung.'], 422);
         }
 
         $status->delete();
 
-        if (!LeadStatus::query()->where('is_default', true)->exists()) {
-            $first = LeadStatus::query()->orderBy('sort_order')->first();
+        if (!LeadStatus::withoutGlobalScopes()->where('account_id', $accountId)->where('is_default', true)->exists()) {
+            $first = LeadStatus::withoutGlobalScopes()
+                ->where('account_id', $accountId)
+                ->orderBy('sort_order')
+                ->first();
             if ($first) {
                 $first->update(['is_default' => true]);
             }

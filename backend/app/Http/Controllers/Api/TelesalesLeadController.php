@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Lead;
+use App\Models\LeadFollowUpTask;
 use App\Models\LeadNote;
+use App\Models\LeadPotential;
 use App\Models\LeadStaff;
 use App\Models\LeadStatus;
 use App\Services\Leads\LeadCaptureService;
@@ -17,14 +19,6 @@ use Illuminate\Validation\Rule;
 
 class TelesalesLeadController extends Controller
 {
-    private const POTENTIAL_OPTIONS = [
-        ['value' => 'hot', 'label' => 'Rất tiềm năng', 'color' => '#dc2626'],
-        ['value' => 'high', 'label' => 'Cao', 'color' => '#16a34a'],
-        ['value' => 'medium', 'label' => 'Trung bình', 'color' => '#d97706'],
-        ['value' => 'low', 'label' => 'Thấp', 'color' => '#64748b'],
-        ['value' => 'unqualified', 'label' => 'Không tiềm năng', 'color' => '#475569'],
-    ];
-
     private const FOLLOW_UP_SCRIPTS = [
         ['value' => 'same_day', 'label' => 'Gọi trong ngày', 'days' => 0],
         ['value' => '3_days', 'label' => 'Gọi lại sau 3 ngày', 'days' => 3],
@@ -74,6 +68,18 @@ class TelesalesLeadController extends Controller
         'spam',
     ];
 
+    private const NEW_LEAD_STATUS_CODE_PATTERNS = [
+        'don-moi',
+        'so-moi',
+        'khach-moi',
+    ];
+
+    private const TASK_TYPE_LABELS = [
+        LeadFollowUpTask::TYPE_NEW => 'Số mới',
+        LeadFollowUpTask::TYPE_THREE_DAYS => 'Gọi lại 3 ngày',
+        LeadFollowUpTask::TYPE_SEVEN_DAYS => 'Gọi lại 7 ngày',
+    ];
+
     public function __construct(private readonly LeadCaptureService $leadCaptureService)
     {
     }
@@ -82,11 +88,12 @@ class TelesalesLeadController extends Controller
     {
         $accountId = $this->accountId($request);
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
+        $potentials = LeadPotential::ensureDefaultsForAccount($accountId);
 
         return response()->json([
             'statuses' => $statuses->map(fn (LeadStatus $status) => $this->transformStatus($status))->values(),
             'staffs' => $this->staffQuery($accountId)->get()->map(fn (LeadStaff $staff) => $this->transformStaff($staff))->values(),
-            'potentials' => self::POTENTIAL_OPTIONS,
+            'potentials' => $potentials->map(fn (LeadPotential $potential) => $this->transformPotential($potential))->values(),
             'follow_up_scripts' => self::FOLLOW_UP_SCRIPTS,
             'activity_types' => self::ACTIVITY_TYPES,
         ]);
@@ -95,26 +102,42 @@ class TelesalesLeadController extends Controller
     public function index(Request $request)
     {
         $accountId = $this->accountId($request);
+        $this->ensureFollowUpTasksForAccount($accountId);
+
         $statuses = LeadStatus::ensureDefaultsForAccount($accountId);
+        $potentials = LeadPotential::ensureDefaultsForAccount($accountId);
 
         $query = $this->scopedLeadQuery($request)
-            ->with(['statusConfig', 'assignedStaff', 'latestNote'])
+            ->with([
+                'statusConfig',
+                'assignedStaff',
+                'latestNote',
+                'followUpTasks' => fn ($taskQuery) => $taskQuery
+                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                    ->orderBy('due_date')
+                    ->orderBy('id'),
+            ])
             ->withCount('notesTimeline');
 
         $this->applyFilters($query, $request);
         $this->applyQueueFilter($query, (string) $request->input('queue', 'today'));
 
-        $sortBy = (string) $request->input('sort_by', 'next_follow_up_at');
+        $sortBy = (string) $request->input('sort_by', 'placed_at');
         $sortDirection = $request->input('sort_order') === 'asc' ? 'asc' : 'desc';
         if (!in_array($sortBy, ['next_follow_up_at', 'placed_at', 'last_contacted_at', 'customer_name', 'updated_at'], true)) {
-            $sortBy = 'next_follow_up_at';
+            $sortBy = 'placed_at';
         }
 
         if ($sortBy === 'next_follow_up_at') {
             $query->orderByRaw('CASE WHEN next_follow_up_at IS NULL THEN 1 ELSE 0 END');
+            $query->orderBy($sortBy, $sortDirection);
+        } elseif ($sortBy === 'placed_at') {
+            $query->orderByRaw("COALESCE(placed_at, created_at) {$sortDirection}");
+        } else {
+            $query->orderBy($sortBy, $sortDirection);
         }
 
-        $query->orderBy($sortBy, $sortDirection)->orderByDesc('id');
+        $query->orderBy('id', $sortDirection);
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
         $paginator = $query->paginate($perPage);
@@ -128,6 +151,7 @@ class TelesalesLeadController extends Controller
             'total' => $paginator->total(),
             'stats' => $this->stats($request),
             'statuses' => $statuses->map(fn (LeadStatus $status) => $this->transformStatus($status))->values(),
+            'potentials' => $potentials->map(fn (LeadPotential $potential) => $this->transformPotential($potential))->values(),
         ]);
     }
 
@@ -138,6 +162,10 @@ class TelesalesLeadController extends Controller
                 'statusConfig',
                 'assignedStaff',
                 'latestNote',
+                'followUpTasks' => fn ($taskQuery) => $taskQuery
+                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                    ->orderBy('due_date')
+                    ->orderBy('id'),
                 'notesTimeline.statusConfig',
                 'notesTimeline.assignedStaff',
                 'notesTimeline.user',
@@ -168,7 +196,7 @@ class TelesalesLeadController extends Controller
                 'integer',
                 Rule::exists('lead_staffs', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
             ],
-            'potential_level' => ['nullable', Rule::in($this->potentialValues())],
+            'potential_level' => ['nullable', Rule::in($this->potentialValues($accountId))],
             'follow_up_script' => ['nullable', Rule::in($this->followUpScriptValues())],
             'note' => 'nullable|string|max:5000',
         ]);
@@ -185,6 +213,7 @@ class TelesalesLeadController extends Controller
         $defaultStatus = LeadStatus::ensureDefaultsForAccount($accountId)
             ->firstWhere('is_default', true)
             ?: LeadStatus::withoutGlobalScopes()->where('account_id', $accountId)->orderBy('sort_order')->first();
+        $defaultPotential = LeadPotential::defaultForAccount($accountId);
 
         $existingByPhone = $this->existingLeadMapByPhone($accountId);
         $created = collect();
@@ -225,7 +254,7 @@ class TelesalesLeadController extends Controller
                 'lead_number' => $this->leadCaptureService->generateLeadNumber($accountId),
                 'lead_status_id' => $defaultStatus?->id,
                 'assigned_staff_id' => $validated['assigned_staff_id'] ?? null,
-                'potential_level' => $validated['potential_level'] ?? null,
+                'potential_level' => $validated['potential_level'] ?? $defaultPotential?->code,
                 'next_follow_up_at' => $this->followUpDateFromDays($intervalDays),
                 'follow_up_script' => $script,
                 'follow_up_interval_days' => $intervalDays,
@@ -250,8 +279,17 @@ class TelesalesLeadController extends Controller
 
             $noteContent = trim((string) ($validated['note'] ?? ''));
             $this->createLeadNote($lead, $request, $noteContent ?: 'Nhập khách telesales thủ công.', 'import');
+            $this->ensureLeadFollowUpTasks($lead);
 
-            $lead->load(['statusConfig', 'assignedStaff', 'latestNote']);
+            $lead->load([
+                'statusConfig',
+                'assignedStaff',
+                'latestNote',
+                'followUpTasks' => fn ($taskQuery) => $taskQuery
+                    ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                    ->orderBy('due_date')
+                    ->orderBy('id'),
+            ]);
             $created->push($this->transformLead($lead));
             $existingByPhone->put($normalizedPhone, $lead);
         }
@@ -284,13 +322,14 @@ class TelesalesLeadController extends Controller
                 'integer',
                 Rule::exists('lead_staffs', 'id')->where(fn ($query) => $query->where('account_id', $accountId)),
             ],
-            'potential_level' => ['nullable', Rule::in($this->potentialValues())],
+            'potential_level' => ['nullable', Rule::in($this->potentialValues($accountId))],
             'next_follow_up_at' => 'nullable|date',
             'follow_up_script' => ['nullable', Rule::in($this->followUpScriptValues())],
             'follow_up_interval_days' => 'nullable|integer|min:0|max:365',
             'do_not_call' => 'nullable|boolean',
             'note' => 'nullable|string|max:5000',
             'activity_type' => ['nullable', Rule::in($this->activityTypeValues())],
+            'complete_current_task' => 'nullable|boolean',
             'customer_name' => 'nullable|string|max:255',
             'phone' => 'nullable|string|max:20',
             'zalo_phone' => 'nullable|string|max:20',
@@ -355,8 +394,10 @@ class TelesalesLeadController extends Controller
             $lead->next_follow_up_at = null;
             $lead->follow_up_script = null;
             $lead->follow_up_interval_days = null;
+            $this->stopPendingTasksForLead($lead, $activityType);
         } else {
             $lead->do_not_call = false;
+            $this->ensureLeadFollowUpTasks($lead);
 
             if (in_array($activityType, ['call', 'zalo', 'status', 'note', 'schedule'], true)) {
                 if ($hasExplicitFollowUpAt) {
@@ -378,9 +419,48 @@ class TelesalesLeadController extends Controller
         $lead->save();
 
         $noteContent = trim((string) ($validated['note'] ?? ''));
+        $shouldCompleteTask = (bool) ($validated['complete_current_task'] ?? false)
+            || in_array($activityType, ['call', 'zalo', 'status', 'schedule'], true)
+            || $noteContent !== '';
+
+        if (!$lead->do_not_call && $shouldCompleteTask) {
+            $this->completeCurrentTaskForLead($lead, $activityType);
+        }
+
         if ($noteContent !== '' || $activityType !== 'note') {
             $this->createLeadNote($lead, $request, $noteContent ?: $this->defaultActivityContent($activityType), $activityType);
         }
+
+        $lead->load([
+            'statusConfig',
+            'assignedStaff',
+            'latestNote',
+            'followUpTasks' => fn ($taskQuery) => $taskQuery
+                ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                ->orderBy('due_date')
+                ->orderBy('id'),
+        ])->loadCount('notesTimeline');
+
+        return response()->json([
+            'lead' => $this->transformLead($lead),
+            'stats' => $this->stats($request),
+        ]);
+    }
+
+    public function deleteLatestNote(Request $request, int $id)
+    {
+        $lead = $this->scopedLeadQuery($request)
+            ->with(['latestNote'])
+            ->findOrFail($id);
+
+        $latestNote = $lead->latestNote;
+        if (!$latestNote) {
+            return response()->json(['message' => 'Khách này chưa có ghi chú để xóa.'], 422);
+        }
+
+        $latestNote->delete();
+
+        $this->syncLatestNoteSnapshot($lead);
 
         $lead->load(['statusConfig', 'assignedStaff', 'latestNote'])->loadCount('notesTimeline');
 
@@ -388,6 +468,69 @@ class TelesalesLeadController extends Controller
             'lead' => $this->transformLead($lead),
             'stats' => $this->stats($request),
         ]);
+    }
+
+    public function deleteNote(Request $request, int $id, int $noteId)
+    {
+        $lead = $this->scopedLeadQuery($request)->findOrFail($id);
+
+        $note = LeadNote::withoutGlobalScopes()
+            ->where('account_id', $this->accountId($request))
+            ->where('lead_id', $lead->id)
+            ->where('id', $noteId)
+            ->firstOrFail();
+
+        $note->delete();
+
+        $this->syncLatestNoteSnapshot($lead);
+
+        $lead->load(['statusConfig', 'assignedStaff', 'latestNote'])->loadCount('notesTimeline');
+
+        return response()->json([
+            'lead' => $this->transformLead($lead),
+            'stats' => $this->stats($request),
+        ]);
+    }
+
+    public function completeTask(Request $request, int $id, int $taskId)
+    {
+        $lead = $this->scopedLeadQuery($request)
+            ->with(['statusConfig', 'assignedStaff'])
+            ->findOrFail($id);
+
+        $task = LeadFollowUpTask::withoutGlobalScopes()
+            ->where('account_id', $this->accountId($request))
+            ->where('lead_id', $lead->id)
+            ->where('id', $taskId)
+            ->where('status', LeadFollowUpTask::STATUS_PENDING)
+            ->firstOrFail();
+
+        $this->completeTaskRecord($task, (string) $request->input('activity_type', 'note'));
+
+        $lead->load([
+            'statusConfig',
+            'assignedStaff',
+            'latestNote',
+            'followUpTasks' => fn ($taskQuery) => $taskQuery
+                ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                ->orderBy('due_date')
+                ->orderBy('id'),
+        ])->loadCount('notesTimeline');
+
+        return response()->json([
+            'lead' => $this->transformLead($lead),
+            'stats' => $this->stats($request),
+        ]);
+    }
+
+    private function syncLatestNoteSnapshot(Lead $lead): void
+    {
+        $nextLatestNote = $lead->notesTimeline()->first();
+
+        $lead->forceFill([
+            'latest_note_excerpt' => $nextLatestNote ? mb_strimwidth($nextLatestNote->content, 0, 180, '...') : null,
+            'last_noted_at' => $nextLatestNote?->created_at,
+        ])->save();
     }
 
     private function accountId(Request $request): int
@@ -440,39 +583,252 @@ class TelesalesLeadController extends Controller
             $query->where('potential_level', $request->input('potential_level'));
         }
 
-        if ($request->filled('date_from')) {
-            $query->where('placed_at', '>=', Carbon::parse($request->input('date_from'))->startOfDay());
+        if ($request->filled('date_from') || $request->filled('date_to')) {
+            $start = $request->filled('date_from')
+                ? Carbon::parse($request->input('date_from'))->startOfDay()
+                : Carbon::create(1970, 1, 1)->startOfDay();
+            $end = $request->filled('date_to')
+                ? Carbon::parse($request->input('date_to'))->endOfDay()
+                : now()->copy()->addYears(50)->endOfDay();
+
+            if ($start->gt($end)) {
+                [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+            }
+
+            $this->whereAddedBetween($query, $start, $end);
         }
 
-        if ($request->filled('date_to')) {
-            $query->where('placed_at', '<=', Carbon::parse($request->input('date_to'))->endOfDay());
-        }
-
-        if (!$request->boolean('include_stopped')) {
+        if (!$request->boolean('include_stopped') && (string) $request->input('queue', 'today') !== 'all') {
             $this->applyActiveFollowUpScope($query);
         }
     }
 
     private function applyQueueFilter(Builder $query, string $queue): void
     {
-        $todayStart = now()->startOfDay();
-        $todayEnd = now()->endOfDay();
-
         match ($queue) {
             'all' => null,
-            'new_today' => $query->whereBetween('placed_at', [$todayStart, $todayEnd]),
-            'overdue' => $query->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<', $todayStart),
-            '3_days' => $query->where('follow_up_interval_days', 3)->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<=', $todayEnd),
-            '7_days' => $query->where('follow_up_interval_days', 7)->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<=', $todayEnd),
-            default => $query->where(function (Builder $builder) use ($todayStart, $todayEnd) {
-                $builder->whereNotNull('next_follow_up_at')
-                    ->where('next_follow_up_at', '<=', $todayEnd)
-                    ->orWhere(function (Builder $newLeadQuery) use ($todayStart, $todayEnd) {
-                        $newLeadQuery->whereNull('last_contacted_at')
-                            ->whereBetween('placed_at', [$todayStart, $todayEnd]);
-                    });
-            }),
+            'new_today' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_NEW, false),
+            'overdue' => $this->whereHasCurrentDueTask($query, null, true),
+            '3_days' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_THREE_DAYS, false),
+            '7_days' => $this->whereHasCurrentDueTask($query, LeadFollowUpTask::TYPE_SEVEN_DAYS, false),
+            default => $this->whereHasCurrentDueTask($query, null, false),
         };
+    }
+
+    private function whereHasCurrentDueTask(Builder $query, ?string $taskType = null, bool $overdueOnly = false): void
+    {
+        $today = now()->toDateString();
+        $leadTable = $query->getModel()->getTable();
+        $taskTable = (new LeadFollowUpTask())->getTable();
+
+        $query->whereExists(function ($taskQuery) use ($leadTable, $taskTable, $taskType, $overdueOnly, $today) {
+            $taskQuery->selectRaw('1')
+                ->from("{$taskTable} as current_tasks")
+                ->whereColumn('current_tasks.account_id', "{$leadTable}.account_id")
+                ->whereColumn('current_tasks.lead_id', "{$leadTable}.id")
+                ->where('current_tasks.status', LeadFollowUpTask::STATUS_PENDING)
+                ->where('current_tasks.due_date', $overdueOnly ? '<' : '<=', $today)
+                ->when($taskType, fn ($builder) => $builder->where('current_tasks.task_type', $taskType))
+                ->whereNotExists(function ($priorQuery) use ($today) {
+                    $priorQuery->selectRaw('1')
+                        ->from('lead_follow_up_tasks as prior_tasks')
+                        ->whereColumn('prior_tasks.account_id', 'current_tasks.account_id')
+                        ->whereColumn('prior_tasks.lead_id', 'current_tasks.lead_id')
+                        ->where('prior_tasks.status', LeadFollowUpTask::STATUS_PENDING)
+                        ->where('prior_tasks.due_date', '<=', $today)
+                        ->where(function ($orderQuery) {
+                            $orderQuery->whereColumn('prior_tasks.due_date', '<', 'current_tasks.due_date')
+                                ->orWhere(function ($tieQuery) {
+                                    $tieQuery->whereColumn('prior_tasks.due_date', 'current_tasks.due_date')
+                                        ->whereColumn('prior_tasks.id', '<', 'current_tasks.id');
+                                });
+                        });
+                });
+        });
+    }
+
+    private function applyAddedDateBucket(Builder $query, int $daysBack): void
+    {
+        $targetStart = now()->startOfDay()->subDays($daysBack);
+
+        $this->whereAddedBetween($query, $targetStart, $targetStart->copy()->endOfDay());
+    }
+
+    private function applyTodayWorkBuckets(Builder $query): void
+    {
+        $todayStart = now()->startOfDay();
+        $threeDaysAgoStart = $todayStart->copy()->subDays(3);
+        $sevenDaysAgoStart = $todayStart->copy()->subDays(7);
+
+        $query->where(function (Builder $builder) use ($todayStart, $threeDaysAgoStart, $sevenDaysAgoStart) {
+            $builder->where(function (Builder $newLeadQuery) use ($todayStart, $sevenDaysAgoStart) {
+                $this->applyNewLeadScope($newLeadQuery);
+                $this->whereAddedBetween($newLeadQuery, $sevenDaysAgoStart, $todayStart->copy()->endOfDay());
+            });
+            $this->orWhereAddedBetween($builder, $threeDaysAgoStart, $threeDaysAgoStart->copy()->endOfDay());
+            $this->orWhereAddedBetween($builder, $sevenDaysAgoStart, $sevenDaysAgoStart->copy()->endOfDay());
+        });
+    }
+
+    private function applyNewLeadScope(Builder $query): void
+    {
+        $query->where(function (Builder $builder) {
+            $builder->whereNull('lead_status_id')
+                ->orWhereIn('status', self::NEW_LEAD_STATUS_CODE_PATTERNS)
+                ->orWhereHas('statusConfig', function (Builder $statusQuery) {
+                    $statusQuery->where('is_default', true)
+                        ->orWhereIn('code', self::NEW_LEAD_STATUS_CODE_PATTERNS);
+                });
+        });
+    }
+
+    private function whereAddedBetween(Builder $query, Carbon $start, Carbon $end): void
+    {
+        $query->where(function (Builder $builder) use ($start, $end) {
+            $this->addAddedBetweenClause($builder, $start, $end);
+        });
+    }
+
+    private function orWhereAddedBetween(Builder $query, Carbon $start, Carbon $end): void
+    {
+        $query->orWhere(function (Builder $builder) use ($start, $end) {
+            $this->addAddedBetweenClause($builder, $start, $end);
+        });
+    }
+
+    private function addAddedBetweenClause(Builder $query, Carbon $start, Carbon $end): void
+    {
+        $query->whereBetween('placed_at', [$start, $end])
+            ->orWhere(function (Builder $fallbackQuery) use ($start, $end) {
+                $fallbackQuery->whereNull('placed_at')
+                    ->whereBetween('created_at', [$start, $end]);
+            });
+    }
+
+    private function whereAddedBefore(Builder $query, Carbon $before): void
+    {
+        $query->where(function (Builder $builder) use ($before) {
+            $builder->where('placed_at', '<', $before)
+                ->orWhere(function (Builder $fallbackQuery) use ($before) {
+                    $fallbackQuery->whereNull('placed_at')
+                        ->where('created_at', '<', $before);
+                });
+        });
+    }
+
+    private function ensureFollowUpTasksForAccount(int $accountId): void
+    {
+        Lead::withoutGlobalScopes()
+            ->where('account_id', $accountId)
+            ->with('statusConfig')
+            ->orderBy('id')
+            ->chunkById(200, function (Collection $leads) {
+                $leads->each(fn (Lead $lead) => $this->ensureLeadFollowUpTasks($lead));
+            });
+    }
+
+    private function ensureLeadFollowUpTasks(Lead $lead): void
+    {
+        $lead->loadMissing('statusConfig');
+
+        if ($lead->do_not_call || $this->statusStopsFollowUp($lead->statusConfig)) {
+            $this->stopPendingTasksForLead($lead, 'schedule');
+            return;
+        }
+
+        $addedAt = $this->leadAddedAt($lead);
+        if (!$addedAt) {
+            return;
+        }
+
+        $baseDate = $addedAt->copy()->startOfDay();
+        $tasks = [];
+
+        if ($this->leadHasNewStatus($lead)) {
+            $tasks[] = [LeadFollowUpTask::TYPE_NEW, $baseDate->copy()];
+        } else {
+            LeadFollowUpTask::withoutGlobalScopes()
+                ->where('account_id', $lead->account_id)
+                ->where('lead_id', $lead->id)
+                ->where('task_type', LeadFollowUpTask::TYPE_NEW)
+                ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                ->update([
+                    'status' => LeadFollowUpTask::STATUS_COMPLETED,
+                    'completed_at' => now(),
+                    'completed_by' => auth()->id(),
+                    'completed_activity_type' => 'status',
+                    'updated_at' => now(),
+                ]);
+        }
+
+        $tasks[] = [LeadFollowUpTask::TYPE_THREE_DAYS, $baseDate->copy()->addDays(3)];
+        $tasks[] = [LeadFollowUpTask::TYPE_SEVEN_DAYS, $baseDate->copy()->addDays(7)];
+
+        foreach ($tasks as [$taskType, $dueDate]) {
+            LeadFollowUpTask::withoutGlobalScopes()->firstOrCreate([
+                'account_id' => $lead->account_id,
+                'lead_id' => $lead->id,
+                'task_type' => $taskType,
+                'due_date' => $dueDate->toDateString(),
+            ], [
+                'status' => LeadFollowUpTask::STATUS_PENDING,
+            ]);
+        }
+    }
+
+    private function stopPendingTasksForLead(Lead $lead, string $activityType): void
+    {
+        LeadFollowUpTask::withoutGlobalScopes()
+            ->where('account_id', $lead->account_id)
+            ->where('lead_id', $lead->id)
+            ->where('status', LeadFollowUpTask::STATUS_PENDING)
+            ->update([
+                'status' => LeadFollowUpTask::STATUS_STOPPED,
+                'completed_at' => now(),
+                'completed_by' => auth()->id(),
+                'completed_activity_type' => $activityType,
+                'updated_at' => now(),
+            ]);
+    }
+
+    private function completeCurrentTaskForLead(Lead $lead, string $activityType): ?LeadFollowUpTask
+    {
+        $task = LeadFollowUpTask::withoutGlobalScopes()
+            ->where('account_id', $lead->account_id)
+            ->where('lead_id', $lead->id)
+            ->where('status', LeadFollowUpTask::STATUS_PENDING)
+            ->where('due_date', '<=', now()->toDateString())
+            ->orderBy('due_date')
+            ->orderBy('id')
+            ->first();
+
+        if (!$task) {
+            return null;
+        }
+
+        $this->completeTaskRecord($task, $activityType);
+
+        return $task;
+    }
+
+    private function completeTaskRecord(LeadFollowUpTask $task, string $activityType): void
+    {
+        $task->forceFill([
+            'status' => LeadFollowUpTask::STATUS_COMPLETED,
+            'completed_at' => now(),
+            'completed_by' => auth()->id(),
+            'completed_activity_type' => $activityType,
+        ])->save();
+    }
+
+    private function pendingTaskLeadCount(int $accountId, ?string $taskType = null, bool $overdueOnly = false): int
+    {
+        $query = Lead::withoutGlobalScopes()
+            ->where('account_id', $accountId);
+
+        $this->whereHasCurrentDueTask($query, $taskType, $overdueOnly);
+
+        return $query->count();
     }
 
     private function applyActiveFollowUpScope(Builder $query): void
@@ -492,37 +848,139 @@ class TelesalesLeadController extends Controller
 
     private function stats(Request $request): array
     {
-        $todayStart = now()->startOfDay();
-        $todayEnd = now()->endOfDay();
-        $base = $this->scopedLeadQuery($request);
-        $this->applyActiveFollowUpScope($base);
+        $accountId = $this->accountId($request);
+        $this->ensureFollowUpTasksForAccount($accountId);
 
-        $todayDue = clone $base;
-        $newToday = clone $base;
-        $threeDayDue = clone $base;
-        $sevenDayDue = clone $base;
-        $overdue = clone $base;
+        $base = $this->scopedLeadQuery($request);
         $highPotential = clone $base;
         $unassigned = clone $base;
+        $total = $this->scopedLeadQuery($request)->count();
+        $potentialCodes = LeadPotential::ensureDefaultsForAccount($accountId)
+            ->where('counts_as_potential', true)
+            ->pluck('code')
+            ->all();
+
+        $periodQuery = $this->scopedLeadQuery($request)
+            ->with('statusConfig');
+        $periodMeta = $this->applyStatsDateScope($periodQuery, $request);
+        $periodLeads = $periodQuery
+            ->get(['id', 'account_id', 'lead_status_id', 'potential_level', 'status', 'converted_at', 'order_id']);
+        $periodTotal = $periodLeads->count();
+        $closedCount = $periodLeads->filter(fn (Lead $lead) => $this->isClosedLead($lead))->count();
+        $potentialCount = $periodLeads->filter(fn (Lead $lead) => $this->isPotentialLead($lead, $potentialCodes))->count();
+        $statusBreakdown = $periodLeads
+            ->groupBy(fn (Lead $lead) => (string) ($lead->lead_status_id ?: 'none'))
+            ->map(function (Collection $items) use ($periodTotal) {
+                $lead = $items->first();
+                $status = $lead?->statusConfig;
+                $count = $items->count();
+
+                return [
+                    'id' => $status?->id,
+                    'name' => $status?->name ?: 'Chưa chọn',
+                    'color' => $status?->color ?: '#94a3b8',
+                    'count' => $count,
+                    'rate' => $periodTotal > 0 ? round(($count / $periodTotal) * 100, 1) : 0,
+                ];
+            })
+            ->sortByDesc('count')
+            ->values();
 
         return [
-            'today_due' => $todayDue
-                ->where(function (Builder $builder) use ($todayStart, $todayEnd) {
-                    $builder->whereNotNull('next_follow_up_at')
-                        ->where('next_follow_up_at', '<=', $todayEnd)
-                        ->orWhere(function (Builder $newLeadQuery) use ($todayStart, $todayEnd) {
-                            $newLeadQuery->whereNull('last_contacted_at')
-                                ->whereBetween('placed_at', [$todayStart, $todayEnd]);
-                        });
-                })
-                ->count(),
-            'new_today' => $newToday->whereBetween('placed_at', [$todayStart, $todayEnd])->count(),
-            'three_day_due' => $threeDayDue->where('follow_up_interval_days', 3)->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<=', $todayEnd)->count(),
-            'seven_day_due' => $sevenDayDue->where('follow_up_interval_days', 7)->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<=', $todayEnd)->count(),
-            'overdue' => $overdue->whereNotNull('next_follow_up_at')->where('next_follow_up_at', '<', $todayStart)->count(),
-            'high_potential' => $highPotential->whereIn('potential_level', ['hot', 'high'])->count(),
+            'total' => $total,
+            'today_due' => $this->pendingTaskLeadCount($accountId),
+            'new_today' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_NEW),
+            'three_day_due' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_THREE_DAYS),
+            'seven_day_due' => $this->pendingTaskLeadCount($accountId, LeadFollowUpTask::TYPE_SEVEN_DAYS),
+            'overdue' => $this->pendingTaskLeadCount($accountId, null, true),
+            'high_potential' => !empty($potentialCodes) ? $highPotential->whereIn('potential_level', $potentialCodes)->count() : 0,
             'unassigned' => $unassigned->whereNull('assigned_staff_id')->count(),
+            'conversion' => [
+                'mode' => $periodMeta['mode'],
+                'date_label' => $periodMeta['label'],
+                'date_from' => $periodMeta['date_from'],
+                'date_to' => $periodMeta['date_to'],
+                'total' => $periodTotal,
+                'closed_count' => $closedCount,
+                'close_rate' => $periodTotal > 0 ? round(($closedCount / $periodTotal) * 100, 1) : 0,
+                'potential_count' => $potentialCount,
+                'potential_rate' => $periodTotal > 0 ? round(($potentialCount / $periodTotal) * 100, 1) : 0,
+            ],
+            'status_breakdown' => $statusBreakdown,
         ];
+    }
+
+    private function applyStatsDateScope(Builder $query, Request $request): array
+    {
+        $mode = (string) $request->input('stats_mode', 'day');
+        $today = now();
+
+        if ($mode === 'month') {
+            $monthValue = (string) $request->input('stats_month', $today->format('Y-m'));
+            $start = Carbon::parse($monthValue . '-01')->startOfMonth();
+            $end = $start->copy()->endOfMonth();
+            $label = 'Tháng ' . $start->format('m/Y');
+        } elseif ($mode === 'custom') {
+            $from = (string) ($request->input('stats_date_from') ?: $request->input('date_from') ?: $today->toDateString());
+            $to = (string) ($request->input('stats_date_to') ?: $request->input('date_to') ?: $from);
+            $start = Carbon::parse($from)->startOfDay();
+            $end = Carbon::parse($to)->endOfDay();
+
+            if ($start->gt($end)) {
+                [$start, $end] = [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+            }
+
+            $label = $start->format('d/m/Y') . ' - ' . $end->format('d/m/Y');
+        } else {
+            $mode = 'day';
+            $dateValue = (string) $request->input('stats_date', $today->toDateString());
+            $start = Carbon::parse($dateValue)->startOfDay();
+            $end = $start->copy()->endOfDay();
+            $label = $start->format('d/m/Y');
+        }
+
+        $this->whereAddedBetween($query, $start, $end);
+
+        return [
+            'mode' => $mode,
+            'label' => $label,
+            'date_from' => $start->toDateString(),
+            'date_to' => $end->toDateString(),
+        ];
+    }
+
+    private function isClosedLead(Lead $lead): bool
+    {
+        if ($lead->converted_at || $lead->order_id) {
+            return true;
+        }
+
+        $normalized = $this->normalizedStatusText($lead);
+
+        return str_contains($normalized, 'da chot')
+            || str_contains($normalized, 'da tao don')
+            || str_contains($normalized, 'chot');
+    }
+
+    private function isPotentialLead(Lead $lead, array $potentialCodes): bool
+    {
+        if ($lead->potential_level && in_array($lead->potential_level, $potentialCodes, true)) {
+            return true;
+        }
+
+        $normalized = $this->normalizedStatusText($lead);
+
+        return str_contains($normalized, 'tiem nang');
+    }
+
+    private function normalizedStatusText(Lead $lead): string
+    {
+        return Str::of(trim(($lead->status ?? '') . ' ' . ($lead->statusConfig?->code ?? '') . ' ' . ($lead->statusConfig?->name ?? '')))
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', ' ')
+            ->squish()
+            ->toString();
     }
 
     private function parsePhoneRows(string $phonesText, array $phones): Collection
@@ -646,6 +1104,9 @@ class TelesalesLeadController extends Controller
     private function transformLead(Lead $lead): array
     {
         $nextFollowUpAt = $lead->next_follow_up_at;
+        $addedAt = $this->leadAddedAt($lead);
+        $careBucket = $this->careBucket($lead);
+        $currentTask = $this->currentTaskForLead($lead);
         $daysUntilFollowUp = $nextFollowUpAt
             ? now()->startOfDay()->diffInDays($nextFollowUpAt->copy()->startOfDay(), false)
             : null;
@@ -670,7 +1131,7 @@ class TelesalesLeadController extends Controller
             'assigned_staff_id' => $lead->assigned_staff_id,
             'assigned_staff' => $lead->assignedStaff ? $this->transformStaff($lead->assignedStaff) : null,
             'potential_level' => $lead->potential_level,
-            'potential_label' => $this->labelForPotential($lead->potential_level),
+            'potential_label' => $this->labelForPotential($lead->potential_level, (int) $lead->account_id),
             'next_follow_up_at' => $this->isoDateTime($nextFollowUpAt),
             'next_follow_up_label' => $this->dateTimeLabel($nextFollowUpAt),
             'follow_up_script' => $lead->follow_up_script,
@@ -679,10 +1140,18 @@ class TelesalesLeadController extends Controller
             'last_contacted_label' => $this->dateTimeLabel($lead->last_contacted_at),
             'do_not_call' => (bool) $lead->do_not_call,
             'due_bucket' => $this->dueBucket($lead),
+            'care_bucket' => $careBucket['value'],
+            'care_bucket_label' => $careBucket['label'],
+            'current_task' => $currentTask ? $this->transformFollowUpTask($currentTask, $lead) : null,
             'days_until_follow_up' => $daysUntilFollowUp,
+            'latest_note_id' => $lead->latestNote?->id,
             'latest_note_excerpt' => $lead->latest_note_excerpt,
             'latest_note_content' => $lead->latestNote?->content,
             'notes_count' => (int) ($lead->notes_timeline_count ?? 0),
+            'last_noted_at' => $this->isoDateTime($lead->last_noted_at),
+            'last_noted_label' => $this->dateTimeLabel($lead->last_noted_at),
+            'added_at' => $this->isoDateTime($addedAt),
+            'added_label' => $this->dateTimeLabel($addedAt),
             'placed_at' => $this->isoDateTime($lead->placed_at),
             'placed_label' => $this->dateTimeLabel($lead->placed_at),
             'created_at' => $this->isoDateTime($lead->created_at),
@@ -701,7 +1170,7 @@ class TelesalesLeadController extends Controller
             'next_follow_up_at' => $this->isoDateTime($note->next_follow_up_at),
             'next_follow_up_label' => $this->dateTimeLabel($note->next_follow_up_at),
             'potential_level' => $note->potential_level,
-            'potential_label' => $this->labelForPotential($note->potential_level),
+            'potential_label' => $this->labelForPotential($note->potential_level, (int) $note->account_id),
             'lead_status_id' => $note->lead_status_id,
             'status_config' => $note->statusConfig ? $this->transformStatus($note->statusConfig) : null,
             'assigned_staff_id' => $note->assigned_staff_id,
@@ -725,6 +1194,65 @@ class TelesalesLeadController extends Controller
         ];
     }
 
+    private function transformPotential(LeadPotential $potential): array
+    {
+        return [
+            'id' => $potential->id,
+            'code' => $potential->code,
+            'value' => $potential->code,
+            'name' => $potential->name,
+            'label' => $potential->name,
+            'color' => $potential->color,
+            'sort_order' => $potential->sort_order,
+            'is_default' => (bool) $potential->is_default,
+            'counts_as_potential' => (bool) $potential->counts_as_potential,
+            'is_active' => (bool) $potential->is_active,
+        ];
+    }
+
+    private function transformFollowUpTask(LeadFollowUpTask $task, ?Lead $lead = null): array
+    {
+        $today = now()->startOfDay();
+        $dueDate = $task->due_date?->copy()->startOfDay();
+        $daysOverdue = $dueDate ? max(0, (int) $dueDate->diffInDays($today, false)) : 0;
+        $isDue = $dueDate ? $dueDate->lte($today) : false;
+        $isOverdue = $daysOverdue > 0;
+        $typeLabel = self::TASK_TYPE_LABELS[$task->task_type] ?? 'Việc chăm sóc';
+
+        if ($task->status !== LeadFollowUpTask::STATUS_PENDING) {
+            $label = 'Đã xử lý';
+            $statusLabel = 'Đã xử lý';
+        } elseif ($isOverdue) {
+            $label = "Quá {$daysOverdue} ngày - {$typeLabel}";
+            $statusLabel = 'Chưa xử lý';
+        } elseif ($isDue) {
+            $label = $typeLabel;
+            $statusLabel = 'Chưa xử lý';
+        } else {
+            $addedAt = $lead ? $this->leadAddedAt($lead) : null;
+            $ageDays = $addedAt
+                ? (int) $addedAt->copy()->startOfDay()->diffInDays($today, false)
+                : null;
+            $label = $ageDays !== null ? $this->leadAgeLabel($ageDays) : 'Chưa đến lịch';
+            $statusLabel = 'Chưa đến lịch';
+        }
+
+        return [
+            'id' => $task->id,
+            'task_type' => $task->task_type,
+            'task_type_label' => $typeLabel,
+            'status' => $task->status,
+            'status_label' => $statusLabel,
+            'label' => $label,
+            'due_date' => $task->due_date?->toDateString(),
+            'due_label' => $task->due_date ? $task->due_date->format('d/m/Y') : null,
+            'is_due' => $isDue,
+            'is_overdue' => $isOverdue,
+            'days_overdue' => $daysOverdue,
+            'completed_at' => $this->isoDateTime($task->completed_at),
+        ];
+    }
+
     private function transformStaff(LeadStaff $staff): array
     {
         return [
@@ -734,6 +1262,76 @@ class TelesalesLeadController extends Controller
             'sort_order' => $staff->sort_order,
             'is_active' => (bool) $staff->is_active,
         ];
+    }
+
+    private function leadAddedAt(Lead $lead): ?Carbon
+    {
+        return $lead->placed_at ?: $lead->created_at;
+    }
+
+    private function currentTaskForLead(Lead $lead): ?LeadFollowUpTask
+    {
+        $today = now()->toDateString();
+        $tasks = $lead->relationLoaded('followUpTasks')
+            ? $lead->followUpTasks
+            : $lead->followUpTasks()
+                ->where('status', LeadFollowUpTask::STATUS_PENDING)
+                ->orderBy('due_date')
+                ->orderBy('id')
+                ->get();
+
+        if ($tasks->isEmpty()) {
+            return null;
+        }
+
+        return $tasks->first(fn (LeadFollowUpTask $task) => $task->due_date?->toDateString() <= $today)
+            ?: $tasks->first();
+    }
+
+    private function leadHasNewStatus(Lead $lead): bool
+    {
+        $statusCode = Str::lower((string) ($lead->statusConfig?->code ?: $lead->status));
+
+        return !$lead->lead_status_id
+            || (bool) ($lead->statusConfig?->is_default ?? false)
+            || in_array($statusCode, self::NEW_LEAD_STATUS_CODE_PATTERNS, true);
+    }
+
+    private function careBucket(Lead $lead): array
+    {
+        if ($lead->do_not_call) {
+            return ['value' => 'stopped', 'label' => 'Đã dừng nhắc'];
+        }
+
+        $addedAt = $this->leadAddedAt($lead);
+
+        if (!$addedAt) {
+            return ['value' => null, 'label' => 'Chưa có ngày thêm'];
+        }
+
+        $ageDays = (int) $addedAt->copy()->startOfDay()->diffInDays(now()->startOfDay(), false);
+
+        return match ($ageDays) {
+            0 => ['value' => 'today', 'label' => 'Khách hôm nay'],
+            3 => ['value' => '3_days', 'label' => 'Khách 3 hôm trước'],
+            7 => ['value' => '7_days', 'label' => 'Khách 7 hôm trước'],
+            default => $ageDays > 7
+                ? ['value' => 'overdue', 'label' => 'Quá hạn']
+                : ['value' => $this->leadHasNewStatus($lead) ? 'new' : 'waiting', 'label' => $this->leadAgeLabel($ageDays)],
+        };
+    }
+
+    private function leadAgeLabel(int $ageDays): string
+    {
+        if ($ageDays <= 0) {
+            return 'Khách hôm nay';
+        }
+
+        if ($ageDays === 1) {
+            return 'Khách hôm qua';
+        }
+
+        return "Khách {$ageDays} hôm trước";
     }
 
     private function dueBucket(Lead $lead): ?string
@@ -787,11 +1385,20 @@ class TelesalesLeadController extends Controller
         };
     }
 
-    private function labelForPotential(?string $value): ?string
+    private function labelForPotential(?string $value, ?int $accountId = null): ?string
     {
-        $matched = collect(self::POTENTIAL_OPTIONS)->firstWhere('value', $value);
+        if (!$value) {
+            return null;
+        }
 
-        return $matched['label'] ?? null;
+        $matched = $this->potentialDefinitionsForAccount($accountId)->firstWhere('code', $value);
+        if ($matched) {
+            return $matched->name;
+        }
+
+        $default = collect(LeadPotential::defaultDefinitions())->firstWhere('code', $value);
+
+        return $default['name'] ?? Str::of($value)->replace(['-', '_'], ' ')->headline()->toString();
     }
 
     private function labelForActivity(?string $value): string
@@ -834,9 +1441,24 @@ class TelesalesLeadController extends Controller
         };
     }
 
-    private function potentialValues(): array
+    private function potentialDefinitionsForAccount(?int $accountId): Collection
     {
-        return collect(self::POTENTIAL_OPTIONS)->pluck('value')->all();
+        static $cache = [];
+
+        if (!$accountId) {
+            return collect();
+        }
+
+        if (!isset($cache[$accountId])) {
+            $cache[$accountId] = LeadPotential::ensureDefaultsForAccount($accountId);
+        }
+
+        return $cache[$accountId];
+    }
+
+    private function potentialValues(int $accountId): array
+    {
+        return $this->potentialDefinitionsForAccount($accountId)->pluck('code')->all();
     }
 
     private function followUpScriptValues(): array

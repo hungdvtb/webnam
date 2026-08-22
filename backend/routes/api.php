@@ -299,6 +299,9 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::post('/telesales/leads/import', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'import']);
     Route::get('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'show'])->whereNumber('id');
     Route::put('/telesales/leads/{id}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'update'])->whereNumber('id');
+    Route::post('/telesales/leads/{id}/tasks/{taskId}/complete', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'completeTask'])->whereNumber('id')->whereNumber('taskId');
+    Route::delete('/telesales/leads/{id}/latest-note', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'deleteLatestNote'])->whereNumber('id');
+    Route::delete('/telesales/leads/{id}/notes/{noteId}', [\App\Http\Controllers\Api\TelesalesLeadController::class, 'deleteNote'])->whereNumber('id')->whereNumber('noteId');
     Route::get('/leads/{id}', [\App\Http\Controllers\Api\LeadController::class , 'show']);
     Route::get('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'notes']);
     Route::post('/leads/{id}/notes', [\App\Http\Controllers\Api\LeadController::class , 'storeNote']);
@@ -311,6 +314,10 @@ Route::middleware(['auth:sanctum', 'admin-permission'])->group(function () {
     Route::put('/lead-statuses/{id}', [\App\Http\Controllers\Api\LeadStatusController::class , 'update']);
     Route::post('/lead-statuses/reorder', [\App\Http\Controllers\Api\LeadStatusController::class , 'reorder']);
     Route::delete('/lead-statuses/{id}', [\App\Http\Controllers\Api\LeadStatusController::class , 'destroy']);
+    Route::get('/lead-potentials', [\App\Http\Controllers\Api\LeadPotentialController::class , 'index']);
+    Route::post('/lead-potentials', [\App\Http\Controllers\Api\LeadPotentialController::class , 'store']);
+    Route::put('/lead-potentials/{id}', [\App\Http\Controllers\Api\LeadPotentialController::class , 'update']);
+    Route::delete('/lead-potentials/{id}', [\App\Http\Controllers\Api\LeadPotentialController::class , 'destroy']);
     Route::get('/lead-staffs', [\App\Http\Controllers\Api\LeadStaffController::class , 'index']);
     Route::post('/lead-staffs', [\App\Http\Controllers\Api\LeadStaffController::class , 'store']);
     Route::put('/lead-staffs/{id}', [\App\Http\Controllers\Api\LeadStaffController::class , 'update']);

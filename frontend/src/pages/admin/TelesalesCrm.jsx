@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Pagination from '../../components/Pagination';
 import { telesalesApi } from '../../services/api';
 
 const queueTabs = [
+    { value: 'all', label: 'Tất cả', icon: 'view_list', statKey: 'total' },
     { value: 'today', label: 'Việc hôm nay', icon: 'event_available', statKey: 'today_due' },
     { value: 'new_today', label: 'Khách mới', icon: 'person_add', statKey: 'new_today' },
     { value: '3_days', label: 'Gọi lại 3 ngày', icon: 'phone_callback', statKey: 'three_day_due' },
     { value: '7_days', label: 'Gọi lại 7 ngày', icon: 'event_repeat', statKey: 'seven_day_due' },
     { value: 'overdue', label: 'Quá hạn', icon: 'alarm', statKey: 'overdue' },
-    { value: 'all', label: 'Tất cả', icon: 'view_list', statKey: null },
 ];
 
 const emptyStats = {
+    total: 0,
     today_due: 0,
     new_today: 0,
     three_day_due: 0,
@@ -19,6 +21,16 @@ const emptyStats = {
     overdue: 0,
     high_potential: 0,
     unassigned: 0,
+    conversion: {
+        mode: 'day',
+        date_label: '',
+        total: 0,
+        closed_count: 0,
+        close_rate: 0,
+        potential_count: 0,
+        potential_rate: 0,
+    },
+    status_breakdown: [],
 };
 
 const emptyPagination = {
@@ -32,9 +44,9 @@ const inputClassName = 'h-10 w-full rounded-sm border border-slate-200 bg-white 
 const selectClassName = `${inputClassName} pr-8`;
 const inlineInputClassName = 'h-9 w-full min-w-0 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-700 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10 disabled:cursor-wait disabled:bg-slate-50 disabled:text-slate-400';
 const inlineSelectClassName = `${inlineInputClassName} pr-7`;
-const iconButtonClassName = 'inline-flex size-10 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700';
-const primaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 rounded-sm bg-teal-700 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50';
-const secondaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 rounded-sm border border-slate-200 bg-white px-4 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-50';
+const iconButtonClassName = 'inline-flex size-10 shrink-0 items-center justify-center rounded-sm border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-50';
+const primaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-sm bg-teal-700 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-50';
+const secondaryButtonClassName = 'inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-sm border border-slate-200 bg-white px-4 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:border-teal-300 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-50';
 
 const activityIconMap = {
     call: 'call',
@@ -44,44 +56,6 @@ const activityIconMap = {
     import: 'upload_file',
     note: 'sticky_note_2',
 };
-
-const dueBadgeClassMap = {
-    overdue: 'border-red-200 bg-red-50 text-red-700',
-    today: 'border-amber-200 bg-amber-50 text-amber-700',
-    future: 'border-sky-200 bg-sky-50 text-sky-700',
-    stopped: 'border-slate-200 bg-slate-100 text-slate-600',
-};
-
-const potentialBadgeClassMap = {
-    hot: 'border-red-200 bg-red-50 text-red-700',
-    high: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    medium: 'border-amber-200 bg-amber-50 text-amber-700',
-    low: 'border-slate-200 bg-slate-50 text-slate-600',
-    unqualified: 'border-zinc-200 bg-zinc-100 text-zinc-600',
-};
-
-const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
-
-const isCanceledRequest = (error) => error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError';
-
-const createImportRow = (overrides = {}) => ({
-    local_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    customer_name: '',
-    phone: '',
-    zalo_same_as_phone: true,
-    zalo_phone: '',
-    ...overrides,
-});
-
-const normalizePhoneDigits = (value) => String(value || '').replace(/\D+/g, '');
-
-const normalizeVietnameseText = (value) => String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[đĐ]/g, 'd')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
 
 const stopFollowUpStatusPatterns = [
     'khong co nhu cau',
@@ -99,48 +73,54 @@ const stopFollowUpStatusPatterns = [
     'spam',
 ];
 
-const statusStopsFollowUp = (status) => {
-    const normalized = normalizeVietnameseText(`${status?.code || ''} ${status?.name || ''}`);
-    return stopFollowUpStatusPatterns.some((pattern) => normalized.includes(pattern));
-};
+const formatNumber = (value) => new Intl.NumberFormat('vi-VN').format(Number(value) || 0);
+const formatPercent = (value) => `${new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(Number(value) || 0)}%`;
+const isCanceledRequest = (error) => error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError';
 
-const nextAutomaticFollowUpInterval = (previousIntervalDays) => (
-    Number(previousIntervalDays || 0) >= 3 ? 7 : 3
-);
-
-const scriptForFollowUpInterval = (intervalDays) => (
-    Number(intervalDays) === 7 ? '7_days' : '3_days'
-);
-
-const addDaysAtNine = (days) => {
-    const date = new Date();
-    const dayCount = Number(days || 0);
-
-    if (dayCount <= 0) {
-        date.setMinutes(date.getMinutes() + 30);
-        const roundedMinutes = Math.ceil(date.getMinutes() / 15) * 15;
-        if (roundedMinutes >= 60) {
-            date.setHours(date.getHours() + 1, 0, 0, 0);
-        } else {
-            date.setMinutes(roundedMinutes, 0, 0);
-        }
-
-        return toDateTimeLocalValue(date);
-    }
-
-    date.setDate(date.getDate() + dayCount);
-    date.setHours(9, 0, 0, 0);
-    return toDateTimeLocalValue(date);
-};
-
-const toDateTimeLocalValue = (value) => {
-    if (!value) return '';
-
+const toDateInputValue = (value = new Date()) => {
     const date = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(date.getTime())) return '';
 
     const timezoneOffset = date.getTimezoneOffset() * 60000;
-    return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 16);
+    return new Date(date.getTime() - timezoneOffset).toISOString().slice(0, 10);
+};
+
+const toMonthInputValue = (value = new Date()) => toDateInputValue(value).slice(0, 7);
+
+const getCurrentMonthRange = () => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+    return {
+        from: toDateInputValue(start),
+        to: toDateInputValue(end),
+    };
+};
+
+const formatDateOnlyLabel = (value) => {
+    if (!value) return '';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    return new Intl.DateTimeFormat('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(date);
+};
+
+const formatShortDateLabel = (value) => {
+    if (!value) return '';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    return new Intl.DateTimeFormat('vi-VN', {
+        day: '2-digit',
+        month: '2-digit',
+    }).format(date);
 };
 
 const formatDateTimeLocalLabel = (value) => {
@@ -164,12 +144,80 @@ const resolveApiMessage = (error, fallback) => (
     || fallback
 );
 
-const labelForDueBucket = (lead) => {
-    if (lead?.do_not_call || lead?.due_bucket === 'stopped') return 'Không gọi nữa';
-    if (lead?.due_bucket === 'overdue') return 'Quá hạn';
-    if (lead?.due_bucket === 'today') return 'Đến lịch';
-    if (lead?.due_bucket === 'future') return 'Sắp tới';
-    return 'Chưa hẹn';
+const createImportRow = (overrides = {}) => ({
+    local_id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    customer_name: '',
+    phone: '',
+    zalo_same_as_phone: true,
+    zalo_phone: '',
+    ...overrides,
+});
+
+const normalizePhoneDigits = (value) => String(value || '').replace(/\D+/g, '');
+
+const vietnamMobileCarrierByPrefix = {
+    '032': 'Viettel',
+    '033': 'Viettel',
+    '034': 'Viettel',
+    '035': 'Viettel',
+    '036': 'Viettel',
+    '037': 'Viettel',
+    '038': 'Viettel',
+    '039': 'Viettel',
+    '086': 'Viettel',
+    '096': 'Viettel',
+    '097': 'Viettel',
+    '098': 'Viettel',
+    '070': 'MobiFone',
+    '076': 'MobiFone',
+    '077': 'MobiFone',
+    '078': 'MobiFone',
+    '079': 'MobiFone',
+    '089': 'MobiFone',
+    '090': 'MobiFone',
+    '093': 'MobiFone',
+    '081': 'VinaPhone',
+    '082': 'VinaPhone',
+    '083': 'VinaPhone',
+    '084': 'VinaPhone',
+    '085': 'VinaPhone',
+    '088': 'VinaPhone',
+    '091': 'VinaPhone',
+    '094': 'VinaPhone',
+    '052': 'Vietnamobile',
+    '056': 'Vietnamobile',
+    '058': 'Vietnamobile',
+    '092': 'Vietnamobile',
+    '059': 'Gmobile',
+    '099': 'Gmobile',
+    '087': 'iTelecom',
+    '055': 'Wintel',
+};
+
+const detectVietnamMobileCarrier = (phone) => {
+    const digits = normalizePhoneDigits(phone);
+    if (!digits) return '';
+
+    const localPhone = digits.startsWith('84') && digits.length >= 11
+        ? `0${digits.slice(2)}`
+        : digits.length === 9 && !digits.startsWith('0')
+            ? `0${digits}`
+            : digits;
+
+    return vietnamMobileCarrierByPrefix[localPhone.slice(0, 3)] || '';
+};
+
+const normalizeVietnameseText = (value) => String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const statusStopsFollowUp = (status) => {
+    const normalized = normalizeVietnameseText(`${status?.code || ''} ${status?.name || ''}`);
+    return stopFollowUpStatusPatterns.some((pattern) => normalized.includes(pattern));
 };
 
 const buildZaloUrl = (phone) => {
@@ -180,7 +228,58 @@ const buildZaloUrl = (phone) => {
     return `https://zalo.me/${zaloPhone}`;
 };
 
+const labelForReminder = (lead) => {
+    if (lead?.current_task?.label) return lead.current_task.label;
+    if (lead?.care_bucket_label) return lead.care_bucket_label;
+    if (lead?.do_not_call || lead?.due_bucket === 'stopped') return 'Đã dừng nhắc';
+    if (lead?.due_bucket === 'overdue') return 'Quá hạn';
+    if (lead?.due_bucket === 'today') return 'Đến lịch';
+    if (lead?.due_bucket === 'future') return 'Sắp tới';
+    return 'Chưa bật nhắc';
+};
+
+const normalizeStatusDraft = (status) => ({
+    id: status.id,
+    code: status.code || '',
+    name: status.name || '',
+    color: status.color || '#64748b',
+    sort_order: Number(status.sort_order || 0),
+    is_default: Boolean(status.is_default),
+    is_active: status.is_active !== false,
+    blocks_order_create: Boolean(status.blocks_order_create),
+});
+
+const normalizePotentialDraft = (potential) => ({
+    id: potential.id,
+    code: potential.code || potential.value || '',
+    value: potential.value || potential.code || '',
+    name: potential.name || potential.label || '',
+    label: potential.label || potential.name || '',
+    color: potential.color || '#16a34a',
+    sort_order: Number(potential.sort_order || 0),
+    is_default: Boolean(potential.is_default),
+    counts_as_potential: Boolean(potential.counts_as_potential),
+    is_active: potential.is_active !== false,
+});
+
+const columnOptions = [
+    { key: 'customer', label: 'Khách hàng' },
+    { key: 'phone', label: 'SĐT / Zalo' },
+    { key: 'staff', label: 'Sale phụ trách' },
+    { key: 'status', label: 'Trạng thái' },
+    { key: 'potential', label: 'Tiềm năng' },
+    { key: 'createOrder', label: 'Tạo đơn' },
+    { key: 'reminder', label: 'Nhắc lại tự động' },
+    { key: 'note', label: 'Ghi chú' },
+];
+
 const TelesalesCrm = () => {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const todayValue = useMemo(() => toDateInputValue(), []);
+    const monthValue = useMemo(() => toMonthInputValue(), []);
+    const initialMonthRange = useMemo(() => getCurrentMonthRange(), []);
+
     const [bootstrap, setBootstrap] = useState({
         statuses: [],
         staffs: [],
@@ -192,21 +291,54 @@ const TelesalesCrm = () => {
     const [stats, setStats] = useState(emptyStats);
     const [pagination, setPagination] = useState(emptyPagination);
     const [page, setPage] = useState(1);
-    const [queue, setQueue] = useState('today');
+    const [perPage, setPerPage] = useState(20);
+    const [queue, setQueue] = useState('all');
     const [search, setSearch] = useState('');
     const [staffFilter, setStaffFilter] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
     const [potentialFilter, setPotentialFilter] = useState('');
-    const [selectedId, setSelectedId] = useState(null);
-    const [selectedLead, setSelectedLead] = useState(null);
+    const [dateFrom, setDateFrom] = useState(initialMonthRange.from);
+    const [dateTo, setDateTo] = useState(initialMonthRange.to);
+    const [dateFilterOpen, setDateFilterOpen] = useState(false);
     const [loading, setLoading] = useState(true);
-    const [detailLoading, setDetailLoading] = useState(false);
-    const [saving, setSaving] = useState(false);
     const [inlineSavingIds, setInlineSavingIds] = useState({});
     const [inlineNoteDrafts, setInlineNoteDrafts] = useState({});
-    const [inlineFollowUpDrafts, setInlineFollowUpDrafts] = useState({});
+    const [historyOpenIds, setHistoryOpenIds] = useState({});
+    const [historyLoadingIds, setHistoryLoadingIds] = useState({});
+    const [historyDetails, setHistoryDetails] = useState({});
     const [errorMessage, setErrorMessage] = useState('');
     const [toast, setToast] = useState('');
+
+    const [statsOpen, setStatsOpen] = useState(false);
+    const [statsMode, setStatsMode] = useState('day');
+    const [statsDate, setStatsDate] = useState(todayValue);
+    const [statsMonth, setStatsMonth] = useState(monthValue);
+    const [statsFrom, setStatsFrom] = useState(todayValue);
+    const [statsTo, setStatsTo] = useState(todayValue);
+
+    const [statusManagerOpen, setStatusManagerOpen] = useState(false);
+    const [statusManagerTab, setStatusManagerTab] = useState('statuses');
+    const [statusDrafts, setStatusDrafts] = useState([]);
+    const [statusSavingIds, setStatusSavingIds] = useState({});
+    const [potentialDrafts, setPotentialDrafts] = useState([]);
+    const [potentialSavingIds, setPotentialSavingIds] = useState({});
+    const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
+    const [visibleColumns, setVisibleColumns] = useState(() => (
+        columnOptions.reduce((result, column) => ({ ...result, [column.key]: true }), {})
+    ));
+    const [newStatusForm, setNewStatusForm] = useState({
+        name: '',
+        color: '#2563eb',
+        is_default: false,
+        blocks_order_create: false,
+    });
+    const [newPotentialForm, setNewPotentialForm] = useState({
+        name: '',
+        color: '#16a34a',
+        is_default: false,
+        counts_as_potential: true,
+    });
+
     const [importOpen, setImportOpen] = useState(false);
     const [importing, setImporting] = useState(false);
     const [importResult, setImportResult] = useState(null);
@@ -219,39 +351,32 @@ const TelesalesCrm = () => {
         follow_up_script: '3_days',
         note: '',
     });
-    const [careForm, setCareForm] = useState({
-        assigned_staff_id: '',
-        lead_status_id: '',
-        potential_level: '',
-        follow_up_script: '3_days',
-        follow_up_interval_days: 3,
-        next_follow_up_at: addDaysAtNine(3),
-        do_not_call: false,
-        zalo_same_as_phone: true,
-        zalo_phone: '',
-        activity_type: 'call',
-        note: '',
-    });
 
-    const selectedStatus = useMemo(
-        () => bootstrap.statuses.find((status) => Number(status.id) === Number(careForm.lead_status_id)) || null,
-        [bootstrap.statuses, careForm.lead_status_id]
-    );
-    const followUpPreview = useMemo(() => {
-        if (careForm.do_not_call || statusStopsFollowUp(selectedStatus)) {
-            return 'Khách sẽ dừng nhắc lại và không hiện trong Việc hôm nay.';
-        }
-
-        const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead?.follow_up_interval_days);
-        const dateLabel = formatDateTimeLocalLabel(addDaysAtNine(nextIntervalDays));
-
-        return `Sau khi bấm Lưu chăm sóc, hệ thống tự hẹn lại sau ${nextIntervalDays} ngày và đưa khách lên Việc hôm nay vào ${dateLabel}.`;
-    }, [careForm.do_not_call, selectedLead?.follow_up_interval_days, selectedStatus]);
     const canSubmitImport = useMemo(
         () => importRows.some((row) => row.phone.trim())
             && importRows.every((row) => !row.phone.trim() || row.zalo_same_as_phone || row.zalo_phone.trim()),
         [importRows]
     );
+
+    const conversionStats = stats.conversion || emptyStats.conversion;
+    const statusBreakdown = Array.isArray(stats.status_breakdown) ? stats.status_breakdown : [];
+    const activeStatuses = useMemo(
+        () => bootstrap.statuses.filter((status) => status.is_active !== false),
+        [bootstrap.statuses]
+    );
+    const activePotentials = useMemo(
+        () => bootstrap.potentials.filter((potential) => potential.is_active !== false),
+        [bootstrap.potentials]
+    );
+    const currentStart = pagination.total > 0 ? ((pagination.current_page - 1) * pagination.per_page) + 1 : 0;
+    const currentEnd = pagination.total > 0 ? Math.min(pagination.current_page * pagination.per_page, pagination.total) : 0;
+    const visibleColumnCount = Math.max(1, columnOptions.filter((column) => visibleColumns[column.key]).length);
+    const dateRangeLabel = useMemo(() => {
+        if (dateFrom && dateTo) return `${formatShortDateLabel(dateFrom)} - ${formatShortDateLabel(dateTo)}`;
+        if (dateFrom) return `Từ ${formatShortDateLabel(dateFrom)}`;
+        if (dateTo) return `Đến ${formatShortDateLabel(dateTo)}`;
+        return 'Lọc ngày';
+    }, [dateFrom, dateTo]);
 
     const fetchBootstrap = useCallback(async () => {
         const response = await telesalesApi.bootstrap();
@@ -264,37 +389,63 @@ const TelesalesCrm = () => {
         });
     }, []);
 
-    const fetchLeads = useCallback(async (nextPage = page, signal = undefined) => {
+    const buildStatsParams = useCallback(() => {
+        if (statsMode === 'month') {
+            return {
+                stats_mode: 'month',
+                stats_month: statsMonth || monthValue,
+            };
+        }
+
+        if (statsMode === 'custom') {
+            return {
+                stats_mode: 'custom',
+                stats_date_from: statsFrom || todayValue,
+                stats_date_to: statsTo || statsFrom || todayValue,
+            };
+        }
+
+        return {
+            stats_mode: 'day',
+            stats_date: statsDate || todayValue,
+        };
+    }, [monthValue, statsDate, statsFrom, statsMode, statsMonth, statsTo, todayValue]);
+
+    const fetchLeads = useCallback(async (nextPage = page, signal = undefined, overrides = {}) => {
+        const nextPerPage = overrides.perPage ?? perPage;
+        const nextQueue = overrides.queue ?? queue;
+        const nextSearch = overrides.search ?? search;
+        const nextStaffFilter = overrides.staffFilter ?? staffFilter;
+        const nextStatusFilter = overrides.statusFilter ?? statusFilter;
+        const nextPotentialFilter = overrides.potentialFilter ?? potentialFilter;
+        const nextDateFrom = overrides.dateFrom ?? dateFrom;
+        const nextDateTo = overrides.dateTo ?? dateTo;
+
         setLoading(true);
         setErrorMessage('');
 
         try {
             const response = await telesalesApi.getAll({
                 page: nextPage,
-                per_page: 20,
-                queue,
-                search: search.trim() || undefined,
-                staff_id: staffFilter || undefined,
-                status_id: statusFilter || undefined,
-                potential_level: potentialFilter || undefined,
+                per_page: nextPerPage,
+                queue: nextQueue,
+                search: String(nextSearch || '').trim() || undefined,
+                staff_id: nextStaffFilter || undefined,
+                status_id: nextStatusFilter || undefined,
+                potential_level: nextPotentialFilter || undefined,
+                date_from: nextDateFrom || undefined,
+                date_to: nextDateTo || undefined,
+                ...buildStatsParams(),
             }, signal);
             const data = response.data || {};
-            const nextLeads = data.data || [];
 
-            setLeads(nextLeads);
+            setLeads(data.data || []);
             setStats({ ...emptyStats, ...(data.stats || {}) });
             setPagination({
                 current_page: data.current_page || 1,
                 last_page: data.last_page || 1,
-                per_page: data.per_page || 20,
+                per_page: data.per_page || nextPerPage,
                 total: data.total || 0,
-            });
-            setSelectedId((currentId) => {
-                if (currentId && nextLeads.some((lead) => Number(lead.id) === Number(currentId))) {
-                    return currentId;
-                }
-
-                return nextLeads[0]?.id || null;
             });
         } catch (error) {
             if (!isCanceledRequest(error)) {
@@ -303,24 +454,24 @@ const TelesalesCrm = () => {
         } finally {
             setLoading(false);
         }
-    }, [page, potentialFilter, queue, search, staffFilter, statusFilter]);
+    }, [buildStatsParams, dateFrom, dateTo, page, perPage, potentialFilter, queue, search, staffFilter, statusFilter]);
 
-    const fetchLeadDetail = useCallback(async (id) => {
-        if (!id) {
-            setSelectedLead(null);
-            return;
-        }
+    const refreshLeadHistory = useCallback(async (leadId) => {
+        if (!leadId) return null;
 
-        setDetailLoading(true);
+        setHistoryLoadingIds((prev) => ({ ...prev, [leadId]: true }));
         try {
-            const response = await telesalesApi.getOne(id);
-            setSelectedLead(response.data || null);
+            const response = await telesalesApi.getOne(leadId);
+            const detail = response.data || null;
+            setHistoryDetails((prev) => ({ ...prev, [leadId]: detail }));
+            return detail;
         } catch (error) {
             if (!isCanceledRequest(error)) {
-                setErrorMessage(resolveApiMessage(error, 'Không tải được chi tiết khách.'));
+                setErrorMessage(resolveApiMessage(error, 'Không tải được lịch sử ghi chú.'));
             }
+            return null;
         } finally {
-            setDetailLoading(false);
+            setHistoryLoadingIds((prev) => ({ ...prev, [leadId]: false }));
         }
     }, []);
 
@@ -338,88 +489,34 @@ const TelesalesCrm = () => {
     }, [fetchLeads, page]);
 
     useEffect(() => {
-        fetchLeadDetail(selectedId);
-    }, [fetchLeadDetail, selectedId]);
+        if (statusManagerOpen) {
+            setStatusDrafts(bootstrap.statuses.map(normalizeStatusDraft));
+            setPotentialDrafts(bootstrap.potentials.map(normalizePotentialDraft));
+        }
+    }, [bootstrap.potentials, bootstrap.statuses, statusManagerOpen]);
 
     useEffect(() => {
-        if (!selectedLead?.id) return;
-        const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(selectedLead.lead_status_id)) || selectedLead.status_config;
-        const shouldStopFollowUp = Boolean(selectedLead.do_not_call) || statusStopsFollowUp(nextStatus);
-        const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days);
-
-        setCareForm((prev) => ({
-            ...prev,
-            assigned_staff_id: selectedLead.assigned_staff_id ? String(selectedLead.assigned_staff_id) : '',
-            lead_status_id: selectedLead.lead_status_id ? String(selectedLead.lead_status_id) : '',
-            potential_level: selectedLead.potential_level || '',
-            follow_up_script: scriptForFollowUpInterval(nextIntervalDays),
-            follow_up_interval_days: nextIntervalDays,
-            next_follow_up_at: shouldStopFollowUp ? '' : (toDateTimeLocalValue(selectedLead.next_follow_up_at) || addDaysAtNine(nextIntervalDays)),
-            do_not_call: shouldStopFollowUp,
-            zalo_same_as_phone: !selectedLead.zalo_phone || normalizePhoneDigits(selectedLead.zalo_phone) === normalizePhoneDigits(selectedLead.phone),
-            zalo_phone: selectedLead.zalo_phone || selectedLead.phone || '',
-            note: '',
-        }));
-    }, [bootstrap.statuses, selectedLead]);
-
-    const handleQueueChange = (nextQueue) => {
-        setQueue(nextQueue);
-        setPage(1);
-    };
-
-    const handleSelectLead = (lead) => {
-        setSelectedId(lead.id);
-        setSelectedLead(lead);
-    };
-
-    const handleSaveCare = async (activityType = careForm.activity_type) => {
-        if (!selectedLead?.id) return;
-
-        setSaving(true);
-        setErrorMessage('');
-        setToast('');
-
-        try {
-            const selectedStatusForSave = bootstrap.statuses.find((status) => Number(status.id) === Number(careForm.lead_status_id)) || null;
-            const shouldStopFollowUp = careForm.do_not_call || statusStopsFollowUp(selectedStatusForSave);
-            const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days);
-
-            const response = await telesalesApi.update(selectedLead.id, {
-                assigned_staff_id: careForm.assigned_staff_id || null,
-                lead_status_id: careForm.lead_status_id || null,
-                potential_level: careForm.potential_level || null,
-                follow_up_script: shouldStopFollowUp ? null : scriptForFollowUpInterval(nextIntervalDays),
-                follow_up_interval_days: shouldStopFollowUp ? null : nextIntervalDays,
-                next_follow_up_at: shouldStopFollowUp ? null : addDaysAtNine(nextIntervalDays),
-                do_not_call: shouldStopFollowUp,
-                zalo_phone: careForm.zalo_same_as_phone ? selectedLead.phone : careForm.zalo_phone,
-                activity_type: activityType,
-                note: careForm.note.trim(),
-            });
-
-            const nextLead = response.data?.lead;
-            if (nextLead) {
-                setSelectedLead(nextLead);
-                setSelectedId(nextLead.id);
-                setLeads((prev) => prev.map((lead) => Number(lead.id) === Number(nextLead.id) ? nextLead : lead));
-            }
-            setStats({ ...emptyStats, ...(response.data?.stats || stats) });
-            setCareForm((prev) => ({ ...prev, note: '' }));
-            setToast('Đã lưu lịch sử chăm sóc.');
-            await fetchLeadDetail(selectedLead.id);
-            await fetchLeads(page);
-        } catch (error) {
-            setErrorMessage(resolveApiMessage(error, 'Không lưu được cập nhật telesales.'));
-        } finally {
-            setSaving(false);
+        if (statusFilter && activeStatuses.length > 0 && !activeStatuses.some((status) => String(status.id) === String(statusFilter))) {
+            setStatusFilter('');
+            setPage(1);
         }
-    };
+
+        if (potentialFilter && activePotentials.length > 0 && !activePotentials.some((potential) => potential.value === potentialFilter)) {
+            setPotentialFilter('');
+            setPage(1);
+        }
+    }, [activePotentials, activeStatuses, potentialFilter, statusFilter]);
 
     const setInlineSaving = (leadId, isSaving) => {
         setInlineSavingIds((prev) => ({
             ...prev,
             [leadId]: isSaving,
         }));
+    };
+
+    const handleQueueChange = (nextQueue) => {
+        setQueue(nextQueue);
+        setPage(1);
     };
 
     const handleInlineLeadUpdate = async (lead, payload, successMessage = 'Đã cập nhật khách.') => {
@@ -435,18 +532,16 @@ const TelesalesCrm = () => {
 
             if (nextLead) {
                 setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
-                setSelectedLead((current) => Number(current?.id) === Number(nextLead.id) ? nextLead : current);
             }
 
             setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
             setToast(successMessage);
 
-            if (nextLead && Number(selectedId) === Number(nextLead.id)) {
-                await fetchLeadDetail(nextLead.id);
+            if (historyOpenIds[lead.id]) {
+                await refreshLeadHistory(lead.id);
             }
 
             await fetchLeads(page);
-
             return nextLead || null;
         } catch (error) {
             setErrorMessage(resolveApiMessage(error, 'Không lưu được cập nhật trực tiếp.'));
@@ -454,6 +549,43 @@ const TelesalesCrm = () => {
         } finally {
             setInlineSaving(lead.id, false);
         }
+    };
+
+    const handleCompleteCurrentTask = async (lead) => {
+        const taskId = lead?.current_task?.id;
+        if (!lead?.id || !taskId) return null;
+
+        setInlineSaving(lead.id, true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            const response = await telesalesApi.completeTask(lead.id, taskId, { activity_type: 'note' });
+            const nextLead = response.data?.lead;
+
+            if (nextLead) {
+                setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
+            }
+
+            setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
+            setToast('Đã xử lý lượt việc này.');
+            await fetchLeads(page);
+            return nextLead || null;
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không đánh dấu xong được lượt việc.'));
+            return null;
+        } finally {
+            setInlineSaving(lead.id, false);
+        }
+    };
+
+    const handleInlineStaffChange = (lead, nextStaffId) => {
+        if (String(lead.assigned_staff_id || '') === String(nextStaffId || '')) return;
+
+        handleInlineLeadUpdate(lead, {
+            assigned_staff_id: nextStaffId || null,
+            activity_type: 'note',
+        }, 'Đã cập nhật sale phụ trách.');
     };
 
     const handleInlineStatusChange = (lead, nextStatusId) => {
@@ -476,27 +608,18 @@ const TelesalesCrm = () => {
         }, 'Đã cập nhật mức tiềm năng.');
     };
 
-    const saveInlineFollowUp = async (lead) => {
-        const draftValue = inlineFollowUpDrafts[lead.id] ?? toDateTimeLocalValue(lead.next_follow_up_at);
-        const currentValue = toDateTimeLocalValue(lead.next_follow_up_at);
-
-        if (draftValue === currentValue) return;
-
-        const nextLead = await handleInlineLeadUpdate(lead, {
-            next_follow_up_at: draftValue || null,
-            follow_up_script: draftValue ? 'custom' : null,
-            follow_up_interval_days: null,
-            do_not_call: false,
+    const handleToggleDoNotCall = (lead, checked) => {
+        handleInlineLeadUpdate(lead, {
+            do_not_call: checked,
             activity_type: 'schedule',
-        }, draftValue ? 'Đã cập nhật lịch hẹn gọi lại.' : 'Đã xóa lịch hẹn gọi lại.');
+        }, checked ? 'Đã dừng nhắc lại cho khách.' : 'Đã bật lại nhắc tự động.');
+    };
 
-        if (nextLead) {
-            setInlineFollowUpDrafts((prev) => {
-                const next = { ...prev };
-                delete next[lead.id];
-                return next;
-            });
-        }
+    const handleZaloSameAsPhoneChange = (lead, checked) => {
+        handleInlineLeadUpdate(lead, {
+            zalo_phone: checked ? lead.phone : null,
+            activity_type: 'note',
+        }, checked ? 'Đã đặt SĐT khách là Zalo.' : 'Đã bỏ đánh dấu SĐT là Zalo.');
     };
 
     const saveInlineNote = async (lead) => {
@@ -517,6 +640,79 @@ const TelesalesCrm = () => {
                 [lead.id]: nextLead.latest_note_content || nextLead.latest_note_excerpt || '',
             }));
         }
+    };
+
+    const deleteHistoryNote = async (lead, note) => {
+        if (!lead?.id || !note?.id) return;
+        setInlineSaving(lead.id, true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            const response = await telesalesApi.deleteNote(lead.id, note.id);
+            const nextLead = response.data?.lead;
+
+            if (nextLead) {
+                setLeads((prev) => prev.map((item) => Number(item.id) === Number(nextLead.id) ? nextLead : item));
+                setInlineNoteDrafts((prev) => ({
+                    ...prev,
+                    [lead.id]: nextLead.latest_note_content || nextLead.latest_note_excerpt || '',
+                }));
+            }
+
+            setStats((prev) => ({ ...emptyStats, ...(response.data?.stats || prev) }));
+            setToast('Đã xóa ghi chú.');
+
+            if (historyOpenIds[lead.id]) {
+                await refreshLeadHistory(lead.id);
+            }
+
+            await fetchLeads(page);
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không xóa được ghi chú.'));
+        } finally {
+            setInlineSaving(lead.id, false);
+        }
+    };
+
+    const toggleHistory = async (lead) => {
+        const isOpen = Boolean(historyOpenIds[lead.id]);
+        setHistoryOpenIds((prev) => ({ ...prev, [lead.id]: !isOpen }));
+
+        if (!isOpen && !historyDetails[lead.id]) {
+            await refreshLeadHistory(lead.id);
+        }
+    };
+
+    const openCreateOrder = (lead) => {
+        if (!lead?.id) return;
+
+        if (lead.status_config?.blocks_order_create) {
+            setErrorMessage('Trạng thái hiện tại của khách đang chặn thao tác tạo đơn.');
+            return;
+        }
+
+        const returnTo = encodeURIComponent(`${location.pathname}${location.search || ''}` || '/admin/telesales');
+        navigate(`/admin/orders/new?lead_id=${lead.id}&return_to=${returnTo}`);
+    };
+
+    const handleOpenPhone = (lead) => {
+        if (!lead?.phone) return;
+        window.location.href = `tel:${lead.phone}`;
+        handleInlineLeadUpdate(lead, {
+            activity_type: 'call',
+            complete_current_task: true,
+        }, 'Đã ghi nhận cuộc gọi.');
+    };
+
+    const handleOpenZalo = (lead) => {
+        const url = buildZaloUrl(lead?.zalo_phone_for_zalo || lead?.phone_for_zalo || lead?.zalo_phone || lead?.phone);
+        if (!url) return;
+        window.open(url, '_blank', 'noopener,noreferrer');
+        handleInlineLeadUpdate(lead, {
+            activity_type: 'zalo',
+            complete_current_task: true,
+        }, 'Đã ghi nhận nhắn Zalo.');
     };
 
     const updateImportRow = (rowId, updates) => {
@@ -543,6 +739,34 @@ const TelesalesCrm = () => {
         });
     };
 
+    const focusCustomerInTable = useCallback(async (rawSearch, shouldCloseImport = false) => {
+        const nextSearch = String(rawSearch || '').trim();
+        const filterReset = {
+            queue: 'all',
+            search: nextSearch,
+            staffFilter: '',
+            statusFilter: '',
+            potentialFilter: '',
+            dateFrom: '',
+            dateTo: '',
+        };
+
+        setQueue(filterReset.queue);
+        setSearch(filterReset.search);
+        setStaffFilter(filterReset.staffFilter);
+        setStatusFilter(filterReset.statusFilter);
+        setPotentialFilter(filterReset.potentialFilter);
+        setDateFrom(filterReset.dateFrom);
+        setDateTo(filterReset.dateTo);
+        setPage(1);
+
+        if (shouldCloseImport) {
+            setImportOpen(false);
+        }
+
+        await fetchLeads(1, undefined, filterReset);
+    }, [fetchLeads]);
+
     const handleImportSubmit = async (event) => {
         event.preventDefault();
         setImporting(true);
@@ -566,18 +790,30 @@ const TelesalesCrm = () => {
                 potential_level: importForm.potential_level || null,
             });
             const result = response.data || {};
+            const createdItems = Array.isArray(result.created) ? result.created : [];
+            const duplicateItems = Array.isArray(result.duplicates) ? result.duplicates : [];
+            const createdCount = Number(result.created_count || 0);
+            const duplicateCount = Number(result.duplicate_count || 0);
+            const focusPhone = createdItems[0]?.phone
+                || duplicateItems[0]?.normalized_phone
+                || duplicateItems[0]?.lead?.phone
+                || duplicateItems[0]?.phone
+                || importPayloadRows[0]?.phone
+                || '';
+
             setImportResult(result);
-            setToast(`Đã nhập ${formatNumber(result.created_count)} khách, bỏ qua ${formatNumber(result.duplicate_count)} số trùng.`);
-            setImportRows([createImportRow()]);
-            setImportForm((prev) => ({ ...prev, note: '' }));
-            setQueue('today');
-            setPage(1);
+            setToast(createdCount > 0
+                ? `Đã nhập ${formatNumber(createdCount)} khách, bỏ qua ${formatNumber(duplicateCount)} số trùng.`
+                : `Số này đã tồn tại, đã lọc bảng theo ${focusPhone || 'số trùng'} để bạn kiểm tra.`
+            );
 
-            if (result.created?.[0]?.id) {
-                setSelectedId(result.created[0].id);
+            if (createdCount > 0) {
+                setImportRows([createImportRow()]);
+                setImportForm((prev) => ({ ...prev, note: '' }));
+                await focusCustomerInTable('', true);
+            } else {
+                await focusCustomerInTable(focusPhone);
             }
-
-            await fetchLeads(1);
         } catch (error) {
             setErrorMessage(resolveApiMessage(error, 'Không nhập được danh sách số điện thoại.'));
         } finally {
@@ -585,37 +821,814 @@ const TelesalesCrm = () => {
         }
     };
 
-    const handleOpenPhone = () => {
-        if (!selectedLead?.phone) return;
-        window.location.href = `tel:${selectedLead.phone}`;
+    const updateStatusDraft = (statusId, updates) => {
+        setStatusDrafts((prev) => prev.map((status) => {
+            if (Number(status.id) === Number(statusId)) {
+                return { ...status, ...updates };
+            }
+
+            if (updates.is_default) {
+                return { ...status, is_default: false };
+            }
+
+            return status;
+        }));
     };
 
-    const handleOpenZalo = () => {
-        const url = buildZaloUrl(selectedLead?.zalo_phone_for_zalo || selectedLead?.phone_for_zalo || selectedLead?.phone);
-        if (!url) return;
-        window.open(url, '_blank', 'noopener,noreferrer');
+    const setStatusSaving = (statusId, isSaving) => {
+        setStatusSavingIds((prev) => ({ ...prev, [statusId]: isSaving }));
     };
 
-    const renderPotentialBadge = (lead) => {
-        const value = lead?.potential_level;
-        const label = lead?.potential_label || 'Chưa phân loại';
-        const className = potentialBadgeClassMap[value] || 'border-slate-200 bg-white text-slate-500';
+    const createStatus = async () => {
+        if (!newStatusForm.name.trim()) {
+            setErrorMessage('Tên trạng thái không được để trống.');
+            return;
+        }
+
+        setStatusSaving('new', true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            await telesalesApi.createStatus({
+                name: newStatusForm.name.trim(),
+                color: newStatusForm.color || '#2563eb',
+                is_default: newStatusForm.is_default,
+                is_active: true,
+                blocks_order_create: newStatusForm.blocks_order_create,
+            });
+            setNewStatusForm({
+                name: '',
+                color: '#2563eb',
+                is_default: false,
+                blocks_order_create: false,
+            });
+            await fetchBootstrap();
+            await fetchLeads(page);
+            setToast('Đã thêm trạng thái mới.');
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không thêm được trạng thái.'));
+        } finally {
+            setStatusSaving('new', false);
+        }
+    };
+
+    const deleteStatus = async (status) => {
+        if (!window.confirm(`Xóa trạng thái "${status.name}"?`)) return;
+
+        setStatusSaving(status.id, true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            await telesalesApi.deleteStatus(status.id);
+            await fetchBootstrap();
+            await fetchLeads(page);
+            setToast('Đã xóa trạng thái.');
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không xóa được trạng thái. Trạng thái đang có khách sử dụng sẽ không xóa được.'));
+        } finally {
+            setStatusSaving(status.id, false);
+        }
+    };
+
+    const updatePotentialDraft = (potentialId, updates) => {
+        setPotentialDrafts((prev) => prev.map((potential) => {
+            if (Number(potential.id) === Number(potentialId)) {
+                return { ...potential, ...updates };
+            }
+
+            if (updates.is_default) {
+                return { ...potential, is_default: false };
+            }
+
+            return potential;
+        }));
+    };
+
+    const setPotentialSaving = (potentialId, isSaving) => {
+        setPotentialSavingIds((prev) => ({ ...prev, [potentialId]: isSaving }));
+    };
+
+    const saveConfigurationDrafts = async () => {
+        const blankStatus = statusDrafts.find((status) => !status.name?.trim());
+        if (blankStatus) {
+            setErrorMessage('Tên trạng thái không được để trống.');
+            setStatusManagerTab('statuses');
+            return;
+        }
+
+        const blankPotential = potentialDrafts.find((potential) => !potential.name?.trim());
+        if (blankPotential) {
+            setErrorMessage('Tên mức tiềm năng không được để trống.');
+            setStatusManagerTab('potentials');
+            return;
+        }
+
+        setStatusSaving('bulk', true);
+        setPotentialSaving('bulk', true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            await Promise.all([
+                ...statusDrafts.map((status) => telesalesApi.updateStatus(status.id, {
+                    name: status.name.trim(),
+                    code: status.code,
+                    color: status.color || '#64748b',
+                    sort_order: status.sort_order,
+                    is_default: status.is_default,
+                    is_active: status.is_active,
+                    blocks_order_create: status.blocks_order_create,
+                })),
+                ...potentialDrafts.map((potential) => telesalesApi.updatePotential(potential.id, {
+                    name: potential.name.trim(),
+                    color: potential.color || '#16a34a',
+                    sort_order: potential.sort_order,
+                    is_default: potential.is_default,
+                    counts_as_potential: potential.counts_as_potential,
+                    is_active: potential.is_active,
+                })),
+            ]);
+
+            await fetchBootstrap();
+            await fetchLeads(page);
+            setToast('Đã lưu cấu hình telesales.');
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không lưu được cấu hình telesales.'));
+        } finally {
+            setStatusSaving('bulk', false);
+            setPotentialSaving('bulk', false);
+        }
+    };
+
+    const createPotential = async () => {
+        if (!newPotentialForm.name.trim()) {
+            setErrorMessage('Tên mức tiềm năng không được để trống.');
+            return;
+        }
+
+        setPotentialSaving('new', true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            await telesalesApi.createPotential({
+                name: newPotentialForm.name.trim(),
+                color: newPotentialForm.color || '#16a34a',
+                is_default: newPotentialForm.is_default,
+                counts_as_potential: newPotentialForm.counts_as_potential,
+                is_active: true,
+            });
+            setNewPotentialForm({
+                name: '',
+                color: '#16a34a',
+                is_default: false,
+                counts_as_potential: true,
+            });
+            await fetchBootstrap();
+            await fetchLeads(page);
+            setToast('Đã thêm mức tiềm năng mới.');
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không thêm được mức tiềm năng.'));
+        } finally {
+            setPotentialSaving('new', false);
+        }
+    };
+
+    const deletePotential = async (potential) => {
+        if (!window.confirm(`Xóa mức tiềm năng "${potential.name}"?`)) return;
+
+        setPotentialSaving(potential.id, true);
+        setErrorMessage('');
+        setToast('');
+
+        try {
+            await telesalesApi.deletePotential(potential.id);
+            await fetchBootstrap();
+            await fetchLeads(page);
+            setToast('Đã xóa mức tiềm năng.');
+        } catch (error) {
+            setErrorMessage(resolveApiMessage(error, 'Không xóa được mức tiềm năng. Mức đang có khách hoặc lịch sử ghi chú sử dụng sẽ không xóa được.'));
+        } finally {
+            setPotentialSaving(potential.id, false);
+        }
+    };
+
+    const renderStatusManager = () => {
+        if (!statusManagerOpen) return null;
+        const isStatusTab = statusManagerTab === 'statuses';
+        const configurationSaving = Boolean(statusSavingIds.bulk || potentialSavingIds.bulk);
+        const tabClassName = (active) => `inline-flex h-10 items-center justify-center gap-2 rounded-sm border px-4 text-[13px] font-black transition ${active ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'}`;
 
         return (
-            <span className={`inline-flex max-w-full items-center rounded-full border px-2 py-1 text-[12px] font-semibold ${className}`}>
-                <span className="truncate">{label}</span>
-            </span>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <div className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-sm bg-white shadow-2xl">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+                        <div>
+                            <h2 className="text-xl font-black text-slate-950">Cấu hình telesales</h2>
+                            <p className="mt-1 text-[13px] font-medium text-slate-500">Thêm, sửa, xóa và chọn màu cho trạng thái hoặc mức tiềm năng.</p>
+                        </div>
+                        <button type="button" onClick={() => setStatusManagerOpen(false)} className={iconButtonClassName} title="Đóng">
+                            <span className="material-symbols-outlined text-[19px]">close</span>
+                        </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => setStatusManagerTab('statuses')} className={tabClassName(isStatusTab)}>
+                                <span className="material-symbols-outlined text-[18px]">settings</span>
+                                Trạng thái
+                            </button>
+                            <button type="button" onClick={() => setStatusManagerTab('potentials')} className={tabClassName(!isStatusTab)}>
+                                <span className="material-symbols-outlined text-[18px]">trending_up</span>
+                                Tiềm năng
+                            </button>
+                        </div>
+                        <button type="button" onClick={saveConfigurationDrafts} disabled={configurationSaving} className={primaryButtonClassName}>
+                            <span className="material-symbols-outlined text-[18px]">save</span>
+                            {configurationSaving ? 'Đang lưu...' : 'Lưu thay đổi'}
+                        </button>
+                    </div>
+
+                    <div className="space-y-4 p-4">
+                        {isStatusTab ? (
+                            <>
+                                <div className="overflow-hidden rounded-sm border border-slate-200">
+                                    <div className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_120px_120px] border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500">
+                                        <div className="border-r border-slate-200 px-3 py-2">Màu</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Tên trạng thái</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Mã</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Mặc định</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Đang dùng</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Chặn tạo đơn</div>
+                                        <div className="px-3 py-2">Xóa</div>
+                                    </div>
+
+                                    <div className="overflow-x-auto">
+                                        {statusDrafts.map((status) => {
+                                            const savingStatus = Boolean(statusSavingIds[status.id] || configurationSaving);
+
+                                            return (
+                                                <div key={status.id} className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_120px_120px] border-b border-slate-200 text-[13px] last:border-b-0">
+                                                    <div className="flex items-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="color"
+                                                            value={status.color || '#64748b'}
+                                                            onChange={(event) => updateStatusDraft(status.id, { color: event.target.value })}
+                                                            className="h-8 w-10 rounded-sm border border-slate-200 bg-white"
+                                                            title="Chọn màu"
+                                                        />
+                                                    </div>
+                                                    <div className="border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            value={status.name}
+                                                            onChange={(event) => updateStatusDraft(status.id, { name: event.target.value })}
+                                                            className={inlineInputClassName}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center border-r border-slate-200 px-3 py-2 font-mono text-[12px] text-slate-500">{status.code}</div>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={status.is_default}
+                                                            onChange={(event) => updateStatusDraft(status.id, { is_default: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={status.is_active}
+                                                            onChange={(event) => updateStatusDraft(status.id, { is_active: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={status.blocks_order_create}
+                                                            onChange={(event) => updateStatusDraft(status.id, { blocks_order_create: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <div className="flex items-center gap-2 px-3 py-2">
+                                                        <button type="button" onClick={() => deleteStatus(status)} disabled={savingStatus} className="inline-flex size-8 items-center justify-center rounded-sm border border-red-200 bg-white text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-wait disabled:opacity-50" title="Xóa">
+                                                            <span className="material-symbols-outlined text-[17px]">delete</span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-teal-200 bg-teal-50 p-3">
+                                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(160px,1fr)_90px_120px_130px_120px] lg:items-center">
+                                        <input
+                                            value={newStatusForm.name}
+                                            onChange={(event) => setNewStatusForm((prev) => ({ ...prev, name: event.target.value }))}
+                                            className={inputClassName}
+                                            placeholder="Tên trạng thái mới"
+                                        />
+                                        <input
+                                            type="color"
+                                            value={newStatusForm.color}
+                                            onChange={(event) => setNewStatusForm((prev) => ({ ...prev, color: event.target.value }))}
+                                            className="h-10 w-full rounded-sm border border-slate-200 bg-white p-1"
+                                            title="Màu trạng thái"
+                                        />
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-teal-200 bg-white px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={newStatusForm.is_default}
+                                                onChange={(event) => setNewStatusForm((prev) => ({ ...prev, is_default: event.target.checked }))}
+                                                className="size-4 accent-teal-700"
+                                            />
+                                            Mặc định
+                                        </label>
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-teal-200 bg-white px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={newStatusForm.blocks_order_create}
+                                                onChange={(event) => setNewStatusForm((prev) => ({ ...prev, blocks_order_create: event.target.checked }))}
+                                                className="size-4 accent-teal-700"
+                                            />
+                                            Chặn tạo đơn
+                                        </label>
+                                        <button type="button" onClick={createStatus} disabled={Boolean(statusSavingIds.new)} className={primaryButtonClassName}>
+                                            <span className="material-symbols-outlined text-[18px]">add</span>
+                                            Thêm
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div className="overflow-hidden rounded-sm border border-slate-200">
+                                    <div className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_140px_120px] border-b border-slate-200 bg-slate-50 text-[12px] font-black text-slate-500">
+                                        <div className="border-r border-slate-200 px-3 py-2">Màu</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Tên tiềm năng</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Mã</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Mặc định</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Đang dùng</div>
+                                        <div className="border-r border-slate-200 px-3 py-2">Tính % tiềm năng</div>
+                                        <div className="px-3 py-2">Xóa</div>
+                                    </div>
+
+                                    <div className="overflow-x-auto">
+                                        {potentialDrafts.map((potential) => {
+                                            const savingPotential = Boolean(potentialSavingIds[potential.id] || configurationSaving);
+
+                                            return (
+                                                <div key={potential.id} className="grid min-w-[860px] grid-cols-[70px_minmax(180px,1fr)_120px_100px_100px_140px_120px] border-b border-slate-200 text-[13px] last:border-b-0">
+                                                    <div className="flex items-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="color"
+                                                            value={potential.color || '#16a34a'}
+                                                            onChange={(event) => updatePotentialDraft(potential.id, { color: event.target.value })}
+                                                            className="h-8 w-10 rounded-sm border border-slate-200 bg-white"
+                                                            title="Chọn màu"
+                                                        />
+                                                    </div>
+                                                    <div className="border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            value={potential.name}
+                                                            onChange={(event) => updatePotentialDraft(potential.id, { name: event.target.value })}
+                                                            className={inlineInputClassName}
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center border-r border-slate-200 px-3 py-2 font-mono text-[12px] text-slate-500">{potential.code}</div>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={potential.is_default}
+                                                            onChange={(event) => updatePotentialDraft(potential.id, { is_default: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={potential.is_active}
+                                                            onChange={(event) => updatePotentialDraft(potential.id, { is_active: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <label className="flex items-center justify-center border-r border-slate-200 px-3 py-2">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={potential.counts_as_potential}
+                                                            onChange={(event) => updatePotentialDraft(potential.id, { counts_as_potential: event.target.checked })}
+                                                            className="size-4 accent-teal-700"
+                                                        />
+                                                    </label>
+                                                    <div className="flex items-center gap-2 px-3 py-2">
+                                                        <button type="button" onClick={() => deletePotential(potential)} disabled={savingPotential} className="inline-flex size-8 items-center justify-center rounded-sm border border-red-200 bg-white text-red-600 shadow-sm hover:bg-red-50 disabled:cursor-wait disabled:opacity-50" title="Xóa">
+                                                            <span className="material-symbols-outlined text-[17px]">delete</span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-sm border border-teal-200 bg-teal-50 p-3">
+                                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(160px,1fr)_90px_120px_150px_120px] lg:items-center">
+                                        <input
+                                            value={newPotentialForm.name}
+                                            onChange={(event) => setNewPotentialForm((prev) => ({ ...prev, name: event.target.value }))}
+                                            className={inputClassName}
+                                            placeholder="Tên mức tiềm năng mới"
+                                        />
+                                        <input
+                                            type="color"
+                                            value={newPotentialForm.color}
+                                            onChange={(event) => setNewPotentialForm((prev) => ({ ...prev, color: event.target.value }))}
+                                            className="h-10 w-full rounded-sm border border-slate-200 bg-white p-1"
+                                            title="Màu tiềm năng"
+                                        />
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-teal-200 bg-white px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={newPotentialForm.is_default}
+                                                onChange={(event) => setNewPotentialForm((prev) => ({ ...prev, is_default: event.target.checked }))}
+                                                className="size-4 accent-teal-700"
+                                            />
+                                            Mặc định
+                                        </label>
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-teal-200 bg-white px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={newPotentialForm.counts_as_potential}
+                                                onChange={(event) => setNewPotentialForm((prev) => ({ ...prev, counts_as_potential: event.target.checked }))}
+                                                className="size-4 accent-teal-700"
+                                            />
+                                            Tính % tiềm năng
+                                        </label>
+                                        <button type="button" onClick={createPotential} disabled={Boolean(potentialSavingIds.new)} className={primaryButtonClassName}>
+                                            <span className="material-symbols-outlined text-[18px]">add</span>
+                                            Thêm
+                                        </button>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
         );
     };
 
-    const renderDueBadge = (lead) => {
-        const bucket = lead?.due_bucket;
-        const className = dueBadgeClassMap[bucket] || 'border-slate-200 bg-white text-slate-500';
+    const renderStatsPanel = () => {
+        if (!statsOpen) return null;
 
         return (
-            <span className={`inline-flex items-center rounded-full border px-2 py-1 text-[12px] font-semibold ${className}`}>
-                {labelForDueBucket(lead)}
-            </span>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <div className="w-full max-w-4xl rounded-sm bg-white shadow-2xl">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+                        <div>
+                            <h2 className="text-xl font-black text-slate-950">Thống kê telesales</h2>
+                            <p className="mt-1 text-[13px] font-medium text-slate-500">Tỉ lệ chốt, khách tiềm năng và cơ cấu trạng thái theo khoảng thời gian.</p>
+                        </div>
+                        <button type="button" onClick={() => setStatsOpen(false)} className={iconButtonClassName} title="Đóng">
+                            <span className="material-symbols-outlined text-[19px]">close</span>
+                        </button>
+                    </div>
+
+                    <div className="space-y-4 p-4">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                            <div className="inline-grid overflow-hidden rounded-sm border border-slate-200 bg-white sm:grid-cols-3">
+                                {[
+                                    ['day', 'Theo ngày'],
+                                    ['month', 'Theo tháng'],
+                                    ['custom', 'Tùy chọn'],
+                                ].map(([value, label]) => (
+                                    <button
+                                        key={value}
+                                        type="button"
+                                        onClick={() => setStatsMode(value)}
+                                        className={`h-10 px-4 text-[13px] font-bold transition ${statsMode === value ? 'bg-teal-700 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {statsMode === 'day' ? (
+                                <input type="date" value={statsDate} onChange={(event) => setStatsDate(event.target.value)} className={`${inputClassName} lg:w-[180px]`} />
+                            ) : null}
+
+                            {statsMode === 'month' ? (
+                                <input type="month" value={statsMonth} onChange={(event) => setStatsMonth(event.target.value)} className={`${inputClassName} lg:w-[180px]`} />
+                            ) : null}
+
+                            {statsMode === 'custom' ? (
+                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[180px_180px]">
+                                    <input type="date" value={statsFrom} onChange={(event) => setStatsFrom(event.target.value)} className={inputClassName} />
+                                    <input type="date" value={statsTo} onChange={(event) => setStatsTo(event.target.value)} className={inputClassName} />
+                                </div>
+                            ) : null}
+
+                            <button type="button" onClick={() => fetchLeads(page)} className={secondaryButtonClassName}>
+                                <span className="material-symbols-outlined text-[18px]">sync</span>
+                                Cập nhật
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                            <div className="rounded-sm border border-slate-200 bg-slate-50 p-4">
+                                <div className="text-[12px] font-black uppercase text-slate-500">Tổng khách</div>
+                                <div className="mt-2 text-3xl font-black text-slate-950">{formatNumber(conversionStats.total)}</div>
+                                <div className="mt-1 text-[12px] font-semibold text-slate-500">{conversionStats.date_label || 'Khoảng đang chọn'}</div>
+                            </div>
+                            <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-4">
+                                <div className="text-[12px] font-black uppercase text-emerald-700">Tỉ lệ chốt</div>
+                                <div className="mt-2 text-3xl font-black text-emerald-800">{formatPercent(conversionStats.close_rate)}</div>
+                                <div className="mt-1 text-[12px] font-semibold text-emerald-700">{formatNumber(conversionStats.closed_count)} khách đã chốt</div>
+                            </div>
+                            <div className="rounded-sm border border-violet-200 bg-violet-50 p-4">
+                                <div className="text-[12px] font-black uppercase text-violet-700">Khách tiềm năng</div>
+                                <div className="mt-2 text-3xl font-black text-violet-800">{formatPercent(conversionStats.potential_rate)}</div>
+                                <div className="mt-1 text-[12px] font-semibold text-violet-700">{formatNumber(conversionStats.potential_count)} khách tiềm năng</div>
+                            </div>
+                        </div>
+
+                        <div className="rounded-sm border border-slate-200 p-4">
+                            <div className="mb-3 text-[14px] font-black text-slate-950">Theo trạng thái</div>
+                            {statusBreakdown.length ? (
+                                <div className="space-y-3">
+                                    {statusBreakdown.map((item) => (
+                                        <div key={item.id || 'none'} className="grid grid-cols-[150px_minmax(0,1fr)_86px] items-center gap-3 text-[13px]">
+                                            <div className="flex min-w-0 items-center gap-2 font-bold text-slate-700">
+                                                <span className="size-3 rounded-full" style={{ backgroundColor: item.color || '#94a3b8' }} />
+                                                <span className="truncate">{item.name}</span>
+                                            </div>
+                                            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                                                <div className="h-full rounded-full" style={{ width: `${Math.min(100, Number(item.rate) || 0)}%`, backgroundColor: item.color || '#94a3b8' }} />
+                                            </div>
+                                            <div className="text-right font-black text-slate-700">{formatNumber(item.count)} / {formatPercent(item.rate)}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="py-8 text-center text-[13px] font-semibold text-slate-500">Chưa có dữ liệu thống kê trong khoảng này.</div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const renderImportModal = () => {
+        if (!importOpen) return null;
+
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+                <form onSubmit={handleImportSubmit} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-sm bg-white shadow-2xl">
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
+                        <div>
+                            <h2 className="text-xl font-black text-slate-950">Nhập khách telesales</h2>
+                            <p className="mt-1 text-[13px] font-medium text-slate-500">Mỗi dòng là một khách, mặc định SĐT khách cũng là SĐT Zalo.</p>
+                        </div>
+                        <button type="button" onClick={() => setImportOpen(false)} className={iconButtonClassName} title="Đóng">
+                            <span className="material-symbols-outlined text-[19px]">close</span>
+                        </button>
+                    </div>
+
+                    <div className="space-y-4 p-4">
+                        <div className="rounded-sm border border-slate-200">
+                            <div className="grid grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-black text-slate-500">
+                                <span>Tên khách</span>
+                                <span>SĐT khách</span>
+                                <span>SĐT là Zalo</span>
+                                <span>SĐT Zalo</span>
+                                <span />
+                            </div>
+
+                            <div className="divide-y divide-slate-100">
+                                {importRows.map((row, index) => (
+                                    <div key={row.local_id} className="grid grid-cols-1 gap-2 px-3 py-3 lg:grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] lg:items-center">
+                                        <label className="block">
+                                            <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">Tên khách</span>
+                                            <input
+                                                value={row.customer_name}
+                                                onChange={(event) => updateImportRow(row.local_id, { customer_name: event.target.value })}
+                                                className={inputClassName}
+                                                placeholder={`Khách ${index + 1}`}
+                                            />
+                                        </label>
+
+                                        <label className="block">
+                                            <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT khách</span>
+                                            <input
+                                                value={row.phone}
+                                                onChange={(event) => updateImportRow(row.local_id, { phone: event.target.value })}
+                                                className={inputClassName}
+                                                placeholder="09xx xxx xxx"
+                                            />
+                                        </label>
+
+                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={row.zalo_same_as_phone}
+                                                onChange={(event) => updateImportRow(row.local_id, {
+                                                    zalo_same_as_phone: event.target.checked,
+                                                    zalo_phone: event.target.checked ? '' : row.zalo_phone,
+                                                })}
+                                                className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                                            />
+                                            Có
+                                        </label>
+
+                                        <label className="block">
+                                            <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT Zalo</span>
+                                            <input
+                                                value={row.zalo_same_as_phone ? row.phone : row.zalo_phone}
+                                                onChange={(event) => updateImportRow(row.local_id, { zalo_phone: event.target.value })}
+                                                disabled={row.zalo_same_as_phone}
+                                                className={inputClassName}
+                                                placeholder="Nhập nếu khác SĐT khách"
+                                            />
+                                        </label>
+
+                                        <button type="button" onClick={() => removeImportRow(row.local_id)} className={iconButtonClassName} title="Xóa dòng">
+                                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="border-t border-slate-200 p-3">
+                                <button type="button" onClick={addImportRow} className={secondaryButtonClassName}>
+                                    <span className="material-symbols-outlined text-[18px]">add</span>
+                                    Thêm khách
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <label className="block">
+                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Sale phụ trách</span>
+                                <select
+                                    value={importForm.assigned_staff_id}
+                                    onChange={(event) => setImportForm((prev) => ({ ...prev, assigned_staff_id: event.target.value }))}
+                                    className={selectClassName}
+                                >
+                                    <option value="">Chưa gán</option>
+                                    {bootstrap.staffs.map((staff) => (
+                                        <option key={staff.id} value={staff.id}>{staff.name}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Tiềm năng ban đầu</span>
+                                <select
+                                    value={importForm.potential_level}
+                                    onChange={(event) => setImportForm((prev) => ({ ...prev, potential_level: event.target.value }))}
+                                    className={selectClassName}
+                                >
+                                    <option value="">Chưa phân loại</option>
+                                    {activePotentials.map((potential) => (
+                                        <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Nguồn</span>
+                                <input
+                                    value={importForm.source}
+                                    onChange={(event) => setImportForm((prev) => ({ ...prev, source: event.target.value }))}
+                                    className={inputClassName}
+                                />
+                            </label>
+
+                            <label className="block">
+                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Nhãn / chiến dịch</span>
+                                <input
+                                    value={importForm.tag}
+                                    onChange={(event) => setImportForm((prev) => ({ ...prev, tag: event.target.value }))}
+                                    className={inputClassName}
+                                />
+                            </label>
+
+                            <div className="rounded-sm border border-teal-200 bg-teal-50 px-3 py-3 text-[13px] font-semibold leading-6 text-teal-800 md:col-span-2">
+                                Khách mới sẽ hiện ngay trong Việc hôm nay. Đến đúng 3 ngày và 7 ngày sau, hệ thống đưa khách vào nhóm gọi lại tương ứng.
+                            </div>
+
+                            <label className="block md:col-span-2">
+                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Ghi chú nhập</span>
+                                <textarea
+                                    value={importForm.note}
+                                    onChange={(event) => setImportForm((prev) => ({ ...prev, note: event.target.value }))}
+                                    className="min-h-[82px] w-full resize-none rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
+                                    placeholder="Ví dụ: khách từ file Facebook Ads ngày hôm nay..."
+                                />
+                            </label>
+                        </div>
+
+                        {importResult ? (
+                            <div className="space-y-2 rounded-sm border border-slate-200 bg-slate-50 p-3 text-[13px] font-semibold text-slate-600">
+                                <div>
+                                    Đã tạo {formatNumber(importResult.created_count)} khách, bỏ qua {formatNumber(importResult.duplicate_count)} số trùng.
+                                </div>
+                                {Array.isArray(importResult.duplicates) && importResult.duplicates.length > 0 ? (
+                                    <div className="rounded-sm border border-amber-200 bg-amber-50 p-2 text-amber-800">
+                                        <div className="mb-1 font-black">Số đã tồn tại trong hệ thống:</div>
+                                        <div className="space-y-1">
+                                            {importResult.duplicates.slice(0, 6).map((duplicate, index) => {
+                                                const duplicatePhone = duplicate.normalized_phone || duplicate.lead?.phone || duplicate.phone || '';
+                                                const duplicateName = duplicate.lead?.customer_name || 'Khách chưa có tên';
+
+                                                return (
+                                                    <div key={`${duplicatePhone}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-sm bg-white/70 px-2 py-1.5">
+                                                        <span className="min-w-0 truncate">
+                                                            <span className="font-black">{duplicatePhone || duplicate.phone}</span>
+                                                            <span className="text-amber-700"> - {duplicateName}</span>
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => focusCustomerInTable(duplicatePhone || duplicate.phone, true)}
+                                                            className="inline-flex h-7 shrink-0 items-center justify-center rounded-sm border border-amber-300 bg-white px-2 text-[12px] font-black text-amber-800 shadow-sm hover:bg-amber-100"
+                                                        >
+                                                            Xem
+                                                        </button>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                        {importResult.duplicates.length > 6 ? (
+                                            <div className="mt-1 text-[12px]">Còn {formatNumber(importResult.duplicates.length - 6)} số trùng khác.</div>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+                    </div>
+
+                    <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
+                        <button type="button" onClick={() => setImportOpen(false)} className={secondaryButtonClassName}>Đóng</button>
+                        <button type="submit" disabled={importing || !canSubmitImport} className={primaryButtonClassName}>
+                            <span className="material-symbols-outlined text-[18px]">add</span>
+                            {importing ? 'Đang nhập...' : 'Nhập khách'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        );
+    };
+
+    const renderHistoryRow = (lead) => {
+        const detail = historyDetails[lead.id];
+        const notes = Array.isArray(detail?.notes_timeline) ? detail.notes_timeline : [];
+        const inlineSaving = Boolean(inlineSavingIds[lead.id]);
+
+        return (
+            <tr className="bg-slate-50">
+                <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-3">
+                    <div className="mx-auto max-w-4xl rounded-sm border border-slate-200 bg-white p-3 shadow-sm">
+                        {historyLoadingIds[lead.id] ? (
+                            <div className="py-6 text-center text-[13px] font-semibold text-slate-500">Đang tải lịch sử...</div>
+                        ) : notes.length ? (
+                            <div className="divide-y divide-slate-100">
+                                {notes.map((note) => {
+                                    const isLatestNote = Number(note.id) === Number(lead.latest_note_id);
+
+                                    return (
+                                        <div key={note.id} className="grid grid-cols-[34px_150px_110px_minmax(0,1fr)_36px] items-center gap-3 py-2 text-[12px]">
+                                            <span className="inline-flex size-8 items-center justify-center rounded-full bg-slate-100 text-slate-600">
+                                                <span className="material-symbols-outlined text-[17px]">{activityIconMap[note.activity_type] || activityIconMap.note}</span>
+                                            </span>
+                                            <span className="font-semibold text-slate-500">{formatDateTimeLocalLabel(note.created_at) || note.created_label}</span>
+                                            <span className="flex items-center gap-1 font-black text-teal-700">
+                                                {note.activity_label}
+                                                {isLatestNote ? <span className="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-black text-teal-700">Mới</span> : null}
+                                            </span>
+                                            <span className="whitespace-pre-wrap font-semibold text-slate-700">{note.content}</span>
+                                            <button
+                                                type="button"
+                                                onClick={() => deleteHistoryNote(lead, note)}
+                                                disabled={inlineSaving}
+                                                className="inline-flex size-8 items-center justify-center rounded-sm border border-red-100 bg-white text-red-500 shadow-sm hover:border-red-300 hover:bg-red-50 disabled:cursor-wait disabled:opacity-50"
+                                                title="Xóa ghi chú này"
+                                            >
+                                                <span className="material-symbols-outlined text-[17px]">delete</span>
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="py-6 text-center text-[13px] font-semibold text-slate-500">Chưa có ghi chú nào.</div>
+                        )}
+                    </div>
+                </td>
+            </tr>
         );
     };
 
@@ -628,15 +1641,9 @@ const TelesalesCrm = () => {
                         <p className="mt-1 text-[13px] font-medium text-slate-500">Quản lý khách, lịch gọi lại 3/7 ngày, sale phụ trách và lịch sử chăm sóc.</p>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                        <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
-                            <span className="material-symbols-outlined text-[18px]">upload_file</span>
-                            Nhập khách
-                        </button>
-                        <button type="button" onClick={() => fetchLeads(page)} className={iconButtonClassName} title="Làm mới">
-                            <span className="material-symbols-outlined text-[19px]">refresh</span>
-                        </button>
-                    </div>
+                    <button type="button" onClick={() => fetchLeads(page)} className={iconButtonClassName} title="Làm mới">
+                        <span className="material-symbols-outlined text-[19px]">refresh</span>
+                    </button>
                 </div>
 
                 {errorMessage ? (
@@ -680,638 +1687,432 @@ const TelesalesCrm = () => {
                     })}
                 </div>
 
-                <div className="grid min-h-[680px] gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-                    <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
-                        <div className="border-b border-slate-200 p-4">
-                            <div className="flex flex-col gap-3 2xl:flex-row 2xl:items-center">
-                                <div className="relative min-w-0 flex-1">
-                                    <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
-                                    <input
-                                        value={search}
-                                        onChange={(event) => {
-                                            setSearch(event.target.value);
-                                            setPage(1);
-                                        }}
-                                        className={`${inputClassName} pl-10`}
-                                        placeholder="Tìm tên khách, SĐT, mã lead, ghi chú..."
-                                    />
-                                </div>
+                <div className="min-w-0 overflow-hidden rounded-sm border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-200 p-3">
+                        <div className="grid grid-cols-1 gap-2 xl:grid-cols-[136px_minmax(180px,1fr)_156px_128px_132px_160px_180px_180px_152px] xl:items-center">
+                            <button type="button" onClick={() => setImportOpen(true)} className={primaryButtonClassName}>
+                                <span className="material-symbols-outlined text-[18px]">add</span>
+                                Nhập khách
+                            </button>
 
-                                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 2xl:w-[620px]">
-                                    <select
-                                        value={staffFilter}
-                                        onChange={(event) => {
-                                            setStaffFilter(event.target.value);
-                                            setPage(1);
-                                        }}
-                                        className={selectClassName}
-                                    >
-                                        <option value="">Tất cả sale</option>
-                                        <option value="unassigned">Chưa gán sale</option>
-                                        {bootstrap.staffs.map((staff) => (
-                                            <option key={staff.id} value={staff.id}>{staff.name}</option>
-                                        ))}
-                                    </select>
+                            <div className="relative min-w-0">
+                                <span className="material-symbols-outlined pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-slate-400">search</span>
+                                <input
+                                    value={search}
+                                    onChange={(event) => {
+                                        setSearch(event.target.value);
+                                        setPage(1);
+                                    }}
+                                    className={`${inputClassName} pl-10`}
+                                    placeholder="Tìm tên khách, SĐT, mã lead, ghi chú..."
+                                />
+                            </div>
 
-                                    <select
-                                        value={statusFilter}
-                                        onChange={(event) => {
-                                            setStatusFilter(event.target.value);
-                                            setPage(1);
-                                        }}
-                                        className={selectClassName}
-                                    >
-                                        <option value="">Tất cả trạng thái</option>
-                                        {bootstrap.statuses.map((status) => (
-                                            <option key={status.id} value={status.id}>{status.name}</option>
-                                        ))}
-                                    </select>
+                            <div className="relative">
+                                <button type="button" onClick={() => setDateFilterOpen((open) => !open)} className={`${secondaryButtonClassName} w-full justify-start px-3`}>
+                                    <span className="material-symbols-outlined text-[18px]">calendar_month</span>
+                                    {dateRangeLabel}
+                                </button>
 
-                                    <select
-                                        value={potentialFilter}
-                                        onChange={(event) => {
-                                            setPotentialFilter(event.target.value);
-                                            setPage(1);
-                                        }}
-                                        className={selectClassName}
-                                    >
-                                        <option value="">Tất cả tiềm năng</option>
-                                        {bootstrap.potentials.map((potential) => (
-                                            <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                {dateFilterOpen ? (
+                                    <div className="absolute left-0 top-12 z-30 w-[280px] rounded-sm border border-slate-200 bg-white p-3 shadow-xl">
+                                        <div className="grid grid-cols-1 gap-2">
+                                            <label className="block">
+                                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Từ ngày</span>
+                                                <input
+                                                    type="date"
+                                                    value={dateFrom}
+                                                    onChange={(event) => {
+                                                        setDateFrom(event.target.value);
+                                                        setPage(1);
+                                                    }}
+                                                    className={inputClassName}
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <span className="mb-1 block text-[12px] font-bold text-slate-500">Đến ngày</span>
+                                                <input
+                                                    type="date"
+                                                    value={dateTo}
+                                                    onChange={(event) => {
+                                                        setDateTo(event.target.value);
+                                                        setPage(1);
+                                                    }}
+                                                    className={inputClassName}
+                                                />
+                                            </label>
+                                        </div>
+                                        <div className="mt-3 flex items-center justify-between gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setDateFrom(initialMonthRange.from);
+                                                    setDateTo(initialMonthRange.to);
+                                                    setPage(1);
+                                                }}
+                                                className="h-9 rounded-sm border border-slate-200 bg-white px-3 text-[12px] font-bold text-slate-600 hover:border-teal-300 hover:text-teal-700"
+                                            >
+                                                Tháng này
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setDateFrom('');
+                                                    setDateTo('');
+                                                    setPage(1);
+                                                    setDateFilterOpen(false);
+                                                }}
+                                                className="h-9 rounded-sm border border-slate-200 bg-white px-3 text-[12px] font-bold text-slate-600 hover:border-red-200 hover:text-red-600"
+                                            >
+                                                Xóa lọc
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : null}
+                            </div>
+
+                            <button type="button" onClick={() => setStatsOpen(true)} className={secondaryButtonClassName}>
+                                <span className="material-symbols-outlined text-[18px]">bar_chart</span>
+                                Thống kê
+                            </button>
+
+                            <button type="button" onClick={() => setStatusManagerOpen(true)} className={secondaryButtonClassName}>
+                                <span className="material-symbols-outlined text-[18px]">settings</span>
+                                Trạng thái
+                            </button>
+
+                            <select
+                                value={staffFilter}
+                                onChange={(event) => {
+                                    setStaffFilter(event.target.value);
+                                    setPage(1);
+                                }}
+                                className={selectClassName}
+                            >
+                                <option value="">Tất cả sale</option>
+                                <option value="unassigned">Chưa gán sale</option>
+                                {bootstrap.staffs.map((staff) => (
+                                    <option key={staff.id} value={staff.id}>{staff.name}</option>
+                                ))}
+                            </select>
+
+                            <select
+                                value={statusFilter}
+                                onChange={(event) => {
+                                    setStatusFilter(event.target.value);
+                                    setPage(1);
+                                }}
+                                className={selectClassName}
+                            >
+                                <option value="">Tất cả trạng thái</option>
+                                {activeStatuses.map((status) => (
+                                    <option key={status.id} value={status.id}>{status.name}</option>
+                                ))}
+                            </select>
+
+                            <select
+                                value={potentialFilter}
+                                onChange={(event) => {
+                                    setPotentialFilter(event.target.value);
+                                    setPage(1);
+                                }}
+                                className={selectClassName}
+                            >
+                                <option value="">Tất cả tiềm năng</option>
+                                {activePotentials.map((potential) => (
+                                    <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                ))}
+                            </select>
+
+                            <div className="relative">
+                                <button type="button" onClick={() => setColumnSettingsOpen((open) => !open)} className={`${secondaryButtonClassName} w-full px-3`}>
+                                    <span className="material-symbols-outlined text-[18px]">view_column</span>
+                                    Cột hiển thị
+                                </button>
+
+                                {columnSettingsOpen ? (
+                                    <div className="absolute right-0 top-12 z-30 w-[220px] rounded-sm border border-slate-200 bg-white p-2 shadow-xl">
+                                        {columnOptions.map((column) => (
+                                            <label key={column.key} className="flex h-9 items-center gap-2 rounded-sm px-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={Boolean(visibleColumns[column.key])}
+                                                    onChange={(event) => setVisibleColumns((prev) => ({ ...prev, [column.key]: event.target.checked }))}
+                                                    className="size-4 accent-teal-700"
+                                                />
+                                                {column.label}
+                                            </label>
                                         ))}
-                                    </select>
-                                </div>
+                                    </div>
+                                ) : null}
                             </div>
                         </div>
+                    </div>
 
-                        <div className="lead-table-scrollbar overflow-auto">
-                            <table className="min-w-[980px] table-fixed border-collapse">
-                                <thead>
-                                    <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">
-                                        <th className="w-[210px] border-b border-slate-200 px-4 py-3">Khách hàng</th>
-                                        <th className="w-[140px] border-b border-slate-200 px-4 py-3">SĐT</th>
-                                        <th className="w-[150px] border-b border-slate-200 px-4 py-3">Sale phụ trách</th>
-                                        <th className="w-[150px] border-b border-slate-200 px-4 py-3">Trạng thái</th>
-                                        <th className="w-[140px] border-b border-slate-200 px-4 py-3">Tiềm năng</th>
-                                        <th className="w-[170px] border-b border-slate-200 px-4 py-3">Hẹn gọi lại</th>
-                                        <th className="w-[220px] border-b border-slate-200 px-4 py-3">Ghi chú gần nhất</th>
+                    <div className="max-h-[calc(100vh-330px)] min-h-[480px] overflow-auto">
+                        <table className="min-w-[1580px] table-fixed border-collapse">
+                            <thead className="sticky top-0 z-20">
+                                <tr className="bg-slate-50 text-left text-[12px] font-bold text-slate-500">
+                                    {visibleColumns.customer ? <th className="w-[190px] border border-slate-200 px-3 py-3">Khách hàng</th> : null}
+                                    {visibleColumns.phone ? <th className="w-[210px] border border-slate-200 px-3 py-3">SĐT / Zalo</th> : null}
+                                    {visibleColumns.staff ? <th className="w-[140px] border border-slate-200 px-3 py-3">Sale phụ trách</th> : null}
+                                    {visibleColumns.status ? <th className="w-[190px] border border-slate-200 px-3 py-3">Trạng thái</th> : null}
+                                    {visibleColumns.potential ? <th className="w-[190px] border border-slate-200 px-3 py-3">Tiềm năng</th> : null}
+                                    {visibleColumns.createOrder ? <th className="w-[145px] border border-slate-200 px-3 py-3">Tạo đơn</th> : null}
+                                    {visibleColumns.reminder ? <th className="w-[250px] border border-slate-200 px-3 py-3">Nhắc lại tự động</th> : null}
+                                    {visibleColumns.note ? <th className="w-[365px] border border-slate-200 px-3 py-3">Ghi chú</th> : null}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {loading && leads.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
+                                            Đang tải danh sách khách...
+                                        </td>
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    {loading && leads.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={7} className="px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
-                                                Đang tải danh sách khách...
-                                            </td>
-                                        </tr>
-                                    ) : leads.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={7} className="px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
-                                                Chưa có khách phù hợp với bộ lọc hiện tại.
-                                            </td>
-                                        </tr>
-                                    ) : leads.map((lead) => {
-                                        const selected = Number(selectedId) === Number(lead.id);
-                                        const inlineSaving = Boolean(inlineSavingIds[lead.id]);
-                                        const statusValue = lead.lead_status_id ? String(lead.lead_status_id) : '';
-                                        const potentialValue = lead.potential_level || '';
-                                        const followUpValue = inlineFollowUpDrafts[lead.id] ?? toDateTimeLocalValue(lead.next_follow_up_at);
-                                        const noteValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
-                                        const potentialOption = bootstrap.potentials.find((potential) => potential.value === potentialValue);
+                                ) : leads.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={visibleColumnCount} className="border border-slate-200 px-4 py-16 text-center text-[13px] font-semibold text-slate-500">
+                                            Chưa có khách phù hợp với bộ lọc hiện tại.
+                                        </td>
+                                    </tr>
+                                ) : leads.map((lead) => {
+                                    const inlineSaving = Boolean(inlineSavingIds[lead.id]);
+                                    const statusValue = lead.lead_status_id ? String(lead.lead_status_id) : '';
+                                    const potentialValue = lead.potential_level || '';
+                                    const noteValue = inlineNoteDrafts[lead.id] ?? lead.latest_note_content ?? lead.latest_note_excerpt ?? '';
+                                    const currentStatusOption = activeStatuses.find((status) => String(status.id) === String(statusValue));
+                                    const potentialOption = activePotentials.find((potential) => potential.value === potentialValue);
+                                    const historyOpen = Boolean(historyOpenIds[lead.id]);
+                                    const zaloSameAsPhone = normalizePhoneDigits(lead.zalo_phone || lead.phone) === normalizePhoneDigits(lead.phone);
+                                    const phoneCarrierLabel = detectVietnamMobileCarrier(lead.phone);
+                                    const statusSelectValue = currentStatusOption ? statusValue : '';
+                                    const potentialSelectValue = potentialOption ? potentialValue : '';
+                                    const currentStatusColor = currentStatusOption?.color || '#64748b';
+                                    const leadAddedAt = lead.added_at || lead.placed_at || lead.created_at;
+                                    const customerAddedLabel = formatDateTimeLocalLabel(leadAddedAt) || lead.added_label || lead.placed_label || '';
+                                    const reminderAddedDateLabel = formatDateOnlyLabel(leadAddedAt);
+                                    const currentTask = lead.current_task || null;
+                                    const currentTaskDue = currentTask?.due_label || '';
+                                    const canCompleteTask = currentTask?.status === 'pending' && currentTask?.is_due && !lead.do_not_call;
 
-                                        return (
-                                            <tr
-                                                key={lead.id}
-                                                onClick={() => handleSelectLead(lead)}
-                                                className={`cursor-pointer border-b border-slate-100 text-[13px] transition ${
-                                                    selected ? 'bg-teal-50/80' : 'bg-white hover:bg-slate-50'
-                                                }`}
-                                            >
-                                                <td className="px-4 py-3 align-top">
+                                    return (
+                                        <React.Fragment key={lead.id}>
+                                            <tr className="border-b border-slate-200 bg-white text-[13px] transition hover:bg-teal-50/40">
+                                                {visibleColumns.customer ? <td className="border border-slate-200 px-3 py-3 align-middle">
                                                     <div className="min-w-0">
-                                                        <div className="truncate font-bold text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
-                                                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-slate-500">
-                                                            <span>{lead.lead_number || `#${lead.id}`}</span>
-                                                            <span className="text-slate-300">/</span>
-                                                            <span className="truncate">{lead.tag || lead.source || 'Telesales'}</span>
+                                                        <div className="truncate font-black text-slate-950">{lead.customer_name || 'Khách chưa có tên'}</div>
+                                                        <div className="mt-1 truncate text-[12px] font-semibold text-slate-500">
+                                                            {customerAddedLabel || 'Chưa có ngày thêm'}
                                                         </div>
                                                     </div>
-                                                </td>
-                                                <td className="px-4 py-3 align-top font-semibold text-slate-800">{lead.phone || '-'}</td>
-                                                <td className="px-4 py-3 align-top text-slate-700">{lead.assigned_staff?.name || 'Chưa gán'}</td>
-                                                <td className="px-4 py-3 align-top">
-                                                    <select
-                                                        value={statusValue}
-                                                        disabled={inlineSaving}
-                                                        onClick={(event) => event.stopPropagation()}
-                                                        onChange={(event) => handleInlineStatusChange(lead, event.target.value)}
-                                                        className={inlineSelectClassName}
-                                                        style={{
-                                                            borderColor: `${lead.status_config?.color || '#64748b'}55`,
-                                                            color: lead.status_config?.color || '#475569',
-                                                        }}
-                                                        aria-label={`Sửa trạng thái ${lead.customer_name || lead.phone || lead.id}`}
-                                                    >
-                                                        <option value="">Chưa chọn</option>
-                                                        {bootstrap.statuses.map((status) => (
-                                                            <option key={status.id} value={status.id}>{status.name}</option>
-                                                        ))}
-                                                    </select>
-                                                </td>
-                                                <td className="px-4 py-3 align-top">
-                                                    <select
-                                                        value={potentialValue}
-                                                        disabled={inlineSaving}
-                                                        onClick={(event) => event.stopPropagation()}
-                                                        onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
-                                                        className={inlineSelectClassName}
-                                                        style={{
-                                                            borderColor: `${potentialOption?.color || '#94a3b8'}55`,
-                                                            color: potentialOption?.color || '#475569',
-                                                        }}
-                                                        aria-label={`Sửa tiềm năng ${lead.customer_name || lead.phone || lead.id}`}
-                                                    >
-                                                        <option value="">Chưa phân loại</option>
-                                                        {bootstrap.potentials.map((potential) => (
-                                                            <option key={potential.value} value={potential.value}>{potential.label}</option>
-                                                        ))}
-                                                    </select>
-                                                </td>
-                                                <td className="px-4 py-3 align-top">
-                                                    <div className="flex flex-col gap-1">
-                                                        {renderDueBadge(lead)}
+                                                </td> : null}
+
+                                                {visibleColumns.phone ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <div className="whitespace-nowrap font-black text-slate-900">
+                                                        {lead.phone || '-'}
+                                                        {phoneCarrierLabel ? <span className="font-bold text-teal-700"> - {phoneCarrierLabel}</span> : null}
+                                                    </div>
+                                                    <label className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
                                                         <input
-                                                            type="datetime-local"
-                                                            value={followUpValue}
+                                                            type="checkbox"
+                                                            checked={zaloSameAsPhone}
                                                             disabled={inlineSaving}
-                                                            onClick={(event) => event.stopPropagation()}
-                                                            onChange={(event) => setInlineFollowUpDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
-                                                            onBlur={() => saveInlineFollowUp(lead)}
+                                                            onChange={(event) => handleZaloSameAsPhoneChange(lead, event.target.checked)}
+                                                            className="size-3.5 accent-teal-700"
+                                                        />
+                                                        SĐT là Zalo
+                                                    </label>
+                                                    <div className="mt-2 flex items-center gap-2">
+                                                        <button type="button" onClick={() => handleOpenPhone(lead)} className="inline-flex h-8 items-center gap-1 rounded-sm bg-teal-700 px-2 text-[12px] font-bold text-white shadow-sm hover:bg-teal-800">
+                                                            <span className="material-symbols-outlined text-[15px]">call</span>
+                                                            Gọi
+                                                        </button>
+                                                        <button type="button" onClick={() => handleOpenZalo(lead)} className="inline-flex h-8 items-center gap-1 rounded-sm border border-slate-200 bg-white px-2 text-[12px] font-bold text-slate-700 shadow-sm hover:border-teal-300 hover:text-teal-700">
+                                                            Zalo
+                                                        </button>
+                                                    </div>
+                                                </td> : null}
+
+                                                {visibleColumns.staff ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <select
+                                                        value={lead.assigned_staff_id ? String(lead.assigned_staff_id) : ''}
+                                                        disabled={inlineSaving}
+                                                        onChange={(event) => handleInlineStaffChange(lead, event.target.value)}
+                                                        className={inlineSelectClassName}
+                                                        aria-label={`Sửa sale ${lead.customer_name || lead.phone || lead.id}`}
+                                                    >
+                                                        <option value="">Chưa gán</option>
+                                                        {bootstrap.staffs.map((staff) => (
+                                                            <option key={staff.id} value={staff.id}>{staff.name}</option>
+                                                        ))}
+                                                    </select>
+                                                </td> : null}
+
+                                                {visibleColumns.status ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <div className="relative">
+                                                        <span className="pointer-events-none absolute left-3 top-1/2 z-10 size-3 -translate-y-1/2 rounded-full shadow-sm" style={{ backgroundColor: currentStatusColor }} />
+                                                        <select
+                                                            value={statusSelectValue}
+                                                            disabled={inlineSaving}
+                                                            onChange={(event) => handleInlineStatusChange(lead, event.target.value)}
+                                                            className={`${inlineSelectClassName} pl-8`}
+                                                            style={{
+                                                                borderColor: `${currentStatusColor}55`,
+                                                                color: currentStatusColor,
+                                                                backgroundColor: `${currentStatusColor}10`,
+                                                            }}
+                                                            aria-label={`Sửa trạng thái ${lead.customer_name || lead.phone || lead.id}`}
+                                                        >
+                                                            <option value="">Chưa chọn</option>
+                                                            {activeStatuses.map((status) => (
+                                                                <option key={status.id} value={status.id}>{status.name}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </td> : null}
+
+                                                {visibleColumns.potential ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <div className="relative">
+                                                        <span className="pointer-events-none absolute left-3 top-1/2 z-10 size-3 -translate-y-1/2 rounded-full shadow-sm" style={{ backgroundColor: potentialOption?.color || '#94a3b8' }} />
+                                                        <select
+                                                            value={potentialSelectValue}
+                                                            disabled={inlineSaving}
+                                                            onChange={(event) => handleInlinePotentialChange(lead, event.target.value)}
+                                                            className={`${inlineSelectClassName} pl-8`}
+                                                            style={{
+                                                                borderColor: `${potentialOption?.color || '#94a3b8'}55`,
+                                                                color: potentialOption?.color || '#475569',
+                                                                backgroundColor: `${potentialOption?.color || '#94a3b8'}10`,
+                                                            }}
+                                                            aria-label={`Sửa tiềm năng ${lead.customer_name || lead.phone || lead.id}`}
+                                                        >
+                                                            <option value="">Chưa phân loại</option>
+                                                            {activePotentials.map((potential) => (
+                                                                <option key={potential.value} value={potential.value}>{potential.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </td> : null}
+
+                                                {visibleColumns.createOrder ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <button type="button" onClick={() => openCreateOrder(lead)} className="inline-flex h-9 w-full items-center justify-center rounded-sm bg-teal-700 px-2 text-[12px] font-bold text-white shadow-sm hover:bg-teal-800">
+                                                        Tạo đơn
+                                                    </button>
+                                                </td> : null}
+
+                                                {visibleColumns.reminder ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <div className={`rounded-sm border px-2.5 py-2 ${lead.do_not_call ? 'border-slate-200 bg-slate-50' : 'border-teal-200 bg-teal-50'}`}>
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <div className={`text-[12px] font-black ${lead.do_not_call ? 'text-slate-600' : currentTask?.is_overdue ? 'text-red-700' : 'text-teal-800'}`}>
+                                                                {labelForReminder(lead)}
+                                                            </div>
+                                                            {canCompleteTask ? (
+                                                                <button type="button" onClick={() => handleCompleteCurrentTask(lead)} disabled={inlineSaving} className="inline-flex h-7 shrink-0 items-center justify-center rounded-sm border border-teal-300 bg-white px-2 text-[11px] font-black text-teal-700 shadow-sm hover:bg-teal-50 disabled:cursor-wait disabled:opacity-60">
+                                                                    Xong
+                                                                </button>
+                                                            ) : null}
+                                                        </div>
+                                                        {currentTask ? (
+                                                            <div className="mt-1 text-[11px] font-semibold text-slate-600">
+                                                                {currentTask.status_label}{currentTaskDue ? ` - hạn ${currentTaskDue}` : ''}
+                                                            </div>
+                                                        ) : null}
+                                                        {reminderAddedDateLabel ? (
+                                                            <div className="mt-1 text-[11px] font-semibold text-slate-600">
+                                                                Ngày thêm: {reminderAddedDateLabel}
+                                                            </div>
+                                                        ) : null}
+                                                        <label className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={Boolean(lead.do_not_call)}
+                                                                disabled={inlineSaving}
+                                                                onChange={(event) => handleToggleDoNotCall(lead, event.target.checked)}
+                                                                className="size-3.5 accent-teal-700"
+                                                            />
+                                                            Dừng nhắc lại
+                                                        </label>
+                                                    </div>
+                                                </td> : null}
+
+                                                {visibleColumns.note ? <td className="border border-slate-200 px-3 py-3 align-middle">
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={noteValue}
+                                                            disabled={inlineSaving}
+                                                            placeholder="Nhập ghi chú rồi Enter..."
+                                                            onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
                                                             onKeyDown={(event) => {
                                                                 if (event.key === 'Enter') {
                                                                     event.preventDefault();
-                                                                    event.currentTarget.blur();
+                                                                    saveInlineNote(lead);
                                                                 }
 
                                                                 if (event.key === 'Escape') {
                                                                     event.preventDefault();
-                                                                    setInlineFollowUpDrafts((prev) => {
+                                                                    setInlineNoteDrafts((prev) => {
                                                                         const next = { ...prev };
                                                                         delete next[lead.id];
                                                                         return next;
                                                                     });
-                                                                    event.currentTarget.blur();
                                                                 }
                                                             }}
-                                                            className={`${inlineInputClassName} text-[11px]`}
-                                                            aria-label={`Sửa ngày hẹn gọi lại ${lead.customer_name || lead.phone || lead.id}`}
+                                                            className={inlineInputClassName}
+                                                            aria-label={`Sửa ghi chú ${lead.customer_name || lead.phone || lead.id}`}
                                                         />
+                                                        <button type="button" onClick={() => toggleHistory(lead)} disabled={inlineSaving} className="inline-flex size-9 shrink-0 items-center justify-center rounded-sm border border-teal-300 bg-white text-teal-700 shadow-sm hover:bg-teal-50" title="Xem lịch sử cũ">
+                                                            <span className="material-symbols-outlined text-[19px]">{historyOpen ? 'keyboard_arrow_up' : 'keyboard_arrow_down'}</span>
+                                                        </button>
                                                     </div>
-                                                </td>
-                                                <td className="px-4 py-3 align-top">
-                                                    <input
-                                                        type="text"
-                                                        value={noteValue}
-                                                        disabled={inlineSaving}
-                                                        placeholder="Nhập ghi chú..."
-                                                        onClick={(event) => event.stopPropagation()}
-                                                        onChange={(event) => setInlineNoteDrafts((prev) => ({ ...prev, [lead.id]: event.target.value }))}
-                                                        onBlur={() => saveInlineNote(lead)}
-                                                        onKeyDown={(event) => {
-                                                            if (event.key === 'Enter') {
-                                                                event.preventDefault();
-                                                                event.currentTarget.blur();
-                                                            }
-
-                                                            if (event.key === 'Escape') {
-                                                                event.preventDefault();
-                                                                setInlineNoteDrafts((prev) => {
-                                                                    const next = { ...prev };
-                                                                    delete next[lead.id];
-                                                                    return next;
-                                                                });
-                                                                event.currentTarget.blur();
-                                                            }
-                                                        }}
-                                                        className={inlineInputClassName}
-                                                        aria-label={`Sửa ghi chú ${lead.customer_name || lead.phone || lead.id}`}
-                                                    />
-                                                </td>
+                                                    <div className="mt-1 text-[11px] font-semibold text-slate-400">
+                                                        {lead.last_noted_label ? `Mới nhất: ${formatDateOnlyLabel(lead.last_noted_at) || lead.last_noted_label}` : 'Chưa có ghi chú'}
+                                                    </div>
+                                                </td> : null}
                                             </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
+
+                                            {historyOpen ? renderHistoryRow(lead) : null}
+                                        </React.Fragment>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex flex-wrap items-center gap-3 text-[13px] font-semibold text-slate-500">
+                            <span>Hiển thị {formatNumber(currentStart)}-{formatNumber(currentEnd)} / {formatNumber(pagination.total)}</span>
+                            <span className="flex items-center gap-2">
+                                Số dòng:
+                                <select
+                                    value={perPage}
+                                    onChange={(event) => {
+                                        setPerPage(Number(event.target.value));
+                                        setPage(1);
+                                    }}
+                                    className="h-9 rounded-full border border-slate-200 bg-white px-3 text-[13px] font-black text-slate-900 shadow-sm outline-none focus:border-teal-500"
+                                >
+                                    <option value={20}>20</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </span>
                         </div>
 
-                        <div className="flex flex-col gap-3 border-t border-slate-200 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                            <div className="text-[13px] font-semibold text-slate-500">
-                                Tổng khách đang xem: <span className="font-black text-slate-900">{formatNumber(pagination.total)}</span>
-                            </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[12px] font-bold text-slate-500">
+                                Tổng khách: <span className="font-black text-slate-900">{formatNumber(pagination.total)}</span>
+                            </span>
                             <Pagination pagination={pagination} onPageChange={setPage} />
                         </div>
                     </div>
-
-                    <aside className="min-w-0 rounded-sm border border-slate-200 bg-white shadow-sm">
-                        {!selectedLead ? (
-                            <div className="flex min-h-[520px] items-center justify-center p-8 text-center">
-                                <div>
-                                    <span className="material-symbols-outlined text-[44px] text-slate-300">contact_phone</span>
-                                    <div className="mt-3 text-[15px] font-bold text-slate-700">Chọn một khách để xem chi tiết</div>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="flex h-full min-h-[680px] flex-col">
-                                <div className="border-b border-slate-200 p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <h2 className="truncate text-xl font-black text-slate-950">{selectedLead.customer_name || 'Khách chưa có tên'}</h2>
-                                                {renderPotentialBadge(selectedLead)}
-                                            </div>
-                                            <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] font-semibold text-slate-500">
-                                                <span>{selectedLead.phone || '-'}</span>
-                                                <span className="text-slate-300">/</span>
-                                                <span>{selectedLead.assigned_staff?.name || 'Chưa gán sale'}</span>
-                                            </div>
-                                        </div>
-                                        {detailLoading ? (
-                                            <span className="material-symbols-outlined animate-spin text-[20px] text-teal-700">progress_activity</span>
-                                        ) : null}
-                                    </div>
-
-                                    <div className="mt-4 grid grid-cols-2 gap-2">
-                                        <button type="button" onClick={handleOpenPhone} className={primaryButtonClassName}>
-                                            <span className="material-symbols-outlined text-[18px]">call</span>
-                                            Gọi điện
-                                        </button>
-                                        <button type="button" onClick={handleOpenZalo} className={secondaryButtonClassName}>
-                                            <span className="material-symbols-outlined text-[18px]">chat</span>
-                                            Nhắn Zalo
-                                        </button>
-                                    </div>
-
-                                    <div className="mt-3 grid grid-cols-1 gap-2">
-                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
-                                            <input
-                                                type="checkbox"
-                                                checked={careForm.zalo_same_as_phone}
-                                                onChange={(event) => setCareForm((prev) => ({
-                                                    ...prev,
-                                                    zalo_same_as_phone: event.target.checked,
-                                                    zalo_phone: event.target.checked ? (selectedLead.phone || '') : prev.zalo_phone,
-                                                }))}
-                                                className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
-                                            />
-                                            SĐT khách là Zalo
-                                        </label>
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">SĐT Zalo</span>
-                                            <input
-                                                value={careForm.zalo_same_as_phone ? (selectedLead.phone || '') : careForm.zalo_phone}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, zalo_phone: event.target.value }))}
-                                                disabled={careForm.zalo_same_as_phone}
-                                                className={inputClassName}
-                                                placeholder="Nhập SĐT Zalo nếu khác SĐT khách"
-                                            />
-                                        </label>
-                                    </div>
-                                </div>
-
-                                <div className="border-b border-slate-200 p-4">
-                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Sale phụ trách</span>
-                                            <select
-                                                value={careForm.assigned_staff_id}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, assigned_staff_id: event.target.value }))}
-                                                className={selectClassName}
-                                            >
-                                                <option value="">Chưa gán</option>
-                                                {bootstrap.staffs.map((staff) => (
-                                                    <option key={staff.id} value={staff.id}>{staff.name}</option>
-                                                ))}
-                                            </select>
-                                        </label>
-
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Trạng thái</span>
-                                            <select
-                                                value={careForm.lead_status_id}
-                                                onChange={(event) => {
-                                                    const nextStatusId = event.target.value;
-                                                    const nextStatus = bootstrap.statuses.find((status) => Number(status.id) === Number(nextStatusId));
-                                                    const shouldStopFollowUp = statusStopsFollowUp(nextStatus);
-                                                    const nextIntervalDays = nextAutomaticFollowUpInterval(selectedLead?.follow_up_interval_days);
-
-                                                    setCareForm((prev) => ({
-                                                        ...prev,
-                                                        lead_status_id: nextStatusId,
-                                                        do_not_call: shouldStopFollowUp ? true : false,
-                                                        follow_up_script: scriptForFollowUpInterval(nextIntervalDays),
-                                                        follow_up_interval_days: nextIntervalDays,
-                                                        next_follow_up_at: shouldStopFollowUp ? '' : addDaysAtNine(nextIntervalDays),
-                                                    }));
-                                                }}
-                                                className={selectClassName}
-                                            >
-                                                <option value="">Chưa có</option>
-                                                {bootstrap.statuses.map((status) => (
-                                                    <option key={status.id} value={status.id}>{status.name}</option>
-                                                ))}
-                                            </select>
-                                        </label>
-
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Tiềm năng</span>
-                                            <select
-                                                value={careForm.potential_level}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, potential_level: event.target.value }))}
-                                                className={selectClassName}
-                                            >
-                                                <option value="">Chưa phân loại</option>
-                                                {bootstrap.potentials.map((potential) => (
-                                                    <option key={potential.value} value={potential.value}>{potential.label}</option>
-                                                ))}
-                                            </select>
-                                        </label>
-
-                                        <label className="block">
-                                            <span className="mb-1 block text-[12px] font-bold text-slate-500">Loại lịch sử</span>
-                                            <select
-                                                value={careForm.activity_type}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, activity_type: event.target.value }))}
-                                                className={selectClassName}
-                                            >
-                                                {bootstrap.activity_types.map((activity) => (
-                                                    <option key={activity.value} value={activity.value}>{activity.label}</option>
-                                                ))}
-                                            </select>
-                                        </label>
-                                    </div>
-
-                                    <div className="mt-3 rounded-sm border border-teal-200 bg-teal-50 px-3 py-3">
-                                        <div className="flex items-start gap-2">
-                                            <span className="material-symbols-outlined mt-0.5 text-[18px] text-teal-700">event_repeat</span>
-                                            <div className="min-w-0">
-                                                <div className="text-[13px] font-black text-teal-900">
-                                                    Tự động nhắc lại sau {nextAutomaticFollowUpInterval(selectedLead.follow_up_interval_days)} ngày
-                                                </div>
-                                                <div className="mt-1 text-[12px] font-semibold leading-5 text-teal-800">{followUpPreview}</div>
-                                                {selectedLead.next_follow_up_label ? (
-                                                    <div className="mt-1 text-[12px] font-semibold text-teal-700/75">
-                                                        Lịch hiện tại: {selectedLead.next_follow_up_label}
-                                                    </div>
-                                                ) : null}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-3">
-                                        <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
-                                            <input
-                                                type="checkbox"
-                                                checked={careForm.do_not_call}
-                                                onChange={(event) => setCareForm((prev) => ({ ...prev, do_not_call: event.target.checked }))}
-                                                className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
-                                            />
-                                            Dừng nhắc lại cho khách này
-                                        </label>
-                                    </div>
-
-                                    <label className="mt-3 block">
-                                        <span className="mb-1 block text-[12px] font-bold text-slate-500">Ghi chú</span>
-                                        <textarea
-                                            value={careForm.note}
-                                            onChange={(event) => setCareForm((prev) => ({ ...prev, note: event.target.value }))}
-                                            className="min-h-[96px] w-full resize-none rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
-                                            placeholder="Ví dụ: khách hỏi giá, hẹn gọi lại chiều thứ 6..."
-                                        />
-                                    </label>
-
-                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                                        <div className="text-[12px] font-semibold text-slate-500">
-                                            {selectedStatus ? `Sẽ lưu trạng thái: ${selectedStatus.name}` : 'Sẵn sàng lưu cập nhật'}
-                                        </div>
-                                        <button type="button" onClick={() => handleSaveCare()} disabled={saving} className={primaryButtonClassName}>
-                                            <span className="material-symbols-outlined text-[18px]">save</span>
-                                            {saving ? 'Đang lưu...' : 'Lưu chăm sóc'}
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="min-h-0 flex-1 overflow-auto p-4">
-                                    <div className="mb-3 flex items-center justify-between gap-3">
-                                        <h3 className="text-[15px] font-black text-slate-950">Lịch sử chăm sóc</h3>
-                                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[12px] font-bold text-slate-500">
-                                            {formatNumber(selectedLead.notes_timeline?.length || selectedLead.notes_count || 0)}
-                                        </span>
-                                    </div>
-
-                                    {selectedLead.notes_timeline?.length ? (
-                                        <div className="space-y-3">
-                                            {selectedLead.notes_timeline.map((note) => (
-                                                <div key={note.id} className="grid grid-cols-[34px_minmax(0,1fr)] gap-3">
-                                                    <span className="inline-flex size-8 items-center justify-center rounded-full bg-slate-100 text-slate-600">
-                                                        <span className="material-symbols-outlined text-[17px]">{activityIconMap[note.activity_type] || activityIconMap.note}</span>
-                                                    </span>
-                                                    <div className="min-w-0 border-b border-slate-100 pb-3">
-                                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                                            <div className="text-[13px] font-black text-slate-900">{note.activity_label}</div>
-                                                            <div className="text-[12px] font-semibold text-slate-400">{note.created_label}</div>
-                                                        </div>
-                                                        <div className="mt-1 whitespace-pre-wrap text-[13px] leading-6 text-slate-600">{note.content}</div>
-                                                        <div className="mt-2 flex flex-wrap gap-1.5">
-                                                            {note.assigned_staff?.name ? (
-                                                                <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">{note.assigned_staff.name}</span>
-                                                            ) : null}
-                                                            {note.potential_label ? (
-                                                                <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-bold text-emerald-700">{note.potential_label}</span>
-                                                            ) : null}
-                                                            {note.next_follow_up_label ? (
-                                                                <span className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-700">Hẹn {note.next_follow_up_label}</span>
-                                                            ) : null}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <div className="rounded-sm border border-dashed border-slate-200 p-6 text-center text-[13px] font-semibold text-slate-500">
-                                            Chưa có lịch sử chăm sóc.
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                    </aside>
                 </div>
             </div>
 
-            {importOpen ? (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
-                    <form onSubmit={handleImportSubmit} className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-sm bg-white shadow-2xl">
-                        <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-4">
-                            <div>
-                                <h2 className="text-xl font-black text-slate-950">Nhập khách telesales</h2>
-                                <p className="mt-1 text-[13px] font-medium text-slate-500">Mỗi dòng là một khách, mặc định SĐT khách cũng là SĐT Zalo.</p>
-                            </div>
-                            <button type="button" onClick={() => setImportOpen(false)} className={iconButtonClassName} title="Đóng">
-                                <span className="material-symbols-outlined text-[19px]">close</span>
-                            </button>
-                        </div>
-
-                        <div className="space-y-4 p-4">
-                            <div className="rounded-sm border border-slate-200">
-                                <div className="grid grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[12px] font-black text-slate-500">
-                                    <span>Tên khách</span>
-                                    <span>SĐT khách</span>
-                                    <span>SĐT là Zalo</span>
-                                    <span>SĐT Zalo</span>
-                                    <span />
-                                </div>
-
-                                <div className="divide-y divide-slate-100">
-                                    {importRows.map((row, index) => (
-                                        <div key={row.local_id} className="grid grid-cols-1 gap-2 px-3 py-3 lg:grid-cols-[minmax(150px,1fr)_150px_150px_minmax(150px,1fr)_42px] lg:items-center">
-                                            <label className="block">
-                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">Tên khách</span>
-                                                <input
-                                                    value={row.customer_name}
-                                                    onChange={(event) => updateImportRow(row.local_id, { customer_name: event.target.value })}
-                                                    className={inputClassName}
-                                                    placeholder={`Khách ${index + 1}`}
-                                                />
-                                            </label>
-
-                                            <label className="block">
-                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT khách</span>
-                                                <input
-                                                    value={row.phone}
-                                                    onChange={(event) => updateImportRow(row.local_id, { phone: event.target.value })}
-                                                    className={inputClassName}
-                                                    placeholder="09xx xxx xxx"
-                                                />
-                                            </label>
-
-                                            <label className="flex h-10 items-center gap-2 rounded-sm border border-slate-200 bg-slate-50 px-3 text-[13px] font-semibold text-slate-700">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={row.zalo_same_as_phone}
-                                                    onChange={(event) => updateImportRow(row.local_id, {
-                                                        zalo_same_as_phone: event.target.checked,
-                                                        zalo_phone: event.target.checked ? '' : row.zalo_phone,
-                                                    })}
-                                                    className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
-                                                />
-                                                Có
-                                            </label>
-
-                                            <label className="block">
-                                                <span className="mb-1 block text-[12px] font-bold text-slate-500 lg:hidden">SĐT Zalo</span>
-                                                <input
-                                                    value={row.zalo_same_as_phone ? row.phone : row.zalo_phone}
-                                                    onChange={(event) => updateImportRow(row.local_id, { zalo_phone: event.target.value })}
-                                                    disabled={row.zalo_same_as_phone}
-                                                    className={inputClassName}
-                                                    placeholder="Nhập nếu khác SĐT khách"
-                                                />
-                                            </label>
-
-                                            <button type="button" onClick={() => removeImportRow(row.local_id)} className={iconButtonClassName} title="Xóa dòng">
-                                                <span className="material-symbols-outlined text-[18px]">delete</span>
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-
-                                <div className="border-t border-slate-200 p-3">
-                                    <button type="button" onClick={addImportRow} className={secondaryButtonClassName}>
-                                        <span className="material-symbols-outlined text-[18px]">add</span>
-                                        Thêm khách
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                <label className="block">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Sale phụ trách</span>
-                                    <select
-                                        value={importForm.assigned_staff_id}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, assigned_staff_id: event.target.value }))}
-                                        className={selectClassName}
-                                    >
-                                        <option value="">Chưa gán</option>
-                                        {bootstrap.staffs.map((staff) => (
-                                            <option key={staff.id} value={staff.id}>{staff.name}</option>
-                                        ))}
-                                    </select>
-                                </label>
-
-                                <label className="block">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Tiềm năng ban đầu</span>
-                                    <select
-                                        value={importForm.potential_level}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, potential_level: event.target.value }))}
-                                        className={selectClassName}
-                                    >
-                                        <option value="">Chưa phân loại</option>
-                                        {bootstrap.potentials.map((potential) => (
-                                            <option key={potential.value} value={potential.value}>{potential.label}</option>
-                                        ))}
-                                    </select>
-                                </label>
-
-                                <label className="block">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Nguồn</span>
-                                    <input
-                                        value={importForm.source}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, source: event.target.value }))}
-                                        className={inputClassName}
-                                    />
-                                </label>
-
-                                <label className="block">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Nhãn / chiến dịch</span>
-                                    <input
-                                        value={importForm.tag}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, tag: event.target.value }))}
-                                        className={inputClassName}
-                                    />
-                                </label>
-
-                                <div className="rounded-sm border border-teal-200 bg-teal-50 px-3 py-3 text-[13px] font-semibold leading-6 text-teal-800 md:col-span-2">
-                                    Sau khi nhập, khách sẽ tự hiện lại trong Việc hôm nay sau 3 ngày. Nếu sale chăm tiếp mà khách chưa dừng, lịch tiếp theo tự chuyển sang 7 ngày.
-                                </div>
-
-                                <label className="block md:col-span-2">
-                                    <span className="mb-1 block text-[12px] font-bold text-slate-500">Ghi chú nhập</span>
-                                    <textarea
-                                        value={importForm.note}
-                                        onChange={(event) => setImportForm((prev) => ({ ...prev, note: event.target.value }))}
-                                        className="min-h-[82px] w-full resize-none rounded-sm border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-900 shadow-sm outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/10"
-                                        placeholder="Ví dụ: khách từ file Facebook Ads ngày hôm nay..."
-                                    />
-                                </label>
-                            </div>
-
-                            {importResult ? (
-                                <div className="rounded-sm border border-slate-200 bg-slate-50 p-3 text-[13px] font-semibold text-slate-600">
-                                    Đã tạo {formatNumber(importResult.created_count)} khách, bỏ qua {formatNumber(importResult.duplicate_count)} số trùng.
-                                </div>
-                            ) : null}
-                        </div>
-
-                        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 p-4">
-                            <button type="button" onClick={() => setImportOpen(false)} className={secondaryButtonClassName}>Đóng</button>
-                            <button type="submit" disabled={importing || !canSubmitImport} className={primaryButtonClassName}>
-                                <span className="material-symbols-outlined text-[18px]">add</span>
-                                {importing ? 'Đang nhập...' : 'Nhập khách'}
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            ) : null}
+            {renderImportModal()}
+            {renderStatsPanel()}
+            {renderStatusManager()}
         </div>
     );
 };

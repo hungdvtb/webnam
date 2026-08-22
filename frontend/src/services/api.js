@@ -802,6 +802,17 @@ export const telesalesApi = {
     getOne: (id) => api.get(`/telesales/leads/${id}`),
     importLeads: (data) => api.post('/telesales/leads/import', data),
     update: (id, data) => api.put(`/telesales/leads/${id}`, data),
+    completeTask: (id, taskId, data = {}) => api.post(`/telesales/leads/${id}/tasks/${taskId}/complete`, data),
+    deleteLatestNote: (id) => api.delete(`/telesales/leads/${id}/latest-note`),
+    deleteNote: (id, noteId) => api.delete(`/telesales/leads/${id}/notes/${noteId}`),
+    getStatuses: () => api.get('/lead-statuses'),
+    createStatus: (data) => api.post('/lead-statuses', data),
+    updateStatus: (id, data) => api.put(`/lead-statuses/${id}`, data),
+    deleteStatus: (id) => api.delete(`/lead-statuses/${id}`),
+    getPotentials: () => api.get('/lead-potentials'),
+    createPotential: (data) => api.post('/lead-potentials', data),
+    updatePotential: (id, data) => api.put(`/lead-potentials/${id}`, data),
+    deletePotential: (id) => api.delete(`/lead-potentials/${id}`),
 };
 
 export const orderStatusApi = {

@@ -279,18 +279,25 @@ class LeadCaptureService
 
     public function generateLeadNumber(?int $accountId): string
     {
-        $query = Lead::withoutGlobalScopes()->orderByDesc('id');
-        if ($accountId) {
-            $query->where('account_id', $accountId);
-        }
+        $maxNumber = Lead::withoutGlobalScopes()
+            ->whereNotNull('lead_number')
+            ->pluck('lead_number')
+            ->reduce(function (int $max, ?string $leadNumber) {
+                if (preg_match('/^LD(\d+)A0$/', (string) $leadNumber, $matches)) {
+                    return max($max, (int) $matches[1]);
+                }
 
-        $last = $query->value('lead_number');
-        $nextNumber = 10000;
-        if ($last && preg_match('/LD(\d+)A0/', $last, $matches)) {
-            $nextNumber = ((int) $matches[1]) + 1;
-        }
+                return $max;
+            }, 9999);
 
-        return sprintf('LD%dA0', $nextNumber);
+        $nextNumber = max(10000, $maxNumber + 1);
+
+        do {
+            $candidate = sprintf('LD%dA0', $nextNumber);
+            $nextNumber++;
+        } while (Lead::withoutGlobalScopes()->where('lead_number', $candidate)->exists());
+
+        return $candidate;
     }
 
     public function buildProductSummary(array $items): array

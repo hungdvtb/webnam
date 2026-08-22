@@ -37,16 +37,16 @@ class LeadStatus extends Model
     {
         return [
             ['name' => 'Đơn nháp', 'code' => 'don-nhap', 'color' => '#94a3b8', 'sort_order' => 0, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Don moi', 'code' => 'don-moi', 'color' => '#2563eb', 'sort_order' => 2, 'is_default' => true, 'blocks_order_create' => false],
-            ['name' => 'Da tao don', 'code' => 'da-tao-don', 'color' => '#059669', 'sort_order' => 3, 'is_default' => false, 'blocks_order_create' => true],
-            ['name' => 'KNM1', 'code' => 'knm1', 'color' => '#7c3aed', 'sort_order' => 4, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'KNM2', 'code' => 'knm2', 'color' => '#8b5cf6', 'sort_order' => 5, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'KNM3', 'code' => 'knm3', 'color' => '#a855f7', 'sort_order' => 6, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Huy don', 'code' => 'huy-don', 'color' => '#dc2626', 'sort_order' => 7, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Sai sdt', 'code' => 'sai-sdt', 'color' => '#ef4444', 'sort_order' => 8, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Cho xem lai', 'code' => 'cho-xem-lai', 'color' => '#f59e0b', 'sort_order' => 9, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Hen goi lai', 'code' => 'hen-goi-lai', 'color' => '#0ea5e9', 'sort_order' => 10, 'is_default' => false, 'blocks_order_create' => false],
-            ['name' => 'Da chot', 'code' => 'da-chot', 'color' => '#14b8a6', 'sort_order' => 11, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Số mới', 'code' => 'don-moi', 'color' => '#2563eb', 'sort_order' => 1, 'is_default' => true, 'blocks_order_create' => false],
+            ['name' => 'Đã gọi', 'code' => 'hen-goi-lai', 'color' => '#0ea5e9', 'sort_order' => 2, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Không nghe máy', 'code' => 'knm1', 'color' => '#f59e0b', 'sort_order' => 3, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Khách tiềm năng', 'code' => 'cho-xem-lai', 'color' => '#8b5cf6', 'sort_order' => 4, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Đã chốt', 'code' => 'da-chot', 'color' => '#16a34a', 'sort_order' => 5, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Không nhu cầu', 'code' => 'huy-don', 'color' => '#64748b', 'sort_order' => 6, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Đã tạo đơn', 'code' => 'da-tao-don', 'color' => '#059669', 'sort_order' => 7, 'is_default' => false, 'blocks_order_create' => true],
+            ['name' => 'Sai số', 'code' => 'sai-sdt', 'color' => '#ef4444', 'sort_order' => 8, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Không nghe máy lần 2', 'code' => 'knm2', 'color' => '#fb923c', 'sort_order' => 9, 'is_default' => false, 'blocks_order_create' => false],
+            ['name' => 'Không nghe máy lần 3', 'code' => 'knm3', 'color' => '#ea580c', 'sort_order' => 10, 'is_default' => false, 'blocks_order_create' => false],
         ];
     }
 
@@ -61,15 +61,19 @@ class LeadStatus extends Model
             ->get()
             ->keyBy('code');
 
+        $legacyNames = ['Don moi', 'Da tao don', 'KNM1', 'KNM2', 'KNM3', 'Huy don', 'Sai sdt', 'Cho xem lai', 'Hen goi lai', 'Da chot'];
+
         foreach (static::defaultDefinitions() as $definition) {
             if ($existing->has($definition['code'])) {
                 $existingStatus = $existing->get($definition['code']);
 
-                if ($definition['code'] === 'don-nhap') {
+                if ($definition['code'] === 'don-nhap' || in_array($existingStatus->name, $legacyNames, true)) {
                     $existingStatus->forceFill([
                         'name' => $definition['name'],
                         'color' => $definition['color'],
                         'sort_order' => $definition['sort_order'],
+                        'is_default' => $definition['is_default'],
+                        'blocks_order_create' => $definition['blocks_order_create'],
                     ])->save();
                 }
 

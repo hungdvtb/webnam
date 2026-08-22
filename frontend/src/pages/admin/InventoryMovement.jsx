@@ -5251,6 +5251,7 @@ const InventoryMovement = () => {
 
     useEffect(() => {
         if (restoredImportDraftRef.current) return undefined;
+        if (resolvedRouteSection !== 'imports') return undefined;
 
         const draft = readPersistedImportDraft();
         restoredImportDraftRef.current = true;
@@ -5303,7 +5304,7 @@ const InventoryMovement = () => {
         return () => {
             active = false;
         };
-    }, []);
+    }, [resolvedRouteSection]);
 
     useEffect(() => {
         const returnContext = location.state?.returnContext;

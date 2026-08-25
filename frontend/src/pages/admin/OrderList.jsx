@@ -835,6 +835,7 @@ const EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT = {
     askKey: '',
     submitting: false,
 };
+const WAREHOUSE_PICKING_REPLACEMENT_HISTORY_KEY = '__warehousePickingReplacementOpen';
 
 const getWarehousePickingDeclarationAskKey = (row, candidate) => {
     const sourceKey = row?.original_key || getWarehousePickingCandidateKey(row?.original);
@@ -1610,6 +1611,61 @@ const WarehousePickingReplacementDeclarationPrompt = ({
                             {submitting ? 'progress_activity' : 'add_link'}
                         </span>
                         {submitting ? 'Đang thêm...' : 'Thêm vào mã thay thế'}
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
+const WarehousePickingReplacementLeavePrompt = ({
+    open,
+    changedCount,
+    saving,
+    onSave,
+    onDiscard,
+    onStay,
+}) => {
+    if (!open || typeof document === 'undefined') return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[100030] flex items-end justify-center bg-slate-950/35 px-3 py-0 backdrop-blur-[2px] sm:items-center sm:py-6">
+            <div className="w-full max-w-md overflow-hidden rounded-t-[22px] border border-primary/10 bg-white shadow-2xl sm:rounded-sm">
+                <div className="border-b border-primary/10 bg-primary/[0.03] px-5 py-4">
+                    <div className="text-[10px] font-black uppercase tracking-[0.16em] text-primary/40">Đổi khi nhặt hàng</div>
+                    <h3 className="mt-1 text-[18px] font-black text-primary">Lưu thay đổi trước khi thoát?</h3>
+                    <p className="mt-2 text-[13px] font-semibold leading-relaxed text-primary/55">
+                        Có {formatNumber(changedCount)} dòng đang lấy khác mã gốc. Lưu vào đơn trước khi thoát, hoặc thoát không lưu nếu muốn bỏ các đổi mã này.
+                    </p>
+                </div>
+                <div className="grid gap-2 px-5 py-4 sm:grid-cols-[1fr_auto]">
+                    <button
+                        type="button"
+                        onClick={onSave}
+                        disabled={saving}
+                        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[14px] bg-emerald-600 px-4 text-[13px] font-black uppercase tracking-[0.08em] text-white transition-all hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-55 sm:col-span-2"
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
+                            {saving ? 'progress_activity' : 'save'}
+                        </span>
+                        Lưu rồi thoát
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onDiscard}
+                        disabled={saving}
+                        className="inline-flex min-h-[42px] items-center justify-center rounded-[14px] border border-rose-200 bg-rose-50 px-4 text-[12px] font-black uppercase tracking-[0.08em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                        Thoát không lưu
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onStay}
+                        disabled={saving}
+                        className="inline-flex min-h-[42px] items-center justify-center rounded-[14px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.08em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03] disabled:cursor-not-allowed disabled:opacity-55"
+                    >
+                        Ở lại
                     </button>
                 </div>
             </div>
@@ -3950,7 +4006,16 @@ const OrderList = () => {
     const [warehousePickingReplacementSaving, setWarehousePickingReplacementSaving] = useState(false);
     const [warehousePickingReplacementSearch, setWarehousePickingReplacementSearch] = useState('');
     const [warehousePickingDeclarationPrompt, setWarehousePickingDeclarationPrompt] = useState(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+    const [warehousePickingLeavePromptOpen, setWarehousePickingLeavePromptOpen] = useState(false);
     const warehousePickingDeclarationDismissedRef = useRef(new Set());
+    const warehousePickingBackGuardActiveRef = useRef(false);
+    const warehousePickingBackGuardBypassRef = useRef(false);
+    const warehousePickingBackGuardHandlingPopRef = useRef(false);
+    const warehousePickingShouldPromptBackRef = useRef(false);
+    const warehousePickingChangedCount = useMemo(
+        () => warehousePickingReplacementRows.filter((row) => !isWarehousePickingRowUsingOriginal(row)).length,
+        [warehousePickingReplacementRows]
+    );
     const [connectedCarriers, setConnectedCarriers] = useState([]);
     const [manualCarrierOptions, setManualCarrierOptions] = useState([]);
     const [selectedCarrierCode, setSelectedCarrierCode] = useState('');
@@ -5609,6 +5674,47 @@ const OrderList = () => {
         }
     };
 
+    const pushWarehousePickingBackGuardHistoryState = useCallback(() => {
+        if (typeof window === 'undefined') return;
+
+        const currentState = window.history.state && typeof window.history.state === 'object'
+            ? window.history.state
+            : {};
+
+        window.history.pushState(
+            { ...currentState, [WAREHOUSE_PICKING_REPLACEMENT_HISTORY_KEY]: true },
+            '',
+            window.location.href
+        );
+        warehousePickingBackGuardActiveRef.current = true;
+        warehousePickingBackGuardBypassRef.current = false;
+    }, []);
+
+    const clearWarehousePickingBackGuardHistory = useCallback(() => {
+        if (typeof window === 'undefined') {
+            warehousePickingBackGuardActiveRef.current = false;
+            return;
+        }
+
+        if (warehousePickingBackGuardHandlingPopRef.current || !warehousePickingBackGuardActiveRef.current) {
+            warehousePickingBackGuardActiveRef.current = false;
+            return;
+        }
+
+        const currentState = window.history.state && typeof window.history.state === 'object'
+            ? window.history.state
+            : {};
+
+        warehousePickingBackGuardActiveRef.current = false;
+        if (!currentState[WAREHOUSE_PICKING_REPLACEMENT_HISTORY_KEY]) return;
+
+        warehousePickingBackGuardBypassRef.current = true;
+        window.history.back();
+        window.setTimeout(() => {
+            warehousePickingBackGuardBypassRef.current = false;
+        }, 0);
+    }, []);
+
     const resetWarehousePickingReplacementModal = useCallback(() => {
         setWarehousePickingReplacementOpen(false);
         setWarehousePickingReplacementOrders([]);
@@ -5617,8 +5723,11 @@ const OrderList = () => {
         setWarehousePickingReplacementLoading(false);
         setWarehousePickingReplacementSaving(false);
         setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+        setWarehousePickingLeavePromptOpen(false);
         warehousePickingDeclarationDismissedRef.current.clear();
-    }, []);
+        warehousePickingShouldPromptBackRef.current = false;
+        clearWarehousePickingBackGuardHistory();
+    }, [clearWarehousePickingBackGuardHistory]);
 
     const closeWarehousePickingReplacementModal = useCallback(() => {
         if (warehousePickingReplacementSaving) return;
@@ -5664,6 +5773,49 @@ const OrderList = () => {
             setWarehousePickingReplacementLoading(false);
         }
     }, [resetWarehousePickingReplacementModal, selectedIds]);
+
+    useEffect(() => {
+        warehousePickingShouldPromptBackRef.current = warehousePickingReplacementOpen
+            && !warehousePickingReplacementSaving
+            && warehousePickingChangedCount > 0;
+    }, [warehousePickingChangedCount, warehousePickingReplacementOpen, warehousePickingReplacementSaving]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        if (
+            warehousePickingReplacementOpen
+            && !warehousePickingBackGuardActiveRef.current
+            && !warehousePickingBackGuardBypassRef.current
+        ) {
+            pushWarehousePickingBackGuardHistoryState();
+        }
+
+        return undefined;
+    }, [pushWarehousePickingBackGuardHistoryState, warehousePickingReplacementOpen]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return undefined;
+
+        const handleWarehousePickingBack = () => {
+            if (warehousePickingBackGuardBypassRef.current || !warehousePickingBackGuardActiveRef.current) {
+                return;
+            }
+
+            if (warehousePickingShouldPromptBackRef.current) {
+                pushWarehousePickingBackGuardHistoryState();
+                setWarehousePickingLeavePromptOpen(true);
+                return;
+            }
+
+            warehousePickingBackGuardHandlingPopRef.current = true;
+            resetWarehousePickingReplacementModal();
+            warehousePickingBackGuardHandlingPopRef.current = false;
+        };
+
+        window.addEventListener('popstate', handleWarehousePickingBack);
+        return () => window.removeEventListener('popstate', handleWarehousePickingBack);
+    }, [pushWarehousePickingBackGuardHistoryState, resetWarehousePickingReplacementModal]);
 
     const dismissWarehousePickingDeclarationPrompt = useCallback(() => {
         setWarehousePickingDeclarationPrompt((current) => {
@@ -5888,6 +6040,22 @@ const OrderList = () => {
         warehousePickingReplacementRows,
         warehousePickingReplacementSaving,
     ]);
+
+    const handleWarehousePickingLeaveStay = useCallback(() => {
+        if (warehousePickingReplacementSaving) return;
+        setWarehousePickingLeavePromptOpen(false);
+    }, [warehousePickingReplacementSaving]);
+
+    const handleWarehousePickingLeaveDiscard = useCallback(() => {
+        if (warehousePickingReplacementSaving) return;
+        resetWarehousePickingReplacementModal();
+    }, [resetWarehousePickingReplacementModal, warehousePickingReplacementSaving]);
+
+    const handleWarehousePickingLeaveSave = useCallback(() => {
+        if (warehousePickingReplacementSaving) return;
+        setWarehousePickingLeavePromptOpen(false);
+        handleSubmitWarehousePickingReplacements();
+    }, [handleSubmitWarehousePickingReplacements, warehousePickingReplacementSaving]);
 
     const closePrintConfirmation = useCallback(() => {
         closePrintSession(printConfirmState.session);
@@ -8370,6 +8538,14 @@ const OrderList = () => {
                 submitting={warehousePickingDeclarationPrompt.submitting}
                 onConfirm={handleConfirmWarehousePickingDeclaration}
                 onDismiss={dismissWarehousePickingDeclarationPrompt}
+            />
+            <WarehousePickingReplacementLeavePrompt
+                open={warehousePickingLeavePromptOpen}
+                changedCount={warehousePickingChangedCount}
+                saving={warehousePickingReplacementSaving}
+                onSave={handleWarehousePickingLeaveSave}
+                onDiscard={handleWarehousePickingLeaveDiscard}
+                onStay={handleWarehousePickingLeaveStay}
             />
             <OrderInventorySlipDrawer
                 open={!!inventorySlipOrderId}

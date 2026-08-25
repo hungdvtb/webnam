@@ -6535,11 +6535,17 @@ const OrderForm = () => {
     const isExistingOrderDirty = isEdit
         && leaveGuardBaselineReadyRef.current
         && leaveGuardBaselineSnapshotRef.current !== latestLeaveGuardSnapshot;
-    const shouldPromptLeave = !loading && !saving && (
+    const shouldPromptLeave = isCompactOrderMobileLayout && !loading && !saving && (
         isEdit
             ? isExistingOrderDirty
             : hasNewOrderUnsavedContent
     );
+
+    useEffect(() => {
+        if (!isCompactOrderMobileLayout) {
+            setLeavePromptOpen(false);
+        }
+    }, [isCompactOrderMobileLayout]);
 
     useEffect(() => {
         leaveGuardBaselineReadyRef.current = false;
@@ -13972,7 +13978,7 @@ const OrderForm = () => {
                     </button>
                 </div>
             )}
-            {leavePromptOpen && (
+            {isCompactOrderMobileLayout && leavePromptOpen && (
                 <div className="fixed inset-0 z-[2600] flex items-end justify-center bg-slate-950/35 px-3 py-0 backdrop-blur-[2px] sm:items-center sm:py-6">
                     <div className="w-full max-w-md overflow-hidden rounded-t-[22px] border border-primary/10 bg-white shadow-2xl sm:rounded-sm">
                         <div className="border-b border-primary/10 bg-primary/[0.03] px-5 py-4">

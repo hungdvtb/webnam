@@ -6253,6 +6253,7 @@ class OrderController extends Controller
             $request->validate([
                 'status' => 'required|string',
                 'allow_shipping_override' => 'nullable|boolean',
+                'auto_create_export_slip' => 'nullable|boolean',
             ]);
 
             return DB::transaction(function () use ($request, $id) {
@@ -6266,13 +6267,6 @@ class OrderController extends Controller
 
                 $newStatus = $request->status;
                 $oldStatus = $order->status;
-
-                if ($newStatus === $oldStatus) {
-                    return response()->json($order->load(array_merge(
-                        $this->orderDetailRelations(),
-                        ['customer', 'shipments']
-                    )));
-                }
 
                 // Validate that the status exists in order_statuses for this account
                 $exists = \App\Models\OrderStatus::where('account_id', $order->account_id)
@@ -6344,6 +6338,50 @@ class OrderController extends Controller
                     }
                 }
 
+                $completedExportSlipItems = $this->completedStatusExportSlipItems($order);
+                $needsCompletedExportSlipConfirmation = $this->shouldConfirmCompletedExportSlipBackfill(
+                    $order,
+                    (string) $newStatus,
+                    (string) $oldStatus,
+                    $completedExportSlipItems
+                );
+
+                if ($needsCompletedExportSlipConfirmation && !$request->has('auto_create_export_slip')) {
+                    return response()->json([
+                        'message' => 'Đơn này đã qua bước xử lý/in đơn nhưng chưa có mã vận đơn hoặc phiếu xuất kho. Có tạo phiếu xuất bù khi chuyển sang giao thành công không?',
+                        'requires_export_slip_confirmation' => true,
+                        'order_id' => (int) $order->id,
+                        'order_number' => $order->order_number,
+                        'item_count' => $completedExportSlipItems->count(),
+                        'total_quantity' => InventoryQuantity::normalize($completedExportSlipItems->sum('quantity')),
+                    ], 409);
+                }
+
+                $shouldCreateCompletedExportSlip = $needsCompletedExportSlipConfirmation
+                    && $request->boolean('auto_create_export_slip');
+                $createdExportSlip = null;
+
+                if ($newStatus === $oldStatus) {
+                    if ($shouldCreateCompletedExportSlip) {
+                        $createdExportSlip = $this->createCompletedStatusExportSlip($order, (string) $oldStatus);
+                        $order->refresh();
+                    }
+
+                    $responsePayload = $order->load(array_merge(
+                        $this->orderDetailRelations(),
+                        ['customer', 'shipments']
+                    ))->toArray();
+
+                    if ($createdExportSlip) {
+                        $responsePayload['auto_export_slip'] = [
+                            'id' => (int) $createdExportSlip->id,
+                            'document_number' => $createdExportSlip->document_number,
+                        ];
+                    }
+
+                    return response()->json($responsePayload);
+                }
+
                 // Log order status change
                 \App\Models\OrderStatusLog::create([
                     'order_id'    => $order->id,
@@ -6356,17 +6394,153 @@ class OrderController extends Controller
 
                 $order->update(['status' => $newStatus]);
 
-                return response()->json($order->load(array_merge(
+                if ($shouldCreateCompletedExportSlip) {
+                    $createdExportSlip = $this->createCompletedStatusExportSlip($order, (string) $oldStatus);
+                    $order->refresh();
+                }
+
+                $responsePayload = $order->load(array_merge(
                     $this->orderDetailRelations(),
                     ['customer', 'shipments']
-                )));
+                ))->toArray();
+
+                if ($createdExportSlip) {
+                    $responsePayload['auto_export_slip'] = [
+                        'id' => (int) $createdExportSlip->id,
+                        'document_number' => $createdExportSlip->document_number,
+                    ];
+                }
+
+                return response()->json($responsePayload);
             });
         } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json(['errors' => $e->errors(), 'message' => 'Dữ liệu không hợp lệ'], 422);
+            $firstError = collect($e->errors())->flatten()->first();
+
+            return response()->json([
+                'errors' => $e->errors(),
+                'message' => $firstError ?: 'Dữ liệu không hợp lệ',
+            ], 422);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error("Order Status Update Error for ID {$id}: " . $e->getMessage());
             return response()->json(['message' => 'Có lỗi xảy ra: ' . $e->getMessage()], 500);
         }
+    }
+
+    private function shouldConfirmCompletedExportSlipBackfill(
+        Order $order,
+        string $newStatus,
+        string $oldStatus,
+        Collection $items
+    ): bool {
+        if ($newStatus !== OrderStatusCatalog::COMPLETED_CODE || $items->isEmpty()) {
+            return false;
+        }
+
+        if (!$this->orderLooksPreparedForExport($order, $oldStatus)) {
+            return false;
+        }
+
+        if ($this->orderAlreadyHasExportMarker($order)) {
+            return false;
+        }
+
+        return !$this->orderHasActiveExportSlip($order);
+    }
+
+    private function orderLooksPreparedForExport(Order $order, string $oldStatus): bool
+    {
+        if ((int) ($order->print_count ?? 0) > 0 || !empty($order->last_printed_at)) {
+            return true;
+        }
+
+        if (!empty($order->shipping_dispatched_at)) {
+            return true;
+        }
+
+        return in_array($oldStatus, [
+            OrderStatusCatalog::PRINTED_CODE,
+            OrderStatusCatalog::DISPATCHED_CODE,
+            'shipping',
+        ], true);
+    }
+
+    private function orderAlreadyHasExportMarker(Order $order): bool
+    {
+        if ((string) $order->type === 'inventory_export') {
+            return true;
+        }
+
+        if (trim((string) $order->shipping_tracking_code) !== '') {
+            return true;
+        }
+
+        return $order->hasActiveShipment();
+    }
+
+    private function orderHasActiveExportSlip(Order $order): bool
+    {
+        return InventoryDocument::query()
+            ->where('reference_type', 'order')
+            ->where('reference_id', (int) $order->id)
+            ->where('type', 'export')
+            ->whereIn('status', ['draft', 'completed'])
+            ->exists();
+    }
+
+    private function completedStatusExportSlipItems(Order $order): Collection
+    {
+        $order->loadMissing(['items']);
+
+        return $order->items
+            ->map(function (OrderItem $item) {
+                $productId = (int) ($item->actual_product_id ?: $item->product_id);
+                $quantity = InventoryQuantity::normalize($item->quantity ?? 0);
+
+                if ($productId <= 0 || $quantity <= 0) {
+                    return null;
+                }
+
+                return [
+                    'product_id' => $productId,
+                    'quantity' => $quantity,
+                    'notes' => 'Tự tạo phiếu xuất bù khi hoàn tất đơn thiếu mã vận đơn',
+                ];
+            })
+            ->filter()
+            ->groupBy('product_id')
+            ->map(function (Collection $groupedItems, $productId) {
+                return [
+                    'product_id' => (int) $productId,
+                    'quantity' => InventoryQuantity::normalize($groupedItems->sum('quantity')),
+                    'notes' => $groupedItems->pluck('notes')->filter()->unique()->implode(' | '),
+                ];
+            })
+            ->values();
+    }
+
+    private function createCompletedStatusExportSlip(Order $order, string $oldStatus): ?InventoryDocument
+    {
+        if ($this->orderHasActiveExportSlip($order)) {
+            return null;
+        }
+
+        $items = $this->completedStatusExportSlipItems($order);
+        if ($items->isEmpty()) {
+            return null;
+        }
+
+        return $this->orderInventorySlipService->createSlip($order, [
+            'type' => 'export',
+            'document_date' => now()->toDateString(),
+            'notes' => 'Tự tạo phiếu xuất bù khi chuyển đơn thiếu mã vận đơn sang giao thành công.',
+            'items' => $items->all(),
+            'meta' => [
+                'source' => 'completed_status_backfill',
+                'from_status' => $oldStatus,
+                'to_status' => OrderStatusCatalog::COMPLETED_CODE,
+                'created_from' => 'order_status_update',
+            ],
+        ], auth()->id());
     }
 
     public function restore(Request $request, $id)

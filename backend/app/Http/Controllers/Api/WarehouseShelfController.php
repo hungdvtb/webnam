@@ -91,7 +91,7 @@ class WarehouseShelfController extends Controller
             ->where('account_id', $accountId)
             ->with([
                 'product' => fn ($query) => $query
-                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
+                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'stock_quantity', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
                     ->withExists('variations'),
                 'product.unit:id,name',
                 'shelf:id,account_id,warehouse_id,name,code,floor_count,is_active',
@@ -224,7 +224,7 @@ class WarehouseShelfController extends Controller
                 'locations' => fn ($query) => $query
                     ->with([
                         'product' => fn ($query) => $query
-                            ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
+                            ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'stock_quantity', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
                             ->withExists('variations'),
                         'product.unit:id,name',
                     ])
@@ -332,6 +332,7 @@ class WarehouseShelfController extends Controller
                 'unchanged_count' => 0,
                 'removed_count' => 0,
                 'missing_skus' => [],
+                'missing_sequences' => [],
                 'assigned_locations' => [],
             ];
 
@@ -347,6 +348,10 @@ class WarehouseShelfController extends Controller
                 $summary['missing_skus'] = array_values(array_unique(array_merge(
                     $summary['missing_skus'],
                     $result['missing_skus'] ?? []
+                )));
+                $summary['missing_sequences'] = array_values(array_unique(array_merge(
+                    $summary['missing_sequences'],
+                    $result['missing_sequences'] ?? []
                 )));
                 $summary['assigned_locations'] = array_merge(
                     $summary['assigned_locations'],
@@ -385,10 +390,14 @@ class WarehouseShelfController extends Controller
     ): array {
         $accountId = $this->inventoryAccountId($request);
         $skus = $this->parseSkuList($floorInput);
-        $products = $this->productsBySku($request, $skus);
-        $productsBySku = $this->mapProductsBySku($products, $skus);
+        $sequences = $this->parseWarehouseSequenceList($floorInput);
+        $skuProducts = $this->productsBySku($request, $skus);
+        $sequenceProducts = $this->productsByWarehouseSequence($request, $sequences);
+        $productsBySku = $this->mapProductsBySku($skuProducts, $skus);
+        $productsBySequence = $this->mapProductsByWarehouseSequence($sequenceProducts, $sequences);
         $foundProducts = collect($skus)
             ->map(fn (string $sku) => $productsBySku[$this->normalizeSkuKey($sku)] ?? null)
+            ->merge(collect($sequences)->map(fn (int $sequence) => $productsBySequence[$sequence] ?? null))
             ->filter()
             ->unique('id')
             ->values();
@@ -401,6 +410,11 @@ class WarehouseShelfController extends Controller
 
         $missingSkus = collect($skus)
             ->reject(fn (string $sku) => isset($productsBySku[$this->normalizeSkuKey($sku)]))
+            ->values()
+            ->all();
+
+        $missingSequences = collect($sequences)
+            ->reject(fn (int $sequence) => isset($productsBySequence[$sequence]))
             ->values()
             ->all();
 
@@ -426,6 +440,7 @@ class WarehouseShelfController extends Controller
                 'unchanged_count' => 0,
                 'removed_count' => $removedCount,
                 'missing_skus' => $missingSkus,
+                'missing_sequences' => $missingSequences,
                 'assigned_locations' => [],
             ];
         }
@@ -471,7 +486,7 @@ class WarehouseShelfController extends Controller
             ->whereIn('product_id', $foundProductIds)
             ->with([
                 'product' => fn ($query) => $query
-                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
+                    ->select(['id', 'account_id', 'name', 'sku', 'type', 'status', 'stock_quantity', 'inventory_unit_id', 'warehouse_sequence', 'deleted_at'])
                     ->withExists('variations'),
                 'product.unit:id,name',
                 'shelf:id,account_id,warehouse_id,name,code,floor_count,is_active',
@@ -485,6 +500,7 @@ class WarehouseShelfController extends Controller
             'unchanged_count' => $unchangedCount,
             'removed_count' => $removedCount,
             'missing_skus' => $missingSkus,
+            'missing_sequences' => $missingSequences,
             'assigned_locations' => $locations
                 ->map(fn (ProductStorageLocation $location) => $this->locationPayload($location))
                 ->values()
@@ -555,6 +571,10 @@ class WarehouseShelfController extends Controller
             'product_id' => (int) $location->product_id,
             'product_name' => $product?->name,
             'product_sku' => $product?->sku,
+            'product_stock_quantity' => $product?->stock_quantity !== null ? (float) $product->stock_quantity : null,
+            'stock_quantity' => $product?->stock_quantity !== null ? (float) $product->stock_quantity : null,
+            'actual_stock' => $product?->stock_quantity !== null ? (float) $product->stock_quantity : null,
+            'available_to_sell' => $product?->stock_quantity !== null ? (float) $product->stock_quantity : null,
             'product_warehouse_sequence' => $warehouseSequence,
             'warehouse_sequence' => $warehouseSequence,
             'warehouse_pick_label' => $this->formatWarehousePickLabel($product),
@@ -667,33 +687,157 @@ class WarehouseShelfController extends Controller
         return $result;
     }
 
+    private function productsByWarehouseSequence(Request $request, array $sequences): EloquentCollection
+    {
+        $sequenceValues = collect($sequences)
+            ->map(fn ($sequence) => (int) $sequence)
+            ->filter(fn (int $sequence) => $sequence > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($sequenceValues)) {
+            return new EloquentCollection();
+        }
+
+        $accountIds = $this->productAccountIdsForRequest($request);
+
+        return Product::withoutGlobalScope('account_id')
+            ->with(['unit'])
+            ->withExists('variations')
+            ->whereIn('account_id', $accountIds)
+            ->whereIn('warehouse_sequence', $sequenceValues)
+            ->whereNotIn('type', ['configurable', 'bundle'])
+            ->get()
+            ->filter(fn (Product $product) => $product->usesWarehouseSequenceForDisplay())
+            ->sortBy(function (Product $product) use ($sequenceValues, $accountIds) {
+                $sequencePosition = $this->arrayPosition($sequenceValues, (int) $product->warehouse_sequence);
+                $accountPosition = $this->arrayPosition($accountIds, (int) $product->account_id);
+
+                return ($sequencePosition * 1000) + $accountPosition;
+            })
+            ->values();
+    }
+
+    private function mapProductsByWarehouseSequence(EloquentCollection $products, array $sequences): array
+    {
+        $sequenceValues = collect($sequences)
+            ->map(fn ($sequence) => (int) $sequence)
+            ->filter(fn (int $sequence) => $sequence > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $result = [];
+        foreach ($products as $product) {
+            $sequence = $this->warehouseSequenceForProduct($product);
+            if ($sequence !== null && in_array($sequence, $sequenceValues, true) && !isset($result[$sequence])) {
+                $result[$sequence] = $product;
+            }
+        }
+
+        return $result;
+    }
+
     private function parseSkuList(mixed $input): array
     {
         $rawValues = [];
+        $hasStructuredFields = false;
 
         if (is_array($input)) {
-            if (array_key_exists('skus', $input) && is_array($input['skus'])) {
-                $rawValues = array_merge($rawValues, $input['skus']);
+            if (array_key_exists('skus', $input)) {
+                $rawValues[] = $input['skus'];
+                $hasStructuredFields = true;
             }
 
             foreach (['expression', 'text', 'sku'] as $field) {
                 if (array_key_exists($field, $input)) {
                     $rawValues[] = $input[$field];
+                    $hasStructuredFields = true;
                 }
             }
 
-            if (empty($rawValues)) {
+            if ($this->hasWarehouseSequenceFields($input)) {
+                $hasStructuredFields = true;
+            }
+
+            if (empty($rawValues) && !$hasStructuredFields) {
                 $rawValues = $input;
             }
         } else {
             $rawValues[] = $input;
         }
 
-        return collect($rawValues)
-            ->flatMap(fn ($value) => preg_split('/[\s,;=|]+/u', (string) $value) ?: [])
+        return collect($this->tokenizeListValues($rawValues))
             ->map(fn ($sku) => trim((string) $sku))
             ->filter()
             ->unique(fn (string $sku) => $this->normalizeSkuKey($sku))
+            ->values()
+            ->all();
+    }
+
+    private function parseWarehouseSequenceList(mixed $input): array
+    {
+        if (!is_array($input)) {
+            return [];
+        }
+
+        $rawValues = [];
+        foreach ([
+            'warehouse_sequences',
+            'warehouse_sequence',
+            'sequences',
+            'sequence_numbers',
+            'sequence_number',
+            'stt',
+            'numbers',
+        ] as $field) {
+            if (array_key_exists($field, $input)) {
+                $rawValues[] = $input[$field];
+            }
+        }
+
+        return collect($this->tokenizeListValues($rawValues))
+            ->map(fn ($value) => trim((string) $value))
+            ->filter(fn (string $value) => ctype_digit($value))
+            ->map(fn (string $value) => (int) ltrim($value, '0'))
+            ->filter(fn (int $sequence) => $sequence > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function hasWarehouseSequenceFields(array $input): bool
+    {
+        foreach ([
+            'warehouse_sequences',
+            'warehouse_sequence',
+            'sequences',
+            'sequence_numbers',
+            'sequence_number',
+            'stt',
+            'numbers',
+        ] as $field) {
+            if (array_key_exists($field, $input)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function tokenizeListValues(array $rawValues): array
+    {
+        return collect($rawValues)
+            ->flatMap(function ($value) {
+                if (is_array($value)) {
+                    return $this->tokenizeListValues($value);
+                }
+
+                return preg_split('/[\s,;=|]+/u', (string) $value) ?: [];
+            })
+            ->map(fn ($token) => trim((string) $token))
+            ->filter()
             ->values()
             ->all();
     }

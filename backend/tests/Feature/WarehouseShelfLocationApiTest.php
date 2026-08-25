@@ -101,6 +101,60 @@ class WarehouseShelfLocationApiTest extends TestCase
         ]);
     }
 
+    public function test_can_assign_products_by_warehouse_sequence_numbers_per_floor(): void
+    {
+        [$account] = $this->authenticate();
+        $warehouse = $this->createWarehouse($account);
+        $firstProduct = $this->createProduct($account, ['sku' => 'AMTRA-STT-1', 'warehouse_sequence' => 1]);
+        $secondProduct = $this->createProduct($account, ['sku' => 'AMTRA-STT-2', 'warehouse_sequence' => 2]);
+        $fifthProduct = $this->createProduct($account, ['sku' => 'AMTRA-STT-5', 'warehouse_sequence' => 5]);
+
+        $shelfResponse = $this
+            ->withHeaders($this->headers($account))
+            ->postJson('/api/warehouse-shelves', [
+                'warehouse_id' => $warehouse->id,
+                'name' => 'Kệ nhập STT',
+                'code' => 'KSTT',
+                'floor_count' => 4,
+            ])
+            ->assertCreated();
+
+        $shelfId = $shelfResponse->json('data.id');
+
+        $this
+            ->withHeaders($this->headers($account))
+            ->postJson("/api/warehouse-shelves/{$shelfId}/assign", [
+                'mode' => 'merge',
+                'floors' => [
+                    '1' => ['warehouse_sequences' => [1, 2, 999]],
+                    '2' => ['warehouse_sequences' => '5'],
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.assigned_count', 3)
+            ->assertJsonPath('data.missing_sequences.0', 999)
+            ->assertJsonPath('data.missing_skus', []);
+
+        $this->assertDatabaseHas('product_storage_locations', [
+            'account_id' => $account->id,
+            'product_id' => $firstProduct->id,
+            'warehouse_shelf_id' => $shelfId,
+            'floor_number' => 1,
+        ]);
+        $this->assertDatabaseHas('product_storage_locations', [
+            'account_id' => $account->id,
+            'product_id' => $secondProduct->id,
+            'warehouse_shelf_id' => $shelfId,
+            'floor_number' => 1,
+        ]);
+        $this->assertDatabaseHas('product_storage_locations', [
+            'account_id' => $account->id,
+            'product_id' => $fifthProduct->id,
+            'warehouse_shelf_id' => $shelfId,
+            'floor_number' => 2,
+        ]);
+    }
+
     public function test_order_print_data_uses_actual_product_storage_location(): void
     {
         [$account, $user] = $this->authenticate();

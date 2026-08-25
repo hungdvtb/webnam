@@ -24,6 +24,7 @@ const shelfProductSearchDefaultFilters = {
 const sequenceProductSearchDefaultFilters = {
     ...shelfProductSearchDefaultFilters,
     categoryId: '',
+    positiveStockOnly: false,
 };
 const shelfProductTypeOptions = [
     { value: '', label: 'Tất cả loại' },
@@ -176,9 +177,23 @@ const resolveProductImage = (product) => normalizeText(
 );
 
 const resolveProductStock = (product) => parseQuantityNumber(
+    product?.actual_stock,
     product?.available_to_sell,
     product?.computed_stock,
-    product?.stock_quantity
+    product?.stock_quantity,
+    product?.product_stock_quantity,
+    product?.storage_location?.actual_stock,
+    product?.storage_location?.available_to_sell,
+    product?.storage_location?.computed_stock,
+    product?.storage_location?.stock_quantity,
+    product?.shelf_location?.actual_stock,
+    product?.shelf_location?.available_to_sell,
+    product?.shelf_location?.computed_stock,
+    product?.shelf_location?.stock_quantity,
+    product?.product?.actual_stock,
+    product?.product?.available_to_sell,
+    product?.product?.computed_stock,
+    product?.product?.stock_quantity
 );
 
 const productUsesWarehouseSequence = (product) => {
@@ -347,6 +362,10 @@ const buildSequenceManagerRows = (productEntries = [], locations = [], includeLo
             ...entry,
             product_id: productId || entry.product_id,
             warehouse_sequence: sequence,
+            stock_quantity: entry.stock_quantity ?? location?.stock_quantity ?? location?.product?.stock_quantity,
+            actual_stock: entry.actual_stock ?? location?.actual_stock ?? location?.available_to_sell,
+            available_to_sell: entry.available_to_sell ?? location?.available_to_sell,
+            computed_stock: entry.computed_stock ?? location?.computed_stock,
             shelf_location: location,
             location_label: location?.location_label || entry.location_label || '',
         });
@@ -367,6 +386,10 @@ const buildSequenceManagerRows = (productEntries = [], locations = [], includeLo
                 name: location?.product_name,
                 product_name: location?.product_name,
                 warehouse_sequence: resolveProductWarehouseSequence(location),
+                stock_quantity: location?.stock_quantity ?? location?.product?.stock_quantity,
+                actual_stock: location?.actual_stock ?? location?.available_to_sell,
+                available_to_sell: location?.available_to_sell,
+                computed_stock: location?.computed_stock,
                 entry_kind: 'product',
                 shelf_location: location,
                 location_label: location?.location_label || '',
@@ -406,7 +429,45 @@ const createFloorDrafts = (floorCount = 4) => {
         }, {});
 };
 
-const countSkuTokens = (value) => splitSkuTokens(value).length;
+const parseFloorQuickInput = (value) => {
+    const sequenceSet = new Set();
+    const skuSet = new Set();
+    const warehouseSequences = [];
+    const skus = [];
+
+    splitSkuTokens(value).forEach((token) => {
+        if (/^\d+$/.test(token)) {
+            const sequence = Number(normalizeWarehouseSequenceDraft(token));
+            if (Number.isFinite(sequence) && sequence > 0 && !sequenceSet.has(sequence)) {
+                sequenceSet.add(sequence);
+                warehouseSequences.push(sequence);
+            }
+            return;
+        }
+
+        const skuKey = normalizeSkuKey(token);
+        if (skuKey && !skuSet.has(skuKey)) {
+            skuSet.add(skuKey);
+            skus.push(token);
+        }
+    });
+
+    return {
+        skus,
+        warehouse_sequences: warehouseSequences,
+        count: skus.length + warehouseSequences.length,
+    };
+};
+
+const countFloorQuickTokens = (value) => parseFloorQuickInput(value).count;
+
+const parseExactWarehouseSequenceSearch = (value) => {
+    const searchValue = normalizeText(value);
+    if (!/^\d+$/.test(searchValue)) return null;
+
+    const sequence = Number(normalizeWarehouseSequenceDraft(searchValue));
+    return Number.isFinite(sequence) && sequence > 0 ? sequence : null;
+};
 
 const escapePrintHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -464,13 +525,14 @@ const SequenceManagerModal = ({
     onPrintSelected,
     onPrintLabelsSelected,
     onClose,
+    selectedPrintCount,
 }) => {
     if (!open) return null;
 
     const selectedKeySet = new Set(selectedKeys || []);
     const visibleKeys = rows.map((row) => row.sequence_key || buildSequenceRowKey(row)).filter(Boolean);
     const allVisibleSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selectedKeySet.has(key));
-    const selectedCount = selectedKeySet.size;
+    const selectedCount = Number.isFinite(selectedPrintCount) ? selectedPrintCount : selectedKeySet.size;
     const activeFilterBadge = filterCount > 0 ? `${filterCount} lọc` : 'Chưa lọc';
 
     return (
@@ -569,6 +631,15 @@ const SequenceManagerModal = ({
                                 </option>
                             ))}
                         </select>
+                        <label className="inline-flex h-10 min-w-[150px] flex-1 cursor-pointer select-none items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-bold text-primary/70 transition hover:border-primary/30 xl:flex-none">
+                            <input
+                                type="checkbox"
+                                checked={Boolean(filters.positiveStockOnly)}
+                                onChange={(event) => onFilterChange('positiveStockOnly', event.target.checked)}
+                                className="size-4 accent-primary"
+                            />
+                            <span>Tồn kho dương</span>
+                        </label>
                         <select
                             value={filters.categoryId || ''}
                             onChange={(event) => onFilterChange('categoryId', event.target.value)}
@@ -1237,6 +1308,7 @@ const WarehouseShelfManager = () => {
         sequenceFilters.type,
         sequenceFilters.stock,
         sequenceFilters.categoryId,
+        sequenceFilters.positiveStockOnly,
         sequenceFilters.attributeValue,
         sequenceFilters.attributeValue2,
     ].filter(Boolean).length), [sequenceFilters]);
@@ -1261,6 +1333,10 @@ const WarehouseShelfManager = () => {
                 key: 'stock',
                 label: sequenceFilters.stock === 'in_stock' ? 'Còn hàng' : 'Hết hàng',
             });
+        }
+
+        if (sequenceFilters.positiveStockOnly) {
+            pills.push({ key: 'positive-stock-only', label: 'Tồn kho dương' });
         }
 
         if (sequenceFilters.categoryId) {
@@ -1299,6 +1375,7 @@ const WarehouseShelfManager = () => {
 
         try {
             const searchValue = normalizeText(value);
+            const exactSequenceSearch = parseExactWarehouseSequenceSearch(searchValue);
             const productParams = {
                 picker: 1,
                 fast_picker: 1,
@@ -1316,11 +1393,13 @@ const WarehouseShelfManager = () => {
                 productParams.type = sequenceFilters.type;
             }
 
-            if (sequenceFilters.stock === 'in_stock') {
+            const positiveStockOnly = Boolean(sequenceFilters.positiveStockOnly);
+
+            if (sequenceFilters.stock === 'in_stock' || positiveStockOnly) {
                 productParams.min_stock = 1;
             }
 
-            if (sequenceFilters.stock === 'out_of_stock') {
+            if (sequenceFilters.stock === 'out_of_stock' && !positiveStockOnly) {
                 productParams.max_stock = 0;
             }
 
@@ -1355,7 +1434,12 @@ const WarehouseShelfManager = () => {
                 productEntries = productEntries.filter((entry) => entry.entry_kind === 'variation' || entry.parent_product_id);
             }
 
-            if (sequenceFilters.stock === 'in_stock') {
+            if (sequenceFilters.positiveStockOnly) {
+                productEntries = productEntries.filter((entry) => {
+                    const stock = resolveProductStock(entry);
+                    return stock !== null && stock > 0;
+                });
+            } else if (sequenceFilters.stock === 'in_stock') {
                 productEntries = productEntries.filter((entry) => {
                     const stock = resolveProductStock(entry);
                     return stock === null || stock > 0;
@@ -1371,7 +1455,11 @@ const WarehouseShelfManager = () => {
 
             const locationData = extractPayload(locationResponse) || {};
             const locations = Array.isArray(locationData.locations) ? locationData.locations : [];
-            const rows = buildSequenceManagerRows(productEntries, locations, activeSequenceFilterCount === 0).slice(0, 200);
+            let rows = buildSequenceManagerRows(productEntries, locations, activeSequenceFilterCount === 0);
+            if (exactSequenceSearch !== null) {
+                rows = rows.filter((row) => resolveProductWarehouseSequence(row) === exactSequenceSearch);
+            }
+            rows = rows.slice(0, 200);
             const rowByKey = rows.reduce((map, row) => {
                 const key = row.sequence_key || buildSequenceRowKey(row);
                 if (key) {
@@ -1448,6 +1536,14 @@ const WarehouseShelfManager = () => {
     const updateSequenceFilter = useCallback((field, value) => {
         setSequenceFilters((previous) => {
             const next = { ...previous, [field]: value };
+
+            if (field === 'positiveStockOnly' && value && next.stock === 'out_of_stock') {
+                next.stock = '';
+            }
+
+            if (field === 'stock' && value === 'out_of_stock') {
+                next.positiveStockOnly = false;
+            }
 
             if (field === 'attributeId') {
                 next.attributeValue = '';
@@ -1541,7 +1637,7 @@ const WarehouseShelfManager = () => {
         });
     }, [sequenceSelectedKeys]);
 
-    const getSelectedSequenceRows = useCallback(() => {
+    const selectedSequenceRowsForPrint = useMemo(() => {
         const visibleRowByKey = sequenceRows.reduce((map, row) => {
             const key = row.sequence_key || buildSequenceRowKey(row);
             if (key) {
@@ -1550,10 +1646,21 @@ const WarehouseShelfManager = () => {
             return map;
         }, {});
 
-        return sequenceSelectedKeys
+        const rows = sequenceSelectedKeys
             .map((key) => visibleRowByKey[key] || sequenceSelectedRowsByKey[key])
             .filter(Boolean);
-    }, [sequenceRows, sequenceSelectedKeys, sequenceSelectedRowsByKey]);
+
+        if (!sequenceFilters.positiveStockOnly) {
+            return rows;
+        }
+
+        return rows.filter((row) => {
+            const stock = resolveProductStock(row);
+            return stock !== null && stock > 0;
+        });
+    }, [sequenceRows, sequenceSelectedKeys, sequenceSelectedRowsByKey, sequenceFilters.positiveStockOnly]);
+
+    const getSelectedSequenceRows = useCallback(() => selectedSequenceRowsForPrint, [selectedSequenceRowsForPrint]);
 
     const printSelectedSequenceRows = useCallback(() => {
         const rowsToPrint = getSelectedSequenceRows();
@@ -2163,14 +2270,18 @@ const WarehouseShelfManager = () => {
     const saveAllFloors = async () => {
         if (!selectedShelf) return;
         const floors = Object.entries(floorDrafts).reduce((payload, [floorNumber, value]) => {
-            if (countSkuTokens(value) > 0) {
-                payload[floorNumber] = value || '';
+            const parsedInput = parseFloorQuickInput(value);
+            if (parsedInput.count > 0) {
+                payload[floorNumber] = {
+                    ...(parsedInput.skus.length ? { skus: parsedInput.skus } : {}),
+                    ...(parsedInput.warehouse_sequences.length ? { warehouse_sequences: parsedInput.warehouse_sequences } : {}),
+                };
             }
             return payload;
         }, {});
 
         if (Object.keys(floors).length === 0) {
-            setLastResult({ type: 'idle', message: 'Chưa có mã nào trong các ô nhập.' });
+            setLastResult({ type: 'idle', message: 'Chưa có STT/SKU nào trong các ô nhập.' });
             return;
         }
 
@@ -2435,7 +2546,10 @@ const WarehouseShelfManager = () => {
                                                     <>
                                                         Đã lưu vị trí {savedCount} mã.
                                                         {lastResult.missing_skus?.length ? (
-                                                            <span className="ml-2 text-brick">Không tìm thấy: {lastResult.missing_skus.join(', ')}</span>
+                                                            <span className="ml-2 text-brick">Không tìm thấy SKU: {lastResult.missing_skus.join(', ')}</span>
+                                                        ) : null}
+                                                        {lastResult.missing_sequences?.length ? (
+                                                            <span className="ml-2 text-brick">Không tìm thấy STT: {lastResult.missing_sequences.join(', ')}</span>
                                                         ) : null}
                                                     </>
                                                 );
@@ -2453,7 +2567,7 @@ const WarehouseShelfManager = () => {
                                         <div className="space-y-4">
                                             {selectedShelfFloors.map((floor) => {
                                                 const draft = floorDrafts[floor.floor_number] || '';
-                                                const draftCount = countSkuTokens(draft);
+                                                const draftCount = countFloorQuickTokens(draft);
 
                                                 return (
                                                     <section key={floor.floor_number} className="overflow-hidden rounded-sm border border-primary/10 bg-white">
@@ -2728,10 +2842,10 @@ const WarehouseShelfManager = () => {
                                                                     value={draft}
                                                                     onChange={(event) => updateFloorDraft(floor.floor_number, event.target.value)}
                                                                     className={`${textareaClass} w-full font-mono`}
-                                                                    placeholder={`Dán SKU cho tầng ${floor.floor_number}`}
+                                                                    placeholder={`VD tầng ${floor.floor_number}: 1 2 5 6 hoặc ML80-AMTRA`}
                                                                 />
                                                                 <div className="flex items-center justify-between text-[11px] font-bold text-primary/45">
-                                                                    <span>{draftCount} mã trong ô nhập</span>
+                                                                    <span>{draftCount} STT/SKU trong ô nhập</span>
                                                                     {draft ? (
                                                                         <button type="button" onClick={() => updateFloorDraft(floor.floor_number, '')} className="text-brick transition hover:text-umber">
                                                                             Xóa ô nhập
@@ -2829,6 +2943,7 @@ const WarehouseShelfManager = () => {
                 error={sequenceError}
                 rowErrors={sequenceRowErrors}
                 selectedKeys={sequenceSelectedKeys}
+                selectedPrintCount={selectedSequenceRowsForPrint.length}
                 categoryOptions={categories}
                 filterAttributes={productQuickFilterAttributes}
                 filters={sequenceFilters}

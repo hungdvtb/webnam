@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { orderApi, productApi, shipmentApi, warehouseApi } from '../../services/api';
+import { orderApi, productApi, productReplacementApi, shipmentApi, warehouseApi } from '../../services/api';
 import { useNavigate, useLocation } from 'react-router-dom';
 import AccountSelector from '../../components/AccountSelector';
 import { useAuth } from '../../context/AuthContext';
@@ -50,10 +50,14 @@ import {
     parseQuickSelectCodes,
     removeOrderIdsFromReturnWorkbench,
 } from '../../utils/orderReturnWorkbench';
+import { updateOrderStatusWithExportSlipPrompt } from '../../utils/orderStatusUpdate';
 import {
+    getOrderItemActualDisplayName,
+    getOrderItemActualDisplaySku,
     getOrderItemDisplayName,
     getOrderItemDisplaySku,
     getOrderItemOriginalName,
+    hasOrderItemActualProductOverride,
 } from '../../utils/orderItemDisplay';
 import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
@@ -105,6 +109,9 @@ const SHIPPING_FEE_COLUMN_ID = 'shipping_fee';
 const ORDER_SOURCE_COLUMN_ID = 'source';
 const ORDER_PROFIT_CENTER_COLUMN_ID = 'profit_center';
 const ORDER_COLUMN_STORAGE_SCOPE_PAGE = 'order_list';
+const WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX = 'warehouse_picking_replacement_history_v1';
+const WAREHOUSE_PICKING_HISTORY_LIMIT = 6;
+const WAREHOUSE_PICKING_HISTORY_MAX_SOURCES = 400;
 const ORDER_SOURCE_BADGE_CLASSNAMES = {
     FB: 'border-sky-200 bg-sky-50 text-sky-700',
     GG: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -119,6 +126,53 @@ const normalizeStorageScopeSegment = (value, fallback = 'default') => {
     const normalizedValue = String(value ?? '').trim();
     if (!normalizedValue) return fallback;
     return normalizedValue.replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+
+const getWarehousePickingHistoryStorageKey = () => {
+    if (typeof window === 'undefined') {
+        return `${WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX}::default::default`;
+    }
+
+    return [
+        WAREHOUSE_PICKING_HISTORY_STORAGE_KEY_PREFIX,
+        normalizeStorageScopeSegment(window.localStorage.getItem('activeAccountId') || 'default'),
+        normalizeStorageScopeSegment(window.localStorage.getItem('activeSiteCode') || 'default'),
+    ].join('::');
+};
+
+const readWarehousePickingHistoryStore = () => {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const rawValue = window.localStorage.getItem(getWarehousePickingHistoryStorageKey());
+        const parsedValue = rawValue ? JSON.parse(rawValue) : {};
+        return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+            ? parsedValue
+            : {};
+    } catch (error) {
+        console.error('Cannot read warehouse picking replacement history.', error);
+        return {};
+    }
+};
+
+const writeWarehousePickingHistoryStore = (store = {}) => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        const normalizedEntries = Object.entries(store)
+            .filter(([, entries]) => Array.isArray(entries) && entries.length > 0)
+            .slice(-WAREHOUSE_PICKING_HISTORY_MAX_SOURCES);
+        const nextStore = Object.fromEntries(normalizedEntries);
+        const storageKey = getWarehousePickingHistoryStorageKey();
+
+        if (Object.keys(nextStore).length === 0) {
+            window.localStorage.removeItem(storageKey);
+        } else {
+            window.localStorage.setItem(storageKey, JSON.stringify(nextStore));
+        }
+    } catch (error) {
+        console.error('Cannot write warehouse picking replacement history.', error);
+    }
 };
 
 const buildOrderColumnStorageKey = ({ userId, accountId, siteCode }) => [
@@ -506,6 +560,1064 @@ const formatOrderItemQuantity = (value) => {
     return String(roundedValue);
 };
 const formatMoney = (value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(value || 0));
+const normalizeWarehouseReplacementText = (value = '') => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+
+const resolveWarehouseReplacementNumber = (...values) => {
+    for (const value of values) {
+        if (value === null || value === undefined || value === '') continue;
+        const numericValue = Number(typeof value === 'string' ? value.replace(',', '.') : value);
+        if (Number.isFinite(numericValue)) return numericValue;
+    }
+
+    return null;
+};
+
+const getWarehousePickingLineNumber = (item, index = 0) => {
+    const sortOrder = Number(item?.sort_order);
+    if (Number.isFinite(sortOrder) && sortOrder > 0) {
+        return String(Math.trunc(sortOrder));
+    }
+
+    return String((Number(index) || 0) + 1);
+};
+
+const getWarehousePickingCandidateProductId = (entry) => Number(
+    entry?.target_product_id
+    ?? entry?.product_id
+    ?? entry?.product?.id
+    ?? entry?.id
+    ?? 0
+) || 0;
+
+const getWarehousePickingCandidateName = (entry, fallback = 'Sản phẩm') => String(
+    entry?.display_name
+    ?? entry?.name
+    ?? entry?.product?.name
+    ?? fallback
+    ?? 'Sản phẩm'
+).trim();
+
+const getWarehousePickingCandidateSku = (entry, fallback = '') => String(
+    entry?.display_sku
+    ?? entry?.sku
+    ?? entry?.product?.sku
+    ?? fallback
+    ?? ''
+).trim();
+
+const getWarehousePickingCandidateKey = (entry) => {
+    const productId = getWarehousePickingCandidateProductId(entry);
+    if (productId > 0) return `product:${productId}`;
+
+    const sku = normalizeWarehouseReplacementText(getWarehousePickingCandidateSku(entry));
+    if (sku) return `sku:${sku}`;
+
+    const name = normalizeWarehouseReplacementText(getWarehousePickingCandidateName(entry, ''));
+    return name ? `name:${name}` : '';
+};
+
+const getWarehousePickingCandidateLocationText = (entry = {}) => {
+    const directLocation = String(
+        entry.location_text
+        ?? entry.warehouse_location_text
+        ?? entry.location
+        ?? entry.shelf_location
+        ?? ''
+    ).trim();
+    if (directLocation) return directLocation;
+
+    const locations = Array.isArray(entry.warehouse_locations)
+        ? entry.warehouse_locations
+        : (Array.isArray(entry.locations) ? entry.locations : []);
+
+    return locations
+        .map((location) => String(
+            location?.location_text
+            ?? location?.display_name
+            ?? location?.name
+            ?? [location?.warehouse_name, location?.shelf_name, location?.code].filter(Boolean).join(' / ')
+            ?? ''
+        ).trim())
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(', ');
+};
+
+const normalizeWarehousePickingCandidate = (entry, meta = {}) => {
+    if (!entry || typeof entry !== 'object') return null;
+
+    const productId = getWarehousePickingCandidateProductId(entry);
+    const name = getWarehousePickingCandidateName(entry);
+    const sku = getWarehousePickingCandidateSku(entry);
+    const key = getWarehousePickingCandidateKey({ ...entry, product_id: productId, name, sku });
+    if (!key) return null;
+
+    const availableToSell = resolveWarehouseReplacementNumber(
+        entry.available_to_sell,
+        entry.computed_stock,
+        entry.stock_quantity,
+        entry.product?.available_to_sell,
+        entry.product?.stock_quantity
+    );
+
+    return {
+        ...entry,
+        ...meta,
+        key,
+        product_id: productId || null,
+        name,
+        display_name: name,
+        sku,
+        display_sku: sku,
+        available_to_sell: availableToSell,
+        cost_price: resolveWarehouseReplacementNumber(entry.cost_price, entry.replacement_cost_price, entry.product?.cost_price, entry.product?.expected_cost),
+        price: resolveWarehouseReplacementNumber(entry.price, entry.list_price, entry.product?.price),
+        location_text: getWarehousePickingCandidateLocationText(entry),
+    };
+};
+
+const mergeWarehousePickingCandidates = (...candidateGroups) => {
+    const seenKeys = new Set();
+    const candidates = [];
+
+    candidateGroups.flat().forEach((entry) => {
+        const candidate = normalizeWarehousePickingCandidate(entry);
+        if (!candidate?.key || seenKeys.has(candidate.key)) return;
+
+        seenKeys.add(candidate.key);
+        candidates.push(candidate);
+    });
+
+    return candidates;
+};
+
+const getWarehousePickingHistorySourceKey = (source) => getWarehousePickingCandidateKey(source);
+
+const normalizeWarehousePickingHistoryCandidate = (entry) => normalizeWarehousePickingCandidate(entry, {
+    is_history_candidate: true,
+});
+
+const getWarehousePickingHistoryCandidates = (source) => {
+    const sourceKey = getWarehousePickingHistorySourceKey(source);
+    if (!sourceKey) return [];
+
+    const store = readWarehousePickingHistoryStore();
+    return mergeWarehousePickingCandidates(store[sourceKey] || [])
+        .map((candidate) => ({
+            ...candidate,
+            is_history_candidate: true,
+        }));
+};
+
+const removeWarehousePickingHistoryCandidate = (source, candidateToRemove) => {
+    const sourceKey = getWarehousePickingHistorySourceKey(source);
+    const candidateKey = getWarehousePickingCandidateKey(candidateToRemove);
+    if (!sourceKey || !candidateKey) return [];
+
+    const store = readWarehousePickingHistoryStore();
+    const nextEntries = mergeWarehousePickingCandidates(store[sourceKey] || [])
+        .filter((candidate) => candidate.key !== candidateKey)
+        .slice(0, WAREHOUSE_PICKING_HISTORY_LIMIT);
+
+    if (nextEntries.length > 0) {
+        store[sourceKey] = nextEntries;
+    } else {
+        delete store[sourceKey];
+    }
+
+    writeWarehousePickingHistoryStore(store);
+    return nextEntries.map((candidate) => ({
+        ...candidate,
+        is_history_candidate: true,
+    }));
+};
+
+const persistWarehousePickingHistoryCandidates = (source, candidates = []) => {
+    const sourceKey = getWarehousePickingHistorySourceKey(source);
+    const sourceCandidateKey = getWarehousePickingCandidateKey(source);
+    if (!sourceKey) return [];
+
+    const nextCandidates = mergeWarehousePickingCandidates(candidates)
+        .filter((candidate) => candidate.key && candidate.key !== sourceCandidateKey)
+        .slice(0, WAREHOUSE_PICKING_HISTORY_LIMIT);
+    if (nextCandidates.length === 0) return getWarehousePickingHistoryCandidates(source);
+
+    const store = readWarehousePickingHistoryStore();
+    const currentEntries = mergeWarehousePickingCandidates(store[sourceKey] || []);
+    const nextKeys = new Set(nextCandidates.map((candidate) => candidate.key));
+
+    store[sourceKey] = mergeWarehousePickingCandidates(
+        nextCandidates.map((candidate) => ({
+            ...candidate,
+            is_history_candidate: true,
+            last_used_at: Date.now(),
+        })),
+        currentEntries.filter((candidate) => !nextKeys.has(candidate.key))
+    ).slice(0, WAREHOUSE_PICKING_HISTORY_LIMIT);
+
+    writeWarehousePickingHistoryStore(store);
+    return getWarehousePickingHistoryCandidates(source);
+};
+
+const persistWarehousePickingHistoryFromRows = (rows = []) => {
+    if (!Array.isArray(rows) || rows.length === 0) return;
+
+    const usedAt = Date.now();
+
+    rows.forEach((row) => {
+        if (!row || isWarehousePickingRowUsingOriginal(row)) return;
+
+        const selectedCandidate = getWarehousePickingSelectedCandidate(row);
+        const historyCandidate = normalizeWarehousePickingHistoryCandidate({
+            ...selectedCandidate,
+            last_used_at: usedAt,
+        });
+
+        if (!historyCandidate?.key || historyCandidate.key === row.original_key) return;
+        persistWarehousePickingHistoryCandidates(row.original, [historyCandidate]);
+    });
+};
+
+const buildWarehousePickingOriginalCandidate = (item) => normalizeWarehousePickingCandidate({
+    product_id: Number(item?.product_id) || 0,
+    id: Number(item?.product_id) || 0,
+    name: getOrderItemDisplayName(item, 'Sản phẩm'),
+    sku: getOrderItemDisplaySku(item, ''),
+    cost_price: item?.cost_price ?? item?.product?.cost_price ?? item?.product?.expected_cost,
+    price: item?.price,
+    available_to_sell: item?.product?.available_to_sell ?? item?.product?.stock_quantity ?? item?.product?.computed_stock,
+    unit_name: item?.unit_name ?? item?.product?.unit?.name,
+}, {
+    is_original_order_product: true,
+});
+
+const buildWarehousePickingActualCandidate = (item) => {
+    if (!hasOrderItemActualProductOverride(item)) return null;
+
+    const actualProduct = item?.actual_product || item?.actualProduct || {};
+
+    return normalizeWarehousePickingCandidate({
+        ...actualProduct,
+        product_id: Number(item?.actual_product_id) || Number(actualProduct?.id) || 0,
+        id: Number(item?.actual_product_id) || Number(actualProduct?.id) || 0,
+        name: getOrderItemActualDisplayName(item, actualProduct?.name || ''),
+        sku: getOrderItemActualDisplaySku(item, actualProduct?.sku || ''),
+        cost_price: actualProduct?.cost_price ?? actualProduct?.expected_cost ?? item?.cost_price,
+        price: item?.price,
+        available_to_sell: actualProduct?.available_to_sell ?? actualProduct?.stock_quantity ?? actualProduct?.computed_stock,
+    }, {
+        is_current_actual_product: true,
+    });
+};
+
+const getWarehousePickingSelectedCandidate = (row) => (
+    row?.candidates?.find((candidate) => candidate.key === row.selected_key)
+    || row?.original
+    || null
+);
+
+const isWarehousePickingRowUsingOriginal = (row) => (
+    !row?.selected_key || row.selected_key === row.original_key
+);
+
+const EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT = {
+    open: false,
+    rowId: '',
+    source: null,
+    candidate: null,
+    askKey: '',
+    submitting: false,
+};
+
+const getWarehousePickingDeclarationAskKey = (row, candidate) => {
+    const sourceKey = row?.original_key || getWarehousePickingCandidateKey(row?.original);
+    const candidateKey = getWarehousePickingCandidateKey(candidate);
+
+    if (!sourceKey || !candidateKey || sourceKey === candidateKey) return '';
+
+    return `${sourceKey}=>${candidateKey}`;
+};
+
+const isWarehousePickingCandidateDeclaredForRow = (row, candidate) => {
+    const candidateKey = getWarehousePickingCandidateKey(candidate);
+    if (!candidateKey || candidateKey === row?.original_key) return true;
+
+    if (candidate?.is_declared_replacement) {
+        return true;
+    }
+
+    return (Array.isArray(row?.candidates) ? row.candidates : []).some((entry) => {
+        const entryKey = getWarehousePickingCandidateKey(entry);
+
+        return entryKey === candidateKey && (entry?.is_declared_replacement || entry?.replacement_group_id);
+    });
+};
+
+const shouldAskToDeclareWarehousePickingCandidate = (row, candidate, dismissedAskKeys) => {
+    const askKey = getWarehousePickingDeclarationAskKey(row, candidate);
+    if (!askKey || dismissedAskKeys?.has?.(askKey)) return false;
+
+    const sourceSku = String(row?.original?.sku || '').trim();
+    const candidateSku = String(candidate?.sku || '').trim();
+    if (!sourceSku || !candidateSku || normalizeWarehouseReplacementText(sourceSku) === normalizeWarehouseReplacementText(candidateSku)) {
+        return false;
+    }
+
+    return !isWarehousePickingCandidateDeclaredForRow(row, candidate);
+};
+
+const buildWarehousePickingRowSearchText = (row) => normalizeWarehouseReplacementText([
+    row?.line_number,
+    row?.order_number,
+    row?.original?.name,
+    row?.original?.sku,
+    getWarehousePickingSelectedCandidate(row)?.name,
+    getWarehousePickingSelectedCandidate(row)?.sku,
+].filter(Boolean).join(' '));
+
+const buildWarehousePickingFallbackReplacementCandidates = (groups = [], sku = '') => {
+    const skuKey = normalizeWarehouseReplacementText(sku);
+    if (!skuKey) return [];
+
+    const matchedGroup = (Array.isArray(groups) ? groups : []).find((group) => (
+        (Array.isArray(group?.items) ? group.items : []).some((item) => (
+            normalizeWarehouseReplacementText(getWarehousePickingCandidateSku(item)) === skuKey
+        ))
+    ));
+
+    return matchedGroup ? mergeWarehousePickingCandidates(matchedGroup.items || []) : [];
+};
+
+const buildWarehousePickingRowsForOrders = async (ordersForPicking = []) => {
+    const rows = [];
+
+    for (const order of ordersForPicking) {
+        const items = Array.isArray(order?.items) ? order.items : [];
+        const orderRows = await Promise.all(items.map(async (item, index) => {
+            const original = buildWarehousePickingOriginalCandidate(item);
+            if (!original) return null;
+
+            const currentActual = buildWarehousePickingActualCandidate(item);
+            const productId = Number(item?.product_id) || 0;
+            const sku = getOrderItemDisplaySku(item, '');
+            const historyCandidates = getWarehousePickingHistoryCandidates(original);
+            let lookupCandidates = [];
+
+            try {
+                const response = await productReplacementApi.lookup({
+                    product_id: productId || undefined,
+                    sku: sku || undefined,
+                    locked_price: resolveWarehouseReplacementNumber(item?.price) ?? 0,
+                    quantity: resolveWarehouseReplacementNumber(item?.quantity) ?? 1,
+                });
+                const payload = response.data?.data || {};
+                const suggestions = Array.isArray(payload.suggestions)
+                    ? payload.suggestions
+                    : (Array.isArray(payload.alternatives) ? payload.alternatives : []);
+
+                lookupCandidates = mergeWarehousePickingCandidates(
+                    payload.product ? [{ ...payload.product, is_original_order_product: true }] : [],
+                    suggestions
+                );
+            } catch (error) {
+                console.error('Cannot load warehouse picking replacements.', error);
+            }
+
+            if (lookupCandidates.length <= 1 && sku) {
+                try {
+                    const response = await productReplacementApi.getAll({
+                        per_page: 10,
+                        search: sku,
+                    });
+                    lookupCandidates = mergeWarehousePickingCandidates(
+                        lookupCandidates,
+                        buildWarehousePickingFallbackReplacementCandidates(response.data?.data || [], sku)
+                    );
+                } catch (error) {
+                    console.error('Cannot load warehouse picking replacement fallback.', error);
+                }
+            }
+
+            const candidates = mergeWarehousePickingCandidates(
+                [original],
+                currentActual ? [currentActual] : [],
+                historyCandidates,
+                lookupCandidates
+            );
+            const preferredKey = currentActual?.key || original.key;
+            const selectedKey = candidates.some((candidate) => candidate.key === preferredKey)
+                ? preferredKey
+                : original.key;
+
+            return {
+                row_id: `${order.id || 'order'}-${item?.id || index}`,
+                order_id: order.id,
+                order_number: order.order_number || `Đơn #${order.id}`,
+                item_id: item?.id || null,
+                item_index: index,
+                line_number: getWarehousePickingLineNumber(item, index),
+                quantity: item?.quantity,
+                original,
+                original_key: original.key,
+                candidates,
+                selected_key: selectedKey,
+            };
+        }));
+
+        rows.push(...orderRows.filter(Boolean));
+    }
+
+    return rows;
+};
+
+const resolveWarehousePickingPayloadCostPrice = (item, useOriginalProduct) => {
+    if (!useOriginalProduct) {
+        return undefined;
+    }
+
+    const itemCost = resolveWarehouseReplacementNumber(item?.cost_price);
+    return itemCost !== null ? itemCost : undefined;
+};
+
+const buildWarehousePickingOrderItemPayload = (item, row, index) => {
+    const selectedCandidate = getWarehousePickingSelectedCandidate(row);
+    const productId = Number(item?.product_id) || 0;
+    const selectedProductId = Number(selectedCandidate?.product_id) || 0;
+    const useOriginalProduct = !selectedProductId || selectedProductId === productId;
+    const costPrice = resolveWarehousePickingPayloadCostPrice(item, useOriginalProduct);
+    const options = item?.options && typeof item.options === 'object' && Object.keys(item.options).length > 0
+        ? item.options
+        : undefined;
+
+    return {
+        product_id: productId,
+        actual_product_id: useOriginalProduct ? undefined : selectedProductId,
+        sort_order: index + 1,
+        quantity: Math.max(0, resolveWarehouseReplacementNumber(item?.quantity) ?? 0),
+        price: Math.max(0, resolveWarehouseReplacementNumber(item?.price) ?? 0),
+        cost_price: costPrice,
+        name: getOrderItemDisplayName(item, selectedCandidate?.name || ''),
+        sku: getOrderItemDisplaySku(item, ''),
+        actual_name: useOriginalProduct ? undefined : selectedCandidate?.name,
+        actual_sku: useOriginalProduct ? undefined : selectedCandidate?.sku,
+        product_source_account_id: item?.product_source_account_id || undefined,
+        inventory_source_account_id: useOriginalProduct
+            ? (item?.product_source_account_id || undefined)
+            : (selectedCandidate?.account_id || item?.inventory_source_account_id || undefined),
+        options,
+    };
+};
+
+const getWarehousePickingCandidateLabel = (candidate) => [
+    candidate?.name,
+    candidate?.sku,
+].filter(Boolean).join(' - ') || 'Chọn sản phẩm';
+
+const WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS = 'products';
+const WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY = 'history';
+
+const buildWarehousePickingCandidateSearchText = (candidate, row, index = 0) => normalizeWarehouseReplacementText([
+    row?.line_number,
+    index + 1,
+    candidate?.name,
+    candidate?.sku,
+    row?.original?.name,
+    row?.original?.sku,
+].filter(Boolean).join(' '));
+
+const WarehousePickingCandidateCombobox = ({
+    row,
+    saving,
+    onSelectCandidate,
+}) => {
+    const rootRef = useRef(null);
+    const selectedCandidate = getWarehousePickingSelectedCandidate(row);
+    const selectedLabel = getWarehousePickingCandidateLabel(selectedCandidate);
+    const [query, setQuery] = useState(selectedLabel);
+    const [open, setOpen] = useState(false);
+    const [highlightIndex, setHighlightIndex] = useState(0);
+    const [manualCandidates, setManualCandidates] = useState([]);
+    const [manualLoading, setManualLoading] = useState(false);
+    const [historyCandidates, setHistoryCandidates] = useState(() => getWarehousePickingHistoryCandidates(row?.original));
+    const [activeTab, setActiveTab] = useState(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS);
+    const normalizedQuery = normalizeWarehouseReplacementText(query);
+    const usingOriginal = isWarehousePickingRowUsingOriginal(row);
+    const rowCandidates = Array.isArray(row?.candidates) ? row.candidates : [];
+    const rowHistoryCandidateSignature = rowCandidates
+        .filter((candidate) => candidate?.is_history_candidate)
+        .map((candidate) => candidate.key || getWarehousePickingCandidateKey(candidate))
+        .filter(Boolean)
+        .join('|');
+    const productCandidates = useMemo(() => rowCandidates.filter((candidate) => !candidate?.is_history_candidate), [rowCandidates]);
+    const filteredCandidates = useMemo(() => (
+        normalizedQuery
+            ? productCandidates.filter((candidate, index) => buildWarehousePickingCandidateSearchText(candidate, row, index).includes(normalizedQuery))
+            : productCandidates
+    ), [normalizedQuery, productCandidates, row]);
+    const filteredHistoryCandidates = useMemo(() => (
+        normalizedQuery
+            ? historyCandidates.filter((candidate, index) => buildWarehousePickingCandidateSearchText(candidate, row, index).includes(normalizedQuery))
+            : historyCandidates
+    ), [historyCandidates, normalizedQuery, row]);
+    const shouldSearchManualProducts = open && (normalizedQuery.length >= 2 || /^\d+$/.test(normalizedQuery));
+    const displayCandidates = useMemo(() => (
+        activeTab === WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY
+            ? filteredHistoryCandidates
+            : (
+                normalizedQuery
+                    ? mergeWarehousePickingCandidates(filteredCandidates, manualCandidates)
+                    : filteredCandidates
+            )
+    ), [activeTab, filteredCandidates, filteredHistoryCandidates, manualCandidates, normalizedQuery]);
+
+    useEffect(() => {
+        if (!open) {
+            setQuery(selectedLabel);
+            setManualCandidates([]);
+            setManualLoading(false);
+            setActiveTab(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS);
+        }
+    }, [open, selectedLabel]);
+
+    useEffect(() => {
+        setHighlightIndex(0);
+    }, [activeTab, normalizedQuery, row?.row_id]);
+
+    useEffect(() => {
+        setActiveTab(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS);
+        setHistoryCandidates(mergeWarehousePickingCandidates(
+            getWarehousePickingHistoryCandidates(row?.original),
+            rowCandidates.filter((candidate) => candidate?.is_history_candidate)
+        ));
+    }, [row?.original_key, row?.row_id, rowHistoryCandidateSignature]);
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handleOutsideClick = (event) => {
+            if (rootRef.current && !rootRef.current.contains(event.target)) {
+                setOpen(false);
+                setQuery(selectedLabel);
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }, [open, selectedLabel]);
+
+    useEffect(() => {
+        if (!shouldSearchManualProducts) {
+            setManualCandidates([]);
+            setManualLoading(false);
+            return undefined;
+        }
+
+        let cancelled = false;
+        setManualLoading(true);
+
+        const timerId = window.setTimeout(async () => {
+            try {
+                const response = await productApi.getAll({
+                    picker: 1,
+                    per_page: 20,
+                    search: query.trim(),
+                });
+                const products = Array.isArray(response.data?.data) ? response.data.data : [];
+                const entries = products
+                    .map((product) => normalizeWarehousePickingCandidate(product, { is_manual_search_result: true }))
+                    .filter(Boolean);
+
+                if (!cancelled) {
+                    setManualCandidates(entries);
+                }
+            } catch (error) {
+                console.error('Cannot search products for warehouse picking.', error);
+                if (!cancelled) {
+                    setManualCandidates([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setManualLoading(false);
+                }
+            }
+        }, 220);
+
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timerId);
+        };
+    }, [query, shouldSearchManualProducts]);
+
+    const selectCandidate = useCallback((candidate) => {
+        if (!candidate?.key || saving) return;
+
+        onSelectCandidate(row.row_id, candidate);
+        setQuery(getWarehousePickingCandidateLabel(candidate));
+        setOpen(false);
+    }, [onSelectCandidate, row?.row_id, saving]);
+    const resetToOriginal = useCallback(() => {
+        if (saving || !row?.original?.key) return;
+
+        onSelectCandidate(row.row_id, row.original);
+        setQuery(getWarehousePickingCandidateLabel(row.original));
+        setOpen(false);
+    }, [onSelectCandidate, row?.original, row?.row_id, saving]);
+    const removeHistoryCandidate = useCallback((candidate, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (saving) return;
+
+        setHistoryCandidates(removeWarehousePickingHistoryCandidate(row?.original, candidate));
+    }, [row?.original, saving]);
+    const handleTabChange = useCallback((tab) => {
+        if (saving) return;
+
+        setActiveTab(tab);
+        setQuery('');
+        setOpen(true);
+        setHighlightIndex(0);
+    }, [saving]);
+
+    const handleKeyDown = (event) => {
+        if (saving) return;
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+            setHighlightIndex((current) => Math.min(current + 1, Math.max(displayCandidates.length - 1, 0)));
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true);
+            setHighlightIndex((current) => Math.max(current - 1, 0));
+        } else if (event.key === 'Enter') {
+            if (!open) return;
+            event.preventDefault();
+            selectCandidate(displayCandidates[highlightIndex]);
+        } else if (event.key === 'Escape') {
+            setOpen(false);
+            setQuery(selectedLabel);
+        }
+    };
+
+    return (
+        <div ref={rootRef} className="relative w-full">
+            <div className="flex items-center gap-2">
+                <div className="relative min-w-0 flex-1">
+                    <input
+                        type="text"
+                        value={query}
+                        onFocus={() => {
+                            setQuery('');
+                            setOpen(true);
+                        }}
+                        onChange={(event) => {
+                            setQuery(event.target.value);
+                            setOpen(true);
+                        }}
+                        onKeyDown={handleKeyDown}
+                        disabled={saving}
+                        placeholder="Gõ STT, mã SP hoặc tên SP để tìm..."
+                        className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-3 pr-10 text-[13px] font-semibold text-primary/75 outline-none transition-all placeholder:text-primary/25 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (saving) return;
+                            setOpen((current) => {
+                                if (!current) {
+                                    setQuery('');
+                                }
+                                return !current;
+                            });
+                        }}
+                        disabled={saving}
+                        className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-sm text-primary/45 transition-all hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed"
+                        title="Mở danh sách"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">{open ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                </div>
+                {!usingOriginal ? (
+                    <button
+                        type="button"
+                        onClick={resetToOriginal}
+                        disabled={saving}
+                        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border border-rose-200 bg-white text-rose-600 shadow-sm transition-all hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Về mã gốc dòng này"
+                        aria-label="Về mã gốc dòng này"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">undo</span>
+                    </button>
+                ) : null}
+            </div>
+            {open ? (
+                <div className="absolute left-0 right-0 top-full z-40 mt-1 overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl">
+                    <div className="grid grid-cols-2 gap-1 border-b border-primary/10 bg-primary/[0.03] p-1">
+                        <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => handleTabChange(WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS)}
+                            className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[11px] font-black transition-all ${
+                                activeTab === WAREHOUSE_PICKING_CANDIDATE_TAB_PRODUCTS
+                                    ? 'bg-white text-primary shadow-sm'
+                                    : 'text-primary/40 hover:bg-white/70 hover:text-primary/65'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[14px]">inventory_2</span>
+                            Sản phẩm
+                        </button>
+                        <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => handleTabChange(WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY)}
+                            className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-sm px-2 text-[11px] font-black transition-all ${
+                                activeTab === WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY
+                                    ? 'bg-white text-emerald-700 shadow-sm'
+                                    : 'text-primary/40 hover:bg-white/70 hover:text-primary/65'
+                            }`}
+                        >
+                            <span className="material-symbols-outlined text-[14px]">history</span>
+                            Lịch sử
+                            {historyCandidates.length > 0 ? (
+                                <span className="rounded-full bg-emerald-50 px-1.5 text-[10px] text-emerald-700">{historyCandidates.length}</span>
+                            ) : null}
+                        </button>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto py-1">
+                    {displayCandidates.length > 0 ? displayCandidates.map((candidate, index) => (
+                        <div
+                            key={candidate.key}
+                            onMouseEnter={() => setHighlightIndex(index)}
+                            className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-all ${
+                                index === highlightIndex
+                                    ? 'bg-emerald-50 text-primary'
+                                    : 'text-primary/75 hover:bg-primary/[0.04]'
+                            }`}
+                        >
+                            <button
+                                type="button"
+                                onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    selectCandidate(candidate);
+                                }}
+                                className="min-w-0 flex-1 text-left"
+                            >
+                                <span className="block truncate font-bold">{candidate.name}</span>
+                            </button>
+                            {candidate.sku ? (
+                                <span className="shrink-0 text-[11px] font-black text-primary/35">{candidate.sku}</span>
+                            ) : null}
+                            {activeTab === WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY ? (
+                                <button
+                                    type="button"
+                                    onMouseDown={(event) => removeHistoryCandidate(candidate, event)}
+                                    disabled={saving}
+                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/30 transition-all hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Xóa khỏi lịch sử sản phẩm này"
+                                    aria-label="Xóa khỏi lịch sử sản phẩm này"
+                                >
+                                    <span className="material-symbols-outlined text-[14px]">close</span>
+                                </button>
+                            ) : null}
+                        </div>
+                    )) : manualLoading ? (
+                        <div className="flex items-center gap-2 px-3 py-3 text-[12px] font-bold text-primary/40">
+                            <span className="material-symbols-outlined animate-refresh-spin text-[16px]">progress_activity</span>
+                            Đang tìm trong kho sản phẩm...
+                        </div>
+                    ) : (
+                        <div className="px-3 py-3 text-[12px] font-bold text-primary/35">
+                            {activeTab === WAREHOUSE_PICKING_CANDIDATE_TAB_HISTORY
+                                ? 'Chưa có lịch sử cho sản phẩm này.'
+                                : 'Không thấy sản phẩm khớp từ khóa.'}
+                        </div>
+                    )}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const WarehousePickingReplacementModal = ({
+    open,
+    orders = [],
+    rows,
+    loading,
+    saving,
+    searchTerm,
+    onSearchTermChange,
+    onSelectCandidate,
+    onClose,
+    onSubmit,
+}) => {
+    const normalizedSearch = normalizeWarehouseReplacementText(searchTerm);
+    const visibleRows = useMemo(() => (
+        normalizedSearch
+            ? rows.filter((row) => buildWarehousePickingRowSearchText(row).includes(normalizedSearch))
+            : rows
+    ), [normalizedSearch, rows]);
+    const changedCount = useMemo(
+        () => rows.filter((row) => !isWarehousePickingRowUsingOriginal(row)).length,
+        [rows]
+    );
+    const orderCount = useMemo(
+        () => new Set(rows.map((row) => row.order_id).filter(Boolean)).size,
+        [rows]
+    );
+    const orderInfoLines = useMemo(() => (
+        (Array.isArray(orders) ? orders : [])
+            .map((order) => {
+                const orderNumber = String(order?.order_number || (order?.id ? `Đơn #${order.id}` : '')).trim();
+                const customerName = String(order?.customer_name || '').trim();
+                const customerPhone = String(order?.customer_phone || '').trim();
+                const address = String(order?.shipping_address || '').trim();
+                const text = [orderNumber, customerName, customerPhone, address].filter(Boolean).join(' - ');
+
+                return text ? { key: order?.id || orderNumber || text, text } : null;
+            })
+            .filter(Boolean)
+    ), [orders]);
+
+    if (!open || typeof document === 'undefined') return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[100000] flex items-end justify-center bg-slate-950/35 px-2 py-0 backdrop-blur-[2px] sm:items-center sm:px-4 sm:py-6">
+            <div className="flex max-h-[94vh] w-full max-w-6xl flex-col overflow-hidden rounded-t-[20px] border border-primary/10 bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-sm">
+                <div className="flex items-start justify-between gap-3 border-b border-primary/10 bg-primary/[0.03] px-4 py-4 sm:gap-4 sm:px-5">
+                    <div className="min-w-0">
+                        <div className="text-[10px] font-black uppercase tracking-[0.18em] text-primary/45">Kho nhặt hàng</div>
+                        <h2 className="mt-1 text-[18px] font-black text-primary">Đổi khi nhặt hàng</h2>
+                        <div className="mt-1 text-[12px] font-bold text-primary/50">
+                            {loading ? 'Đang tải sản phẩm trong đơn...' : `${formatNumber(orderCount)} đơn, ${formatNumber(rows.length)} dòng sản phẩm`}
+                        </div>
+                        {orderInfoLines.length > 0 ? (
+                            <div className="mt-2 max-h-12 space-y-1 overflow-y-auto pr-2 text-[11px] font-semibold leading-snug text-primary/35 sm:max-h-14 sm:text-[12px]">
+                                {orderInfoLines.map((item) => (
+                                    <div key={item.key} className="truncate" title={item.text}>
+                                        {item.text}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={saving}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-primary/10 bg-white text-primary/45 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Đóng"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                </div>
+
+                <div className="flex flex-col gap-2 border-b border-primary/10 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:px-5">
+                    <div className="relative min-w-0 flex-1 sm:min-w-[260px]">
+                        <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[18px] text-primary/30">search</span>
+                        <input
+                            value={searchTerm}
+                            onChange={(event) => onSearchTermChange(event.target.value)}
+                            placeholder="Tìm theo STT, mã SP hoặc tên sản phẩm..."
+                            className="h-10 w-full rounded-sm border border-primary/15 bg-white pl-10 pr-3 text-[13px] font-semibold text-primary outline-none transition-all placeholder:text-primary/25 focus:border-primary/40 focus:ring-2 focus:ring-primary/10"
+                            autoFocus
+                        />
+                    </div>
+                    <div className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-sm border border-emerald-200 bg-emerald-50 px-3 text-[12px] font-black text-emerald-700 sm:justify-start">
+                        <span className="material-symbols-outlined text-[17px]">swap_horiz</span>
+                        {formatNumber(changedCount)} dòng lấy khác mã gốc
+                    </div>
+                </div>
+
+                <div className="min-h-[360px] flex-1 overflow-auto bg-[#f8fafc]">
+                    {loading ? (
+                        <div className="flex h-[420px] items-center justify-center">
+                            <div className="flex items-center gap-3 rounded-sm border border-primary/10 bg-white px-4 py-3 text-[13px] font-bold text-primary/60 shadow-sm">
+                                <span className="material-symbols-outlined animate-refresh-spin text-[18px]">progress_activity</span>
+                                Đang tải bảng đổi khi nhặt hàng...
+                            </div>
+                        </div>
+                    ) : visibleRows.length > 0 ? (
+                        <>
+                        <div className="space-y-3 p-3 sm:hidden">
+                            {visibleRows.map((row) => (
+                                <div key={row.row_id} className="rounded-[16px] border border-primary/10 bg-white p-3 shadow-sm">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">STT {row.line_number}</span>
+                                                <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">{formatOrderItemQuantity(row.quantity)}x</span>
+                                            </div>
+                                            <div className="mt-2 text-[14px] font-black leading-snug text-primary" title={row.original?.name}>{row.original?.name}</div>
+                                            {row.original?.sku ? (
+                                                <div className="mt-1 truncate text-[12px] font-black text-primary/35" title={row.original.sku}>{row.original.sku}</div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 border-t border-primary/10 pt-3">
+                                        <div className="mb-2 text-[10px] font-black uppercase tracking-[0.14em] text-primary/45">Hàng thực nhặt</div>
+                                        <WarehousePickingCandidateCombobox
+                                            row={row}
+                                            saving={saving}
+                                            onSelectCandidate={onSelectCandidate}
+                                        />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="hidden min-w-[900px] sm:block">
+                            <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] border-b border-primary/10 bg-[#eef3f8] text-[11px] font-black uppercase tracking-[0.14em] text-primary/55">
+                                <div className="border-r border-primary/10 px-5 py-3">Sản phẩm gốc</div>
+                                <div className="px-5 py-3">Sản phẩm đổi / hàng thực nhặt</div>
+                            </div>
+                            <div className="divide-y divide-primary/10">
+                                {visibleRows.map((row) => {
+                                    return (
+                                        <div key={row.row_id} className="grid min-h-[92px] grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center bg-white">
+                                            <div className="flex min-w-0 flex-col justify-center border-r border-primary/10 px-5 py-4">
+                                                <div className="flex flex-wrap items-center gap-1.5">
+                                                    <span className="rounded-sm border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-black text-sky-700">STT {row.line_number}</span>
+                                                    <span className="rounded-sm border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-black text-orange-700">{formatOrderItemQuantity(row.quantity)}x</span>
+                                                </div>
+                                                <div className="mt-2 truncate text-[14px] font-black text-primary" title={row.original?.name}>{row.original?.name}</div>
+                                                {row.original?.sku ? (
+                                                    <div className="mt-1 truncate text-[12px] font-black text-primary/35" title={row.original.sku}>{row.original.sku}</div>
+                                                ) : null}
+                                            </div>
+                                            <div className="flex min-w-0 items-center px-5 py-4">
+                                                <WarehousePickingCandidateCombobox
+                                                    row={row}
+                                                    saving={saving}
+                                                    onSelectCandidate={onSelectCandidate}
+                                                />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                        </>
+                    ) : (
+                        <div className="flex h-[420px] items-center justify-center text-center">
+                            <div className="rounded-sm border border-dashed border-primary/15 bg-white px-5 py-6 text-[13px] font-bold text-primary/45">
+                                {rows.length > 0 ? 'Không có dòng nào khớp từ khóa.' : 'Đơn đang chọn chưa có sản phẩm để đổi khi nhặt hàng.'}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex flex-col gap-3 border-t border-primary/10 bg-white px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-5 sm:py-4">
+                    <div className="text-[12px] font-bold text-primary/45">
+                        Bên trái là hàng khách chốt, bên phải là hàng kho sẽ lấy thực tế.
+                    </div>
+                    <div className="flex w-full items-center gap-2 sm:w-auto">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            disabled={saving}
+                            className="h-10 flex-1 rounded-sm border border-primary/15 bg-white px-4 text-[13px] font-bold text-primary/55 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
+                        >
+                            Hủy
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onSubmit}
+                            disabled={loading || saving || rows.length === 0}
+                            className={`inline-flex h-10 flex-[1.8] items-center justify-center gap-2 rounded-sm px-5 text-[13px] font-black text-white transition-all sm:flex-none ${
+                                loading || saving || rows.length === 0
+                                    ? 'cursor-not-allowed bg-emerald-300'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 shadow-sm'
+                            }`}
+                        >
+                            <span className={`material-symbols-outlined text-[18px] ${saving ? 'animate-refresh-spin' : ''}`}>
+                                {saving ? 'progress_activity' : 'save'}
+                            </span>
+                            {saving ? 'Đang lưu...' : 'Áp dụng vào đơn'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
+const WarehousePickingReplacementDeclarationPrompt = ({
+    open,
+    source,
+    candidate,
+    submitting,
+    onConfirm,
+    onDismiss,
+}) => {
+    if (!open || typeof document === 'undefined') return null;
+
+    const sourceLabel = getWarehousePickingCandidateLabel(source);
+    const candidateLabel = getWarehousePickingCandidateLabel(candidate);
+
+    return createPortal(
+        <div className="fixed inset-0 z-[100020] flex items-end justify-center bg-slate-950/35 px-3 py-3 backdrop-blur-[1px] sm:items-center sm:p-4">
+            <div className="w-full max-w-lg overflow-hidden rounded-t-[18px] border border-primary/10 bg-white shadow-2xl sm:rounded-sm">
+                <div className="flex items-start gap-3 border-b border-primary/10 bg-emerald-50 px-4 py-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border border-emerald-200 bg-white text-emerald-700">
+                        <span className="material-symbols-outlined text-[21px]">playlist_add</span>
+                    </div>
+                    <div className="min-w-0">
+                        <div className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/60">Mã thay thế</div>
+                        <h3 className="mt-1 text-[16px] font-black text-primary">Thêm mã này vào khai báo?</h3>
+                        <p className="mt-1 text-[12px] font-semibold leading-relaxed text-primary/50">
+                            Mã kho vừa chọn chưa nằm trong nhóm thay thế của sản phẩm gốc. Thêm vào để lần sau hiện sẵn trong tab Sản phẩm.
+                        </p>
+                    </div>
+                </div>
+                <div className="space-y-2 px-4 py-4">
+                    <div className="rounded-sm border border-primary/10 bg-primary/[0.02] p-3">
+                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-primary/35">Sản phẩm gốc</div>
+                        <div className="mt-1 truncate text-[13px] font-black text-primary" title={sourceLabel}>{sourceLabel}</div>
+                    </div>
+                    <div className="rounded-sm border border-emerald-200 bg-emerald-50 p-3">
+                        <div className="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/55">Sản phẩm vừa chọn</div>
+                        <div className="mt-1 truncate text-[13px] font-black text-emerald-800" title={candidateLabel}>{candidateLabel}</div>
+                    </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-primary/10 px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={onDismiss}
+                        disabled={submitting}
+                        className="h-10 rounded-sm border border-primary/15 bg-white px-4 text-[13px] font-bold text-primary/55 transition-all hover:border-primary/25 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Không thêm
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onConfirm}
+                        disabled={submitting}
+                        className={`inline-flex h-10 items-center justify-center gap-2 rounded-sm px-4 text-[13px] font-black text-white transition-all ${
+                            submitting
+                                ? 'cursor-not-allowed bg-emerald-300'
+                                : 'bg-emerald-600 shadow-sm hover:bg-emerald-700'
+                        }`}
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${submitting ? 'animate-refresh-spin' : ''}`}>
+                            {submitting ? 'progress_activity' : 'add_link'}
+                        </span>
+                        {submitting ? 'Đang thêm...' : 'Thêm vào mã thay thế'}
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+};
+
 const getOrderCostTotalValue = (order) => {
     const parsedValue = Number(order?.cost_total ?? 0);
     return Number.isFinite(parsedValue) ? parsedValue : 0;
@@ -2831,6 +3943,14 @@ const OrderList = () => {
     const [quickDispatchModalOpen, setQuickDispatchModalOpen] = useState(false);
     const [quickDispatchSubmitting, setQuickDispatchSubmitting] = useState(false);
     const [quickDispatchRows, setQuickDispatchRows] = useState({});
+    const [warehousePickingReplacementOpen, setWarehousePickingReplacementOpen] = useState(false);
+    const [warehousePickingReplacementOrders, setWarehousePickingReplacementOrders] = useState([]);
+    const [warehousePickingReplacementRows, setWarehousePickingReplacementRows] = useState([]);
+    const [warehousePickingReplacementLoading, setWarehousePickingReplacementLoading] = useState(false);
+    const [warehousePickingReplacementSaving, setWarehousePickingReplacementSaving] = useState(false);
+    const [warehousePickingReplacementSearch, setWarehousePickingReplacementSearch] = useState('');
+    const [warehousePickingDeclarationPrompt, setWarehousePickingDeclarationPrompt] = useState(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+    const warehousePickingDeclarationDismissedRef = useRef(new Set());
     const [connectedCarriers, setConnectedCarriers] = useState([]);
     const [manualCarrierOptions, setManualCarrierOptions] = useState([]);
     const [selectedCarrierCode, setSelectedCarrierCode] = useState('');
@@ -4334,14 +5454,20 @@ const OrderList = () => {
 
     const handleQuickStatusUpdate = async (id, s) => {
         try {
-            await orderApi.updateStatus(id, {
+            const response = await updateOrderStatusWithExportSlipPrompt(id, {
                 status: s,
                 allow_shipping_override: true,
                 reason: 'Cập nhật từ bảng quản lý đơn hàng',
             });
             await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
             setStatusMenuOrderId(null);
-            setNotification({ type: 'success', message: 'Đã cập nhật trạng thái đơn hàng.' });
+            const slipNumber = response?.data?.auto_export_slip?.document_number;
+            setNotification({
+                type: 'success',
+                message: slipNumber
+                    ? `Đã cập nhật trạng thái và tạo phiếu xuất ${slipNumber}.`
+                    : 'Đã cập nhật trạng thái đơn hàng.',
+            });
         } catch (e) {
             console.error("Status update error", e);
             const errorMsg = e.response?.data?.message || 'Lỗi cập nhật trạng thái.';
@@ -4482,6 +5608,286 @@ const OrderList = () => {
             setVtpExporting(false);
         }
     };
+
+    const resetWarehousePickingReplacementModal = useCallback(() => {
+        setWarehousePickingReplacementOpen(false);
+        setWarehousePickingReplacementOrders([]);
+        setWarehousePickingReplacementRows([]);
+        setWarehousePickingReplacementSearch('');
+        setWarehousePickingReplacementLoading(false);
+        setWarehousePickingReplacementSaving(false);
+        setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+        warehousePickingDeclarationDismissedRef.current.clear();
+    }, []);
+
+    const closeWarehousePickingReplacementModal = useCallback(() => {
+        if (warehousePickingReplacementSaving) return;
+        resetWarehousePickingReplacementModal();
+    }, [resetWarehousePickingReplacementModal, warehousePickingReplacementSaving]);
+
+    const openWarehousePickingReplacementModal = useCallback(async (targetOrderIds = null) => {
+        const orderIdsForPicking = Array.isArray(targetOrderIds)
+            ? targetOrderIds.filter(Boolean)
+            : selectedIds;
+
+        if (!orderIdsForPicking.length) {
+            setNotification({ type: 'error', message: 'Chọn ít nhất 1 đơn để đổi khi nhặt hàng.' });
+            return;
+        }
+
+        setWarehousePickingReplacementOpen(true);
+        setWarehousePickingReplacementLoading(true);
+        setWarehousePickingReplacementSaving(false);
+        setWarehousePickingReplacementOrders([]);
+        setWarehousePickingReplacementRows([]);
+        setWarehousePickingReplacementSearch('');
+        setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+        warehousePickingDeclarationDismissedRef.current.clear();
+
+        try {
+            const responses = await Promise.all(orderIdsForPicking.map((id) => orderApi.getOne(id)));
+            const detailOrders = responses
+                .map((response) => response?.data)
+                .filter(Boolean);
+            const rows = await buildWarehousePickingRowsForOrders(detailOrders);
+
+            setWarehousePickingReplacementOrders(detailOrders);
+            setWarehousePickingReplacementRows(rows);
+        } catch (error) {
+            console.error('Open warehouse picking replacement modal error', error);
+            resetWarehousePickingReplacementModal();
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể tải bảng đổi khi nhặt hàng.',
+            });
+        } finally {
+            setWarehousePickingReplacementLoading(false);
+        }
+    }, [resetWarehousePickingReplacementModal, selectedIds]);
+
+    const dismissWarehousePickingDeclarationPrompt = useCallback(() => {
+        setWarehousePickingDeclarationPrompt((current) => {
+            if (current.submitting) return current;
+            if (current.askKey) {
+                warehousePickingDeclarationDismissedRef.current.add(current.askKey);
+            }
+
+            return EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT;
+        });
+    }, []);
+
+    const markWarehousePickingCandidatesAsDeclared = useCallback((groupPayload, source, candidate) => {
+        const groupId = Number(groupPayload?.id || candidate?.replacement_group_id || 0) || null;
+        const groupItems = Array.isArray(groupPayload?.items) ? groupPayload.items : [];
+        const declaredCandidates = mergeWarehousePickingCandidates(
+            groupItems.map((entry) => ({
+                ...entry,
+                is_declared_replacement: true,
+                replacement_group_id: Number(entry?.replacement_group_id || groupId || 0) || entry?.replacement_group_id || groupId,
+            })),
+            candidate ? [{
+                ...candidate,
+                is_declared_replacement: true,
+                replacement_group_id: groupId || candidate?.replacement_group_id,
+            }] : []
+        );
+        const declaredKeys = new Set(declaredCandidates.map((entry) => entry.key).filter(Boolean));
+        const sourceKey = getWarehousePickingCandidateKey(source);
+        const candidateKey = getWarehousePickingCandidateKey(candidate);
+
+        setWarehousePickingReplacementRows((currentRows) => currentRows.map((row) => {
+            const selectedKey = row?.selected_key || getWarehousePickingSelectedCandidate(row)?.key;
+            const isTouchedRow = row?.original_key === sourceKey
+                || declaredKeys.has(row?.original_key)
+                || selectedKey === candidateKey
+                || declaredKeys.has(selectedKey);
+
+            if (!isTouchedRow) return row;
+
+            const candidates = mergeWarehousePickingCandidates(row.candidates || [], declaredCandidates)
+                .map((entry) => {
+                    if (!declaredKeys.has(entry.key)) return entry;
+
+                    return {
+                        ...entry,
+                        is_history_candidate: false,
+                        is_declared_replacement: true,
+                        replacement_group_id: entry.replacement_group_id || groupId,
+                    };
+                });
+
+            return {
+                ...row,
+                candidates,
+            };
+        }));
+    }, []);
+
+    const handleWarehousePickingReplacementSelect = useCallback((rowId, candidateOrKey) => {
+        const candidate = candidateOrKey && typeof candidateOrKey === 'object'
+            ? normalizeWarehousePickingCandidate(candidateOrKey)
+            : null;
+        const candidateKey = candidate?.key || String(candidateOrKey || '').trim();
+
+        if (!candidateKey) return;
+
+        const sourceRow = warehousePickingReplacementRows.find((row) => row.row_id === rowId);
+        const nextCandidates = sourceRow && candidate
+            ? mergeWarehousePickingCandidates(sourceRow.candidates || [], [candidate])
+            : (sourceRow?.candidates || []);
+        const selectedCandidate = candidate || nextCandidates.find((entry) => entry.key === candidateKey);
+        const rowForPrompt = sourceRow
+            ? {
+                ...sourceRow,
+                candidates: nextCandidates,
+                selected_key: candidateKey,
+            }
+            : null;
+
+        setWarehousePickingReplacementRows((currentRows) => currentRows.map((row) => (
+            row.row_id !== rowId
+                ? row
+                : {
+                    ...row,
+                    candidates: candidate
+                        ? mergeWarehousePickingCandidates(row.candidates || [], [candidate])
+                        : row.candidates,
+                    selected_key: candidateKey,
+                }
+        )));
+
+        if (rowForPrompt && selectedCandidate && shouldAskToDeclareWarehousePickingCandidate(
+            rowForPrompt,
+            selectedCandidate,
+            warehousePickingDeclarationDismissedRef.current
+        )) {
+            setWarehousePickingDeclarationPrompt({
+                open: true,
+                rowId,
+                source: rowForPrompt.original,
+                candidate: selectedCandidate,
+                askKey: getWarehousePickingDeclarationAskKey(rowForPrompt, selectedCandidate),
+                submitting: false,
+            });
+        }
+    }, [warehousePickingReplacementRows]);
+
+    const handleConfirmWarehousePickingDeclaration = useCallback(async () => {
+        const prompt = warehousePickingDeclarationPrompt;
+        if (!prompt.open || prompt.submitting) return;
+
+        const sourceSku = String(prompt.source?.sku || '').trim();
+        const candidateSku = String(prompt.candidate?.sku || '').trim();
+        if (!sourceSku || !candidateSku) {
+            setNotification({ type: 'error', message: 'Thiếu mã sản phẩm nên chưa thêm được vào mã thay thế.' });
+            dismissWarehousePickingDeclarationPrompt();
+            return;
+        }
+
+        setWarehousePickingDeclarationPrompt((current) => (
+            current.askKey === prompt.askKey ? { ...current, submitting: true } : current
+        ));
+
+        try {
+            const response = await productReplacementApi.create({
+                skus: [sourceSku, candidateSku],
+                name: `Thay thế ${sourceSku}`,
+                notes: 'Tự thêm từ đổi khi nhặt hàng',
+            });
+
+            markWarehousePickingCandidatesAsDeclared(response.data?.data || {}, prompt.source, prompt.candidate);
+            if (prompt.askKey) {
+                warehousePickingDeclarationDismissedRef.current.add(prompt.askKey);
+            }
+            setWarehousePickingDeclarationPrompt(EMPTY_WAREHOUSE_PICKING_DECLARATION_PROMPT);
+            setNotification({ type: 'success', message: 'Đã thêm mã này vào bảng mã thay thế.' });
+        } catch (error) {
+            console.error('Create replacement from warehouse picking error', error);
+            setWarehousePickingDeclarationPrompt((current) => (
+                current.askKey === prompt.askKey ? { ...current, submitting: false } : current
+            ));
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể thêm vào bảng mã thay thế.',
+            });
+        }
+    }, [
+        dismissWarehousePickingDeclarationPrompt,
+        markWarehousePickingCandidatesAsDeclared,
+        warehousePickingDeclarationPrompt,
+    ]);
+
+    const handleSubmitWarehousePickingReplacements = useCallback(async () => {
+        if (warehousePickingReplacementSaving || warehousePickingReplacementLoading || !warehousePickingReplacementOrders.length) {
+            return;
+        }
+
+        setWarehousePickingReplacementSaving(true);
+
+        try {
+            const rowsByOrderId = warehousePickingReplacementRows.reduce((map, row) => {
+                const orderKey = String(row.order_id);
+                const itemKey = row.item_id ? `item:${row.item_id}` : `index:${row.item_index}`;
+                if (!map.has(orderKey)) map.set(orderKey, new Map());
+                map.get(orderKey).set(itemKey, row);
+                return map;
+            }, new Map());
+
+            await Promise.all(warehousePickingReplacementOrders.map(async (order) => {
+                const itemRows = rowsByOrderId.get(String(order.id)) || new Map();
+                const items = (Array.isArray(order.items) ? order.items : [])
+                    .map((item, index) => {
+                        const itemKey = item?.id ? `item:${item.id}` : `index:${index}`;
+                        const row = itemRows.get(itemKey);
+                        const fallbackOriginal = buildWarehousePickingOriginalCandidate(item);
+                        const resolvedRow = row || {
+                            original: fallbackOriginal,
+                            original_key: fallbackOriginal?.key,
+                            selected_key: fallbackOriginal?.key,
+                            candidates: fallbackOriginal ? [fallbackOriginal] : [],
+                        };
+
+                        return buildWarehousePickingOrderItemPayload(item, resolvedRow, index);
+                    })
+                    .filter((item) => item.product_id && item.quantity > 0);
+
+                await orderApi.update(order.id, {
+                    order_type: order.order_type || ORDER_TYPE_STANDARD,
+                    region_type: order.district ? 'old' : 'new',
+                    items,
+                });
+            }));
+
+            persistWarehousePickingHistoryFromRows(warehousePickingReplacementRows);
+
+            const orderCount = warehousePickingReplacementOrders.length;
+            resetWarehousePickingReplacementModal();
+            await fetchOrders(pagination.current_page || 1, filters, pagination.per_page, sortConfig);
+            setNotification({
+                type: 'success',
+                message: `Đã áp dụng đổi khi nhặt hàng cho ${formatNumber(orderCount)} đơn.`,
+            });
+        } catch (error) {
+            console.error('Save warehouse picking replacements error', error);
+            setNotification({
+                type: 'error',
+                message: error.response?.data?.message || 'Không thể lưu đổi khi nhặt hàng.',
+            });
+        } finally {
+            setWarehousePickingReplacementSaving(false);
+        }
+    }, [
+        fetchOrders,
+        filters,
+        pagination.current_page,
+        pagination.per_page,
+        resetWarehousePickingReplacementModal,
+        sortConfig,
+        warehousePickingReplacementLoading,
+        warehousePickingReplacementOrders,
+        warehousePickingReplacementRows,
+        warehousePickingReplacementSaving,
+    ]);
 
     const closePrintConfirmation = useCallback(() => {
         closePrintSession(printConfirmState.session);
@@ -5082,7 +6488,7 @@ const OrderList = () => {
             )}
 
             <div className="flex-none bg-[#F8FAFC] pb-4 space-y-2">
-                <div className="flex items-center justify-between gap-3">
+                <div className="hidden items-center justify-between gap-3 lg:flex">
                     <h1 className="admin-header-title italic">{listTitle}</h1>
                     <AccountSelector user={user} reloadOnAutoSelect={false} />
                 </div>
@@ -5111,7 +6517,7 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-6 lg:hidden">
+                    <div className={`grid gap-2 lg:hidden ${!isReturnFollowupView ? 'grid-cols-3' : 'grid-cols-2'}`}>
                         <button type="button" onClick={() => navigateToListView('main')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isMainView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
                             <span className="material-symbols-outlined text-[18px]">receipt_long</span>
                             Đơn
@@ -5120,73 +6526,23 @@ const OrderList = () => {
                             <span className="material-symbols-outlined text-[18px]">draft_orders</span>
                             Nháp
                         </button>
-                        <button type="button" onClick={handleOutsideDeliveryUnpaidToggle} title="Ship ngoài chưa trả" className={`relative inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isOutsideDeliveryUnpaidFilterActive ? 'border-orange-500 bg-orange-500 text-white shadow-sm' : 'border-orange-200 bg-white text-orange-600 hover:bg-orange-50'}`}>
-                            <span className="material-symbols-outlined text-[18px]">local_shipping</span>
-                            Ship nợ
-                            {outsideDeliveryUnpaidCount > 0 && (
-                                <span className={`absolute right-1.5 top-1.5 min-w-[18px] rounded-full px-1 py-0.5 text-[9px] font-black ${isOutsideDeliveryUnpaidFilterActive ? 'bg-white text-orange-600' : 'bg-brick text-white'}`}>
-                                    {outsideDeliveryUnpaidCount > 99 ? '99+' : outsideDeliveryUnpaidCount}
-                                </span>
-                            )}
-                        </button>
-                        <button type="button" onClick={() => navigateToListView('trash')} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isTrashView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                            Rác
-                        </button>
-                        <button type="button" onClick={() => navigateToListView(RETURN_FOLLOWUP_VIEW)} className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isReturnFollowupView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
-                            <span className="material-symbols-outlined text-[18px]">fact_check</span>
-                            Treo hoàn
-                        </button>
-                        <button type="button" onClick={() => navigateToListView(RETURN_WORKBENCH_VIEW)} className={`relative inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${isReturnWorkbenchView ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}>
-                            <span className="material-symbols-outlined text-[18px]">inbox</span>
-                            Tạm hoàn
-                            {workbenchOrderCount > 0 && (
-                                <span className={`absolute right-1.5 top-1.5 min-w-[18px] rounded-full px-1 py-0.5 text-[9px] font-black ${isReturnWorkbenchView ? 'bg-white text-primary' : 'bg-primary text-white'}`}>
-                                    {workbenchOrderCount > 99 ? '99+' : workbenchOrderCount}
-                                </span>
-                            )}
-                        </button>
+                        {!isReturnFollowupView && (
+                            <button
+                                type="button"
+                                data-filter-btn
+                                onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }}
+                                className={`inline-flex min-h-[44px] flex-col items-center justify-center gap-1 rounded-[16px] border px-2 text-[10px] font-black uppercase tracking-[0.12em] transition-all ${showFilters || activeCount() > 0 ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">filter_alt</span>
+                                Lọc
+                            </button>
+                        )}
                     </div>
 
-                    <div className="flex items-center gap-2 lg:hidden">
-                        {!isReturnFollowupView && (
-                            <>
-                                <button
-                                    type="button"
-                                    data-filter-btn
-                                    onClick={() => { if (!showFilters) setTempFilters({ ...filters }); setShowFilters(!showFilters); }}
-                                    className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${showFilters || activeCount() > 0 ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
-                                >
-                                    <span className="material-symbols-outlined text-[18px]">filter_alt</span>
-                                    Lọc
-                                </button>
-                                {canQuickSelect && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setQuickSelectPanelOpen((current) => !current)}
-                                        className={`inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${quickSelectPanelOpen || quickSelectResult ? 'border-primary bg-primary text-white shadow-sm' : 'border-primary/10 bg-white text-primary/60'}`}
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
-                                        Chọn nhanh
-                                    </button>
-                                )}
-                                {isMainView && canViewCost && (
-                                    <button
-                                        type="button"
-                                        onClick={openImportCostRefreshModal}
-                                        className="inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]"
-                                    >
-                                        <span className="material-symbols-outlined text-[18px]">price_change</span>
-                                        Giá nhập
-                                    </button>
-                                )}
-                            </>
-                        )}
-                        <button onClick={handleRefresh} disabled={loading} className={`${!isReturnFollowupView ? 'ml-auto ' : ''}inline-flex h-11 items-center justify-center gap-2 rounded-[16px] border border-primary/10 bg-white px-4 text-[12px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]`}>
-                            <span className={`material-symbols-outlined text-[18px] ${loading ? 'animate-refresh-spin' : ''}`}>refresh</span>
-                            Làm mới
-                        </button>
-                    </div>
+                    {selectedIds.length === 0 && renderOrderSearch(
+                        'relative w-full lg:order-last lg:flex-1',
+                        'Tìm tên SP, mã SP, mã đơn, khách hàng, SĐT, mã vận đơn...'
+                    )}
 
                     <div className="hidden flex-wrap items-center gap-2 lg:flex">
                         {!isTrashView && canCreateOrders && (
@@ -5289,6 +6645,21 @@ const OrderList = () => {
                             <>
                                 <button onClick={handleBulkDuplicate} disabled={selectedIds.length === 0} title="Sao chép đơn hàng" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className="material-symbols-outlined text-[18px]">content_copy</span></button>
                                 <button onClick={handleBulkPrint} disabled={selectedIds.length === 0 || printingOrders || printConfirmState.open || printTemplateState.open} title="In đơn" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !printingOrders && !printConfirmState.open && !printTemplateState.open ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${printingOrders ? 'animate-refresh-spin' : ''}`}>{printingOrders ? 'progress_activity' : 'local_printshop'}</span></button>
+                                <button
+                                    type="button"
+                                    onClick={openWarehousePickingReplacementModal}
+                                    disabled={selectedIds.length === 0 || warehousePickingReplacementLoading || warehousePickingReplacementSaving}
+                                    title="Đổi khi nhặt hàng"
+                                    className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${
+                                        selectedIds.length > 0 && !warehousePickingReplacementLoading && !warehousePickingReplacementSaving
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-600 hover:text-white shadow-sm'
+                                            : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <span className={`material-symbols-outlined text-[18px] ${warehousePickingReplacementLoading ? 'animate-refresh-spin' : ''}`}>
+                                        {warehousePickingReplacementLoading ? 'progress_activity' : 'inventory_2'}
+                                    </span>
+                                </button>
                                 <button onClick={handleBulkExportPdf} disabled={selectedIds.length === 0 || exportingPdf} title="Tải PDF đơn hàng về máy" className={`h-9 w-9 rounded-sm border flex items-center justify-center transition-all ${selectedIds.length > 0 && !exportingPdf ? 'bg-white text-primary border-primary/20 hover:bg-primary/5 shadow-sm' : 'bg-white text-primary/30 border-primary/10 cursor-not-allowed'}`}><span className={`material-symbols-outlined text-[18px] ${exportingPdf ? 'animate-refresh-spin' : ''}`}>{exportingPdf ? 'progress_activity' : 'picture_as_pdf'}</span></button>
                                 {/* ViettelPost Export Button */}
                                 <div className="relative flex items-center gap-1">
@@ -5556,7 +6927,6 @@ const OrderList = () => {
                         )}
                     </div>
 
-                    {selectedIds.length === 0 && renderOrderSearch()}
                 </div>
             </div>
 
@@ -6312,16 +7682,19 @@ const OrderList = () => {
                                                 type="button"
                                                 onClick={(event) => {
                                                     event.stopPropagation();
-                                                    toggleSelectOrder(o.id);
+                                                    openWarehousePickingReplacementModal([o.id]);
                                                 }}
-                                                className={`inline-flex min-h-[44px] items-center justify-center gap-2 rounded-[16px] border px-4 text-[12px] font-black uppercase tracking-[0.12em] transition-all ${
-                                                    selectedIds.includes(o.id)
-                                                        ? 'border-primary bg-primary text-white'
-                                                        : 'border-primary/10 bg-white text-primary'
+                                                disabled={warehousePickingReplacementLoading || warehousePickingReplacementSaving}
+                                                className={`inline-flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-[16px] border px-3 text-[10px] font-black uppercase leading-tight tracking-[0.08em] transition-all ${
+                                                    !warehousePickingReplacementLoading && !warehousePickingReplacementSaving
+                                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white'
+                                                        : 'border-primary/10 bg-white text-primary/30'
                                                 }`}
                                             >
-                                                <span className="material-symbols-outlined text-[18px]">{selectedIds.includes(o.id) ? 'check_circle' : 'radio_button_unchecked'}</span>
-                                                {selectedIds.includes(o.id) ? 'Đã chọn' : 'Chọn'}
+                                                <span className={`material-symbols-outlined text-[18px] ${warehousePickingReplacementLoading ? 'animate-refresh-spin' : ''}`}>
+                                                    {warehousePickingReplacementLoading ? 'progress_activity' : 'inventory_2'}
+                                                </span>
+                                                Đổi khi nhặt hàng
                                             </button>
                                         </div>
                                     </div>
@@ -6877,91 +8250,25 @@ const OrderList = () => {
                     </div>
 
                     {!isTrashView && (
-                        <div className="mt-3 grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                onClick={() => setBulkAttributeOpen(true)}
-                                disabled={allAttributes.length === 0}
-                                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.08em] text-primary disabled:opacity-45"
-                            >
-                                <span className="material-symbols-outlined text-[17px]">edit_attributes</span>
-                                Thuộc tính
-                            </button>
-                            {isMainView && (
-                                <select
-                                    defaultValue=""
-                                    onChange={(event) => {
-                                        const nextStatus = event.target.value;
-                                        event.target.value = '';
-                                        handleBulkStatusUpdate(nextStatus);
-                                    }}
-                                    disabled={loading || orderStatuses.length === 0}
-                                    className="h-11 min-w-0 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.05em] text-primary outline-none disabled:opacity-45"
-                                >
-                                    <option value="">Đổi trạng thái</option>
-                                    {orderStatuses.map((status) => (
-                                        <option key={status.id || status.code} value={status.code}>{status.name}</option>
-                                    ))}
-                                </select>
-                            )}
-                            <select
-                                defaultValue=""
-                                onChange={(event) => {
-                                    const nextProfitCenter = event.target.value;
-                                    event.target.value = '';
-                                    handleBulkProfitCenterUpdate(nextProfitCenter);
-                                }}
-                                className="h-11 min-w-0 rounded-xl border border-primary/15 bg-white px-3 text-[11px] font-black uppercase tracking-[0.05em] text-primary outline-none"
-                            >
-                                <option value="">Đổi người quản lý</option>
-                                <option value="__clear__">Chưa gắn quản lý</option>
-                                {profitCenters.map((center) => (
-                                    <option key={center.id} value={center.id}>{formatProfitCenterLabel(center)}</option>
-                                ))}
-                            </select>
-                        </div>
+                        <button
+                            type="button"
+                            onClick={openWarehousePickingReplacementModal}
+                            disabled={selectedIds.length === 0 || warehousePickingReplacementLoading || warehousePickingReplacementSaving}
+                            className={`mt-3 inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-[16px] border text-[11px] font-black uppercase tracking-[0.1em] transition-all ${
+                                selectedIds.length > 0 && !warehousePickingReplacementLoading && !warehousePickingReplacementSaving
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 shadow-sm active:scale-[0.99]'
+                                    : 'border-primary/10 bg-white text-primary/30'
+                            }`}
+                        >
+                            <span className={`material-symbols-outlined text-[18px] ${warehousePickingReplacementLoading ? 'animate-refresh-spin' : ''}`}>
+                                {warehousePickingReplacementLoading ? 'progress_activity' : 'inventory_2'}
+                            </span>
+                            Đổi khi nhặt hàng
+                            <span className="rounded-full bg-white/80 px-2 py-0.5 text-[10px] text-emerald-700">
+                                {selectedIds.length} đơn
+                            </span>
+                        </button>
                     )}
-
-                    <div className="mt-3 grid grid-cols-3 gap-2">
-                        {isTrashView ? (
-                            <>
-                                <button type="button" onClick={handleBulkRestore} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-emerald-200 bg-emerald-50 text-[10px] font-black uppercase tracking-[0.12em] text-emerald-700 transition-all hover:bg-emerald-600 hover:text-white">
-                                    <span className="material-symbols-outlined text-[18px]">restore_from_trash</span>
-                                    Khôi phục
-                                </button>
-                                <button type="button" onClick={handleBulkDuplicate} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
-                                    <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                                    Nhân bản
-                                </button>
-                                {canDeleteOrdersPermanently && <button type="button" onClick={handleBulkForceDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
-                                    <span className="material-symbols-outlined text-[18px]">delete_forever</span>
-                                    Xóa hẳn
-                                </button>}
-                            </>
-                        ) : (
-                            <>
-                                <button type="button" onClick={handleBulkDuplicate} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-white text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.03]">
-                                    <span className="material-symbols-outlined text-[18px]">content_copy</span>
-                                    Nhân bản
-                                </button>
-                                {isDraftView ? (
-                                    <button type="button" onClick={() => handleBulkConvert(MAIN_ORDER_KIND)} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-primary/10 bg-primary/[0.04] text-[10px] font-black uppercase tracking-[0.12em] text-primary transition-all hover:border-primary/25 hover:bg-primary/[0.08]">
-                                        <span className="material-symbols-outlined text-[18px]">published_with_changes</span>
-                                        Chốt đơn
-                                    </button>
-                                ) : canDeleteOrders ? (
-                                    <button type="button" onClick={handleBulkDelete} className="inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border border-rose-200 bg-rose-50 text-[10px] font-black uppercase tracking-[0.12em] text-rose-700 transition-all hover:bg-rose-600 hover:text-white">
-                                        <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
-                                        Bỏ vào rác
-                                    </button>
-                                ) : null}
-                                <button type="button" onClick={handleToggleSelectedOnly} className={`inline-flex min-h-[48px] flex-col items-center justify-center gap-1 rounded-[16px] border text-[10px] font-black uppercase tracking-[0.12em] transition-all ${showSelectedOnly ? 'border-primary bg-primary text-white' : 'border-primary/10 bg-white text-primary'}`}>
-                                    <span className="material-symbols-outlined text-[18px]">{showSelectedOnly ? 'filter_alt_off' : 'filter_alt'}</span>
-                                    {showSelectedOnly ? 'Tắt lọc' : 'Lọc chọn'}
-                                </button>
-                            </>
-                        )}
-                    </div>
                 </div>
             )}
                 </>
@@ -7043,6 +8350,26 @@ const OrderList = () => {
                 onFieldChange={handleQuickDispatchFieldChange}
                 onClose={closeQuickDispatchModal}
                 onSubmit={handleQuickDispatchOrders}
+            />
+            <WarehousePickingReplacementModal
+                open={warehousePickingReplacementOpen}
+                orders={warehousePickingReplacementOrders}
+                rows={warehousePickingReplacementRows}
+                loading={warehousePickingReplacementLoading}
+                saving={warehousePickingReplacementSaving}
+                searchTerm={warehousePickingReplacementSearch}
+                onSearchTermChange={setWarehousePickingReplacementSearch}
+                onSelectCandidate={handleWarehousePickingReplacementSelect}
+                onClose={closeWarehousePickingReplacementModal}
+                onSubmit={handleSubmitWarehousePickingReplacements}
+            />
+            <WarehousePickingReplacementDeclarationPrompt
+                open={warehousePickingDeclarationPrompt.open}
+                source={warehousePickingDeclarationPrompt.source}
+                candidate={warehousePickingDeclarationPrompt.candidate}
+                submitting={warehousePickingDeclarationPrompt.submitting}
+                onConfirm={handleConfirmWarehousePickingDeclaration}
+                onDismiss={dismissWarehousePickingDeclarationPrompt}
             />
             <OrderInventorySlipDrawer
                 open={!!inventorySlipOrderId}

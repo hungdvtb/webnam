@@ -77,6 +77,7 @@ class InventoryService
                 'import_date' => $importDate->toDateString(),
                 'status' => $status->code,
                 'entry_mode' => $context['entry_mode'],
+                'has_purchase_invoice' => $context['has_purchase_invoice'],
                 'total_quantity' => $totalQuantity,
                 'subtotal_amount' => $context['subtotal_amount'],
                 'extra_charge_percent' => $context['extra_charge_percent'],
@@ -121,6 +122,7 @@ class InventoryService
                     'line_total' => $lineTotal,
                     'notes' => $item['notes'] ?? null,
                     'sort_order' => $index + 1,
+                    'has_purchase_invoice' => $context['has_purchase_invoice'],
                 ]);
 
                 if ($this->importAffectsInventory($status) && $receivedQuantity > 0) {
@@ -214,6 +216,7 @@ class InventoryService
                 'import_date' => $context['import_date']->toDateString(),
                 'status' => $status->code,
                 'entry_mode' => $context['entry_mode'],
+                'has_purchase_invoice' => $context['has_purchase_invoice'],
                 'total_quantity' => $context['total_quantity'],
                 'subtotal_amount' => $context['subtotal_amount'],
                 'extra_charge_percent' => $context['extra_charge_percent'],
@@ -960,6 +963,9 @@ class InventoryService
     {
         $status = $this->resolveImportStatus($payload, $accountId);
         $statusWasManuallySelected = filter_var($payload['status_is_manual'] ?? false, FILTER_VALIDATE_BOOL);
+        $hasPurchaseInvoice = array_key_exists('has_purchase_invoice', $payload)
+            ? filter_var($payload['has_purchase_invoice'], FILTER_VALIDATE_BOOL)
+            : (!empty($payload['invoice_analysis_log_id']) || !empty($payload['attachments']));
 
         $items = collect($payload['items'] ?? [])
             ->map(function ($item) {
@@ -1074,6 +1080,7 @@ class InventoryService
             'import_date' => $importDate,
             'status' => $status,
             'entry_mode' => $this->resolveImportEntryMode($payload),
+            'has_purchase_invoice' => $hasPurchaseInvoice,
             'total_quantity' => InventoryQuantity::normalize($items->sum('quantity')),
             'total_received_quantity' => InventoryQuantity::normalize($items->sum('received_quantity')),
             'subtotal_amount' => $subtotalAmount,
@@ -1289,6 +1296,7 @@ class InventoryService
                 'line_total' => $lineTotal,
                 'notes' => $item['notes'] ?? null,
                 'sort_order' => $index + 1,
+                'has_purchase_invoice' => $context['has_purchase_invoice'],
             ]);
 
             if ($supplier && ($shouldUpdateSupplierPrice || $supplierPrice === null || array_key_exists('supplier_product_code', $item))) {

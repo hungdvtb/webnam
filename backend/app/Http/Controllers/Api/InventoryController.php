@@ -38,6 +38,8 @@ use Illuminate\Validation\ValidationException;
 
 class InventoryController extends Controller
 {
+    private const INVENTORY_TRACKING_WINDOW_DAYS = 15;
+
     public function __construct(
         private readonly InventoryService $inventoryService,
         private readonly InvoiceAnalysisService $invoiceAnalysisService,
@@ -159,6 +161,7 @@ class InventoryController extends Controller
         $query = $this->buildInventoryProductsQuery($request, $isPickerMode);
         $summary = ($isPickerMode || $withoutSummary) ? null : $this->inventoryProductSummary(clone $query);
         $withVariants = $request->boolean('with_variants');
+        $includeAttributeValues = $isPickerMode || $request->has('attributes');
         $searchTerm = trim((string) ($request->input('quick_search') ?? $request->input('search') ?? ''));
 
         $baseRelations = [
@@ -180,11 +183,15 @@ class InventoryController extends Controller
             };
         }
 
+        if ($includeAttributeValues) {
+            $baseRelations[] = 'attributeValues:id,product_id,attribute_id,value';
+        }
+
         $query->with($baseRelations);
 
         if ($withVariants) {
             $query->with([
-                'variations' => function ($builder) use ($isPickerMode) {
+                'variations' => function ($builder) use ($isPickerMode, $includeAttributeValues) {
                     $variationRelations = [
                         'unit:id,name',
                         'parentConfigurable:id,name,sku',
@@ -204,6 +211,10 @@ class InventoryController extends Controller
                         };
                     }
 
+                    if ($includeAttributeValues) {
+                        $variationRelations[] = 'attributeValues:id,product_id,attribute_id,value';
+                    }
+
                     $builder
                         ->select([
                             'products.id',
@@ -213,6 +224,7 @@ class InventoryController extends Controller
                             'products.expected_cost',
                             'products.cost_price',
                             'products.inventory_unit_id',
+                            'products.inventory_import_starred',
                             'products.stock_quantity',
                             'products.damaged_quantity',
                             'products.status',
@@ -227,7 +239,9 @@ class InventoryController extends Controller
             ]);
         }
 
-        $sortBy = $request->input('sort_by', 'created_at');
+        $trackingMode = $request->boolean('tracking_mode');
+        $requestedSortBy = $request->input('sort_by');
+        $sortBy = $requestedSortBy ?: 'created_at';
         $sortOrder = strtolower((string) $request->input('sort_order', 'desc')) === 'asc' ? 'asc' : 'desc';
         $allowedSorts = [
             'created_at',
@@ -245,6 +259,11 @@ class InventoryController extends Controller
             'pending_return_quantity',
             'actual_stock',
             'inventory_value',
+            'recent_outbound_quantity',
+            'tracking_demand_quantity',
+            'tracking_daily_average',
+            'tracking_stock_coverage_days',
+            'tracking_priority_score',
             'total_imported',
             'total_exported',
             'total_returned',
@@ -258,7 +277,19 @@ class InventoryController extends Controller
                 ->orderBy('products.name', 'asc')
                 ->orderBy('products.created_at', 'desc');
         } else {
-            $query->orderBy(in_array($sortBy, $allowedSorts, true) ? $sortBy : 'created_at', $sortOrder);
+            $resolvedSortBy = in_array($sortBy, $allowedSorts, true) ? $sortBy : 'created_at';
+            $resolvedSortOrder = $sortOrder;
+
+            if ($trackingMode && !$requestedSortBy) {
+                $resolvedSortBy = 'tracking_priority_score';
+                $resolvedSortOrder = 'desc';
+            }
+
+            $query->orderBy($resolvedSortBy, $resolvedSortOrder);
+
+            if ($trackingMode && $resolvedSortBy !== 'name') {
+                $query->orderBy('products.name', 'asc');
+            }
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 20), 500);
@@ -404,8 +435,8 @@ class InventoryController extends Controller
 
         return response()->json([
             'message' => $product->inventory_import_starred
-                ? 'Đã ưu tiên sản phẩm này trong phiếu nhập.'
-                : 'Đã bỏ ưu tiên sản phẩm này khỏi phiếu nhập.',
+                ? 'Đã lưu sản phẩm này vào lọc nhanh phiếu nhập.'
+                : 'Đã bỏ sản phẩm này khỏi lọc nhanh phiếu nhập.',
             'product' => [
                 'id' => (int) $product->id,
                 'inventory_import_starred' => (bool) $product->inventory_import_starred,
@@ -1416,7 +1447,7 @@ class InventoryController extends Controller
             ->orderBy('id')
             ->get();
 
-        return response()->json($statuses);
+        return response()->json($this->deduplicateImportStatusesForResponse($statuses)->values());
     }
 
     public function storeImportStatus(Request $request)
@@ -1593,9 +1624,9 @@ class InventoryController extends Controller
         if ($request->filled('has_invoice')) {
             $hasInvoice = (string) $request->input('has_invoice');
             if ($hasInvoice === 'with_invoice') {
-                $query->has('attachments');
+                $query->where('has_purchase_invoice', true);
             } elseif ($hasInvoice === 'without_invoice') {
-                $query->doesntHave('attachments');
+                $query->where('has_purchase_invoice', false);
             }
         }
 
@@ -2942,6 +2973,40 @@ class InventoryController extends Controller
             return;
         }
 
+        $exactSkuCandidates = collect([
+            $rawSearch,
+            $this->productSkuService->normalize($rawSearch),
+        ])
+            ->filter(fn ($sku) => is_string($sku) && trim($sku) !== '')
+            ->map(fn ($sku) => trim($sku))
+            ->unique(fn ($sku) => Str::lower($sku))
+            ->values()
+            ->all();
+
+        if (!empty($exactSkuCandidates)) {
+            $applyExactSkuFilter = static function (Builder $builder) use ($exactSkuCandidates): void {
+                $builder->where(function (Builder $exactQuery) use ($exactSkuCandidates) {
+                    foreach ($exactSkuCandidates as $index => $sku) {
+                        $method = $index === 0 ? 'whereRaw' : 'orWhereRaw';
+                        $exactQuery->{$method}(
+                            "LOWER(BTRIM(COALESCE(products.sku, ''))) = LOWER(BTRIM(?))",
+                            [$sku]
+                        );
+                    }
+                });
+            };
+
+            $exactSkuQuery = clone $query;
+            $applyExactSkuFilter($exactSkuQuery);
+
+            if ($exactSkuQuery->exists()) {
+                $query->selectRaw('2000 AS search_score');
+                $applyExactSkuFilter($query);
+
+                return;
+            }
+        }
+
         $normalizedSearch = Str::of($rawSearch)
             ->lower()
             ->ascii()
@@ -2979,7 +3044,10 @@ class InventoryController extends Controller
         }
 
         $strictTokenMatchSql = !empty($strictTokenMatchParts) ? '(' . implode(' + ', $strictTokenMatchParts) . ')' : '0';
-        $minimumRelevantMatches = count($strictTokens) <= 1 ? 1 : max(2, count($strictTokens) - 1);
+        $hasNumericStrictToken = collect($strictTokens)->contains(fn ($token) => preg_match('/\d/', $token));
+        $minimumRelevantMatches = count($strictTokens) <= 1
+            ? 1
+            : ($hasNumericStrictToken ? count($strictTokens) : max(2, count($strictTokens) - 1));
         $searchRankingParts = [
             "CASE WHEN {$skuExpr} = immutable_unaccent(?) THEN 1600 ELSE 0 END",
             "CASE WHEN {$nameExpr} = immutable_unaccent(?) THEN 1500 ELSE 0 END",
@@ -3212,6 +3280,7 @@ class InventoryController extends Controller
         $parentIdSub = $this->buildParentProductSubquery();
         $pendingOutboundQtySub = $this->buildPendingOutboundQuantitySubquery($request);
         $pendingReturnQtySub = $this->buildPendingReturnQuantitySubquery($request);
+        $recentOutboundQtySub = $this->buildRecentOutboundQuantitySubquery($request, self::INVENTORY_TRACKING_WINDOW_DAYS);
 
         $query->leftJoinSub($importQtySub, 'import_totals', function ($join) {
             $join->on('import_totals.product_id', '=', 'products.id');
@@ -3243,6 +3312,9 @@ class InventoryController extends Controller
         $query->leftJoinSub($pendingReturnQtySub, 'pending_returns', function ($join) {
             $join->on('pending_returns.product_id', '=', 'products.id');
         });
+        $query->leftJoinSub($recentOutboundQtySub, 'recent_outbound', function ($join) {
+            $join->on('recent_outbound.product_id', '=', 'products.id');
+        });
 
         $importQtySql = 'COALESCE(import_totals.total_imported, 0)';
         $exportQtySql = 'COALESCE(export_totals.total_exported, 0)';
@@ -3252,6 +3324,7 @@ class InventoryController extends Controller
         $adjustmentQtySql = 'COALESCE(stock_adjustments.total_adjusted, 0)';
         $pendingExportQtySql = 'COALESCE(pending_outbound.pending_export_quantity, 0)';
         $pendingReturnQtySql = 'COALESCE(pending_returns.pending_return_quantity, 0)';
+        $recentOutboundQtySql = 'COALESCE(recent_outbound.recent_outbound_quantity, 0)';
         $correctedExportQtySql = '(' . $exportQtySql . ' + ' . $exportAdjustmentQtySql . ')';
         $computedStockSql = '('
             . $importQtySql
@@ -3266,6 +3339,24 @@ class InventoryController extends Controller
             . ')';
         $actualStockSql = '(' . $computedStockSql . ' - ' . $pendingExportQtySql . ')';
         $inventoryValueSql = '(GREATEST(' . $actualStockSql . ', 0) * COALESCE(products.cost_price, products.expected_cost, 0))';
+        $trackingDemandQtySql = '(' . $recentOutboundQtySql . ' + ' . $pendingExportQtySql . ')';
+        $trackingDailyAverageSql = '(' . $trackingDemandQtySql . ' / ' . self::INVENTORY_TRACKING_WINDOW_DAYS . '.0)';
+        $positiveActualStockSql = 'GREATEST(' . $actualStockSql . ', 0)';
+        $trackingCoverageDaysSql = '(CASE WHEN ' . $trackingDailyAverageSql . ' > 0 THEN ' . $positiveActualStockSql . ' / ' . $trackingDailyAverageSql . ' ELSE NULL END)';
+        $trackingNeedsRestockSql = '(CASE WHEN ' . $trackingDemandQtySql . ' > 0 AND ('
+            . $actualStockSql
+            . ' <= 0 OR ('
+            . $trackingDailyAverageSql
+            . ' > 0 AND '
+            . $trackingCoverageDaysSql
+            . ' < 7)) THEN 1 ELSE 0 END)';
+        $trackingPriorityScoreSql = '(('
+            . $trackingNeedsRestockSql
+            . ' * 1000000) + ('
+            . $trackingDemandQtySql
+            . ' * 1000) + GREATEST(0 - '
+            . $actualStockSql
+            . ', 0))';
 
         if ($compact) {
             $query = $query
@@ -3276,9 +3367,16 @@ class InventoryController extends Controller
                 ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
                 ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
                 ->selectRaw($actualStockSql . ' as actual_stock')
-                ->selectRaw($inventoryValueSql . ' as inventory_value');
+                ->selectRaw($inventoryValueSql . ' as inventory_value')
+                ->selectRaw($recentOutboundQtySql . ' as recent_outbound_quantity')
+                ->selectRaw($trackingDemandQtySql . ' as tracking_demand_quantity')
+                ->selectRaw($trackingDailyAverageSql . ' as tracking_daily_average')
+                ->selectRaw($trackingCoverageDaysSql . ' as tracking_stock_coverage_days')
+                ->selectRaw($trackingNeedsRestockSql . ' as tracking_needs_restock')
+                ->selectRaw($trackingPriorityScoreSql . ' as tracking_priority_score');
 
             $this->applyInventoryProductFilters($query, $request);
+            $this->applyInventoryTrackingFilter($query, $request, $trackingDemandQtySql, $trackingDailyAverageSql);
 
             return $query;
         }
@@ -3296,22 +3394,36 @@ class InventoryController extends Controller
             ->selectRaw($pendingExportQtySql . ' as pending_export_quantity')
             ->selectRaw($pendingReturnQtySql . ' as pending_return_quantity')
             ->selectRaw($actualStockSql . ' as actual_stock')
-            ->selectRaw($inventoryValueSql . ' as inventory_value');
+            ->selectRaw($inventoryValueSql . ' as inventory_value')
+            ->selectRaw($recentOutboundQtySql . ' as recent_outbound_quantity')
+            ->selectRaw($trackingDemandQtySql . ' as tracking_demand_quantity')
+            ->selectRaw($trackingDailyAverageSql . ' as tracking_daily_average')
+            ->selectRaw($trackingCoverageDaysSql . ' as tracking_stock_coverage_days')
+            ->selectRaw($trackingNeedsRestockSql . ' as tracking_needs_restock')
+            ->selectRaw($trackingPriorityScoreSql . ' as tracking_priority_score');
 
         $this->applyInventoryProductFilters($query, $request);
 
-        if ($request->filled('stock_alert')) {
-            $stockAlert = trim((string) $request->input('stock_alert'));
-            if ($stockAlert === 'low') {
-                $query
-                    ->whereRaw($actualStockSql . ' > 0')
-                    ->whereRaw($actualStockSql . ' <= 5');
-            } elseif ($stockAlert === 'out') {
-                $query->whereRaw($actualStockSql . ' <= 0');
-            } elseif ($stockAlert === 'available') {
-                $query->whereRaw($actualStockSql . ' > 5');
-            }
+        $stockAlerts = array_values(array_intersect($this->requestStringList($request, 'stock_alert'), ['low', 'out', 'available']));
+        if (!empty($stockAlerts)) {
+            $query->where(function ($stockQuery) use ($stockAlerts, $actualStockSql) {
+                if (in_array('low', $stockAlerts, true)) {
+                    $stockQuery->orWhere(function ($itemQuery) use ($actualStockSql) {
+                        $itemQuery
+                            ->whereRaw($actualStockSql . ' > 0')
+                            ->whereRaw($actualStockSql . ' <= 5');
+                    });
+                }
+                if (in_array('out', $stockAlerts, true)) {
+                    $stockQuery->orWhereRaw($actualStockSql . ' <= 0');
+                }
+                if (in_array('available', $stockAlerts, true)) {
+                    $stockQuery->orWhereRaw($actualStockSql . ' > 5');
+                }
+            });
         }
+
+        $this->applyInventoryTrackingFilter($query, $request, $trackingDemandQtySql, $trackingDailyAverageSql);
 
         return $query;
     }
@@ -3577,6 +3689,33 @@ class InventoryController extends Controller
             ->groupBy('export_keys.product_id');
     }
 
+    private function buildRecentOutboundQuantitySubquery(Request $request, int $days)
+    {
+        $trackingDays = max($days, 1);
+        $today = now();
+        $toDate = $today->toDateString();
+        $fromDate = $today->copy()->subDays($trackingDays - 1)->toDateString();
+        $recentRequest = $request->duplicate(
+            array_merge($request->query->all(), [
+                'date_from' => $fromDate,
+                'date_to' => $toDate,
+            ]),
+            array_merge($request->request->all(), [
+                'date_from' => $fromDate,
+                'date_to' => $toDate,
+            ]),
+        );
+
+        $recentRequest->setUserResolver($request->getUserResolver());
+        $recentRequest->setRouteResolver($request->getRouteResolver());
+
+        return DB::query()
+            ->fromSub($this->buildExportQuantitySubquery($recentRequest), 'recent_export_totals')
+            ->selectRaw('recent_export_totals.product_id')
+            ->selectRaw('COALESCE(SUM(recent_export_totals.total_exported), 0) as recent_outbound_quantity')
+            ->groupBy('recent_export_totals.product_id');
+    }
+
     private function buildExportAdjustmentQuantitySubquery(Request $request)
     {
         $query = \App\Models\InventoryDocumentItem::query()
@@ -3804,6 +3943,7 @@ class InventoryController extends Controller
             'returning',
             'pending return',
             'pending_return',
+            'completed',
             'draft',
             'nhap',
             'huy',
@@ -3831,6 +3971,47 @@ class InventoryController extends Controller
         }
     }
 
+    private function applyInventoryTrackingFilter($query, Request $request, string $trackingDemandQtySql, string $trackingDailyAverageSql): void
+    {
+        $trackingModes = $this->requestStringList($request, 'tracking_mode');
+        if (!$request->boolean('tracking_mode') && !in_array('1', $trackingModes, true)) {
+            return;
+        }
+
+        $query->whereRaw($trackingDemandQtySql . ' > 0');
+
+        $dailyMinimum = $this->inventoryTrackingDailyMinimum($request);
+        if ($dailyMinimum > 0) {
+            $query->whereRaw($trackingDailyAverageSql . ' >= ?', [$dailyMinimum]);
+        }
+    }
+
+    private function inventoryTrackingDailyMinimum(Request $request): float
+    {
+        $rawValue = trim(str_replace(',', '.', (string) $request->input('tracking_daily_min', '1')));
+        if ($rawValue === '' || !is_numeric($rawValue)) {
+            return 1.0;
+        }
+
+        return max((float) $rawValue, 0.0);
+    }
+
+    private function requestStringList(Request $request, string $key): array
+    {
+        $value = $request->input($key, []);
+        if (!is_array($value)) {
+            $value = explode(',', (string) $value);
+        }
+
+        return collect($value)
+            ->flatten()
+            ->map(fn ($item) => trim((string) $item))
+            ->filter(fn ($item) => $item !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     private function applyInventoryProductFilters($query, Request $request): void
     {
         if ($request->boolean('trash')) {
@@ -3851,6 +4032,10 @@ class InventoryController extends Controller
 
         if (!empty($productIds)) {
             $query->whereIn('products.id', $productIds);
+        }
+
+        if ($request->boolean('import_starred') || $request->boolean('inventory_import_starred')) {
+            $this->whereInventoryProductOrRelatedImportStarred($query);
         }
 
         $supplierIdForCodeSearch = null;
@@ -3913,34 +4098,65 @@ class InventoryController extends Controller
             });
         }
 
-        if ($request->filled('status')) {
-            $status = (string) $request->input('status');
-            if ($status === 'active') {
-                $query->where('products.status', true);
-            } elseif ($status === 'inactive') {
-                $query->where('products.status', false);
+        $statusValues = array_values(array_intersect($this->requestStringList($request, 'status'), ['active', 'inactive']));
+        if (!empty($statusValues)) {
+            $statusBooleans = [];
+            if (in_array('active', $statusValues, true)) {
+                $statusBooleans[] = true;
+            }
+            if (in_array('inactive', $statusValues, true)) {
+                $statusBooleans[] = false;
+            }
+
+            if (!empty($statusBooleans)) {
+                $query->whereIn('products.status', array_values(array_unique($statusBooleans)));
             }
         }
 
-        if ($request->filled('cost_source')) {
-            $costSource = (string) $request->input('cost_source');
-            if ($costSource === 'expected') {
-                $query->whereNull('products.cost_price')->whereNotNull('products.expected_cost');
-            } elseif ($costSource === 'actual') {
-                $query->whereNotNull('products.cost_price');
-            } elseif ($costSource === 'empty') {
-                $query->whereNull('products.cost_price')->whereNull('products.expected_cost');
-            }
+        $costSources = array_values(array_intersect($this->requestStringList($request, 'cost_source'), ['expected', 'actual', 'empty']));
+        if (!empty($costSources)) {
+            $query->where(function ($sourceQuery) use ($costSources) {
+                if (in_array('expected', $costSources, true)) {
+                    $sourceQuery->orWhere(function ($itemQuery) {
+                        $itemQuery->whereNull('products.cost_price')->whereNotNull('products.expected_cost');
+                    });
+                }
+                if (in_array('actual', $costSources, true)) {
+                    $sourceQuery->orWhereNotNull('products.cost_price');
+                }
+                if (in_array('empty', $costSources, true)) {
+                    $sourceQuery->orWhere(function ($itemQuery) {
+                        $itemQuery->whereNull('products.cost_price')->whereNull('products.expected_cost');
+                    });
+                }
+            });
         }
 
-        if ($request->filled('category_id')) {
-            $categoryId = $request->input('category_id');
-            if ($categoryId === 'uncategorized') {
-                $query->whereNull('products.category_id');
-            } else {
-                $this->whereInventoryProductOrParentMatchesCategory($query, (int) $categoryId);
-            }
+        $categoryIds = array_values(array_filter(
+            $this->requestStringList($request, 'category_id'),
+            fn ($categoryId) => $categoryId === 'uncategorized' || (int) $categoryId > 0
+        ));
+        if (!empty($categoryIds)) {
+            $query->where(function ($categoryQuery) use ($categoryIds) {
+                foreach ($categoryIds as $categoryId) {
+                    if ($categoryId === 'uncategorized') {
+                        $categoryQuery->orWhereNull('products.category_id');
+                        continue;
+                    }
+
+                    $numericCategoryId = (int) $categoryId;
+                    if ($numericCategoryId <= 0) {
+                        continue;
+                    }
+
+                    $categoryQuery->orWhere(function ($itemQuery) use ($numericCategoryId) {
+                        $this->whereInventoryProductOrParentMatchesCategory($itemQuery, $numericCategoryId);
+                    });
+                }
+            });
         }
+
+        $this->applyInventoryProductAttributeFilters($query, $request);
 
         if ($request->filled('supplier_id')) {
             $supplierId = $request->input('supplier_id');
@@ -3976,19 +4192,34 @@ class InventoryController extends Controller
             });
         }
 
-        if ($request->filled('type')) {
-            $query->where('products.type', (string) $request->input('type'));
+        $types = $this->requestStringList($request, 'type');
+        if (!empty($types)) {
+            $query->whereIn('products.type', $types);
         }
 
-        $variantScope = (string) $request->input('variant_scope', '');
-        if ($variantScope === 'has_variants') {
-            $query->whereHas('variations');
-        } elseif ($variantScope === 'no_variants') {
-            $query->whereDoesntHave('variations');
-        } elseif ($variantScope === 'only_variants') {
-            $query->whereHas('parentConfigurable');
-        } elseif (in_array($variantScope, ['roots', 'parents_only'], true)) {
-            $query->whereDoesntHave('parentConfigurable');
+        $variantScopes = array_values(array_intersect($this->requestStringList($request, 'variant_scope'), ['has_variants', 'no_variants', 'only_variants', 'roots', 'parents_only']));
+        if (!empty($variantScopes)) {
+            $query->where(function ($scopeQuery) use ($variantScopes) {
+                foreach ($variantScopes as $variantScope) {
+                    if ($variantScope === 'has_variants') {
+                        $scopeQuery->orWhere(function ($itemQuery) {
+                            $itemQuery->whereHas('variations');
+                        });
+                    } elseif ($variantScope === 'no_variants') {
+                        $scopeQuery->orWhere(function ($itemQuery) {
+                            $itemQuery->whereDoesntHave('variations');
+                        });
+                    } elseif ($variantScope === 'only_variants') {
+                        $scopeQuery->orWhere(function ($itemQuery) {
+                            $itemQuery->whereHas('parentConfigurable');
+                        });
+                    } elseif (in_array($variantScope, ['roots', 'parents_only'], true)) {
+                        $scopeQuery->orWhere(function ($itemQuery) {
+                            $itemQuery->whereDoesntHave('parentConfigurable');
+                        });
+                    }
+                }
+            });
         }
 
         if ($request->filled('has_variants')) {
@@ -4050,6 +4281,167 @@ class InventoryController extends Controller
         });
     }
 
+    private function whereInventoryProductOrRelatedImportStarred($query): void
+    {
+        $query->where(function ($starQuery) {
+            $starQuery
+                ->where('products.inventory_import_starred', true)
+                ->orWhereHas('variations', function ($variationQuery) {
+                    $variationQuery->where('inventory_import_starred', true);
+                })
+                ->orWhereHas('parentConfigurable', function ($parentQuery) {
+                    $parentQuery->where('inventory_import_starred', true);
+                });
+        });
+    }
+
+    private function applyInventoryProductAttributeFilters($query, Request $request): void
+    {
+        $filterGroups = $this->inventoryAttributeFilterGroups($request->input('attributes', []));
+        if (empty($filterGroups)) {
+            return;
+        }
+
+        foreach ($filterGroups as $filterGroup) {
+            $attributeId = (int) $filterGroup['attribute_id'];
+            $values = $filterGroup['values'];
+
+            $query->where(function ($attributeQuery) use ($attributeId, $values) {
+                $this->whereInventoryProductOrParentMatchesAttribute($attributeQuery, $attributeId, $values);
+            });
+        }
+    }
+
+    private function inventoryAttributeFilterGroups($inputAttributes): array
+    {
+        if (!is_array($inputAttributes) || empty($inputAttributes)) {
+            return [];
+        }
+
+        return collect($inputAttributes)
+            ->map(function ($values, $attributeId) {
+                if (!is_numeric($attributeId)) {
+                    return null;
+                }
+
+                $normalizedValues = collect(is_array($values) ? $values : explode(',', (string) $values))
+                    ->map(function ($value) {
+                        if (!is_scalar($value)) {
+                            return null;
+                        }
+
+                        return trim((string) $value);
+                    })
+                    ->filter(fn ($value) => $value !== null && $value !== '')
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                if (empty($normalizedValues)) {
+                    return null;
+                }
+
+                return [
+                    'attribute_id' => (int) $attributeId,
+                    'values' => $normalizedValues,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function whereInventoryProductOrParentMatchesAttribute($query, int $attributeId, array $values): void
+    {
+        $query->where(function ($attributeQuery) use ($attributeId, $values) {
+            $attributeQuery
+                ->whereHas('attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $values) {
+                    $this->applyInventoryAttributeValueConstraint($attributeValueQuery, $attributeId, $values);
+                })
+                ->orWhereHas('variations.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $values) {
+                    $this->applyInventoryAttributeValueConstraint($attributeValueQuery, $attributeId, $values);
+                })
+                ->orWhere(function ($parentFallbackQuery) use ($attributeId, $values) {
+                    $parentFallbackQuery
+                        ->whereDoesntHave('attributeValues', function (Builder $ownAttributeQuery) use ($attributeId) {
+                            $ownAttributeQuery->where('attribute_id', $attributeId);
+                        })
+                        ->whereHas('parentConfigurable.attributeValues', function (Builder $attributeValueQuery) use ($attributeId, $values) {
+                            $this->applyInventoryAttributeValueConstraint($attributeValueQuery, $attributeId, $values);
+                        });
+                });
+        });
+    }
+
+    private function applyInventoryAttributeValueConstraint(Builder $query, int $attributeId, array $values): void
+    {
+        $exactValueCandidates = $this->buildInventoryExactAttributeValueCandidates($values);
+        $normalizedValueCandidates = collect($values)
+            ->map(fn ($value) => $this->normalizeInventoryAttributeFilterValue((string) $value))
+            ->filter(fn ($value) => $value !== '')
+            ->unique()
+            ->values()
+            ->all();
+
+        if (empty($exactValueCandidates) && empty($normalizedValueCandidates)) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $normalizedValueExpression = $this->normalizedInventoryAttributeFilterExpression('value');
+
+        $query
+            ->where('attribute_id', $attributeId)
+            ->where(function (Builder $valueQuery) use ($exactValueCandidates, $normalizedValueCandidates, $normalizedValueExpression) {
+                foreach ($exactValueCandidates as $candidate) {
+                    $valueQuery->orWhere('value', $candidate);
+                }
+
+                foreach ($normalizedValueCandidates as $candidate) {
+                    $valueQuery->orWhereRaw("{$normalizedValueExpression} = ?", [$candidate]);
+                }
+            });
+    }
+
+    private function buildInventoryExactAttributeValueCandidates(array $values): array
+    {
+        return collect($values)
+            ->flatMap(function ($value) {
+                $normalizedValue = trim((string) $value);
+                if ($normalizedValue === '') {
+                    return [];
+                }
+
+                return [
+                    $normalizedValue,
+                    json_encode([$normalizedValue]),
+                    json_encode([$normalizedValue], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                ];
+            })
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function normalizedInventoryAttributeFilterExpression(string $column): string
+    {
+        $expression = "TRIM(COALESCE({$column}, ''))";
+        $expression = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({$expression}, '[', ''), ']', ''), '{', ''), '}', ''), '\"', '')";
+
+        return "LOWER({$expression})";
+    }
+
+    private function normalizeInventoryAttributeFilterValue(string $value): string
+    {
+        return (string) Str::of($value)
+            ->lower()
+            ->ascii()
+            ->replace(['[', ']', '{', '}', '"'], ' ')
+            ->replaceMatches('/\s+/', ' ')
+            ->trim();
+    }
+
     private function inventoryProductSummary($query): array
     {
         $summary = DB::query()
@@ -4066,6 +4458,10 @@ class InventoryController extends Controller
             ->selectRaw('COALESCE(SUM(GREATEST(actual_stock, 0)), 0) as total_actual_stock')
             ->selectRaw('COALESCE(SUM(damaged_quantity), 0) as total_damaged_stock')
             ->selectRaw('COALESCE(SUM(inventory_value), 0) as total_inventory_value')
+            ->selectRaw('COALESCE(SUM(recent_outbound_quantity), 0) as total_recent_outbound_quantity')
+            ->selectRaw('COALESCE(SUM(tracking_demand_quantity), 0) as total_tracking_demand_quantity')
+            ->selectRaw('COALESCE(SUM(CASE WHEN tracking_demand_quantity > 0 THEN 1 ELSE 0 END), 0) as tracking_active_products')
+            ->selectRaw('COALESCE(SUM(CASE WHEN tracking_needs_restock = 1 THEN 1 ELSE 0 END), 0) as tracking_needs_restock_products')
             ->first();
 
         return [
@@ -4082,6 +4478,11 @@ class InventoryController extends Controller
             'total_sellable_stock' => InventoryQuantity::normalize($summary->total_actual_stock ?? 0),
             'total_damaged_stock' => InventoryQuantity::normalize($summary->total_damaged_stock ?? 0),
             'total_inventory_value' => round((float) ($summary->total_inventory_value ?? 0), 2),
+            'tracking_window_days' => self::INVENTORY_TRACKING_WINDOW_DAYS,
+            'total_recent_outbound_quantity' => InventoryQuantity::normalize($summary->total_recent_outbound_quantity ?? 0),
+            'total_tracking_demand_quantity' => InventoryQuantity::normalize($summary->total_tracking_demand_quantity ?? 0),
+            'tracking_active_products' => (int) ($summary->tracking_active_products ?? 0),
+            'tracking_needs_restock_products' => (int) ($summary->tracking_needs_restock_products ?? 0),
         ];
     }
 
@@ -4223,6 +4624,7 @@ class InventoryController extends Controller
             'invoice_analysis_log_id' => 'nullable|integer|exists:inventory_invoice_analysis_logs,id',
             'update_supplier_prices' => 'nullable|boolean',
             'status_is_manual' => 'nullable|boolean',
+            'has_purchase_invoice' => 'nullable|boolean',
             'attachments' => 'nullable|array',
             'attachments.*.id' => 'nullable|integer',
             'attachments.*.file_path' => 'required|string|max:1000',
@@ -4353,6 +4755,48 @@ class InventoryController extends Controller
         }
 
         return $files;
+    }
+
+    private function deduplicateImportStatusesForResponse($statuses)
+    {
+        $seen = [];
+
+        return collect($statuses)
+            ->filter(function (InventoryImportStatus $status) use (&$seen) {
+                $key = $this->importStatusResponseKey($status);
+                if ($key === '' || isset($seen[$key])) {
+                    return false;
+                }
+
+                $seen[$key] = true;
+                return true;
+            })
+            ->values();
+    }
+
+    private function importStatusResponseKey(InventoryImportStatus $status): string
+    {
+        $code = $this->normalizeImportStatusText($status->code);
+        $name = $this->normalizeImportStatusText($status->name);
+
+        if (in_array($code, ['moi', 'new'], true) || in_array($name, ['moi', 'new'], true)) {
+            return 'new';
+        }
+
+        if (in_array($code, ['hoan_thanh', 'completed', 'complete', 'done'], true) || in_array($name, ['hoan_thanh', 'completed', 'complete', 'done'], true)) {
+            return 'completed';
+        }
+
+        return $code !== '' ? $code : $name;
+    }
+
+    private function normalizeImportStatusText(?string $value): string
+    {
+        return (string) Str::of((string) $value)
+            ->ascii()
+            ->lower()
+            ->replaceMatches('/[^a-z0-9]+/', '_')
+            ->trim('_');
     }
 
     private function uniqueImportStatusCode(string $name, int $accountId): string
@@ -4525,6 +4969,29 @@ class InventoryController extends Controller
         $actualStock = $product->actual_stock !== null
             ? InventoryQuantity::normalize($product->actual_stock)
             : ($computedStock - $pendingExportQuantity);
+        $recentOutboundQuantity = InventoryQuantity::normalize($product->recent_outbound_quantity ?? 0);
+        $trackingDemandQuantity = InventoryQuantity::normalize($product->tracking_demand_quantity ?? ($recentOutboundQuantity + $pendingExportQuantity));
+        $trackingDailyAverage = round((float) ($product->tracking_daily_average ?? ($trackingDemandQuantity / self::INVENTORY_TRACKING_WINDOW_DAYS)), 3);
+        $trackingStockCoverageDays = $product->tracking_stock_coverage_days !== null
+            ? round((float) $product->tracking_stock_coverage_days, 1)
+            : ($trackingDailyAverage > 0 ? round(max($actualStock, 0) / $trackingDailyAverage, 1) : null);
+        $trackingNeedsRestock = (bool) (int) ($product->tracking_needs_restock ?? (
+            $trackingDemandQuantity > 0
+            && ($actualStock <= 0 || ($trackingStockCoverageDays !== null && $trackingStockCoverageDays < 7))
+        ));
+        if ($trackingDemandQuantity <= 0) {
+            $trackingLevel = 'slow';
+            $trackingLevelLabel = "B\u{00E1}n ch\u{1EAD}m";
+        } elseif ($trackingNeedsRestock) {
+            $trackingLevel = 'restock';
+            $trackingLevelLabel = "C\u{1EA7}n nh\u{1EAD}p";
+        } elseif ($recentOutboundQuantity >= 10 || $trackingDailyAverage >= 0.7) {
+            $trackingLevel = 'fast';
+            $trackingLevelLabel = "B\u{00E1}n m\u{1EA1}nh";
+        } else {
+            $trackingLevel = 'watch';
+            $trackingLevelLabel = "Theo d\u{00F5}i";
+        }
         $displayCost = round((float) ($product->display_cost ?? ($currentCost ?? $expectedCost ?? 0)), 2);
         $inventoryValue = $product->inventory_value !== null
             ? round((float) $product->inventory_value, 2)
@@ -4556,6 +5023,12 @@ class InventoryController extends Controller
             },
             'category_id' => $product->category_id,
             'category_name' => $product->relationLoaded('category') ? $product->category?->name : null,
+            'attribute_values' => $product->relationLoaded('attributeValues')
+                ? $product->attributeValues->map(fn ($attributeValue) => [
+                    'attribute_id' => (int) $attributeValue->attribute_id,
+                    'value' => $attributeValue->value,
+                ])->values()
+                : [],
             'current_cost' => $currentCost,
             'expected_cost' => $expectedCost,
             'display_cost' => $displayCost,
@@ -4575,6 +5048,15 @@ class InventoryController extends Controller
             'pending_return_quantity' => $pendingReturnQuantity,
             'actual_stock' => $actualStock,
             'inventory_value' => $inventoryValue,
+            'tracking_window_days' => self::INVENTORY_TRACKING_WINDOW_DAYS,
+            'recent_outbound_quantity' => $recentOutboundQuantity,
+            'tracking_demand_quantity' => $trackingDemandQuantity,
+            'tracking_daily_average' => $trackingDailyAverage,
+            'tracking_stock_coverage_days' => $trackingStockCoverageDays,
+            'tracking_needs_restock' => $trackingNeedsRestock,
+            'tracking_level' => $trackingLevel,
+            'tracking_level_label' => $trackingLevelLabel,
+            'tracking_priority_score' => round((float) ($product->tracking_priority_score ?? 0), 3),
             'stock_alert' => $stockAlert,
             'stock_alert_label' => match ($stockAlert) {
                 'out' => "H\u{1EBF}t h\u{00E0}ng",

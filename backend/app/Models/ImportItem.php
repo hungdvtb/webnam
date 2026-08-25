@@ -27,6 +27,7 @@ class ImportItem extends Model
         'line_total',
         'notes',
         'sort_order',
+        'has_purchase_invoice',
     ];
 
     protected $casts = [
@@ -36,6 +37,7 @@ class ImportItem extends Model
         'supplier_price_snapshot' => 'decimal:2',
         'line_total' => 'decimal:2',
         'price_was_updated' => 'boolean',
+        'has_purchase_invoice' => 'boolean',
     ];
 
     public function import()

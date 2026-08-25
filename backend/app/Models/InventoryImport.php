@@ -22,6 +22,7 @@ class InventoryImport extends Model
         'import_date',
         'status',
         'entry_mode',
+        'has_purchase_invoice',
         'total_quantity',
         'subtotal_amount',
         'extra_charge_percent',
@@ -36,6 +37,7 @@ class InventoryImport extends Model
 
     protected $casts = [
         'import_date' => 'date',
+        'has_purchase_invoice' => 'boolean',
         'total_quantity' => 'decimal:3',
         'subtotal_amount' => 'decimal:2',
         'extra_charge_percent' => 'decimal:2',

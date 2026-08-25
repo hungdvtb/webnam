@@ -12,6 +12,7 @@ import TableColumnSettingsPanel from '../../components/TableColumnSettingsPanel'
 import SortIndicator from '../../components/SortIndicator';
 import { DEFAULT_STATUS_BADGE_COLOR } from '../../utils/statusBadge';
 import { normalizeWholeMoneyNumber } from '../../utils/money';
+import { updateOrderStatusWithExportSlipPrompt } from '../../utils/orderStatusUpdate';
 
 const COPY_RESET_MS = 1800;
 
@@ -1719,7 +1720,7 @@ const ShipmentList = () => {
     const handleOrderStatusUpdate = async (shipment, nextStatus) => {
         if (!shipment?.order?.id) return;
         try {
-            const response = await orderApi.updateStatus(shipment.order.id, { status: nextStatus, allow_shipping_override: true, reason: 'Cập nhật từ bảng vận đơn' });
+            const response = await updateOrderStatusWithExportSlipPrompt(shipment.order.id, { status: nextStatus, allow_shipping_override: true, reason: 'Cập nhật từ bảng vận đơn' });
             syncOrderIntoState(response.data);
             showToast('success', 'Đã cập nhật trạng thái đơn hàng.');
         } catch (error) {

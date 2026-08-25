@@ -6,6 +6,7 @@ import OrderPrintTemplateModal from '../../components/admin/OrderPrintTemplateMo
 import { getOrderTypeMeta, isSpecialOrderType } from '../../config/orderTypes';
 import { formatRoundedImportCost } from '../../utils/money';
 import { DEFAULT_ORDER_PRINT_TEMPLATE, closePrintSession, printOrders } from '../../utils/orderPrint';
+import { updateOrderStatusWithExportSlipPrompt } from '../../utils/orderStatusUpdate';
 import { getStatusBadgeStyle } from '../../utils/statusBadge';
 import {
     getOrderItemDisplayName,
@@ -70,7 +71,10 @@ const OrderDetail = () => {
     const handleUpdateStatus = async (newStatus) => {
         setUpdating(true);
         try {
-            const response = await orderApi.updateStatus(id, newStatus);
+            const response = await updateOrderStatusWithExportSlipPrompt(id, {
+                status: newStatus,
+                reason: 'Cập nhật từ chi tiết đơn hàng',
+            });
             setOrder(response.data);
         } catch (error) {
             console.error("Error updating status", error);

@@ -8,9 +8,10 @@ import { useUI } from '../../context/UIContext';
 import useAiAvailability from '../../hooks/useAiAvailability';
 import { useTableColumns } from '../../hooks/useTableColumns';
 import { ACTIVE_PRODUCT_TYPE_OPTIONS } from '../../config/productTypes';
-import { aiApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
+import { aiApi, attributeApi, categoryApi, cmsApi, inventoryApi, orderApi, productApi } from '../../services/api';
 import BatchReturnSlipModal from '../../components/admin/BatchReturnSlipModal';
 import InventoryProductDailyOutboundDrawer from '../../components/admin/InventoryProductDailyOutboundDrawer';
+import { resolveMediaUrl } from '../../utils/mediaUrl';
 import {
     formatRoundedImportCost,
     formatWholeMoneyInput,
@@ -36,10 +37,7 @@ const compactIconButton = (active) => `inline-flex h-5 w-5 shrink-0 items-center
 const checkboxClass = 'size-4 rounded border-primary/20 accent-primary';
 const importFieldClass = 'h-8 rounded-sm border border-primary/15 bg-white px-3 text-[13px] text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
 const importSelectClass = `${importFieldClass} pr-8`;
-const importQuickSearchClass = 'h-11 w-full rounded-sm border border-primary/15 bg-white pl-9 pr-9 text-[13px] text-primary outline-none transition placeholder:text-primary/35 focus:border-primary';
-const importActionButtonClass = 'inline-flex h-11 w-full items-center justify-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-center text-[11px] font-bold leading-tight text-primary transition hover:border-primary hover:bg-primary/[0.04] disabled:cursor-not-allowed disabled:opacity-60';
 const importFieldLabelClass = 'mb-1 text-[12px] font-black uppercase tracking-[0.1em] text-primary/50';
-const importFieldLabelHiddenClass = `${importFieldLabelClass} select-none opacity-0`;
 const inventorySearchCache = new Map();
 const COPY_FEEDBACK_RESET_MS = 1800;
 
@@ -100,7 +98,33 @@ const trashSlipTypeLabels = {
     adjustment: 'Phiếu điều chỉnh',
 };
 
-const defaultProductFilters = { search: '', status: '', cost_source: '', stock_alert: '', type: '', category_id: '', variant_scope: '', date_from: '', date_to: '' };
+const INVENTORY_TRACKING_WINDOW_DAYS = 15;
+const PRODUCT_FILTER_PRESETS_STORAGE_KEY = 'inventory_product_filter_presets_v1';
+const productMultiFilterKeys = ['status', 'cost_source', 'stock_alert', 'type', 'category_id', 'variant_scope'];
+const normalizeStringFilterList = (value) => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : (typeof value === 'string' ? value.split(',') : []);
+
+    return Array.from(new Set(rawValues
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean)));
+};
+const createDefaultProductFilters = () => ({
+    search: '',
+    ids: [],
+    status: [],
+    cost_source: [],
+    stock_alert: [],
+    type: [],
+    category_id: [],
+    variant_scope: [],
+    tracking_mode: '',
+    tracking_daily_min: '1',
+    date_from: '',
+    date_to: '',
+});
+const defaultProductFilters = createDefaultProductFilters();
 const defaultSupplierFilters = { search: '', status: '', month: '', date_from: '', date_to: '' };
 const defaultSupplierCatalogFilters = { sku: '', name: '', category_id: '', type: '', variant_scope: '', missing_supplier_price: '', multiple_suppliers: '', supplier_ids: [] };
 const ALL_SUPPLIER_CATALOG_VALUE = 'all';
@@ -115,6 +139,228 @@ const createDefaultSimpleFilters = () => ({
 });
 
 const filterOptionLabel = (options, value) => options.find((option) => String(option.value) === String(value))?.label || String(value || '');
+const summarizeOptionLabels = (options, values, emptyLabel = '') => {
+    const selectedValues = normalizeStringFilterList(values);
+    if (!selectedValues.length) return emptyLabel;
+
+    const labelMap = new Map(options.map((option) => [String(option.value), option.label]));
+    const labels = selectedValues.map((value) => labelMap.get(String(value)) || String(value));
+    if (labels.length <= 2) return labels.join(', ');
+    return `${labels.slice(0, 2).join(', ')} +${labels.length - 2}`;
+};
+const normalizeProductFilters = (filters = {}) => {
+    const defaults = createDefaultProductFilters();
+    const normalized = {
+        ...defaults,
+        ...filters,
+        search: String(filters?.search ?? '').trimStart(),
+        tracking_mode: String(filters?.tracking_mode ?? '').trim(),
+        tracking_daily_min: String(filters?.tracking_daily_min ?? defaults.tracking_daily_min).trim() || defaults.tracking_daily_min,
+        date_from: String(filters?.date_from ?? '').trim(),
+        date_to: String(filters?.date_to ?? '').trim(),
+    };
+
+    productMultiFilterKeys.forEach((key) => {
+        normalized[key] = normalizeStringFilterList(filters?.[key]);
+    });
+    normalized.ids = normalizeStringFilterList(filters?.ids)
+        .filter((id) => Number.isFinite(Number(id)) && Number(id) > 0);
+
+    return normalized;
+};
+const createProductFilterPresetId = () => `inventory_product_filter_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const normalizeProductFilterPreset = (preset) => {
+    if (!preset || typeof preset !== 'object') return null;
+    const name = String(preset.name || '').trim();
+    if (!name) return null;
+
+    return {
+        id: String(preset.id || createProductFilterPresetId()),
+        name,
+        filters: normalizeProductFilters(preset.filters || {}),
+        saved_at: preset.saved_at || new Date().toISOString(),
+    };
+};
+const getProductFilterPresetStorageKey = () => {
+    if (typeof window === 'undefined') return PRODUCT_FILTER_PRESETS_STORAGE_KEY;
+    const accountId = Number(window.localStorage.getItem('activeAccountId') || 0);
+    return accountId > 0
+        ? `${PRODUCT_FILTER_PRESETS_STORAGE_KEY}_account_${accountId}`
+        : PRODUCT_FILTER_PRESETS_STORAGE_KEY;
+};
+const readProductFilterPresets = () => {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(getProductFilterPresetStorageKey()) || '[]');
+        return Array.isArray(parsed)
+            ? parsed.map(normalizeProductFilterPreset).filter(Boolean)
+            : [];
+    } catch (error) {
+        window.localStorage.removeItem(getProductFilterPresetStorageKey());
+        return [];
+    }
+};
+const writeProductFilterPresets = (presets) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(getProductFilterPresetStorageKey(), JSON.stringify(presets));
+};
+const IMPORT_QUICK_FILTER_PRESETS_STORAGE_KEY = 'inventory_import_quick_filter_presets_v1';
+const supportedImportQuickFilterTypes = new Set(['select', 'multiselect']);
+const normalizeImportQuickOptionValue = (value) => String(value ?? '').trim();
+const normalizeImportQuickOptionKey = (value) => normalizeImportQuickOptionValue(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, 'd')
+    .toLowerCase();
+const normalizeImportQuickFilterOption = (option, index = 0, attributeId = '') => {
+    const rawValue = option && typeof option === 'object'
+        ? (option.value ?? option.label)
+        : option;
+    const value = normalizeImportQuickOptionValue(rawValue);
+    if (!value) return null;
+
+    const rawLabel = option && typeof option === 'object'
+        ? (option.label ?? option.value)
+        : option;
+
+    return {
+        ...(option && typeof option === 'object' ? option : {}),
+        id: option && typeof option === 'object' && option.id ? option.id : `${attributeId}_${index}_${normalizeImportQuickOptionKey(value)}`,
+        value,
+        label: normalizeImportQuickOptionValue(rawLabel) || value,
+    };
+};
+const normalizeImportQuickFilterOptionsList = (options = [], attributeId = '') => {
+    const seenValues = new Set();
+
+    return (Array.isArray(options) ? options : [])
+        .map((option, index) => normalizeImportQuickFilterOption(option, index, attributeId))
+        .filter((option) => {
+            const valueKey = normalizeImportQuickOptionKey(option?.value);
+            if (!valueKey || seenValues.has(valueKey)) return false;
+
+            seenValues.add(valueKey);
+            return true;
+        });
+};
+const buildImportQuickFilterAttributes = (attributes = []) => {
+    const normalizedAttributes = (Array.isArray(attributes) ? attributes : [])
+        .filter((attribute) => Number.isFinite(Number(attribute?.id)) && Number(attribute.id) > 0)
+        .filter((attribute) => supportedImportQuickFilterTypes.has(attribute?.frontend_type))
+        .map((attribute) => ({
+            ...attribute,
+            options: normalizeImportQuickFilterOptionsList(
+                attribute?.options || attribute?.attribute_options || attribute?.attributeOptions || [],
+                attribute?.id
+            ),
+        }))
+        .filter((attribute) => attribute.options.length > 0);
+
+    const backendPreferredAttributes = normalizedAttributes.filter(
+        (attribute) => attribute.is_filterable_backend || attribute.is_filterable || attribute.is_filterable_frontend
+    );
+
+    return (backendPreferredAttributes.length > 0 ? backendPreferredAttributes : normalizedAttributes)
+        .sort((left, right) => String(left.name || '').localeCompare(String(right.name || ''), 'vi'));
+};
+const mergeImportQuickFilterAttributes = (...sources) => {
+    const merged = new Map();
+
+    sources.flatMap((source) => (Array.isArray(source) ? source : [])).forEach((attribute) => {
+        if (!attribute) return;
+        const key = Number.isFinite(Number(attribute.id)) && Number(attribute.id) > 0
+            ? `id:${attribute.id}`
+            : (attribute.code ? `code:${attribute.code}` : '');
+        if (!key) return;
+
+        const existing = merged.get(key);
+        if (!existing) {
+            merged.set(key, { ...attribute });
+            return;
+        }
+
+        merged.set(key, {
+            ...existing,
+            ...attribute,
+            options: normalizeImportQuickFilterOptionsList([
+                ...(existing.options || []),
+                ...(attribute.options || []),
+            ], attribute.id || existing.id),
+            is_filterable: existing.is_filterable || attribute.is_filterable,
+            is_filterable_backend: existing.is_filterable_backend || attribute.is_filterable_backend,
+            is_filterable_frontend: existing.is_filterable_frontend || attribute.is_filterable_frontend,
+        });
+    });
+
+    return Array.from(merged.values());
+};
+const createDefaultImportQuickFilters = () => ({
+    category_id: '',
+    attributes: {},
+});
+const normalizeImportQuickAttributeFilters = (attributes = {}) => {
+    if (!attributes || typeof attributes !== 'object') return {};
+
+    return Object.entries(attributes).reduce((normalized, [attributeId, values]) => {
+        const normalizedValues = normalizeStringFilterList(values);
+        if (normalizedValues.length) {
+            normalized[String(attributeId)] = normalizedValues;
+        }
+        return normalized;
+    }, {});
+};
+const normalizeImportQuickFilters = (filters = {}) => ({
+    category_id: String(filters?.category_id ?? '').trim(),
+    attributes: normalizeImportQuickAttributeFilters(filters?.attributes || {}),
+});
+const hasImportQuickFilters = (filters = {}) => {
+    const normalized = normalizeImportQuickFilters(filters);
+    return Boolean(normalized.category_id || Object.values(normalized.attributes).some((values) => values.length > 0));
+};
+const countImportQuickFilters = (filters = {}) => {
+    const normalized = normalizeImportQuickFilters(filters);
+    return (normalized.category_id ? 1 : 0)
+        + Object.values(normalized.attributes).reduce((total, values) => total + values.length, 0);
+};
+const serializeImportQuickFilters = (filters = {}) => JSON.stringify(normalizeImportQuickFilters(filters));
+const createImportQuickFilterPresetId = () => `inventory_import_quick_filter_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+const normalizeImportQuickFilterPreset = (preset) => {
+    if (!preset || typeof preset !== 'object') return null;
+    const name = String(preset.name || '').trim();
+    if (!name) return null;
+
+    return {
+        id: String(preset.id || createImportQuickFilterPresetId()),
+        name,
+        filters: normalizeImportQuickFilters(preset.filters || {}),
+        saved_at: preset.saved_at || new Date().toISOString(),
+    };
+};
+const getImportQuickFilterPresetStorageKey = () => {
+    if (typeof window === 'undefined') return IMPORT_QUICK_FILTER_PRESETS_STORAGE_KEY;
+    const accountId = Number(window.localStorage.getItem('activeAccountId') || 0);
+    return accountId > 0
+        ? `${IMPORT_QUICK_FILTER_PRESETS_STORAGE_KEY}_account_${accountId}`
+        : IMPORT_QUICK_FILTER_PRESETS_STORAGE_KEY;
+};
+const readImportQuickFilterPresets = () => {
+    if (typeof window === 'undefined') return [];
+
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(getImportQuickFilterPresetStorageKey()) || '[]');
+        return Array.isArray(parsed)
+            ? parsed.map(normalizeImportQuickFilterPreset).filter(Boolean)
+            : [];
+    } catch (error) {
+        window.localStorage.removeItem(getImportQuickFilterPresetStorageKey());
+        return [];
+    }
+};
+const writeImportQuickFilterPresets = (presets) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(getImportQuickFilterPresetStorageKey(), JSON.stringify(presets));
+};
 const normalizeSupplierFilterIds = (value) => {
     const rawValues = Array.isArray(value)
         ? value
@@ -267,8 +513,15 @@ const isSlipTab = (tabKey) => isDocumentTab(tabKey) || tabKey === 'trash';
 const documentTypeMap = { returns: 'return', damaged: 'damaged', adjustments: 'adjustment' };
 const documentTitleMap = { returns: 'Phiếu hàng hoàn', damaged: 'Phiếu hàng hỏng', adjustments: 'Phiếu điều chỉnh' };
 const pageSizeOptions = [20, 50, 100, 500];
-const inventoryTableStorageVersion = 'v10';
+const inventoryTableStorageVersion = 'v11';
 const emptySortConfig = { key: null, direction: 'none' };
+const productTrackingSortConfig = { key: 'tracking_status', direction: 'desc' };
+const productTrackingColumnIds = new Set([
+    'recent_outbound_quantity',
+    'tracking_daily_average',
+    'tracking_stock_coverage_days',
+    'tracking_status',
+]);
 const getStoredPageSize = (key) => {
     if (typeof window === 'undefined') return 20;
     const raw = Number(localStorage.getItem(`inventory_page_size_${key}`) || 20);
@@ -299,6 +552,20 @@ const nextSortConfig = (current, columnId) => {
 const formatCurrency = (value) => `${new Intl.NumberFormat('vi-VN').format(Math.round(Number(value || 0)))}đ`;
 const formatImportCost = (value) => `${formatRoundedImportCost(value)}đ`;
 const formatNumber = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(Number(value ?? 0));
+const formatOneDecimal = (value) => new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 }).format(Number(value ?? 0));
+const normalizeDecimalFilterDraft = (value) => {
+    const raw = String(value ?? '').trimStart().replace(/\./g, ',');
+    const normalized = raw.replace(/[^0-9,]/g, '');
+    const [integerPartRaw, ...decimalParts] = normalized.split(',');
+    const integerPart = integerPartRaw.replace(/^0+(?=\d)/, '') || (decimalParts.length ? '0' : '');
+    const decimalPart = decimalParts.join('').slice(0, 2);
+
+    if (decimalParts.length > 0) {
+        return `${integerPart || '0'},${decimalPart}`;
+    }
+
+    return integerPart;
+};
 const stripNumericValue = (value) => String(value ?? '').replace(/[^0-9]/g, '');
 const normalizeQuantityDraft = (value, { signed = false } = {}) => {
     const raw = String(value ?? '').trimStart().replace(/,/g, '.');
@@ -371,6 +638,44 @@ const getActualStockCellMeta = (row) => {
     return {
         ...baseMeta,
         textClass: 'text-rose-700',
+    };
+};
+const getProductTrackingMeta = (row) => {
+    const demand = Number(row?.tracking_demand_quantity || 0);
+    const level = String(row?.tracking_level || '').trim();
+
+    if (level === 'restock' || row?.tracking_needs_restock) {
+        return {
+            key: 'restock',
+            label: row?.tracking_level_label || 'Cần nhập',
+            badgeClass: 'border-rose-300 bg-rose-100 text-rose-800',
+            textClass: 'text-rose-700',
+        };
+    }
+
+    if (level === 'fast') {
+        return {
+            key: 'fast',
+            label: row?.tracking_level_label || 'Bán mạnh',
+            badgeClass: 'border-emerald-300 bg-emerald-50 text-emerald-800',
+            textClass: 'text-emerald-700',
+        };
+    }
+
+    if (level === 'watch' || demand > 0) {
+        return {
+            key: 'watch',
+            label: row?.tracking_level_label || 'Theo dõi',
+            badgeClass: 'border-amber-300 bg-amber-50 text-amber-800',
+            textClass: 'text-amber-700',
+        };
+    }
+
+    return {
+        key: 'slow',
+        label: row?.tracking_level_label || 'Bán chậm',
+        badgeClass: 'border-primary/10 bg-primary/[0.03] text-primary/55',
+        textClass: 'text-primary/45',
     };
 };
 const renderTwoLineHeader = (topLine, bottomLine) => (
@@ -816,9 +1121,12 @@ const findExactInventorySearchMatch = (rows = [], query = '') => {
 
     return exactMatches.length === 1 ? exactMatches[0] : null;
 };
+const isInventorySearchRowImportStarred = (row) => (
+    Boolean(row?.inventory_import_starred || row?.parent_inventory_import_starred)
+);
 const compareInventorySearchRows = (left, right, prioritizeImportStar = false) => {
-    if (prioritizeImportStar && Boolean(right?.inventory_import_starred) !== Boolean(left?.inventory_import_starred)) {
-        return left?.inventory_import_starred ? -1 : 1;
+    if (prioritizeImportStar && isInventorySearchRowImportStarred(right) !== isInventorySearchRowImportStarred(left)) {
+        return isInventorySearchRowImportStarred(left) ? -1 : 1;
     }
     if ((right?._search_score || 0) !== (left?._search_score || 0)) {
         return (right?._search_score || 0) - (left?._search_score || 0);
@@ -862,6 +1170,9 @@ const flattenInventorySearchProducts = (products = [], normalizedQuery = '') => 
                     ...variant,
                     parent_name: product.name,
                     parent_sku: product.sku,
+                    parent_category_id: product.category_id,
+                    parent_inventory_import_starred: Boolean(product.inventory_import_starred),
+                    parent_attribute_values: product.attribute_values || [],
                     _search_score: scoreInventorySearchRow({
                         ...variant,
                         parent_name: product.name,
@@ -897,6 +1208,60 @@ const flattenInventorySearchProducts = (products = [], normalizedQuery = '') => 
 
     return uniqueRows;
 };
+const normalizeImportQuickAttributeMatchValue = (value) => normalizeSearchText(String(value ?? '').replace(/[\[\]{}"]/g, ' '));
+const expandImportQuickAttributeValues = (value) => {
+    if (Array.isArray(value)) return value.flatMap((item) => expandImportQuickAttributeValues(item));
+
+    const rawValue = String(value ?? '').trim();
+    if (!rawValue) return [];
+
+    if ((rawValue.startsWith('[') && rawValue.endsWith(']')) || (rawValue.startsWith('{') && rawValue.endsWith('}'))) {
+        try {
+            const parsed = JSON.parse(rawValue);
+            return expandImportQuickAttributeValues(parsed);
+        } catch (error) {
+            // Fall through to the raw value below.
+        }
+    }
+
+    return [rawValue];
+};
+const inventorySearchRowMatchesFilters = (row, filters = {}) => {
+    const normalizedFilters = normalizeImportQuickFilters(filters);
+
+    if (normalizedFilters.category_id) {
+        const categoryId = String(normalizedFilters.category_id);
+        const rowCategoryId = row?.category_id != null ? String(row.category_id) : '';
+        const parentCategoryId = row?.parent_category_id != null ? String(row.parent_category_id) : '';
+
+        if (categoryId === 'uncategorized') {
+            if (rowCategoryId || parentCategoryId) return false;
+        } else if (rowCategoryId !== categoryId && parentCategoryId !== categoryId) {
+            return false;
+        }
+    }
+
+    const attributeFilters = normalizedFilters.attributes || {};
+    const attributeEntries = Object.entries(attributeFilters);
+    if (!attributeEntries.length) return true;
+
+    return attributeEntries.every(([attributeId, selectedValues]) => {
+        const selectedSet = new Set(selectedValues.map(normalizeImportQuickAttributeMatchValue).filter(Boolean));
+        if (!selectedSet.size) return true;
+
+        const ownAttributeValues = (Array.isArray(row?.attribute_values) ? row.attribute_values : [])
+            .filter((attributeValue) => String(attributeValue?.attribute_id || '') === String(attributeId));
+        const parentAttributeValues = (Array.isArray(row?.parent_attribute_values) ? row.parent_attribute_values : [])
+            .filter((attributeValue) => String(attributeValue?.attribute_id || '') === String(attributeId));
+        const candidateAttributeValues = ownAttributeValues.length ? ownAttributeValues : parentAttributeValues;
+
+        return candidateAttributeValues.some((attributeValue) => (
+            expandImportQuickAttributeValues(attributeValue?.value).some((value) => (
+                selectedSet.has(normalizeImportQuickAttributeMatchValue(value))
+            ))
+        ));
+    });
+};
 const pruneInventorySearchCache = () => {
     const now = Date.now();
 
@@ -912,33 +1277,48 @@ const pruneInventorySearchCache = () => {
         inventorySearchCache.delete(oldestKey);
     }
 };
-const inventorySearchCacheKey = ({ query, supplierId = null, limit = 20, prioritizeImportStar = false }) => {
+const inventorySearchCacheKey = ({ query, supplierId = null, limit = 20, prioritizeImportStar = false, onlyImportStarred = false, allowEmptySearch = false, filters = {} }) => {
     const normalizedQuery = normalizeSearchText(query);
-    return `${supplierId || 'all'}::${limit}::${prioritizeImportStar ? 'import_star' : 'default'}::${normalizedQuery}`;
+    return `${supplierId || 'all'}::${limit}::${prioritizeImportStar ? 'import_star' : 'default'}::${onlyImportStarred ? 'starred_only' : 'all'}::${allowEmptySearch ? 'empty_ok' : 'query_only'}::${serializeImportQuickFilters(filters)}::${normalizedQuery}`;
 };
-const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 20, signal, prioritizeImportStar = false } = {}) => {
+const fetchInventorySearchResults = async ({ query, supplierId = null, limit = 20, signal, prioritizeImportStar = false, onlyImportStarred = false, allowEmptySearch = false, filters = {} } = {}) => {
     const trimmed = String(query ?? '').trim();
-    if (!trimmed) return [];
+    const normalizedFilters = normalizeImportQuickFilters(filters);
+    const filtersActive = hasImportQuickFilters(normalizedFilters);
+    if (!trimmed && !filtersActive && !onlyImportStarred && !allowEmptySearch) return [];
 
-    const cacheKey = inventorySearchCacheKey({ query: trimmed, supplierId, limit, prioritizeImportStar });
+    const cacheKey = inventorySearchCacheKey({ query: trimmed, supplierId, limit, prioritizeImportStar, onlyImportStarred, allowEmptySearch, filters: normalizedFilters });
     const cachedEntry = inventorySearchCache.get(cacheKey);
     if (cachedEntry && Date.now() - cachedEntry.timestamp <= INVENTORY_SEARCH_CACHE_TTL) {
         return cachedEntry.data;
     }
 
     const normalizedQuery = normalizeSearchText(trimmed);
-    const response = await inventoryApi.getProducts({
-        search: trimmed,
-        quick_search: trimmed,
+    const params = {
+        search: trimmed || undefined,
+        quick_search: trimmed || undefined,
         with_variants: 1,
         variant_scope: 'roots',
-        per_page: Math.max(limit, 24),
+        per_page: Math.max(limit * 2, 32),
         supplier_id: supplierId || undefined,
         picker: 1,
         without_summary: 1,
+        import_starred: onlyImportStarred ? 1 : undefined,
+        category_id: normalizedFilters.category_id || undefined,
+    };
+    Object.entries(normalizedFilters.attributes || {}).forEach(([attributeId, values]) => {
+        if (values.length) {
+            params[`attributes[${attributeId}]`] = values.join(',');
+        }
+    });
+
+    const response = await inventoryApi.getProducts({
+        ...params,
     }, signal);
 
     const rows = sortInventorySearchRows(flattenInventorySearchProducts(response.data?.data || [], normalizedQuery)
+        .filter((row) => inventorySearchRowMatchesFilters(row, normalizedFilters))
+        .filter((row) => !onlyImportStarred || isInventorySearchRowImportStarred(row))
         .map((row, index) => ({
             ...row,
             _search_score: scoreInventorySearchRow(row, normalizedQuery),
@@ -1220,6 +1600,20 @@ const createImportForm = (data = null) => {
             mapping_label: item.product_id ? 'Đã map sản phẩm' : '',
         }))
         : [];
+    const allMappedItemsCompleted = mappedItems.length > 0 && mappedItems.every((item) => (
+        parseLineQuantity(item.received_quantity, 0) >= parseLineQuantity(item.quantity, 0)
+    ));
+    const mappedAttachments = Array.isArray(data?.attachments)
+        ? data.attachments.map(mapImportAttachment)
+        : [];
+    const hasPurchaseInvoice = Object.prototype.hasOwnProperty.call(data || {}, 'has_purchase_invoice')
+        ? Boolean(data?.has_purchase_invoice)
+        : Boolean(
+            mappedAttachments.length
+            || Number(data?.attachments_count || 0) > 0
+            || data?.invoice_analysis_log_id
+            || (Array.isArray(data?.invoiceAnalysisLogs) && data.invoiceAnalysisLogs.length)
+        );
 
     return {
         id: data?.id || null,
@@ -1228,6 +1622,8 @@ const createImportForm = (data = null) => {
         supplier_name: data?.supplier?.name || data?.supplier_name || '',
         inventory_import_status_id: data?.inventory_import_status_id ? String(data.inventory_import_status_id) : '',
         status_is_manual: data?.status_is_manual ?? Boolean(data?.id && data?.inventory_import_status_id),
+        auto_complete_import: data?.auto_complete_import ?? (!data?.id || allMappedItemsCompleted),
+        auto_complete_import_touched: Boolean(data?.auto_complete_import_touched ?? data?.id),
         import_date: data?.import_date ? String(data.import_date).slice(0, 10) : todayValue,
         notes: data?.notes || '',
         update_supplier_prices: data?.update_supplier_prices ?? true,
@@ -1238,10 +1634,9 @@ const createImportForm = (data = null) => {
         extra_charge_percent_input: chargeInputs.percentInput,
         invoice_analysis_log_id: data?.invoice_analysis_log_id ? String(data.invoice_analysis_log_id) : (data?.invoiceAnalysisLogs?.[0]?.id ? String(data.invoiceAnalysisLogs[0].id) : ''),
         invoice_number: data?.invoice_number || data?.invoiceAnalysisLogs?.[0]?.analysis_result?.raw_invoice?.invoice_number || '',
+        has_purchase_invoice: hasPurchaseInvoice,
         analysis_log: data?.invoiceAnalysisLogs?.[0] || null,
-        attachments: Array.isArray(data?.attachments)
-            ? data.attachments.map(mapImportAttachment)
-            : [],
+        attachments: mappedAttachments,
         local_attachment_files: [],
         items: data?.id ? mappedItems : sortImportItemsByStarPriority(mappedItems),
     };
@@ -1810,9 +2205,32 @@ const isCompletedImportStatus = (status) => {
     const code = normalizeImportStatusKey(status.code);
     const name = normalizeSearchText(status.name);
     return ['hoan_thanh', 'completed', 'complete', 'done'].includes(code)
-        || name.includes('hoan thanh')
-        || name.includes('completed')
-        || name.includes('complete');
+        || ['hoan thanh', 'completed', 'complete', 'done'].includes(name)
+        || (name.includes('completed') && !name.includes('partial') && !name.includes('incomplete'))
+        || (name.includes('complete') && !name.includes('partial') && !name.includes('incomplete'));
+};
+const isNewImportStatus = (status) => {
+    if (!status) return false;
+    const code = normalizeImportStatusKey(status.code);
+    const name = normalizeSearchText(status.name);
+    return ['moi', 'new'].includes(code) || ['moi', 'new'].includes(name);
+};
+const importStatusDedupKey = (status) => {
+    if (isNewImportStatus(status)) return 'new';
+    if (isCompletedImportStatus(status)) return 'completed';
+    const code = normalizeImportStatusKey(status?.code);
+    const name = normalizeSearchText(status?.name);
+    return code || name || String(status?.id || '');
+};
+const deduplicateImportStatuses = (statuses = []) => {
+    const seen = new Set();
+
+    return (Array.isArray(statuses) ? statuses : []).filter((status) => {
+        const key = importStatusDedupKey(status);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 };
 
 const productColumns = [
@@ -1820,6 +2238,7 @@ const productColumns = [
     { id: 'product', label: 'Sản phẩm', minWidth: 300 },
     { id: 'total_imported', label: 'Tổng nhập', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL đã về từ các phiếu nhập.', headerRender: () => renderTwoLineHeader('Tổng', 'nhập') },
     { id: 'total_exported', label: 'Tổng xuất', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL từ các phiếu xuất kho.', headerRender: () => renderTwoLineHeader('Tổng', 'xuất') },
+    { id: 'recent_outbound_quantity', label: 'Đi 15 ngày', minWidth: 86, align: 'right', headerTooltip: 'Số lượng đã xuất trong 15 ngày gần nhất.', headerRender: () => renderTwoLineHeader('Đi', '15 ngày') },
     { id: 'total_returned', label: 'Tổng hoàn', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL đã nhập lại từ phiếu hoàn.', headerRender: () => renderTwoLineHeader('Tổng', 'hoàn') },
     { id: 'total_damaged', label: 'Tổng hỏng', minWidth: 72, align: 'right', headerTooltip: 'Cộng SL từ các phiếu hỏng.', headerRender: () => renderTwoLineHeader('Tổng', 'hỏng') },
     { id: 'total_adjusted', label: 'Điều chỉnh tồn', minWidth: 92, align: 'right', headerTooltip: 'Cộng/trừ SL từ phiếu điều chỉnh tồn độc lập.', headerRender: () => renderTwoLineHeader('Điều chỉnh', 'tồn') },
@@ -1827,6 +2246,9 @@ const productColumns = [
     { id: 'pending_export_quantity', label: 'SL chờ xuất', minWidth: 82, align: 'right', headerTooltip: 'Cộng SL đã bán nhưng chưa có phiếu xuất.', headerRender: () => renderTwoLineHeader('SL chờ', 'xuất') },
     { id: 'pending_return_quantity', label: 'SL hoàn chờ về', minWidth: 90, align: 'right', headerTooltip: 'Cộng SL đơn hoàn chưa nhập lại kho.', headerRender: () => renderTwoLineHeader('SL hoàn', 'chờ về') },
     { id: 'actual_stock', label: 'Có thể bán', minWidth: 84, align: 'right', headerTooltip: 'Có thể bán = Tồn kho - SL chờ xuất', headerRender: () => renderTwoLineHeader('Có thể', 'bán') },
+    { id: 'tracking_daily_average', label: 'TB/ngày', minWidth: 78, align: 'right', headerTooltip: 'Tốc độ đi trung bình trong 15 ngày, cộng cả lượng chờ xuất.', headerRender: () => renderTwoLineHeader('TB', 'ngày') },
+    { id: 'tracking_stock_coverage_days', label: 'Đủ bán', minWidth: 82, align: 'right', headerTooltip: 'Ước tính tồn hiện tại đủ bán bao nhiêu ngày theo tốc độ 15 ngày.', headerRender: () => renderTwoLineHeader('Đủ', 'bán') },
+    { id: 'tracking_status', label: 'Theo dõi', minWidth: 92, align: 'center', headerTooltip: 'Ưu tiên nhập hàng dựa trên lượng đi 15 ngày, chờ xuất và tồn còn lại.' },
     { id: 'expected_cost', label: 'Giá nhập dự kiến', minWidth: 108, align: 'right', headerRender: () => renderTwoLineHeader('Giá nhập', 'dự kiến') },
     { id: 'current_cost', label: 'Giá nhập thực tế', minWidth: 108, align: 'right', headerTooltip: 'Tổng tiền nhập hợp lệ / Tổng SL nhập hợp lệ', headerRender: () => renderTwoLineHeader('Giá nhập', 'thực tế') },
     { id: 'inventory_value', label: 'Thành tiền', minWidth: 104, align: 'right', headerTooltip: 'Có thể bán x giá đang dùng; thiếu giá thực tế thì lấy giá dự kiến', headerRender: () => renderTwoLineHeader('Thành', 'tiền') },
@@ -1951,6 +2373,7 @@ const inventorySortColumnMaps = {
         product: 'name',
         total_imported: 'total_imported',
         total_exported: 'total_exported',
+        recent_outbound_quantity: 'recent_outbound_quantity',
         total_returned: 'total_returned',
         total_damaged: 'total_damaged',
         total_adjusted: 'total_adjusted',
@@ -1958,6 +2381,9 @@ const inventorySortColumnMaps = {
         pending_export_quantity: 'pending_export_quantity',
         pending_return_quantity: 'pending_return_quantity',
         actual_stock: 'actual_stock',
+        tracking_daily_average: 'tracking_daily_average',
+        tracking_stock_coverage_days: 'tracking_stock_coverage_days',
+        tracking_status: 'tracking_priority_score',
         expected_cost: 'expected_cost',
         current_cost: 'cost_price',
         inventory_value: 'inventory_value',
@@ -2034,23 +2460,24 @@ const inventorySortColumnMaps = {
     },
 };
 
-const ActiveFilterChips = ({ items = [], onClearAll = null }) => {
+const ActiveFilterChips = ({ items = [], onClearAll = null, variant = 'block' }) => {
     const visibleItems = items.filter(Boolean);
     if (visibleItems.length === 0) return null;
+    const isInline = variant === 'inline';
 
     return (
-        <div className="border-y border-primary/10 bg-[#fbfcfe] px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2">
+        <div className={isInline ? 'min-w-0 flex-1 overflow-x-auto' : 'border-y border-primary/10 bg-[#fbfcfe] px-3 py-2'}>
+            <div className={isInline ? 'flex min-w-max items-center justify-end gap-2' : 'flex flex-wrap items-center gap-2'}>
                 <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Đang lọc</div>
                 {visibleItems.map((item) => (
                     <button
                         key={item.key}
                         type="button"
                         onClick={item.onRemove}
-                        className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/15 bg-white px-3 py-1 text-left text-[12px] text-primary transition hover:border-brick/35 hover:text-brick"
+                        className="inline-flex max-w-full shrink-0 items-center gap-1.5 rounded-full border border-primary/15 bg-white px-3 py-1 text-left text-[12px] text-primary transition hover:border-brick/35 hover:text-brick"
                         title={`Bỏ lọc ${String(item.label || '').toLowerCase()}`}
                     >
-                        <span className="max-w-[260px] truncate">
+                        <span className={`${isInline ? 'max-w-[185px]' : 'max-w-[260px]'} truncate`}>
                             <span className="font-semibold text-primary/55">{item.label}:</span>
                             {' '}
                             <span className="font-black text-primary">{item.value}</span>
@@ -2072,17 +2499,20 @@ const ActiveFilterChips = ({ items = [], onClearAll = null }) => {
     );
 };
 
-const PanelHeader = ({ title, description, toggles = [], leadingActions = null, actions = null, activeFilterChips = [], onClearAllFilters = null }) => {
+const PanelHeader = ({ title, description, toggles = [], leadingActions = null, actions = null, activeFilterChips = [], onClearAllFilters = null, activeFilterPlacement = 'below' }) => {
     const hasActiveFilterChips = activeFilterChips.filter(Boolean).length > 0;
+    const renderInlineFilterChips = activeFilterPlacement === 'toolbar' && hasActiveFilterChips;
+    const renderBelowFilterChips = activeFilterPlacement !== 'toolbar' && hasActiveFilterChips;
 
     return (
         <>
-            <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 ${hasActiveFilterChips ? '' : 'border-b border-primary/10'}`}>
-                <div className="min-w-0">
+            <div className={`flex items-center justify-between gap-2 px-3 py-2.5 ${renderBelowFilterChips ? '' : 'border-b border-primary/10'}`}>
+                <div className="min-w-0 shrink-0">
                     <div className="text-[13px] font-black text-primary">{title}</div>
                     {description ? <div className="text-[11px] text-primary/45">{description}</div> : null}
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                    {renderInlineFilterChips ? <ActiveFilterChips items={activeFilterChips} onClearAll={onClearAllFilters} variant="inline" /> : null}
                     {leadingActions}
                     {toggles.map((toggle) => (
                         <button
@@ -2099,19 +2529,303 @@ const PanelHeader = ({ title, description, toggles = [], leadingActions = null, 
                     {actions}
                 </div>
             </div>
-            {hasActiveFilterChips ? <ActiveFilterChips items={activeFilterChips} onClearAll={onClearAllFilters} /> : null}
+            {renderBelowFilterChips ? <ActiveFilterChips items={activeFilterChips} onClearAll={onClearAllFilters} /> : null}
         </>
     );
 };
 
-const FilterPanel = ({ children, actions }) => (
+const FilterPanel = ({ children, actions, singleLine = false }) => (
     <div className="border-b border-primary/10 bg-[#fbfcfe] px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-2">
-            {children}
-            <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
-        </div>
+        {singleLine ? (
+            <div className="overflow-visible">
+                <div className="flex w-full min-w-0 items-center gap-2">
+                    {children}
+                    <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>
+                </div>
+            </div>
+        ) : (
+            <div className="flex flex-wrap items-center gap-2">
+                {children}
+                <div className="ml-auto flex flex-wrap items-center gap-2">{actions}</div>
+            </div>
+        )}
     </div>
 );
+
+const InventoryMultiSelectFilter = ({
+    options = [],
+    value = [],
+    onChange,
+    placeholder = 'Tất cả',
+    className = 'w-[175px]',
+    menuClassName = 'w-[300px]',
+    searchable = false,
+}) => {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const containerRef = useRef(null);
+    const selectedValues = useMemo(() => normalizeStringFilterList(value), [value]);
+    const optionValues = useMemo(
+        () => options.map((option) => String(option.value)).filter(Boolean),
+        [options]
+    );
+    const selectedOptions = useMemo(
+        () => options.filter((option) => selectedValues.includes(String(option.value))),
+        [options, selectedValues]
+    );
+    const summaryLabel = selectedOptions.length
+        ? (selectedOptions.length <= 2
+            ? selectedOptions.map((option) => option.label).join(', ')
+            : `${selectedOptions.slice(0, 2).map((option) => option.label).join(', ')} +${selectedOptions.length - 2}`)
+        : placeholder;
+    const filteredOptions = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        if (!needle) return options;
+        return options.filter((option) => [
+            option.label,
+            option.value,
+            option.description,
+        ].some((item) => String(item || '').toLowerCase().includes(needle)));
+    }, [options, query]);
+    const allSelected = optionValues.length > 0 && selectedValues.length === optionValues.length;
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handlePointerDown = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setOpen(false);
+            }
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [open]);
+
+    const applyNextValue = (nextValue) => {
+        onChange?.(normalizeStringFilterList(nextValue));
+    };
+
+    return (
+        <div ref={containerRef} className={`relative ${className}`.trim()}>
+            <button
+                type="button"
+                onClick={() => setOpen((prev) => !prev)}
+                className={`flex w-full items-center justify-between gap-2 ${selectClass}`}
+                title={selectedOptions.length ? selectedOptions.map((option) => option.label).join(', ') : summaryLabel}
+            >
+                <span className={`truncate text-left ${selectedOptions.length ? 'font-bold text-primary' : 'text-primary'}`}>{summaryLabel}</span>
+                <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/45">
+                    {open ? 'expand_less' : 'expand_more'}
+                </span>
+            </button>
+            {open ? (
+                <div className={`absolute left-0 top-full z-40 mt-1 max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white shadow-lg ${menuClassName}`}>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            applyNextValue([]);
+                            setOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between gap-3 border-b border-primary/10 px-3 py-2.5 text-left transition hover:bg-[#f6f9fc] ${
+                            selectedValues.length === 0 ? 'bg-primary/[0.04]' : ''
+                        }`}
+                    >
+                        <span className="truncate text-[12px] font-black text-primary">{placeholder}</span>
+                        {selectedValues.length === 0 ? <span className="material-symbols-outlined text-[18px] text-primary">check</span> : null}
+                    </button>
+                    <div className="flex flex-wrap items-center gap-2 border-b border-primary/10 px-3 py-2">
+                        <button type="button" onClick={() => applyNextValue(optionValues)} disabled={!optionValues.length || allSelected} className={ghostButton}>Chọn hết</button>
+                        <button type="button" onClick={() => applyNextValue([])} disabled={!selectedValues.length} className={ghostButton}>Bỏ chọn</button>
+                    </div>
+                    {searchable ? (
+                        <div className="border-b border-primary/10 p-2">
+                            <input
+                                value={query}
+                                onChange={(event) => setQuery(event.target.value)}
+                                placeholder="Tìm trong bộ lọc"
+                                className={`w-full ${inputClass}`}
+                            />
+                        </div>
+                    ) : null}
+                    <div className="max-h-72 overflow-auto p-1.5">
+                        {!filteredOptions.length ? <div className="px-2 py-3 text-[12px] text-primary/45">Không có lựa chọn phù hợp.</div> : null}
+                        {filteredOptions.map((option) => {
+                            const optionValue = String(option.value);
+                            const checked = selectedValues.includes(optionValue);
+
+                            return (
+                                <label key={optionValue} className="flex cursor-pointer items-start gap-2 rounded-sm px-2 py-2 transition hover:bg-[#f6f9fc]">
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => {
+                                            applyNextValue(
+                                                checked
+                                                    ? selectedValues.filter((item) => item !== optionValue)
+                                                    : [...selectedValues, optionValue]
+                                            );
+                                        }}
+                                        className={`${checkboxClass} mt-0.5`}
+                                    />
+                                    <span className={`min-w-0 truncate text-[12px] ${checked ? 'font-black text-primary' : 'font-semibold text-primary/80'}`}>
+                                        {option.label}
+                                    </span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
+const ProductSavedSearchSelect = ({
+    presets = [],
+    selectedId = '',
+    onSelect,
+    onRename,
+    onDelete,
+    className = 'w-[180px]',
+}) => {
+    const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
+    const containerRef = useRef(null);
+    const selectedPreset = useMemo(
+        () => presets.find((preset) => preset.id === selectedId) || null,
+        [presets, selectedId]
+    );
+    const filteredPresets = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        if (!needle) return presets;
+        return presets.filter((preset) => String(preset.name || '').toLowerCase().includes(needle));
+    }, [presets, query]);
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handlePointerDown = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setOpen(false);
+            }
+        };
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') setOpen(false);
+        };
+
+        document.addEventListener('mousedown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+
+        return () => {
+            document.removeEventListener('mousedown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [open]);
+
+    const selectPreset = (presetId) => {
+        onSelect?.(presetId);
+        setOpen(false);
+        setQuery('');
+    };
+
+    return (
+        <div ref={containerRef} className={`relative shrink-0 ${className}`.trim()}>
+            <button
+                type="button"
+                onClick={() => setOpen((prev) => !prev)}
+                className={`flex w-full items-center justify-between gap-2 ${selectClass}`}
+                title={selectedPreset?.name || 'Tìm kiếm đã lưu'}
+            >
+                <span className={`truncate text-left ${selectedPreset ? 'font-black text-primary' : 'text-primary'}`}>
+                    {selectedPreset?.name || 'Tìm kiếm đã lưu'}
+                </span>
+                <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/45">
+                    {open ? 'expand_less' : 'expand_more'}
+                </span>
+            </button>
+            {open ? (
+                <div className="absolute left-0 top-full z-50 mt-1 w-[390px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white shadow-lg">
+                    <div className="border-b border-primary/10 p-2">
+                        <div className="relative">
+                            <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[17px] text-primary/35">search</span>
+                            <input
+                                value={query}
+                                onChange={(event) => setQuery(event.target.value)}
+                                placeholder="Gõ để tìm tìm kiếm đã lưu"
+                                className={`w-full pl-8 ${inputClass}`}
+                                autoFocus
+                            />
+                        </div>
+                    </div>
+                    <div className="max-h-72 overflow-auto p-1.5">
+                        <button
+                            type="button"
+                            onClick={() => selectPreset('')}
+                            className={`flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left transition hover:bg-[#f6f9fc] ${selectedId ? '' : 'bg-primary/[0.04]'}`}
+                        >
+                            <span className="truncate text-[12px] font-black text-primary">Tất cả tìm kiếm đã lưu</span>
+                            {!selectedId ? <span className="material-symbols-outlined text-[18px] text-primary">check</span> : null}
+                        </button>
+                        {!filteredPresets.length ? (
+                            <div className="px-2 py-3 text-[12px] text-primary/45">Không có tìm kiếm đã lưu phù hợp.</div>
+                        ) : null}
+                        {filteredPresets.map((preset) => {
+                            const isSelected = preset.id === selectedId;
+
+                            return (
+                                <div key={preset.id} className={`group flex items-center gap-1 rounded-sm px-2 py-1.5 transition hover:bg-[#f6f9fc] ${isSelected ? 'bg-primary/[0.04]' : ''}`}>
+                                    <button
+                                        type="button"
+                                        onClick={() => selectPreset(preset.id)}
+                                        className="min-w-0 flex-1 text-left"
+                                        title={preset.name}
+                                    >
+                                        <div className={`truncate text-[12px] ${isSelected ? 'font-black text-primary' : 'font-semibold text-primary'}`}>
+                                            {preset.name}
+                                        </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            onRename?.(preset.id);
+                                        }}
+                                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm text-primary/55 transition hover:bg-primary/[0.08] hover:text-primary"
+                                        title="Sửa tên tìm kiếm này"
+                                    >
+                                        <span className="material-symbols-outlined text-[17px]">edit</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            onDelete?.(preset.id);
+                                        }}
+                                        className="inline-flex size-7 shrink-0 items-center justify-center rounded-sm text-brick/70 transition hover:bg-brick/10 hover:text-brick"
+                                        title="Xóa tìm kiếm này"
+                                    >
+                                        <span className="material-symbols-outlined text-[17px]">delete</span>
+                                    </button>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            ) : null}
+        </div>
+    );
+};
 
 const SummaryPanel = ({ items }) => (
     <div className="border-b border-primary/10 bg-white px-3 py-2.5">
@@ -2362,19 +3076,31 @@ const IndeterminateCheckbox = ({ checked, indeterminate = false, onChange, disab
     );
 };
 
-const ModalShell = ({ open, title, onClose, children, footer, maxWidth = 'max-w-5xl', closeOnBackdrop = true }) => {
+const ModalShell = ({
+    open,
+    title,
+    onClose,
+    children,
+    footer,
+    maxWidth = 'max-w-5xl',
+    closeOnBackdrop = true,
+    backdropClassName = 'fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-4',
+    panelClassName = '',
+    bodyClassName = 'max-h-[72vh] overflow-auto px-5 py-4',
+    footerClassName = 'border-t border-primary/10 px-5 py-4',
+}) => {
     if (!open) return null;
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-4" onClick={closeOnBackdrop ? onClose : undefined}>
-            <div className={`w-full ${maxWidth} overflow-hidden rounded-sm bg-white shadow-2xl`} onClick={(event) => event.stopPropagation()}>
-                <div className="flex items-center justify-between border-b border-primary/10 px-5 py-4">
+        <div className={backdropClassName} onClick={closeOnBackdrop ? onClose : undefined}>
+            <div className={`w-full ${maxWidth} overflow-hidden rounded-sm bg-white shadow-2xl ${panelClassName}`.trim()} onClick={(event) => event.stopPropagation()}>
+                <div className="flex shrink-0 items-center justify-between border-b border-primary/10 px-5 py-4">
                     <div className="text-[24px] font-black text-primary">{title}</div>
                     <button type="button" onClick={onClose} className="text-primary/35 transition hover:text-primary">
                         <span className="material-symbols-outlined text-[28px]">close</span>
                     </button>
                 </div>
-                <div className="max-h-[72vh] overflow-auto px-5 py-4">{children}</div>
-                {footer ? <div className="border-t border-primary/10 px-5 py-4">{footer}</div> : null}
+                <div className={bodyClassName}>{children}</div>
+                {footer ? <div className={footerClassName}>{footer}</div> : null}
             </div>
         </div>
     );
@@ -2456,26 +3182,239 @@ const ProductLookupInput = ({ supplierId = null, onSelect, placeholder = 'Tìm t
     );
 };
 
+const ImportQuickAttributeFilterDropdown = ({ attributes = [], value = {}, onChange }) => {
+    const [open, setOpen] = useState(false);
+    const [activeAttributeId, setActiveAttributeId] = useState('');
+    const containerRef = useRef(null);
+    const filterableAttributes = useMemo(() => buildImportQuickFilterAttributes(attributes), [attributes]);
+    const normalizedValue = normalizeImportQuickAttributeFilters(value);
+    const selectedCount = Object.values(normalizedValue).reduce((total, values) => total + values.length, 0);
+    const activeAttribute = filterableAttributes.find((attribute) => String(attribute.id) === String(activeAttributeId)) || null;
+
+    useEffect(() => {
+        if (!open) return undefined;
+
+        const handleOutsideClick = (event) => {
+            if (containerRef.current && !containerRef.current.contains(event.target)) {
+                setOpen(false);
+                setActiveAttributeId('');
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }, [open]);
+
+    useEffect(() => {
+        if (activeAttributeId && !filterableAttributes.some((attribute) => String(attribute.id) === String(activeAttributeId))) {
+            setActiveAttributeId('');
+        }
+    }, [activeAttributeId, filterableAttributes]);
+
+    const toggleAttributeValue = (attributeId, optionValue) => {
+        const key = String(attributeId);
+        const currentValues = normalizedValue[key] || [];
+        const nextValues = currentValues.includes(optionValue)
+            ? currentValues.filter((item) => item !== optionValue)
+            : [...currentValues, optionValue];
+
+        onChange?.(normalizeImportQuickAttributeFilters({
+            ...normalizedValue,
+            [key]: nextValues,
+        }));
+    };
+
+    const clearAttribute = (attributeId) => {
+        const nextValue = { ...normalizedValue };
+        delete nextValue[String(attributeId)];
+        onChange?.(nextValue);
+    };
+
+    return (
+        <div ref={containerRef} className="relative min-w-0">
+            <button
+                type="button"
+                onClick={() => {
+                    setOpen((prev) => {
+                        const nextOpen = !prev;
+                        if (nextOpen) {
+                            setActiveAttributeId('');
+                        }
+                        return nextOpen;
+                    });
+                }}
+                className={`flex h-12 w-full min-w-[170px] items-center justify-between gap-2 rounded-sm border bg-white px-3 text-[12px] font-bold text-primary shadow-sm transition hover:border-primary/30 ${selectedCount ? 'border-emerald-200 text-emerald-700' : 'border-primary/15'}`}
+                title="Lọc theo thuộc tính sản phẩm"
+            >
+                <span className="inline-flex min-w-0 items-center gap-2">
+                    <span className="material-symbols-outlined shrink-0 text-[18px]">category</span>
+                    <span className="truncate">{selectedCount ? `Thuộc tính: ${selectedCount}` : 'Thuộc tính'}</span>
+                </span>
+                <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/40">{open ? 'expand_less' : 'expand_more'}</span>
+            </button>
+
+            {open ? (
+                <div className="absolute right-0 top-[calc(100%+6px)] z-[145] w-[380px] max-w-[calc(100vw-2rem)] rounded-sm border border-primary/15 bg-white p-3 shadow-2xl">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                        {activeAttribute ? (
+                            <button
+                                type="button"
+                                onClick={() => setActiveAttributeId('')}
+                                className="inline-flex h-7 min-w-0 items-center gap-1 rounded-sm border border-primary/10 bg-white px-2 text-[11px] font-black text-primary transition hover:bg-primary/[0.04]"
+                            >
+                                <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+                                <span className="truncate">{activeAttribute.name}</span>
+                            </button>
+                        ) : (
+                            <div className="text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Chọn thuộc tính</div>
+                        )}
+                        {selectedCount ? (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    onChange?.({});
+                                    setActiveAttributeId('');
+                                }}
+                                className="inline-flex h-7 items-center gap-1 rounded-sm border border-brick/15 bg-white px-2 text-[11px] font-bold text-brick transition hover:bg-brick/5"
+                            >
+                                <span className="material-symbols-outlined text-[15px]">backspace</span>
+                                Xóa chọn
+                            </button>
+                        ) : null}
+                    </div>
+
+                    {!filterableAttributes.length ? (
+                        <div className="rounded-sm border border-dashed border-primary/15 px-3 py-5 text-center text-[12px] text-primary/45">
+                            Chưa có thuộc tính khả dụng để lọc.
+                        </div>
+                    ) : (
+                        <div className="max-h-[360px] overflow-auto rounded-sm border border-primary/10 bg-[#f8fbff]">
+                            {!activeAttribute ? (
+                                filterableAttributes.map((attribute) => {
+                                    const selectedValues = normalizedValue[String(attribute.id)] || [];
+
+                                    return (
+                                        <button
+                                            key={attribute.id}
+                                            type="button"
+                                            onClick={() => setActiveAttributeId(String(attribute.id))}
+                                            className="flex min-h-10 w-full items-center justify-between gap-3 border-b border-primary/10 bg-white px-3 py-2 text-left transition last:border-b-0 hover:bg-primary/[0.04]"
+                                        >
+                                            <span className="min-w-0 truncate text-[12px] font-black text-primary">{attribute.name}</span>
+                                            <span className="inline-flex shrink-0 items-center gap-2">
+                                                {selectedValues.length ? (
+                                                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                                        {selectedValues.length}
+                                                    </span>
+                                                ) : null}
+                                                <span className="material-symbols-outlined text-[17px] text-primary/35">chevron_right</span>
+                                            </span>
+                                        </button>
+                                    );
+                                })
+                            ) : (
+                                <div className="bg-white">
+                                    <div className="flex items-center justify-between gap-2 border-b border-primary/10 bg-[#f8fbff] px-3 py-2">
+                                        <div className="min-w-0 truncate text-[11px] font-black uppercase tracking-[0.1em] text-primary/50">{activeAttribute.name}</div>
+                                        {(normalizedValue[String(activeAttribute.id)] || []).length ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => clearAttribute(activeAttribute.id)}
+                                                className="shrink-0 text-[11px] font-bold text-brick hover:underline"
+                                            >
+                                                Xóa
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                    <div className="max-h-[300px] overflow-auto p-1">
+                                        {activeAttribute.options.map((option) => {
+                                            const selectedValues = normalizedValue[String(activeAttribute.id)] || [];
+                                            const optionValue = normalizeImportQuickOptionValue(option.value);
+                                            if (!optionValue) return null;
+                                            const checked = selectedValues.includes(optionValue);
+
+                                            return (
+                                                <label key={option.id || optionValue} className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-[12px] font-semibold text-primary transition hover:bg-[#f8fbff]">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={() => toggleAttributeValue(activeAttribute.id, optionValue)}
+                                                        className={checkboxClass}
+                                                    />
+                                                    <span className={checked ? 'font-black text-primary' : 'text-primary/70'}>{option.label || optionValue}</span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {selectedCount ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                            {filterableAttributes.flatMap((attribute) => (
+                                (normalizedValue[String(attribute.id)] || []).map((selectedValue) => (
+                                    <span key={`${attribute.id}_${selectedValue}`} className="inline-flex max-w-[180px] items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                                        <span className="truncate">{attribute.name}: {selectedValue}</span>
+                                    </span>
+                                ))
+                            )).slice(0, 6)}
+                            {selectedCount > 6 ? (
+                                <span className="inline-flex items-center rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[10px] font-bold text-primary/55">
+                                    +{selectedCount - 6}
+                                </span>
+                            ) : null}
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
+    );
+};
+
 const ImportProductQuickSearch = ({
     onSelect,
     onToggleStar = null,
     supplierId = null,
+    categoryOptions = [],
+    attributes = [],
+    onNotify = null,
     disabled = false,
     placeholder = 'Tìm tên, mã sản phẩm, mã NCC hoặc từ khóa liên quan',
     starLoadingProductIds = [],
+    updateSupplierPrices = false,
+    onUpdateSupplierPricesChange = null,
+    onRefreshPricing = null,
+    refreshPricingDisabled = false,
+    refreshPricingLoading = false,
 }) => {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
     const [open, setOpen] = useState(false);
     const [activeIndex, setActiveIndex] = useState(-1);
+    const [quickModeActive, setQuickModeActive] = useState(false);
+    const [declarationModeActive, setDeclarationModeActive] = useState(false);
+    const [showHistory, setShowHistory] = useState(false);
+    const [historyItems, setHistoryItems] = useState([]);
+    const [refreshNonce, setRefreshNonce] = useState(0);
+    const [filters, setFilters] = useState(() => createDefaultImportQuickFilters());
+    const [savedFilters, setSavedFilters] = useState(() => readImportQuickFilterPresets());
+    const [selectedSavedFilterId, setSelectedSavedFilterId] = useState('');
     const containerRef = useRef(null);
     const inputRef = useRef(null);
+    const normalizedFilters = useMemo(() => normalizeImportQuickFilters(filters), [filters]);
+    const filtersKey = serializeImportQuickFilters(normalizedFilters);
+    const quickFilterCount = countImportQuickFilters(normalizedFilters);
+    const filtersActive = hasImportQuickFilters(normalizedFilters);
 
     useEffect(() => {
         if (disabled) {
             setOpen(false);
             setResults([]);
+            setShowHistory(false);
+            setDeclarationModeActive(false);
         }
     }, [disabled]);
 
@@ -2484,6 +3423,8 @@ const ImportProductQuickSearch = ({
             if (!containerRef.current?.contains(event.target)) {
                 setOpen(false);
                 setActiveIndex(-1);
+                setShowHistory(false);
+                setDeclarationModeActive(false);
             }
         };
 
@@ -2493,7 +3434,7 @@ const ImportProductQuickSearch = ({
 
     useEffect(() => {
         const trimmed = query.trim();
-        if (disabled || trimmed.length < 1) {
+        if (disabled || (trimmed.length < 1 && !filtersActive && !quickModeActive && !declarationModeActive)) {
             setResults([]);
             setLoading(false);
             return undefined;
@@ -2509,7 +3450,10 @@ const ImportProductQuickSearch = ({
                     supplierId,
                     limit: 20,
                     signal: controller.signal,
-                    prioritizeImportStar: true,
+                    prioritizeImportStar: quickModeActive,
+                    onlyImportStarred: quickModeActive,
+                    allowEmptySearch: declarationModeActive,
+                    filters: normalizedFilters,
                 });
 
                 if (active) {
@@ -2536,9 +3480,50 @@ const ImportProductQuickSearch = ({
             controller.abort();
             clearTimeout(timer);
         };
-    }, [query, disabled, supplierId]);
+    }, [query, disabled, supplierId, quickModeActive, declarationModeActive, refreshNonce, filtersActive, filtersKey]);
+
+    const rememberQuery = (value) => {
+        const trimmed = String(value || '').trim();
+        if (!trimmed) return;
+        setHistoryItems((prev) => [
+            trimmed,
+            ...prev.filter((item) => normalizeSearchText(item) !== normalizeSearchText(trimmed)),
+        ].slice(0, 6));
+    };
+
+    const toggleQuickFilterDeclaration = async (row) => {
+        if (!onToggleStar) return;
+
+        const nextStarred = !Boolean(row.inventory_import_starred);
+        const updatedProduct = await Promise.resolve(onToggleStar(row, nextStarred));
+        const updatedResults = results.map((item) => (
+            Number(item.id) === Number(row.id)
+                ? {
+                    ...item,
+                    inventory_import_starred: Boolean(updatedProduct?.inventory_import_starred ?? nextStarred),
+                }
+                : item
+        ));
+        const nextResults = sortInventorySearchRows(
+            updatedResults.filter((item) => !quickModeActive || isInventorySearchRowImportStarred(item)),
+            quickModeActive
+        );
+        setResults(nextResults);
+        setActiveIndex(nextResults.findIndex((item) => Number(item.id) === Number(row.id)));
+    };
 
     const selectRow = async (row, index = null) => {
+        if (declarationModeActive && onToggleStar) {
+            await toggleQuickFilterDeclaration(row);
+            if (index !== null) {
+                setActiveIndex(index);
+            }
+            setOpen(true);
+            requestAnimationFrame(() => inputRef.current?.focus());
+            return;
+        }
+
+        rememberQuery(query);
         await Promise.resolve(onSelect?.(row));
         if (index !== null) {
             setActiveIndex(index);
@@ -2553,18 +3538,7 @@ const ImportProductQuickSearch = ({
         if (!onToggleStar) return;
 
         try {
-            const nextStarred = !Boolean(row.inventory_import_starred);
-            const updatedProduct = await Promise.resolve(onToggleStar(row, nextStarred));
-            const nextResults = sortInventorySearchRows(results.map((item) => (
-                Number(item.id) === Number(row.id)
-                    ? {
-                        ...item,
-                        inventory_import_starred: Boolean(updatedProduct?.inventory_import_starred ?? nextStarred),
-                    }
-                    : item
-            )), true);
-            setResults(nextResults);
-            setActiveIndex(nextResults.findIndex((item) => Number(item.id) === Number(row.id)));
+            await toggleQuickFilterDeclaration(row);
         } catch (error) {
             // Toast is already handled by the parent callback.
         }
@@ -2574,84 +3548,338 @@ const ImportProductQuickSearch = ({
         setQuery('');
         setResults([]);
         setActiveIndex(-1);
-        setOpen(false);
+        setOpen(filtersActive || quickModeActive || declarationModeActive);
+        setShowHistory(false);
         requestAnimationFrame(() => inputRef.current?.focus());
     };
 
-    const showDropdown = open && (query.trim().length > 0 || loading);
+    const refreshSearchAndPricing = () => {
+        clearInventorySearchCache();
+        setRefreshNonce((prev) => prev + 1);
+        setOpen(Boolean(query.trim()) || filtersActive || quickModeActive || declarationModeActive);
+        setShowHistory(false);
+        if (!refreshPricingDisabled && !refreshPricingLoading) {
+            onRefreshPricing?.();
+        }
+        requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const handleHistoryPick = (item) => {
+        setQuery(item);
+        setOpen(true);
+        setShowHistory(false);
+        requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const updateFilters = (nextFilters) => {
+        const normalized = normalizeImportQuickFilters(nextFilters);
+        setFilters(normalized);
+        setSelectedSavedFilterId('');
+        setOpen(Boolean(query.trim()) || hasImportQuickFilters(normalized) || quickModeActive || declarationModeActive);
+        setShowHistory(false);
+    };
+
+    const beginQuickFilterDeclaration = () => {
+        setQuickModeActive(false);
+        setDeclarationModeActive(true);
+        setShowHistory(false);
+        setOpen(true);
+        setRefreshNonce((prev) => prev + 1);
+        onNotify?.({
+            type: 'info',
+            message: 'Chọn sản phẩm trong danh sách để lưu vào lọc nhanh.',
+        });
+        requestAnimationFrame(() => inputRef.current?.focus());
+    };
+
+    const applySavedFilter = (presetId) => {
+        if (!presetId) {
+            setSelectedSavedFilterId('');
+            updateFilters(createDefaultImportQuickFilters());
+            return;
+        }
+
+        const preset = savedFilters.find((item) => item.id === presetId);
+        if (!preset) return;
+
+        setSelectedSavedFilterId(preset.id);
+        setFilters(normalizeImportQuickFilters(preset.filters));
+        setOpen(true);
+        setShowHistory(false);
+    };
+
+    const saveCurrentFilter = () => {
+        if (!filtersActive) {
+            onNotify?.({ type: 'warning', message: 'Hãy chọn danh mục hoặc thuộc tính trước khi lưu bộ lọc.' });
+            return;
+        }
+
+        const suggestedName = [
+            normalizedFilters.category_id
+                ? (categoryOptions.find((option) => String(option.value) === String(normalizedFilters.category_id))?.label || 'Danh mục')
+                : '',
+            quickFilterCount > 0 ? `${quickFilterCount} lựa chọn` : '',
+        ].filter(Boolean).join(' + ') || 'Bộ lọc phiếu nhập';
+        const name = window.prompt('Đặt tên bộ lọc tìm nhanh', suggestedName);
+        const normalizedName = String(name || '').trim();
+        if (!normalizedName) return;
+
+        const preset = {
+            id: createImportQuickFilterPresetId(),
+            name: normalizedName,
+            filters: normalizedFilters,
+            saved_at: new Date().toISOString(),
+        };
+        const nextPresets = [
+            preset,
+            ...savedFilters.filter((item) => item.name !== normalizedName),
+        ].slice(0, 30);
+
+        setSavedFilters(nextPresets);
+        writeImportQuickFilterPresets(nextPresets);
+        setSelectedSavedFilterId(preset.id);
+        onNotify?.({ type: 'success', message: `Đã lưu bộ lọc "${normalizedName}".` });
+    };
+
+    const showDropdown = open && !showHistory && (query.trim().length > 0 || filtersActive || quickModeActive || declarationModeActive || loading);
 
     return (
-        <div ref={containerRef} className="relative">
-            <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 z-10 -translate-y-1/2 text-[18px] text-primary/35">search</span>
-            <input
-                ref={inputRef}
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onFocus={() => setOpen(true)}
-                onKeyDown={(event) => {
-                    if (!showDropdown || !results.length) return;
-                    if (event.key === 'ArrowDown') {
-                        event.preventDefault();
-                        setActiveIndex((prev) => (prev + 1 >= results.length ? 0 : prev + 1));
-                    }
-                    if (event.key === 'ArrowUp') {
-                        event.preventDefault();
-                        setActiveIndex((prev) => (prev - 1 < 0 ? results.length - 1 : prev - 1));
-                    }
-                    if (event.key === 'Enter' && activeIndex >= 0) {
-                        event.preventDefault();
-                        selectRow(results[activeIndex], activeIndex);
-                    }
-                }}
-                disabled={disabled}
-                placeholder={placeholder}
-                className={importQuickSearchClass}
-            />
-            {query ? (
-                <button type="button" onClick={clearQuery} className="absolute right-2 top-1/2 z-10 -translate-y-1/2 text-primary/35 transition hover:text-brick">
-                    <span className="material-symbols-outlined text-[18px]">cancel</span>
+        <div ref={containerRef} className="relative rounded-md border border-primary/10 bg-[#f8fbff] p-2 shadow-sm">
+            <div className="grid min-w-0 gap-2 xl:grid-cols-[minmax(320px,1fr)_auto_auto_minmax(150px,190px)_minmax(170px,210px)_minmax(145px,185px)_auto] xl:items-stretch">
+                <div className="flex h-12 min-w-0 items-stretch overflow-hidden rounded-sm border border-primary/15 bg-white shadow-sm">
+                    <div className="flex w-11 shrink-0 items-center justify-center border-r border-primary/10 bg-primary/[0.03] text-primary/45">
+                        <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                    </div>
+                    <div className="flex min-w-0 flex-1 items-center gap-2 px-3">
+                        <span className="material-symbols-outlined shrink-0 text-[18px] text-primary/35">search</span>
+                        <input
+                            ref={inputRef}
+                            value={query}
+                            onChange={(event) => {
+                                setQuery(event.target.value);
+                                setShowHistory(false);
+                                setOpen(true);
+                            }}
+                            onFocus={() => {
+                                setOpen(true);
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Escape') {
+                                    event.preventDefault();
+                                    if (query) clearQuery();
+                                    return;
+                                }
+                                if (!showDropdown || !results.length) return;
+                                if (event.key === 'ArrowDown') {
+                                    event.preventDefault();
+                                    setActiveIndex((prev) => (prev + 1 >= results.length ? 0 : prev + 1));
+                                }
+                                if (event.key === 'ArrowUp') {
+                                    event.preventDefault();
+                                    setActiveIndex((prev) => (prev - 1 < 0 ? results.length - 1 : prev - 1));
+                                }
+                                if (event.key === 'Enter' && activeIndex >= 0) {
+                                    event.preventDefault();
+                                    selectRow(results[activeIndex], activeIndex);
+                                }
+                            }}
+                            disabled={disabled}
+                            placeholder={placeholder}
+                            className="min-w-0 flex-1 bg-transparent text-[14px] font-bold text-primary outline-none placeholder:text-primary/30"
+                        />
+                    </div>
+                    <button
+                        type="button"
+                        onClick={clearQuery}
+                        disabled={!query}
+                        className="inline-flex w-11 shrink-0 items-center justify-center border-l border-primary/10 text-primary/35 transition hover:bg-primary/[0.04] hover:text-brick disabled:cursor-not-allowed disabled:opacity-35"
+                        title="Xóa từ khóa"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">close</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setShowHistory((prev) => !prev);
+                            setOpen(false);
+                        }}
+                        className={`inline-flex w-11 shrink-0 items-center justify-center border-l border-primary/10 transition hover:bg-primary/[0.04] ${showHistory ? 'bg-primary/[0.06] text-primary' : 'text-primary/35 hover:text-primary'}`}
+                        title="Lịch sử tìm"
+                    >
+                        <span className="material-symbols-outlined text-[18px]">history</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={refreshSearchAndPricing}
+                        disabled={disabled || refreshPricingLoading}
+                        className="inline-flex w-11 shrink-0 items-center justify-center border-l border-primary/10 text-primary/40 transition hover:bg-primary/[0.04] hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+                        title={refreshPricingDisabled ? 'Làm mới kết quả tìm' : 'Làm mới kết quả tìm và giá nhập'}
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${refreshPricingLoading ? 'animate-spin' : ''}`}>refresh</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            const nextQuickModeActive = !quickModeActive;
+                            setQuickModeActive(nextQuickModeActive);
+                            setDeclarationModeActive(false);
+                            setShowHistory(false);
+                            setOpen(Boolean(query.trim()) || filtersActive || nextQuickModeActive);
+                            requestAnimationFrame(() => inputRef.current?.focus());
+                        }}
+                        className={`relative inline-flex w-11 shrink-0 items-center justify-center border-l border-primary/10 text-white transition ${quickModeActive ? 'bg-blue-600 hover:bg-blue-700' : 'bg-primary/30 hover:bg-primary/45'}`}
+                        title={quickModeActive ? 'Tắt lọc sản phẩm đã khai báo' : 'Chỉ hiện sản phẩm đã khai báo lọc nhanh'}
+                    >
+                        <span className="material-symbols-outlined text-[19px]">{quickModeActive ? 'flash_on' : 'flash_off'}</span>
+                        <span className="absolute bottom-1 right-1 rounded-full bg-white px-1 text-[8px] font-black leading-3 text-blue-700">
+                            {quickModeActive ? 'ON' : 'OFF'}
+                        </span>
+                    </button>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={beginQuickFilterDeclaration}
+                    className="inline-flex h-12 w-full min-w-[112px] items-center justify-center gap-1.5 rounded-sm border border-amber-200 bg-amber-50 px-3 text-[12px] font-black text-amber-700 shadow-sm transition hover:border-amber-300 hover:bg-amber-100 xl:w-auto"
+                    title="Tìm toàn bộ sản phẩm để khai báo vào lọc nhanh"
+                >
+                    <span className="material-symbols-outlined text-[17px]">star</span>
+                    <span className="truncate">Khai báo</span>
                 </button>
+
+                <button
+                    type="button"
+                    onClick={() => onUpdateSupplierPricesChange?.(!updateSupplierPrices)}
+                    className={`inline-flex h-12 w-full min-w-[128px] items-center justify-center gap-1.5 rounded-sm border px-3 text-[12px] font-bold shadow-sm transition xl:w-auto ${updateSupplierPrices ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-primary/15 bg-white text-primary/45 hover:border-primary/30 hover:text-primary'}`}
+                    title="Đồng bộ lại giá nhập dự kiến cho sản phẩm được chọn"
+                >
+                    <span className="material-symbols-outlined text-[17px]">{updateSupplierPrices ? 'check_box' : 'check_box_outline_blank'}</span>
+                    <span className="truncate">Đồng bộ giá</span>
+                </button>
+
+                <select
+                    value={normalizedFilters.category_id}
+                    onChange={(event) => updateFilters({ ...normalizedFilters, category_id: event.target.value })}
+                    className={`h-12 min-w-0 rounded-sm border bg-white px-3 text-[12px] font-bold text-primary shadow-sm outline-none transition focus:border-primary ${normalizedFilters.category_id ? 'border-emerald-200 text-emerald-700' : 'border-primary/15'}`}
+                    title="Lọc theo danh mục"
+                >
+                    <option value="">Tất cả danh mục</option>
+                    {categoryOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+
+                <ImportQuickAttributeFilterDropdown
+                    attributes={attributes}
+                    value={normalizedFilters.attributes}
+                    onChange={(nextAttributes) => updateFilters({ ...normalizedFilters, attributes: nextAttributes })}
+                />
+
+                <select
+                    value={selectedSavedFilterId}
+                    onChange={(event) => applySavedFilter(event.target.value)}
+                    className="h-12 min-w-0 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-bold text-primary shadow-sm outline-none transition focus:border-primary"
+                    title="Bộ lọc đã lưu"
+                >
+                    <option value="">Bộ lọc đã lưu</option>
+                    {savedFilters.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                </select>
+
+                <button
+                    type="button"
+                    onClick={saveCurrentFilter}
+                    disabled={!filtersActive}
+                    className="inline-flex h-12 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-primary/15 bg-white px-3 text-[12px] font-black text-primary shadow-sm transition hover:border-primary hover:bg-primary/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Lưu bộ lọc danh mục / thuộc tính hiện tại"
+                >
+                    <span className="material-symbols-outlined text-[18px]">bookmark_add</span>
+                    <span className="hidden 2xl:inline">Lưu bộ lọc</span>
+                </button>
+            </div>
+
+            {showHistory ? (
+                <div className="absolute left-0 top-[calc(100%+6px)] z-[145] w-full max-w-[420px] overflow-hidden rounded-sm border border-primary/15 bg-white shadow-2xl">
+                    <div className="border-b border-primary/10 bg-[#f8fbff] px-3 py-2 text-[11px] font-black uppercase tracking-[0.12em] text-primary/45">Lịch sử tìm</div>
+                    {historyItems.length ? historyItems.map((item) => (
+                        <button
+                            key={`import_search_history_${item}`}
+                            type="button"
+                            onClick={() => handleHistoryPick(item)}
+                            className="flex w-full items-center gap-2 border-b border-primary/10 px-3 py-2 text-left text-[13px] font-semibold text-primary transition last:border-b-0 hover:bg-primary/[0.04]"
+                        >
+                            <span className="material-symbols-outlined text-[16px] text-primary/35">history</span>
+                            <span className="truncate">{item}</span>
+                        </button>
+                    )) : (
+                        <div className="px-3 py-4 text-[12px] text-primary/45">Chưa có lịch sử tìm trong phiên này.</div>
+                    )}
+                </div>
             ) : null}
 
             {showDropdown ? (
-                <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-[140] overflow-hidden rounded-sm border border-primary/20 bg-white shadow-2xl">
-                    <div className="max-h-72 overflow-auto">
+                <div className="absolute left-0 top-[calc(100%+6px)] z-[140] w-full max-w-[690px] overflow-hidden rounded-sm border border-primary/20 bg-white shadow-2xl">
+                    <div className="max-h-[396px] overflow-auto">
                         {loading ? <div className="px-3 py-4 text-[12px] text-primary/55">Đang tìm sản phẩm...</div> : null}
                         {!loading && results.length === 0 ? <div className="px-3 py-4 text-[12px] text-primary/55">Không tìm thấy sản phẩm phù hợp.</div> : null}
-                        {!loading && results.map((row, index) => (
+                        {!loading && results.map((row, index) => {
+                            const metaItems = buildInventorySearchMeta(row).split(' • ').filter(Boolean);
+                            const unitCost = row.supplier_unit_cost ?? row.current_cost ?? row.expected_cost ?? row.unit_cost ?? row.price ?? 0;
+
+                            return (
                             <div
                                 key={`quick_import_${row.id}`}
-                                className={`flex items-stretch border-b border-primary/10 last:border-b-0 ${activeIndex === index ? 'bg-primary/[0.07]' : 'hover:bg-primary/[0.04]'}`}
+                                onMouseEnter={() => setActiveIndex(index)}
+                                className={`grid min-h-[66px] grid-cols-[54px_minmax(0,1fr)_112px_94px] items-center border-b border-primary/10 px-3 transition last:border-b-0 ${activeIndex === index ? 'bg-primary/[0.07]' : 'hover:bg-primary/[0.04]'}`}
                             >
                                 <button
                                     type="button"
                                     onClick={() => selectRow(row, index)}
-                                    className="flex min-w-0 flex-1 items-center justify-between px-3 py-2 text-left"
+                                    className="flex size-9 items-center justify-center rounded-md border border-primary/10 bg-primary/[0.04] text-primary/45"
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">inventory_2</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => selectRow(row, index)}
+                                    className="min-w-0 px-2 py-2 text-left"
                                 >
                                     <div className="min-w-0">
                                         <div className="flex items-center gap-1.5">
-                                            <div className="truncate text-[13px] font-semibold text-primary">{row.name}</div>
+                                            <div className="truncate text-[13px] font-black text-primary">{row.name}</div>
                                             {row.inventory_import_starred ? <span className="material-symbols-outlined text-[16px] text-amber-500">star</span> : null}
                                         </div>
-                                        <div className="truncate text-[11px] text-primary/50">{buildInventorySearchMeta(row) || 'Chưa có thông tin mã sản phẩm'}</div>
+                                        <div className="mt-1 flex min-w-0 flex-wrap gap-1.5">
+                                            {metaItems.length ? metaItems.slice(0, 3).map((item) => (
+                                                <span key={`${row.id}_${item}`} className="inline-flex max-w-[180px] items-center rounded-full border border-primary/10 bg-primary/[0.035] px-2 py-0.5 text-[10px] font-bold text-primary/60">
+                                                    <span className="truncate">{item}</span>
+                                                </span>
+                                            )) : (
+                                                <span className="text-[11px] text-primary/45">Chưa có thông tin mã sản phẩm</span>
+                                            )}
+                                        </div>
                                     </div>
-                                    <span className="ml-3 shrink-0 text-[11px] font-bold text-primary/70">Thêm</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => selectRow(row, index)}
+                                    className="px-2 text-right text-[15px] font-black text-blue-600"
+                                >
+                                    {formatCurrency(unitCost)}
                                 </button>
                                 <button
                                     type="button"
                                     onClick={(event) => handleToggleStar(event, row)}
                                     disabled={starLoadingProductIds.includes(Number(row.id))}
-                                    className={`mr-2 inline-flex w-10 shrink-0 items-center justify-center rounded-sm text-[18px] transition ${
+                                    className={`mr-2 inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-sm border px-2 text-[11px] font-black transition ${
                                         row.inventory_import_starred
-                                            ? 'text-amber-500 hover:bg-amber-50'
-                                            : 'text-primary/35 hover:bg-primary/5 hover:text-amber-500'
+                                            ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                            : 'border-primary/10 bg-white text-primary/45 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700'
                                     } ${starLoadingProductIds.includes(Number(row.id)) ? 'cursor-not-allowed opacity-50' : ''}`}
-                                    title={row.inventory_import_starred ? 'Bỏ ưu tiên sản phẩm này' : 'Ưu tiên sản phẩm này lên đầu'}
+                                    title={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
+                                    <span className="material-symbols-outlined text-[17px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
+                                    <span>{row.inventory_import_starred ? 'Đã lưu' : 'Khai báo'}</span>
                                 </button>
                             </div>
-                        ))}
+                        );})}
                     </div>
                 </div>
             ) : null}
@@ -2967,6 +4195,7 @@ const ImportItemsEditorTable = ({
     readOnly = false,
     hideActions = false,
     storageKey = 'inventory_import_modal_table_v3',
+    bodyMaxHeightClass = null,
     headerMessage = 'Kéo biểu tượng ở tên sản phẩm để đổi thứ tự dòng. Sản phẩm gắn sao sẽ được ưu tiên khi tạo phiếu mới.',
 }) => {
     const displayRows = useMemo(() => (
@@ -3098,7 +4327,7 @@ const ImportItemsEditorTable = ({
                                     ? 'border-amber-300 bg-amber-50 text-amber-500'
                                     : 'border-primary/10 bg-white text-primary/35 hover:border-amber-200 hover:text-amber-500'
                             } ${starLoadingProductIds.includes(Number(row.product_id)) ? 'cursor-not-allowed opacity-50' : ''}`}
-                            title={row.inventory_import_starred ? 'Bỏ ưu tiên sản phẩm này' : 'Ưu tiên sản phẩm này lên đầu'}
+                            title={row.inventory_import_starred ? 'Bỏ khỏi lọc nhanh' : 'Khai báo sản phẩm vào lọc nhanh'}
                         >
                             <span className="material-symbols-outlined text-[18px]">{row.inventory_import_starred ? 'star' : 'star_outline'}</span>
                         </button>
@@ -3197,9 +4426,9 @@ const ImportItemsEditorTable = ({
 
     return (
         <div className="overflow-hidden rounded-sm border border-primary/10">
-            <div className="flex items-center justify-between border-b border-primary/10 bg-[#f8fafc] px-3 py-2">
-                <div className="text-[11px] font-bold text-primary/70">{headerMessage}</div>
-                <div className="flex items-center gap-2">
+            <div className="grid gap-2 border-b border-primary/10 bg-[#f8fafc] px-3 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0 text-[11px] font-bold text-primary/70">{headerMessage}</div>
+                <div className="flex items-center justify-end gap-2">
                     {onOpenPrint ? (
                         <button
                             type="button"
@@ -3239,7 +4468,7 @@ const ImportItemsEditorTable = ({
                 />
             ) : null}
 
-            <div className={expanded ? 'max-h-[68vh] overflow-auto' : 'max-h-[35vh] overflow-auto'}>
+            <div className={bodyMaxHeightClass || (expanded ? 'max-h-[68vh] overflow-auto' : 'max-h-[35vh] overflow-auto')}>
                 <table className="w-full border-collapse table-fixed" style={{ minWidth: `${Math.max(totalTableWidth, 1180)}px` }}>
                     <thead className="sticky top-0 z-10 bg-[#f6f9fc]">
                         <tr>
@@ -3492,6 +4721,7 @@ const InventoryMovement = () => {
 
     const [activeTab, setActiveTab] = useState(() => resolvedRouteSection || DEFAULT_INVENTORY_SECTION_KEY);
     const [categories, setCategories] = useState([]);
+    const [allAttributes, setAllAttributes] = useState([]);
     const [inventoryUnits, setInventoryUnits] = useState([]);
     const [products, setProducts] = useState([]);
     const [productSummary, setProductSummary] = useState(null);
@@ -3540,7 +4770,9 @@ const InventoryMovement = () => {
         trash: { filters: false, stats: false, columns: false },
     });
 
-    const [productFilters, setProductFilters] = useState(defaultProductFilters);
+    const [productFilters, setProductFilters] = useState(() => createDefaultProductFilters());
+    const [productFilterPresets, setProductFilterPresets] = useState(() => readProductFilterPresets());
+    const [selectedProductFilterPresetId, setSelectedProductFilterPresetId] = useState('');
     const [supplierFilters, setSupplierFilters] = useState(defaultSupplierFilters);
     const [supplierCatalogFilters, setSupplierCatalogFilters] = useState(defaultSupplierCatalogFilters);
     const [supplierQuickSearch, setSupplierQuickSearch] = useState('');
@@ -3600,6 +4832,8 @@ const InventoryMovement = () => {
     const [supplierModal, setSupplierModal] = useState({ open: false, form: createSupplierForm() });
     const [supplierPriceModal, setSupplierPriceModal] = useState({ open: false, form: createSupplierPriceForm() });
     const [importModal, setImportModal] = useState({ open: false, form: createImportForm() });
+    const [importAttachmentManagerOpen, setImportAttachmentManagerOpen] = useState(false);
+    const importAttachmentInputRef = useRef(null);
     const [importInvoiceModal, setImportInvoiceModal] = useState(createImportInvoiceModalState());
     const [importInvoiceReplacingId, setImportInvoiceReplacingId] = useState(null);
     const [importInvoiceDeletingId, setImportInvoiceDeletingId] = useState(null);
@@ -4168,6 +5402,12 @@ const InventoryMovement = () => {
 
     const getDefaultImportStatus = () => importStatuses.find((status) => status.is_default) || importStatuses[0] || null;
     const getImportStatusById = (statusId) => importStatuses.find((status) => String(status.id) === String(statusId)) || null;
+    const getNewImportStatus = () => (
+        importStatuses.find((status) => isNewImportStatus(status))
+        || importStatuses.find((status) => !isCompletedImportStatus(status) && !status.affects_inventory)
+        || getDefaultImportStatus()
+        || null
+    );
     const getCompletedImportStatus = () => importStatuses.find((status) => isCompletedImportStatus(status)) || null;
     const getIncompleteImportStatus = () => (
         importStatuses.find((status) => {
@@ -4223,19 +5463,60 @@ const InventoryMovement = () => {
         return currentStatusId ? String(currentStatusId) : String(incompleteStatus?.id || '');
     };
 
+    const applyImportItemsCompletionState = (items, completed) => normalizeImportItems(items || []).map((item) => {
+        const quantity = parseLineQuantity(item.quantity, 0);
+        return {
+            ...item,
+            received_quantity: completed ? String(quantity) : '0',
+        };
+    });
+
     const synchronizeImportFormCompletion = (form) => {
-        const nextItems = normalizeImportItems(form.items || []);
+        const autoCompleteImport = Boolean(form.auto_complete_import);
+        const nextItems = autoCompleteImport
+            ? applyImportItemsCompletionState(form.items || [], true)
+            : normalizeImportItems(form.items || []);
         const baseStatusId = form.inventory_import_status_id ? String(form.inventory_import_status_id) : '';
         const shouldAutoResolveStatus = !form.status_is_manual;
-        const nextStatusId = shouldAutoResolveStatus
-            ? resolveSystemImportStatusByItems(nextItems, baseStatusId)
-            : baseStatusId;
+        let nextStatusId = baseStatusId;
+
+        if (autoCompleteImport) {
+            nextStatusId = getCompletedImportStatus()?.id ? String(getCompletedImportStatus().id) : baseStatusId;
+        } else if (shouldAutoResolveStatus) {
+            nextStatusId = getNewImportStatus()?.id
+                ? String(getNewImportStatus().id)
+                : resolveSystemImportStatusByItems(nextItems, baseStatusId);
+        }
 
         return {
             ...form,
+            auto_complete_import: autoCompleteImport,
             inventory_import_status_id: nextStatusId,
             items: nextItems,
         };
+    };
+
+    const applyImportAutoCompleteMode = (form, checked, statusOptionsOverride = null) => {
+        const statusOptions = Array.isArray(statusOptionsOverride) ? statusOptionsOverride : importStatuses;
+        const completedStatus = statusOptions.find((status) => isCompletedImportStatus(status)) || null;
+        const newStatus = (
+            statusOptions.find((status) => isNewImportStatus(status))
+            || statusOptions.find((status) => !isCompletedImportStatus(status) && !status.affects_inventory)
+            || statusOptions.find((status) => status.is_default)
+            || statusOptions[0]
+            || null
+        );
+
+        return synchronizeImportFormCompletion({
+            ...form,
+            auto_complete_import: Boolean(checked),
+            auto_complete_import_touched: Boolean(form.auto_complete_import_touched),
+            inventory_import_status_id: checked
+                ? (completedStatus ? String(completedStatus.id) : form.inventory_import_status_id)
+                : (newStatus ? String(newStatus.id) : form.inventory_import_status_id),
+            status_is_manual: false,
+            items: applyImportItemsCompletionState(form.items || [], checked),
+        });
     };
 
     const highlightImportRow = (rowKey) => {
@@ -4281,16 +5562,18 @@ const InventoryMovement = () => {
         clearPersistedImportDraft();
         setImportTableSettingsOpen(false);
         setImportTableExpanded(false);
+        setImportAttachmentManagerOpen(false);
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
         setImportStarLoadingProductIds([]);
         highlightImportRow('');
         setImportModal({
             open: false,
-            form: createImportForm({
-                inventory_import_status_id: getDefaultImportStatus()?.id || null,
+            form: applyImportAutoCompleteMode(createImportForm({
+                inventory_import_status_id: getCompletedImportStatus()?.id || getDefaultImportStatus()?.id || null,
                 update_supplier_prices: true,
-            }),
+                auto_complete_import: true,
+            }), true),
         });
     };
 
@@ -4477,13 +5760,36 @@ const InventoryMovement = () => {
 
     const handleImportStatusChange = (statusId) => {
         setImportModal((prev) => {
+            const selectedStatus = getImportStatusById(statusId);
+            const selectedIsCompleted = isCompletedImportStatus(selectedStatus);
+            const nextItems = selectedIsCompleted
+                ? applyImportItemsCompletionState(prev.form.items, true)
+                : (
+                    isNewImportStatus(selectedStatus)
+                        ? applyImportItemsCompletionState(prev.form.items, false)
+                        : prev.form.items
+                );
             const syncedForm = synchronizeImportFormCompletion({
                 ...prev.form,
                 inventory_import_status_id: statusId,
                 status_is_manual: true,
+                auto_complete_import: selectedIsCompleted,
+                auto_complete_import_touched: true,
+                items: nextItems,
             });
             return { ...prev, form: syncedForm };
         });
+    };
+
+    const handleImportAutoCompleteChange = (checked) => {
+        setImportCompleteToggleSnapshot(null);
+        setImportModal((prev) => ({
+            ...prev,
+            form: applyImportAutoCompleteMode({
+                ...prev.form,
+                auto_complete_import_touched: true,
+            }, checked),
+        }));
     };
 
     const updateImportLine = (index, field, value) => {
@@ -4610,8 +5916,8 @@ const InventoryMovement = () => {
             showToast({
                 type: 'success',
                 message: response.data?.message || (resolvedStarred
-                    ? 'Đã ưu tiên sản phẩm này trong phiếu nhập.'
-                    : 'Đã bỏ ưu tiên sản phẩm này khỏi phiếu nhập.'),
+                    ? 'Đã lưu sản phẩm này vào lọc nhanh phiếu nhập.'
+                    : 'Đã bỏ sản phẩm này khỏi lọc nhanh phiếu nhập.'),
             });
 
             return {
@@ -4619,7 +5925,7 @@ const InventoryMovement = () => {
                 inventory_import_starred: resolvedStarred,
             };
         } catch (error) {
-            fail(error, nextStarred ? 'Không thể ưu tiên sản phẩm này.' : 'Không thể bỏ ưu tiên sản phẩm này.');
+            fail(error, nextStarred ? 'Không thể lưu sản phẩm này vào lọc nhanh.' : 'Không thể bỏ sản phẩm này khỏi lọc nhanh.');
             throw error;
         } finally {
             setImportStarLoadingProductIds((prev) => prev.filter((id) => id !== productId));
@@ -4741,6 +6047,7 @@ const InventoryMovement = () => {
         payload.append('extra_charge_amount', String(surchargeState.amount));
         payload.append('extra_charge_percent', String(surchargeState.percent));
         payload.append('update_supplier_prices', form.update_supplier_prices ? '1' : '0');
+        payload.append('has_purchase_invoice', form.has_purchase_invoice ? '1' : '0');
         if (form.invoice_analysis_log_id) {
             payload.append('invoice_analysis_log_id', String(Number(form.invoice_analysis_log_id)));
         }
@@ -4993,9 +6300,12 @@ const InventoryMovement = () => {
         setFlag('importStatuses', true);
         try {
             const response = await inventoryApi.getImportStatuses({ active_only: 0 });
-            setImportStatuses(Array.isArray(response.data) ? response.data : []);
+            const statuses = deduplicateImportStatuses(Array.isArray(response.data) ? response.data : []);
+            setImportStatuses(statuses);
+            return statuses;
         } catch (error) {
             fail(error, 'Không thể tải trạng thái phiếu nhập.');
+            return [];
         } finally {
             setFlag('importStatuses', false);
         }
@@ -5083,18 +6393,148 @@ const InventoryMovement = () => {
     const getRefreshTabsAfterSoftDelete = (tabKey) => Array.from(new Set([...getRelatedSlipTabs(tabKey), 'trash']));
     const getRefreshTabsAfterTrashRestore = (row) => Array.from(new Set([...getRelatedSlipTabs(row?.section_key), 'trash']));
 
-    const getCategoryNameById = (categoryId) => categories.find((category) => String(category.id) === String(categoryId))?.name || String(categoryId || '');
+    const productCategoryFilterOptions = useMemo(
+        () => [
+            { value: 'uncategorized', label: 'Chưa gắn danh mục' },
+            ...categories.map((category) => ({ value: String(category.id), label: category.name })),
+        ],
+        [categories]
+    );
+    const importQuickAttributeOptions = useMemo(
+        () => buildImportQuickFilterAttributes(allAttributes),
+        [allAttributes]
+    );
+    const getCategoryNameById = (categoryId) => categories.find((category) => String(category.id) === String(categoryId))?.name || (String(categoryId) === 'uncategorized' ? 'Chưa gắn danh mục' : String(categoryId || ''));
     const getImportStatusNameById = (statusId) => importStatuses.find((status) => String(status.id) === String(statusId))?.name || String(statusId || '');
 
+    const resolveProductSortForFilters = (filters, currentSort = sortConfigs.products) => {
+        const trackingEnabled = String(filters?.tracking_mode || '') === '1';
+        if (trackingEnabled) return productTrackingSortConfig;
+        if (currentSort?.key === productTrackingSortConfig.key) return emptySortConfig;
+        return currentSort || emptySortConfig;
+    };
+    const updateProductFilterValue = (key, value) => {
+        setSelectedProductFilterPresetId('');
+        setProductFilters((prev) => normalizeProductFilters({ ...prev, [key]: value }));
+    };
+    const persistProductFilterPresets = (nextPresets) => {
+        const normalizedPresets = nextPresets.map(normalizeProductFilterPreset).filter(Boolean);
+        setProductFilterPresets(normalizedPresets);
+        writeProductFilterPresets(normalizedPresets);
+        return normalizedPresets;
+    };
+    const applyProductFilters = (nextFilters, sortOverride = sortConfigs.products, options = {}) => {
+        const normalizedFilters = normalizeProductFilters(nextFilters);
+        const nextSort = resolveProductSortForFilters(normalizedFilters, sortOverride);
+        setProductFilters(normalizedFilters);
+        if (!options.keepPresetSelection) {
+            setSelectedProductFilterPresetId('');
+        }
+        setSortConfigs((prev) => ({ ...prev, products: nextSort }));
+        fetchProducts(1, pageSizes.products, nextSort, normalizedFilters);
+    };
+    const toggleProductTrackingMode = () => {
+        const enabled = String(productFilters.tracking_mode || '') === '1';
+        applyProductFilters({
+            ...productFilters,
+            tracking_mode: enabled ? '' : '1',
+            tracking_daily_min: productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min,
+        }, enabled ? sortConfigs.products : productTrackingSortConfig);
+    };
     const clearProductFilter = (key) => {
-        const nextFilters = { ...productFilters, [key]: defaultProductFilters[key] ?? '' };
-        setProductFilters(nextFilters);
-        fetchProducts(1, pageSizes.products, null, nextFilters);
+        const nextFilters = normalizeProductFilters({ ...productFilters, [key]: createDefaultProductFilters()[key] ?? '' });
+        applyProductFilters(nextFilters);
     };
     const clearAllProductFilters = () => {
-        const nextFilters = { ...defaultProductFilters };
-        setProductFilters(nextFilters);
-        fetchProducts(1, pageSizes.products, null, nextFilters);
+        const nextFilters = createDefaultProductFilters();
+        applyProductFilters(nextFilters);
+    };
+    const saveCurrentProductFilterPreset = ({ onlySelectedProducts = false } = {}) => {
+        const selectedPresetProductIds = Array.from(new Set(
+            selectedProductRows
+                .map((row) => String(row?.id || '').trim())
+                .filter((id) => Number.isFinite(Number(id)) && Number(id) > 0)
+        ));
+
+        if (onlySelectedProducts && selectedPresetProductIds.length === 0) {
+            showToast({ type: 'warning', message: 'Hãy tick các mã muốn lưu trước.' });
+            return null;
+        }
+
+        const normalizedFilters = normalizeProductFilters({
+            ...productFilters,
+            ids: onlySelectedProducts ? selectedPresetProductIds : productFilters.ids,
+        });
+        const activeParts = [
+            onlySelectedProducts ? `${selectedPresetProductIds.length} mã đã chọn` : '',
+            ...productFilterChips.map((chip) => `${chip.label} ${chip.value}`),
+        ].filter(Boolean).slice(0, 3);
+        const suggestedName = activeParts.length ? activeParts.join(' + ') : 'Tìm kiếm tồn kho';
+        const name = window.prompt('Đặt tên tìm kiếm đã lưu', suggestedName);
+        const normalizedName = String(name || '').trim();
+        if (!normalizedName) return;
+
+        const preset = {
+            id: createProductFilterPresetId(),
+            name: normalizedName,
+            filters: normalizedFilters,
+            saved_at: new Date().toISOString(),
+        };
+        const nextPresets = persistProductFilterPresets([
+            preset,
+            ...productFilterPresets.filter((item) => item.name !== normalizedName),
+        ].slice(0, 40));
+
+        setSelectedProductFilterPresetId(preset.id);
+        if (onlySelectedProducts) {
+            setSelectedProductRowsById({});
+            applyProductFilters(normalizedFilters, sortConfigs.products, { keepPresetSelection: true });
+        }
+        showToast({ type: 'success', message: `Đã lưu tìm kiếm "${normalizedName}".` });
+        return nextPresets;
+    };
+    const applyProductFilterPreset = (presetId) => {
+        const preset = productFilterPresets.find((item) => item.id === presetId);
+        if (!preset) return;
+
+        setSelectedProductFilterPresetId(preset.id);
+        setSelectedProductRowsById({});
+        applyProductFilters(preset.filters, sortConfigs.products, { keepPresetSelection: true });
+    };
+    const renameSelectedProductFilterPreset = (presetId = selectedProductFilterPresetId) => {
+        const preset = productFilterPresets.find((item) => item.id === presetId);
+        if (!preset) return;
+
+        const name = window.prompt('Sửa tên tìm kiếm đã lưu', preset.name);
+        const normalizedName = String(name || '').trim();
+        if (!normalizedName || normalizedName === preset.name) return;
+
+        const duplicatedPreset = productFilterPresets.find((item) => item.id !== preset.id && item.name === normalizedName);
+        if (duplicatedPreset) {
+            showToast({ type: 'warning', message: 'Tên này đã tồn tại, hãy chọn tên khác.' });
+            return;
+        }
+
+        persistProductFilterPresets(productFilterPresets.map((item) => (
+            item.id === preset.id
+                ? { ...item, name: normalizedName, saved_at: new Date().toISOString() }
+                : item
+        )));
+        setSelectedProductFilterPresetId(preset.id);
+        showToast({ type: 'success', message: `Đã đổi tên thành "${normalizedName}".` });
+    };
+    const deleteSelectedProductFilterPreset = (presetId = selectedProductFilterPresetId) => {
+        const preset = productFilterPresets.find((item) => item.id === presetId);
+        if (!preset) return;
+
+        const confirmed = window.confirm(`Xóa tìm kiếm "${preset.name}"?`);
+        if (!confirmed) return;
+
+        persistProductFilterPresets(productFilterPresets.filter((item) => item.id !== preset.id));
+        if (selectedProductFilterPresetId === preset.id) {
+            setSelectedProductFilterPresetId('');
+        }
+        showToast({ type: 'success', message: 'Đã xóa tìm kiếm đã lưu.' });
     };
 
     const clearSupplierFilter = (key) => {
@@ -5168,12 +6608,15 @@ const InventoryMovement = () => {
 
     const productFilterChips = [
         buildFilterChip('products_search', 'Tìm kiếm', productFilters.search, () => clearProductFilter('search')),
-        buildFilterChip('products_status', 'Trạng thái bán', productFilters.status ? filterOptionLabel(productStatusFilterOptions, productFilters.status) : '', () => clearProductFilter('status')),
-        buildFilterChip('products_cost_source', 'Trạng thái giá', productFilters.cost_source ? filterOptionLabel(productCostSourceFilterOptions, productFilters.cost_source) : '', () => clearProductFilter('cost_source')),
-        buildFilterChip('products_stock_alert', 'Cảnh báo tồn', productFilters.stock_alert ? filterOptionLabel(productStockAlertFilterOptions, productFilters.stock_alert) : '', () => clearProductFilter('stock_alert')),
-        buildFilterChip('products_type', 'Loại sản phẩm', productFilters.type ? filterOptionLabel(productTypeFilterOptions, productFilters.type) : '', () => clearProductFilter('type')),
-        buildFilterChip('products_category', 'Danh mục', productFilters.category_id ? getCategoryNameById(productFilters.category_id) : '', () => clearProductFilter('category_id')),
-        buildFilterChip('products_variant_scope', 'Biến thể', productFilters.variant_scope ? filterOptionLabel(productVariantScopeFilterOptions, productFilters.variant_scope) : '', () => clearProductFilter('variant_scope')),
+        buildFilterChip('products_ids', 'Mã trong tìm kiếm', normalizeStringFilterList(productFilters.ids).length ? `${normalizeStringFilterList(productFilters.ids).length} mã` : '', () => clearProductFilter('ids')),
+        buildFilterChip('products_status', 'Trạng thái bán', summarizeOptionLabels(productStatusFilterOptions, productFilters.status), () => clearProductFilter('status')),
+        buildFilterChip('products_cost_source', 'Trạng thái giá', summarizeOptionLabels(productCostSourceFilterOptions, productFilters.cost_source), () => clearProductFilter('cost_source')),
+        buildFilterChip('products_stock_alert', 'Cảnh báo tồn', summarizeOptionLabels(productStockAlertFilterOptions, productFilters.stock_alert), () => clearProductFilter('stock_alert')),
+        buildFilterChip('products_type', 'Loại sản phẩm', summarizeOptionLabels(productTypeFilterOptions, productFilters.type), () => clearProductFilter('type')),
+        buildFilterChip('products_category', 'Danh mục', summarizeOptionLabels(productCategoryFilterOptions, productFilters.category_id), () => clearProductFilter('category_id')),
+        buildFilterChip('products_variant_scope', 'Biến thể', summarizeOptionLabels(productVariantScopeFilterOptions, productFilters.variant_scope), () => clearProductFilter('variant_scope')),
+        buildFilterChip('products_tracking_mode', 'Theo dõi nhập', productFilters.tracking_mode === '1' ? `Mã đi ${INVENTORY_TRACKING_WINDOW_DAYS} ngày` : '', () => clearProductFilter('tracking_mode')),
+        buildFilterChip('products_tracking_daily_min', 'TB/ngày từ', productFilters.tracking_mode === '1' ? (productFilters.tracking_daily_min || defaultProductFilters.tracking_daily_min) : '', () => clearProductFilter('tracking_daily_min')),
         buildFilterChip('products_date_from', 'Từ ngày', productFilters.date_from ? formatPrintDate(productFilters.date_from) : '', () => clearProductFilter('date_from')),
         buildFilterChip('products_date_to', 'Đến ngày', productFilters.date_to ? formatPrintDate(productFilters.date_to) : '', () => clearProductFilter('date_to')),
     ].filter(Boolean);
@@ -5229,8 +6672,27 @@ const InventoryMovement = () => {
                 fail(error, 'Không thể tải danh mục.');
             }
         };
+        const loadAttributes = async () => {
+            try {
+                const [attributeResponse, orderBootstrapResponse] = await Promise.all([
+                    attributeApi.getAll({ entity_type: 'product', active_only: true }).catch(() => null),
+                    orderApi.getBootstrapCached({ mode: 'form' }).catch(() => null),
+                ]);
+                const directAttributes = Array.isArray(attributeResponse?.data)
+                    ? attributeResponse.data
+                    : (attributeResponse?.data?.data || []);
+                const bootstrapAttributes = Array.isArray(orderBootstrapResponse?.data?.product_attributes)
+                    ? orderBootstrapResponse.data.product_attributes
+                    : [];
+
+                setAllAttributes(mergeImportQuickFilterAttributes(bootstrapAttributes, directAttributes));
+            } catch (error) {
+                fail(error, 'Không thể tải thuộc tính sản phẩm.');
+            }
+        };
 
         loadCategories();
+        loadAttributes();
         fetchInventoryUnits();
         fetchImportStatuses();
     }, []);
@@ -5389,16 +6851,37 @@ const InventoryMovement = () => {
     useEffect(() => {
         if (!importModal.open) return;
         if (importModal.form.inventory_import_status_id || importStatuses.length === 0) return;
-        const defaultStatus = getDefaultImportStatus();
-        if (!defaultStatus) return;
+        const fallbackStatus = importModal.form.auto_complete_import
+            ? (getCompletedImportStatus() || getDefaultImportStatus())
+            : (getNewImportStatus() || getDefaultImportStatus());
+        if (!fallbackStatus) return;
         setImportModal((prev) => ({
             ...prev,
             form: synchronizeImportFormCompletion({
                 ...prev.form,
-                inventory_import_status_id: String(defaultStatus.id),
+                inventory_import_status_id: String(fallbackStatus.id),
             }),
         }));
-    }, [importModal.open, importModal.form.inventory_import_status_id, importStatuses]);
+    }, [importModal.open, importModal.form.auto_complete_import, importModal.form.inventory_import_status_id, importStatuses]);
+
+    useEffect(() => {
+        if (!importModal.open || importModal.form.id || importModal.form.auto_complete_import || importModal.form.auto_complete_import_touched) return;
+        if (!importStatuses.length) return;
+
+        setImportModal((prev) => {
+            if (!prev.open || prev.form.id || prev.form.auto_complete_import || prev.form.auto_complete_import_touched) {
+                return prev;
+            }
+
+            return {
+                ...prev,
+                form: applyImportAutoCompleteMode({
+                    ...prev.form,
+                    auto_complete_import_touched: false,
+                }, true),
+            };
+        });
+    }, [importModal.open, importModal.form.auto_complete_import, importModal.form.auto_complete_import_touched, importModal.form.id, importStatuses]);
 
     useEffect(() => {
         if (!importModal.open) return;
@@ -6237,10 +7720,12 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 ...prev,
                 form: {
                     ...prev.form,
+                    has_purchase_invoice: true,
                     local_attachment_files: [...(prev.form.local_attachment_files || []), ...nextFiles],
                 },
             };
         });
+        setImportAttachmentManagerOpen(true);
     };
 
     const removeImportAttachment = (attachmentIndex) => {
@@ -6263,6 +7748,74 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }));
     };
 
+    const openImportModalAttachmentPreview = (row) => {
+        if (!row) return;
+
+        let previewUrl = '';
+        let shouldRevoke = false;
+        if (row.kind === 'local' && row.file) {
+            previewUrl = URL.createObjectURL(row.file);
+            shouldRevoke = true;
+        } else if (row.attachment) {
+            previewUrl = row.attachment.url || resolveMediaUrl(row.attachment.file_path);
+        }
+
+        if (!previewUrl) {
+            showToast({ type: 'warning', message: 'Tệp này chưa có đường dẫn để xem.' });
+            return;
+        }
+
+        window.open(previewUrl, '_blank', 'noopener,noreferrer');
+        if (shouldRevoke) {
+            window.setTimeout(() => URL.revokeObjectURL(previewUrl), 60000);
+        }
+    };
+
+    const replaceImportModalAttachmentFile = (row, file) => {
+        if (!row || !file) return;
+        setImportModal((prev) => {
+            const currentFiles = prev.form.local_attachment_files || [];
+            const currentAttachments = prev.form.attachments || [];
+
+            if (row.kind === 'local') {
+                return {
+                    ...prev,
+                    form: {
+                        ...prev.form,
+                        has_purchase_invoice: true,
+                        local_attachment_files: currentFiles.map((currentFile, index) => (index === row.index ? file : currentFile)),
+                    },
+                };
+            }
+
+            return {
+                ...prev,
+                form: {
+                    ...prev.form,
+                    has_purchase_invoice: true,
+                    attachments: currentAttachments.filter((_, index) => index !== row.index),
+                    local_attachment_files: [...currentFiles, file],
+                },
+            };
+        });
+        setImportAttachmentManagerOpen(true);
+        showToast({ type: 'success', message: 'Đã thay file hóa đơn. Lưu phiếu để cập nhật lên hệ thống.' });
+    };
+
+    const deleteImportModalAttachmentFile = (row) => {
+        if (!row) return;
+        const fileName = row.kind === 'local'
+            ? row.file?.name
+            : getImportAttachmentName(row.attachment);
+        if (!window.confirm(`Xóa hóa đơn "${fileName || 'đã chọn'}"?`)) return;
+
+        if (row.kind === 'local') {
+            removeLocalImportFile(row.index);
+        } else {
+            removeImportAttachment(row.index);
+        }
+    };
+
     const analyzeInvoiceFile = async (file) => {
         if (!file) return;
         if (!aiAvailable) {
@@ -6282,6 +7835,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             const response = await aiApi.readInvoice(submitData);
             const draft = response.data?.draft || {};
             const log = response.data?.log || null;
+            const completedStatus = getCompletedImportStatus();
+            const newStatus = getNewImportStatus();
             const defaultStatus = getDefaultImportStatus();
             const subtotalAmount = Number(draft.subtotal_amount || 0);
             const totalAmount = Number(draft.total_amount || subtotalAmount);
@@ -6305,11 +7860,16 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 : null;
 
             setImportModal((prev) => {
+                const autoCompleteImport = Boolean(prev.form.auto_complete_import ?? true);
+                const fallbackStatus = autoCompleteImport
+                    ? (completedStatus || defaultStatus)
+                    : (newStatus || defaultStatus);
                 const nextForm = {
                     ...prev.form,
                     supplier_id: prev.form.supplier_id || (draft.supplier_id ? String(draft.supplier_id) : ''),
-                    inventory_import_status_id: prev.form.inventory_import_status_id || (defaultStatus ? String(defaultStatus.id) : ''),
+                    inventory_import_status_id: prev.form.inventory_import_status_id || (fallbackStatus ? String(fallbackStatus.id) : ''),
                     status_is_manual: false,
+                    auto_complete_import: autoCompleteImport,
                     import_date: draft.import_date || prev.form.import_date || todayValue,
                     notes: prev.form.notes || draft.notes || '',
                     entry_mode: 'invoice_ai',
@@ -6319,6 +7879,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     extra_charge_percent_input: '',
                     invoice_analysis_log_id: log?.id ? String(log.id) : prev.form.invoice_analysis_log_id,
                     invoice_number: draft.invoice_number || prev.form.invoice_number || '',
+                    has_purchase_invoice: true,
                     analysis_log: log || prev.form.analysis_log,
                     attachments: log ? [
                         ...prev.form.attachments.filter((attachment) => Number(attachment.invoice_analysis_log_id || 0) !== Number(log.id)),
@@ -6363,22 +7924,27 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
     const openCreateImport = async () => {
         goToTab('imports');
+        clearPersistedImportDraft();
         await ensureSuppliersLoaded();
         await fetchInventoryUnits();
+        let statusOptions = importStatuses;
         if (!importStatuses.length) {
-            await fetchImportStatuses();
+            statusOptions = await fetchImportStatuses();
         }
-        const defaultStatus = getDefaultImportStatus();
+        const completedStatus = statusOptions.find((status) => isCompletedImportStatus(status)) || null;
+        const defaultStatus = statusOptions.find((status) => status.is_default) || statusOptions[0] || null;
         setImportTableSettingsOpen(false);
         closeImportPrintModal();
         setImportCompleteToggleSnapshot(null);
         highlightImportRow('');
         setImportModal({
             open: true,
-            form: synchronizeImportFormCompletion(createImportForm({
-                inventory_import_status_id: defaultStatus?.id || null,
+            form: applyImportAutoCompleteMode(createImportForm({
+                inventory_import_status_id: completedStatus?.id || defaultStatus?.id || null,
                 update_supplier_prices: true,
-            })),
+                auto_complete_import: true,
+                auto_complete_import_touched: false,
+            }), true, statusOptions),
         });
     };
 
@@ -6874,19 +8440,32 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
     };
 
-    const productSummaryItems = useMemo(() => !productSummary ? [] : [
-        { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
-        { label: 'SL chờ xuất', value: formatNumber(productSummary.total_pending_export || 0) },
-        { label: 'SL hoàn chờ về', value: formatNumber(productSummary.total_pending_return || 0) },
-                                    { label: 'Có thể bán', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
-        { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
-        { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
-        { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
-        { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
-        { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
-        { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
-        { label: 'Điều chỉnh tồn độc lập', value: formatNumber(productSummary.total_adjusted) },
-    ], [productSummary]);
+    const showProductTrackingColumns = productFilters.tracking_mode === '1';
+    const productSummaryItems = useMemo(() => {
+        if (!productSummary) return [];
+
+        const trackingItems = showProductTrackingColumns ? [
+            { label: `Đã đi ${productSummary.tracking_window_days || INVENTORY_TRACKING_WINDOW_DAYS} ngày`, value: formatNumber(productSummary.total_recent_outbound_quantity || 0) },
+            { label: 'Dự kiến đi bán', value: formatNumber(productSummary.total_tracking_demand_quantity || 0) },
+            { label: 'Mã đang theo dõi', value: formatNumber(productSummary.tracking_active_products || 0) },
+            { label: 'Mã cần nhập', value: formatNumber(productSummary.tracking_needs_restock_products || 0) },
+        ] : [];
+
+        return [
+            { label: 'Tổng số lượng tồn kho', value: formatNumber(productSummary.total_stock ?? productSummary.total_sellable_stock) },
+            { label: 'SL chờ xuất', value: formatNumber(productSummary.total_pending_export || 0) },
+            { label: 'SL hoàn chờ về', value: formatNumber(productSummary.total_pending_return || 0) },
+            { label: 'Có thể bán', value: formatNumber(productSummary.total_actual_stock ?? productSummary.total_sellable_stock ?? 0) },
+            ...trackingItems,
+            { label: 'Tổng giá trị tồn kho', value: formatCurrency(productSummary.total_inventory_value || 0) },
+            { label: 'Tổng mã', value: formatNumber(productSummary.total_products) },
+            { label: 'Tổng nhập', value: formatNumber(productSummary.total_imported) },
+            { label: 'Tổng xuất', value: formatNumber(productSummary.total_exported) },
+            { label: 'Tổng hoàn', value: formatNumber(productSummary.total_returned) },
+            { label: 'Tổng hỏng', value: formatNumber(productSummary.total_damaged) },
+            { label: 'Điều chỉnh tồn độc lập', value: formatNumber(productSummary.total_adjusted) },
+        ];
+    }, [productSummary, showProductTrackingColumns]);
 
     const supplierSummaryItems = useMemo(() => !supplierSummary ? [] : [
         { label: 'Tổng nhà cung cấp', value: formatNumber(supplierSummary.total_suppliers) },
@@ -6980,6 +8559,8 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
         if (columnId === 'product') {
             const stockMeta = getProductStockAlertMeta(row);
+            const trackingMeta = getProductTrackingMeta(row);
+            const trackingDemandQuantity = Number(row.tracking_demand_quantity || 0);
             const skuValue = String(row.sku || '').trim();
             const nameValue = String(row.name || '').trim();
             const copyBaseId = String(row.product_id || row.id || row.sku || row.name || 'product');
@@ -7004,6 +8585,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 <div className="min-w-0 flex flex-1 flex-wrap items-center gap-2">
                                     <span className="truncate font-mono text-[12px] font-black text-primary">{row.sku || 'Chưa có mã'}</span>
                                     <span className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${stockMeta.badgeClass}`}>{stockMeta.label}</span>
+                                    {showProductTrackingColumns && trackingDemandQuantity > 0 ? (
+                                        <span
+                                            className={`rounded-sm border px-2 py-0.5 text-[10px] font-black ${trackingMeta.badgeClass}`}
+                                            title={`Đã đi ${formatNumber(row.recent_outbound_quantity || 0)} trong ${row.tracking_window_days || INVENTORY_TRACKING_WINDOW_DAYS} ngày, chờ xuất ${formatNumber(row.pending_export_quantity || 0)}`}
+                                        >
+                                            {trackingMeta.label}
+                                        </span>
+                                    ) : null}
                                 </div>
                                 {skuValue ? (
                                     <button
@@ -7059,6 +8648,14 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 </span>
             );
         }
+        if (columnId === 'recent_outbound_quantity') {
+            const outboundQuantity = Number(row.recent_outbound_quantity || 0);
+            return (
+                <span className={`text-[14px] font-black ${outboundQuantity > 0 ? 'text-emerald-700' : 'text-primary/45'}`}>
+                    {formatNumber(outboundQuantity)}
+                </span>
+            );
+        }
         if (columnId === 'actual_stock') {
             const stockMeta = getActualStockCellMeta(row);
             return (
@@ -7066,6 +8663,50 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                     <span className={`text-[14px] font-black ${stockMeta.textClass}`}>{formatNumber(row.actual_stock ?? 0)}</span>
                     <span className={`text-[11px] ${stockMeta.key === 'available' ? 'text-primary/45' : 'text-rose-600'}`}>{stockMeta.label}</span>
                 </div>
+            );
+        }
+        if (columnId === 'tracking_daily_average') {
+            const average = Number(row.tracking_daily_average || 0);
+            return (
+                <span className={`text-[13px] font-black ${average > 0 ? 'text-primary' : 'text-primary/45'}`}>
+                    {average > 0 ? formatOneDecimal(average) : '-'}
+                </span>
+            );
+        }
+        if (columnId === 'tracking_stock_coverage_days') {
+            const demand = Number(row.tracking_demand_quantity || 0);
+            const actualStock = Number(row.actual_stock ?? 0);
+            const coverageDays = row.tracking_stock_coverage_days == null ? null : Number(row.tracking_stock_coverage_days);
+
+            if (demand <= 0) {
+                return <span className="text-[13px] font-black text-primary/45">-</span>;
+            }
+
+            if (actualStock <= 0) {
+                return (
+                    <div className="flex flex-col items-end gap-0.5">
+                        <span className="text-[13px] font-black text-rose-700">0 ngày</span>
+                        <span className="text-[11px] text-rose-600">Âm kho</span>
+                    </div>
+                );
+            }
+
+            const textClass = coverageDays !== null && coverageDays < 7
+                ? 'text-rose-700'
+                : (coverageDays !== null && coverageDays < 15 ? 'text-amber-700' : 'text-emerald-700');
+
+            return (
+                <span className={`text-[13px] font-black ${textClass}`}>
+                    {coverageDays !== null ? `${formatNumber(coverageDays)} ngày` : '-'}
+                </span>
+            );
+        }
+        if (columnId === 'tracking_status') {
+            const trackingMeta = getProductTrackingMeta(row);
+            return (
+                <span className={`inline-flex items-center rounded-sm border px-2 py-1 text-[11px] font-black ${trackingMeta.badgeClass}`}>
+                    {trackingMeta.label}
+                </span>
             );
         }
         if (columnId === 'inventory_value') {
@@ -7334,7 +8975,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         }
         if (columnId === 'invoice') {
             const attachmentsCount = Number(row.attachments_count || 0);
-            const hasInvoice = attachmentsCount > 0;
+            const hasInvoice = Boolean(row.has_purchase_invoice);
             return (
                 <div className="flex items-center justify-center">
                     <button
@@ -7345,10 +8986,10 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-100'
                                 : 'border-primary/15 bg-white text-primary/65 hover:border-primary hover:bg-primary/[0.05] hover:text-primary'
                         }`}
-                        title={hasInvoice ? `Xem ${formatNumber(attachmentsCount)} hóa đơn đính kèm` : 'Thêm hóa đơn'}
+                        title={hasInvoice ? `Có hóa đơn đầu vào${attachmentsCount ? ` • ${formatNumber(attachmentsCount)} file` : ''}` : 'Không có hóa đơn đầu vào'}
                     >
                         <span className="material-symbols-outlined text-[18px]">{hasInvoice ? 'receipt_long' : 'attach_file'}</span>
-                        {hasInvoice ? (
+                        {attachmentsCount > 0 ? (
                             <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-black text-white">
                                 {attachmentsCount > 99 ? '99+' : attachmentsCount}
                             </span>
@@ -7851,11 +9492,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
             <span className="material-symbols-outlined pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[18px] text-primary/35">search</span>
             <input
                 value={productFilters.search}
-                onChange={(event) => setProductFilters((prev) => ({ ...prev, search: event.target.value }))}
+                onChange={(event) => updateProductFilterValue('search', event.target.value)}
                 onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                         event.preventDefault();
-                        fetchProducts(1);
+                        applyProductFilters(productFilters);
                     }
                 }}
                 placeholder="Tìm nhanh mã hoặc tên"
@@ -7865,23 +9506,29 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
     );
 
     const productListColumns = useMemo(
-        () => productColumns.map((column) => (
-            column.id === 'select'
-                ? {
-                    ...column,
-                    headerRender: () => (
-                        <IndeterminateCheckbox
-                            checked={productPageSelectionState.checked}
-                            indeterminate={productPageSelectionState.indeterminate}
-                            onChange={(event) => setVisibleProductsSelected(event.target.checked)}
-                            disabled={productPageSelectionState.total === 0}
-                            title="Chọn tất cả sản phẩm trên trang hiện tại"
-                        />
-                    ),
-                }
-                : column
-        )),
-        [productPageSelectionState]
+        () => {
+            const columnDefs = showProductTrackingColumns
+                ? productColumns
+                : productColumns.filter((column) => !productTrackingColumnIds.has(column.id));
+
+            return columnDefs.map((column) => (
+                column.id === 'select'
+                    ? {
+                        ...column,
+                        headerRender: () => (
+                            <IndeterminateCheckbox
+                                checked={productPageSelectionState.checked}
+                                indeterminate={productPageSelectionState.indeterminate}
+                                onChange={(event) => setVisibleProductsSelected(event.target.checked)}
+                                disabled={productPageSelectionState.total === 0}
+                                title="Chọn tất cả sản phẩm trên trang hiện tại"
+                            />
+                        ),
+                    }
+                    : column
+            ));
+        },
+        [productPageSelectionState, showProductTrackingColumns]
     );
 
     const refreshProductsTable = () => fetchProducts(
@@ -7897,9 +9544,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 title="Tồn kho"
                 leadingActions={productQuickSearchControl}
                 activeFilterChips={productFilterChips}
+                activeFilterPlacement="toolbar"
                 onClearAllFilters={productFilterChips.length ? clearAllProductFilters : null}
                 toggles={[
                     { id: 'products_refresh', icon: 'refresh', label: 'Làm mới', active: loading.products, disabled: loading.products, disabledTitle: 'Đang làm mới dữ liệu', onClick: refreshProductsTable },
+                    { id: 'products_tracking', icon: 'trending_up', label: `Mã cần theo dõi ${INVENTORY_TRACKING_WINDOW_DAYS} ngày`, active: productFilters.tracking_mode === '1', onClick: toggleProductTrackingMode },
                     { id: 'products_filters', icon: 'filter_alt', label: 'Bộ lọc', active: openPanels.products.filters, onClick: () => togglePanel('products', 'filters') },
                     { id: 'products_stats', icon: 'monitoring', label: 'Thống kê', active: openPanels.products.stats, onClick: () => togglePanel('products', 'stats') },
                     { id: 'products_columns', icon: 'view_column', label: 'Cài đặt cột', active: openPanels.products.columns, onClick: () => togglePanel('products', 'columns') },
@@ -7924,39 +9573,108 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 )}
             />
             {openPanels.products.filters ? (
-                <FilterPanel actions={<button type="button" onClick={() => fetchProducts(1)} className={primaryButton}>Lọc</button>}>
-                    <select value={productFilters.status} onChange={(event) => setProductFilters((prev) => ({ ...prev, status: event.target.value }))} className={`w-[150px] ${selectClass}`}>
-                        <option value="">Tất cả trạng thái bán</option>
-                        <option value="active">Đang bán</option>
-                        <option value="inactive">Ngừng bán</option>
+                <FilterPanel
+                    singleLine
+                    actions={(
+                        <>
+                            {selectedProductRows.length ? (
+                                <button
+                                    type="button"
+                                    onClick={() => saveCurrentProductFilterPreset({ onlySelectedProducts: true })}
+                                    className="inline-flex h-8 items-center justify-center gap-1 rounded-sm border border-primary/15 bg-primary px-2 text-[12px] font-bold text-white transition hover:bg-primary/90"
+                                    title={`Lưu tìm kiếm chỉ gồm ${formatNumber(selectedProductRows.length)} mã đang chọn`}
+                                >
+                                    <span className="material-symbols-outlined text-[18px]">playlist_add_check</span>
+                                    {`Lưu ${formatNumber(selectedProductRows.length)} mã`}
+                                </button>
+                            ) : (
+                                <button type="button" onClick={saveCurrentProductFilterPreset} className="inline-flex h-8 items-center justify-center gap-1 rounded-sm border border-primary/15 bg-white px-2 text-[12px] font-bold text-primary transition hover:border-primary hover:bg-primary/5">
+                                    <span className="material-symbols-outlined text-[18px]">bookmark_add</span>
+                                    Lưu
+                                </button>
+                            )}
+                            <button type="button" onClick={() => applyProductFilters(productFilters)} className={primaryButton}>Lọc</button>
+                        </>
+                    )}
+                >
+                    <div className="flex shrink-0 items-center gap-1.5">
+                        <ProductSavedSearchSelect
+                            presets={productFilterPresets}
+                            selectedId={selectedProductFilterPresetId}
+                            onSelect={(presetId) => {
+                                if (!presetId) {
+                                    setSelectedProductFilterPresetId('');
+                                    return;
+                                }
+                                applyProductFilterPreset(presetId);
+                            }}
+                            onRename={renameSelectedProductFilterPreset}
+                            onDelete={deleteSelectedProductFilterPreset}
+                            className="w-[170px]"
+                        />
+                    </div>
+                    <InventoryMultiSelectFilter
+                        value={productFilters.status}
+                        onChange={(value) => updateProductFilterValue('status', value)}
+                        options={productStatusFilterOptions}
+                        placeholder="Tất cả trạng thái bán"
+                        className="w-[135px] shrink-0"
+                    />
+                    <InventoryMultiSelectFilter
+                        value={productFilters.cost_source}
+                        onChange={(value) => updateProductFilterValue('cost_source', value)}
+                        options={productCostSourceFilterOptions}
+                        placeholder="Tất cả trạng thái giá"
+                        className="w-[145px] shrink-0"
+                    />
+                    <InventoryMultiSelectFilter
+                        value={productFilters.stock_alert}
+                        onChange={(value) => updateProductFilterValue('stock_alert', value)}
+                        options={productStockAlertFilterOptions}
+                        placeholder="Tất cả tồn kho"
+                        className="w-[130px] shrink-0"
+                    />
+                    <InventoryMultiSelectFilter
+                        value={productFilters.type}
+                        onChange={(value) => updateProductFilterValue('type', value)}
+                        options={productTypeFilterOptions}
+                        placeholder="Tất cả loại sản phẩm"
+                        className="w-[145px] shrink-0"
+                    />
+                    <InventoryMultiSelectFilter
+                        value={productFilters.category_id}
+                        onChange={(value) => updateProductFilterValue('category_id', value)}
+                        options={productCategoryFilterOptions}
+                        placeholder="Tất cả danh mục"
+                        className="w-[165px] shrink-0"
+                        menuClassName="w-[360px]"
+                        searchable
+                    />
+                    <InventoryMultiSelectFilter
+                        value={productFilters.variant_scope}
+                        onChange={(value) => updateProductFilterValue('variant_scope', value)}
+                        options={productVariantScopeFilterOptions}
+                        placeholder="Có biến thể / không"
+                        className="w-[150px] shrink-0"
+                    />
+                    <select value={productFilters.tracking_mode} onChange={(event) => updateProductFilterValue('tracking_mode', event.target.value)} className={`w-[130px] shrink-0 ${selectClass}`}>
+                        <option value="">Tất cả mã</option>
+                        <option value="1">Mã cần theo dõi 15 ngày</option>
                     </select>
-                    <select value={productFilters.cost_source} onChange={(event) => setProductFilters((prev) => ({ ...prev, cost_source: event.target.value }))} className={`w-[170px] ${selectClass}`}>
-                        <option value="">Tất cả trạng thái giá</option>
-                        <option value="actual">Đang dùng giá vốn</option>
-                        <option value="expected">Đang dùng giá dự kiến</option>
-                        <option value="empty">Chưa có giá</option>
-                    </select>
-                    <select value={productFilters.stock_alert} onChange={(event) => setProductFilters((prev) => ({ ...prev, stock_alert: event.target.value }))} className={`w-[150px] ${selectClass}`}>
-                        <option value="">Tất cả tồn kho</option>
-                        {productStockAlertFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                    <select value={productFilters.type} onChange={(event) => setProductFilters((prev) => ({ ...prev, type: event.target.value }))} className={`w-[165px] ${selectClass}`}>
-                        <option value="">Tất cả loại sản phẩm</option>
-                        {productTypeFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                    <select value={productFilters.category_id} onChange={(event) => setProductFilters((prev) => ({ ...prev, category_id: event.target.value }))} className={`w-[165px] ${selectClass}`}>
-                        <option value="">Tất cả danh mục</option>
-                        {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                    </select>
-                    <select value={productFilters.variant_scope} onChange={(event) => setProductFilters((prev) => ({ ...prev, variant_scope: event.target.value }))} className={`w-[165px] ${selectClass}`}>
-                        <option value="">Có biến thể / không</option>
-                        <option value="has_variants">Có biến thể</option>
-                        <option value="no_variants">Không có biến thể</option>
-                        <option value="only_variants">Chỉ biến thể con</option>
-                        <option value="roots">Chỉ sản phẩm gốc</option>
-                    </select>
-                    <input type="date" value={productFilters.date_from} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_from: event.target.value }))} className={`w-[145px] ${inputClass}`} />
-                    <input type="date" value={productFilters.date_to} onChange={(event) => setProductFilters((prev) => ({ ...prev, date_to: event.target.value }))} className={`w-[145px] ${inputClass}`} />
+                    {productFilters.tracking_mode === '1' ? (
+                        <input
+                            type="text"
+                            inputMode="decimal"
+                            value={productFilters.tracking_daily_min}
+                            onChange={(event) => updateProductFilterValue('tracking_daily_min', normalizeDecimalFilterDraft(event.target.value))}
+                            onBlur={() => setProductFilters((prev) => normalizeProductFilters({ ...prev, tracking_daily_min: prev.tracking_daily_min || defaultProductFilters.tracking_daily_min }))}
+                            placeholder="TB/ngày từ 1"
+                            className={`w-[105px] shrink-0 ${inputClass}`}
+                            title="Lọc mã có TB/ngày từ số này trở lên"
+                        />
+                    ) : null}
+                    <input type="date" value={productFilters.date_from} onChange={(event) => updateProductFilterValue('date_from', event.target.value)} className={`w-[120px] shrink-0 ${inputClass}`} />
+                    <input type="date" value={productFilters.date_to} onChange={(event) => updateProductFilterValue('date_to', event.target.value)} className={`w-[120px] shrink-0 ${inputClass}`} />
                 </FilterPanel>
             ) : null}
             {openPanels.products.stats ? <SummaryPanel items={productSummaryItems} /> : null}
@@ -8433,6 +10151,47 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
         [exportModal.form.customer_name, exportModal.form.invoice_meta]
     );
     const documentWorkspace = isDocumentTab(activeTab) ? renderSimpleTab(activeTab) : null;
+    const importModalAttachmentRows = useMemo(() => [
+        ...(importModal.form.attachments || []).map((attachment, index) => ({
+            key: `saved_${attachment.id || attachment.file_path || index}`,
+            kind: 'saved',
+            index,
+            attachment,
+            name: getImportAttachmentName(attachment),
+            size: attachment.file_size,
+            mimeType: attachment.mime_type,
+            typeLabel: getImportAttachmentTypeLabel(attachment),
+            icon: isPdfAttachment(attachment) ? 'picture_as_pdf' : (isImageAttachment(attachment) ? 'image' : 'description'),
+            iconClass: isPdfAttachment(attachment) ? 'text-rose-600' : (isImageAttachment(attachment) ? 'text-sky-600' : 'text-primary/45'),
+        })),
+        ...(importModal.form.local_attachment_files || []).map((file, index) => {
+            const pseudoAttachment = {
+                original_name: file.name,
+                mime_type: file.type,
+                file_size: file.size,
+                source_type: 'manual',
+            };
+
+            return {
+                key: `local_${file.name}_${file.size}_${file.lastModified}_${index}`,
+                kind: 'local',
+                index,
+                file,
+                name: file.name,
+                size: file.size,
+                mimeType: file.type,
+                typeLabel: 'Chưa lưu',
+                icon: isPdfAttachment(pseudoAttachment) ? 'picture_as_pdf' : (isImageAttachment(pseudoAttachment) ? 'image' : 'description'),
+                iconClass: isPdfAttachment(pseudoAttachment) ? 'text-rose-600' : (isImageAttachment(pseudoAttachment) ? 'text-sky-600' : 'text-primary/45'),
+            };
+        }),
+    ], [importModal.form.attachments, importModal.form.local_attachment_files]);
+    const importModalAttachmentCount = importModalAttachmentRows.length;
+    useEffect(() => {
+        if (!importModal.open || importModalAttachmentCount === 0) {
+            setImportAttachmentManagerOpen(false);
+        }
+    }, [importModal.open, importModalAttachmentCount]);
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-3">
@@ -8895,7 +10654,11 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 title={importModal.form.id ? 'Sửa phiếu nhập' : 'Tạo phiếu nhập'}
                 onClose={closeImportModal}
                 closeOnBackdrop={false}
-                maxWidth="max-w-[1640px]"
+                maxWidth="max-w-[calc(100vw-16px)] sm:max-w-[calc(100vw-24px)]"
+                backdropClassName="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-2 sm:p-3"
+                panelClassName="flex h-[calc(100vh-16px)] max-h-[calc(100vh-16px)] flex-col sm:h-[calc(100vh-24px)] sm:max-h-[calc(100vh-24px)]"
+                bodyClassName="flex-1 overflow-auto px-5 py-4"
+                footerClassName="shrink-0 border-t border-primary/10 px-5 py-4"
                 footer={(
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div className="grid gap-2 text-[13px] font-semibold text-primary/75 sm:grid-cols-2 xl:grid-cols-4">
@@ -8919,7 +10682,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                 )}
             >
                 <div className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                    <div className="grid items-end gap-3 md:grid-cols-2 xl:grid-cols-[repeat(4,minmax(0,1fr))_44px_44px_44px_repeat(2,minmax(0,1fr))]">
                         <div className="min-w-0">
                             <div className={importFieldLabelClass}>Nhà cung cấp</div>
                             <select value={importModal.form.supplier_id} onChange={(event) => handleImportSupplierChange(event.target.value)} className={`w-full ${importSelectClass} h-11`}>
@@ -8930,18 +10693,32 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
                         <div className="min-w-0">
                             <div className={importFieldLabelClass}>Trạng thái</div>
-                            <div className="relative">
-                                <select value={importModal.form.inventory_import_status_id} onChange={(event) => handleImportStatusChange(event.target.value)} className={`w-full pr-12 ${importSelectClass} h-11`}>
-                                    <option value="">Chọn trạng thái</option>
-                                    {importStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
-                                </select>
+                            <div className="flex min-w-0 gap-2">
+                                <div className="relative min-w-0 flex-1">
+                                    <select value={importModal.form.inventory_import_status_id} onChange={(event) => handleImportStatusChange(event.target.value)} className={`w-full pr-12 ${importSelectClass} h-11`}>
+                                        <option value="">Chọn trạng thái</option>
+                                        {importStatuses.map((status) => <option key={status.id} value={status.id}>{status.name}</option>)}
+                                    </select>
+                                    <button
+                                        type="button"
+                                        onClick={() => openImportStatusManager(importStatuses.find((status) => String(status.id) === String(importModal.form.inventory_import_status_id)) || null)}
+                                        className="absolute right-1 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary/70 transition hover:border-primary hover:text-primary"
+                                        title="Quản lý trạng thái phiếu nhập"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">tune</span>
+                                    </button>
+                                </div>
                                 <button
                                     type="button"
-                                    onClick={() => openImportStatusManager(importStatuses.find((status) => String(status.id) === String(importModal.form.inventory_import_status_id)) || null)}
-                                    className="absolute right-1 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-sm border border-primary/15 bg-white text-primary/70 transition hover:border-primary hover:text-primary"
-                                    title="Quản lý trạng thái phiếu nhập"
+                                    onClick={() => handleImportAutoCompleteChange(!Boolean(importModal.form.auto_complete_import))}
+                                    className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-sm border transition ${
+                                        importModal.form.auto_complete_import
+                                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                            : 'border-primary/15 bg-white text-primary/45 hover:border-primary/30 hover:text-primary'
+                                    }`}
+                                    title={importModal.form.auto_complete_import ? 'Đang tự hoàn thành phiếu nhập' : 'Tích để phiếu nhập tự hoàn thành ngay'}
                                 >
-                                    <span className="material-symbols-outlined text-[18px]">tune</span>
+                                    <span className="material-symbols-outlined text-[20px]">{importModal.form.auto_complete_import ? 'check_circle' : 'radio_button_unchecked'}</span>
                                 </button>
                             </div>
                         </div>
@@ -8953,27 +10730,218 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
 
                         <div className="min-w-0">
                             <div className={importFieldLabelClass}>Số hóa đơn</div>
-                            <input value={importModal.form.invoice_number || ''} onChange={(event) => setImportModal((prev) => ({ ...prev, form: { ...prev.form, invoice_number: event.target.value } }))} className={`w-full ${importFieldClass} h-11`} placeholder="Nhập số hóa đơn (nếu có)" />
+                            <input value={importModal.form.invoice_number || ''} onChange={(event) => {
+                                const value = event.target.value;
+                                setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        invoice_number: value,
+                                        has_purchase_invoice: prev.form.has_purchase_invoice || value.trim() !== '',
+                                    },
+                                }));
+                            }} className={`w-full ${importFieldClass} h-11`} placeholder="Nhập số hóa đơn (nếu có)" />
                         </div>
 
-                        <div className="min-w-0">
-                            <div className={importFieldLabelHiddenClass}>Đính kèm</div>
-                            <label className={importActionButtonClass}>
-                                <input type="file" multiple accept=".pdf,image/*" className="hidden" onChange={(event) => addImportAttachmentFiles(event.target.files)} />
+                        <div className="min-w-0 xl:self-end">
+                            <input
+                                ref={importAttachmentInputRef}
+                                type="file"
+                                multiple
+                                accept=".pdf,image/*"
+                                className="hidden"
+                                onChange={(event) => {
+                                    addImportAttachmentFiles(event.target.files);
+                                    event.target.value = '';
+                                }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    if (importModalAttachmentCount > 0) {
+                                        setImportAttachmentManagerOpen((value) => !value);
+                                        return;
+                                    }
+                                    importAttachmentInputRef.current?.click();
+                                }}
+                                className={`relative inline-flex h-11 w-full items-center justify-center rounded-sm border transition xl:w-11 ${
+                                    importAttachmentManagerOpen
+                                        ? 'border-primary bg-primary text-white'
+                                        : 'border-primary/15 bg-white text-primary hover:border-primary hover:bg-primary/[0.04]'
+                                }`}
+                                title={importModalAttachmentCount > 0 ? 'Xem / sửa / xóa hóa đơn đính kèm' : 'Đính kèm hóa đơn / chứng từ'}
+                            >
                                 <span className="material-symbols-outlined text-[18px]">attach_file</span>
-                                Đính kèm hóa đơn / chứng từ{(importModal.form.attachments || []).length + (importModal.form.local_attachment_files || []).length > 0 ? ` (${(importModal.form.attachments || []).length + (importModal.form.local_attachment_files || []).length})` : ''}
+                                {importModalAttachmentCount > 0 ? (
+                                    <span className="absolute -right-1 -top-1 inline-flex min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-black leading-[18px] text-white ring-2 ring-white">
+                                        {importModalAttachmentCount}
+                                    </span>
+                                ) : null}
+                            </button>
+                        </div>
+
+                        <div className="min-w-0 xl:self-end">
+                            <button
+                                type="button"
+                                onClick={() => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        has_purchase_invoice: !Boolean(prev.form.has_purchase_invoice),
+                                    },
+                                }))}
+                                className={`relative inline-flex h-11 w-full items-center justify-center rounded-sm border transition xl:w-11 ${
+                                    importModal.form.has_purchase_invoice
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                        : 'border-primary/15 bg-white text-primary/45 hover:border-primary/30 hover:text-primary'
+                                }`}
+                                title={importModal.form.has_purchase_invoice ? 'Có hóa đơn đầu vào' : 'Không có hóa đơn đầu vào'}
+                                aria-label={importModal.form.has_purchase_invoice ? 'Có hóa đơn đầu vào' : 'Không có hóa đơn đầu vào'}
+                            >
+                                <span className="material-symbols-outlined text-[18px]">receipt_long</span>
+                                {importModal.form.has_purchase_invoice ? (
+                                    <span className="material-symbols-outlined absolute -right-1 -top-1 rounded-full bg-emerald-600 text-[14px] leading-none text-white ring-2 ring-white">check_circle</span>
+                                ) : null}
+                            </button>
+                        </div>
+
+                        <div className="min-w-0 xl:self-end">
+                            <label
+                                className={`inline-flex h-11 w-full items-center justify-center rounded-sm border px-3 text-primary transition xl:w-11 ${
+                                    !aiAvailable
+                                        ? 'cursor-not-allowed border-stone-200 bg-stone-100 text-stone-400 hover:border-stone-200 hover:bg-stone-100'
+                                        : 'cursor-pointer border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100'
+                                }`}
+                                title={!aiAvailable ? aiDisabledReason : 'Đọc hóa đơn bằng AI'}
+                            >
+                                <input type="file" accept=".pdf,image/*,.heic,.heif" className="hidden" disabled={!aiAvailable || loading.invoiceAnalysis} onChange={(event) => analyzeInvoiceFile(event.target.files?.[0])} />
+                                <span className={`material-symbols-outlined text-[18px] ${loading.invoiceAnalysis ? 'animate-spin' : ''}`}>
+                                    {loading.invoiceAnalysis ? 'progress_activity' : 'auto_awesome'}
+                                </span>
                             </label>
                         </div>
 
                         <div className="min-w-0">
-                            <div className={importFieldLabelHiddenClass}>Bản nháp</div>
-                            <label className={`${importActionButtonClass} ${!aiAvailable ? 'cursor-not-allowed border-stone-200 bg-stone-100 text-stone-400 hover:border-stone-200 hover:bg-stone-100' : ''}`} title={!aiAvailable ? aiDisabledReason : 'Tạo bản nháp phiếu nhập từ ảnh hoặc PDF hóa đơn'}>
-                                <input type="file" accept=".pdf,image/*,.heic,.heif" className="hidden" disabled={!aiAvailable || loading.invoiceAnalysis} onChange={(event) => analyzeInvoiceFile(event.target.files?.[0])} />
-                                <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
-                                {loading.invoiceAnalysis ? 'Đang đọc ảnh / PDF' : 'Đọc hóa đơn bằng AI'}
-                            </label>
+                            <div className={importFieldLabelClass}>Phụ phí tiền</div>
+                            <input
+                                value={importModal.form.extra_charge_amount_input}
+                                onChange={(event) => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        extra_charge_amount_input: formatSignedAmountInput(event.target.value),
+                                    },
+                                }))}
+                                onBlur={(event) => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        extra_charge_amount_input: parseImportAmountInput(event.target.value).normalizedInput,
+                                    },
+                                }))}
+                                className="h-11 w-full rounded-sm border border-primary/15 bg-white px-3 text-right text-[13px] font-semibold text-primary outline-none transition placeholder:text-primary/35 focus:border-primary"
+                                placeholder="+100.000"
+                            />
+                        </div>
+
+                        <div className="min-w-0">
+                            <div className={importFieldLabelClass}>Phụ phí %</div>
+                            <input
+                                value={importModal.form.extra_charge_percent_input}
+                                onChange={(event) => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        extra_charge_percent_input: formatSignedPercentInput(event.target.value),
+                                    },
+                                }))}
+                                onBlur={(event) => setImportModal((prev) => ({
+                                    ...prev,
+                                    form: {
+                                        ...prev.form,
+                                        extra_charge_percent_input: parseImportPercentInput(event.target.value).normalizedInput,
+                                    },
+                                }))}
+                                className="h-11 w-full rounded-sm border border-primary/15 bg-white px-3 text-right text-[13px] font-semibold text-primary outline-none transition placeholder:text-primary/35 focus:border-primary"
+                                placeholder="+10"
+                            />
                         </div>
                     </div>
+
+                    {importAttachmentManagerOpen ? (
+                        <div className="rounded-sm border border-primary/10 bg-[#f8fafc] p-3 shadow-sm">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="text-[13px] font-black text-primary">Hóa đơn đính kèm</div>
+                                    <div className="text-[12px] text-primary/55">{formatNumber(importModalAttachmentCount)} file</div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => importAttachmentInputRef.current?.click()}
+                                        className={ghostButton}
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">upload_file</span>
+                                        Thêm file
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setImportAttachmentManagerOpen(false)}
+                                        className={iconButton(false)}
+                                        title="Đóng"
+                                    >
+                                        <span className="material-symbols-outlined text-[18px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                                {importModalAttachmentRows.map((row) => (
+                                    <div key={row.key} className="rounded-sm border border-primary/10 bg-white p-3">
+                                        <div className="flex items-start gap-2">
+                                            <span className={`material-symbols-outlined mt-0.5 text-[20px] ${row.iconClass}`}>{row.icon}</span>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="truncate text-[13px] font-black text-primary" title={row.name}>{row.name}</div>
+                                                <div className="mt-1 text-[11px] text-primary/55">
+                                                    {row.typeLabel} • {formatFileSize(row.size)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-3 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => openImportModalAttachmentPreview(row)}
+                                                className={ghostButton}
+                                                title="Xem"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">visibility</span>
+                                            </button>
+                                            <label className={ghostButton} title="Thay file">
+                                                <input
+                                                    type="file"
+                                                    accept=".pdf,image/*"
+                                                    className="hidden"
+                                                    onChange={(event) => {
+                                                        replaceImportModalAttachmentFile(row, event.target.files?.[0]);
+                                                        event.target.value = '';
+                                                    }}
+                                                />
+                                                <span className="material-symbols-outlined text-[18px]">sync</span>
+                                            </label>
+                                            <button
+                                                type="button"
+                                                onClick={() => deleteImportModalAttachmentFile(row)}
+                                                className={dangerButton}
+                                                title="Xóa"
+                                            >
+                                                <span className="material-symbols-outlined text-[18px]">delete</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
 
                     {!aiAvailable ? (
                         <div className="rounded-sm border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-900">
@@ -8997,97 +10965,28 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         </div>
                     ) : null}
 
-                    <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
-                        <div className="min-w-0">
-                            <div className={importFieldLabelClass}>Tìm nhanh sản phẩm</div>
-                            <ImportProductQuickSearch
-                                supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
-                                onSelect={appendImportProductFromQuickSearch}
-                                onToggleStar={toggleImportProductStar}
-                                starLoadingProductIds={importStarLoadingProductIds}
-                                placeholder={importModal.form.supplier_id ? 'Tìm tên, mã SP, mã NCC hoặc từ khóa của nhà cung cấp đã chọn' : 'Tìm tên, mã SP, mã NCC hoặc từ khóa trong toàn bộ sản phẩm'}
-                            />
-                        </div>
-
-                        <div className="min-w-0">
-                            <div className={importFieldLabelClass}>Giá nhập dự kiến</div>
-                            <label className="inline-flex h-11 w-full items-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-semibold text-primary">
-                                <input
-                                    type="checkbox"
-                                    checked={Boolean(importModal.form.update_supplier_prices)}
-                                    onChange={(event) => setImportModal((prev) => ({
-                                        ...prev,
-                                        form: {
-                                            ...prev.form,
-                                            update_supplier_prices: event.target.checked,
-                                            items: prev.form.items.map((item) => ({ ...item, update_supplier_price: event.target.checked })),
-                                        },
-                                    }))}
-                                    className="size-4 accent-primary"
-                                />
-                                <span className="leading-tight">Đồng bộ lại giá nhập dự kiến</span>
-                            </label>
-                        </div>
-
-                        <div className="min-w-0">
-                            <div className={importFieldLabelClass}>Dữ liệu</div>
-                            <button
-                                type="button"
-                                onClick={refreshImportItemPricing}
-                                disabled={loading.importPriceRefresh || !importModal.form.items.some((item) => Number(item.product_id || 0) > 0)}
-                                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-sm border border-primary/15 bg-white px-3 text-[13px] font-bold text-primary transition hover:border-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                <span className={`material-symbols-outlined text-[18px] ${loading.importPriceRefresh ? 'animate-spin' : ''}`}>refresh</span>
-                                Làm mới
-                            </button>
-                        </div>
-
-                        <div className="min-w-0">
-                            <div className={importFieldLabelClass}>Phụ phí tiền</div>
-                            <input
-                                value={importModal.form.extra_charge_amount_input}
-                                onChange={(event) => setImportModal((prev) => ({
-                                    ...prev,
-                                    form: {
-                                        ...prev.form,
-                                        extra_charge_amount_input: formatSignedAmountInput(event.target.value),
-                                    },
-                                }))}
-                                onBlur={(event) => setImportModal((prev) => ({
-                                    ...prev,
-                                    form: {
-                                        ...prev.form,
-                                        extra_charge_amount_input: parseImportAmountInput(event.target.value).normalizedInput,
-                                    },
-                                }))}
-                                className="h-11 w-full rounded-sm border border-primary/15 bg-white px-3 text-right text-[13px] font-semibold text-primary outline-none transition placeholder:text-primary/35 focus:border-primary"
-                                placeholder="+100.000 hoặc -100.000"
-                            />
-                        </div>
-
-                        <div className="min-w-0">
-                            <div className={importFieldLabelClass}>Phụ phí %</div>
-                            <input
-                                value={importModal.form.extra_charge_percent_input}
-                                onChange={(event) => setImportModal((prev) => ({
-                                    ...prev,
-                                    form: {
-                                        ...prev.form,
-                                        extra_charge_percent_input: formatSignedPercentInput(event.target.value),
-                                    },
-                                }))}
-                                onBlur={(event) => setImportModal((prev) => ({
-                                    ...prev,
-                                    form: {
-                                        ...prev.form,
-                                        extra_charge_percent_input: parseImportPercentInput(event.target.value).normalizedInput,
-                                    },
-                                }))}
-                                className="h-11 w-full rounded-sm border border-primary/15 bg-white px-3 text-right text-[13px] font-semibold text-primary outline-none transition placeholder:text-primary/35 focus:border-primary"
-                                placeholder="+10 hoặc -10"
-                            />
-                        </div>
-                    </div>
+                    <ImportProductQuickSearch
+                        supplierId={importModal.form.supplier_id ? Number(importModal.form.supplier_id) : null}
+                        categoryOptions={productCategoryFilterOptions}
+                        attributes={importQuickAttributeOptions}
+                        onNotify={showToast}
+                        onSelect={appendImportProductFromQuickSearch}
+                        onToggleStar={toggleImportProductStar}
+                        starLoadingProductIds={importStarLoadingProductIds}
+                        updateSupplierPrices={Boolean(importModal.form.update_supplier_prices)}
+                        onUpdateSupplierPricesChange={(checked) => setImportModal((prev) => ({
+                            ...prev,
+                            form: {
+                                ...prev.form,
+                                update_supplier_prices: checked,
+                                items: prev.form.items.map((item) => ({ ...item, update_supplier_price: checked })),
+                            },
+                        }))}
+                        onRefreshPricing={refreshImportItemPricing}
+                        refreshPricingLoading={loading.importPriceRefresh}
+                        refreshPricingDisabled={!importModal.form.items.some((item) => Number(item.product_id || 0) > 0)}
+                        placeholder={importModal.form.supplier_id ? 'Tìm tên, mã SP, mã NCC hoặc từ khóa của nhà cung cấp đã chọn' : 'Tìm tên, mã SP, mã NCC hoặc từ khóa trong toàn bộ sản phẩm'}
+                    />
 
                     <ImportItemsEditorTable
                         items={importModal.form.items}
@@ -9097,6 +10996,7 @@ const buildSavedSupplierPriceRowUpdates = (row, responseData, fallbackValues = {
                         onToggleSettings={() => setImportTableSettingsOpen((prev) => !prev)}
                         onCloseSettings={() => setImportTableSettingsOpen(false)}
                         expanded={false}
+                        bodyMaxHeightClass="max-h-[52vh] overflow-auto"
                         onToggleExpanded={() => setImportTableExpanded(true)}
                         onOpenPrint={openImportPrintModal}
                         onUpdateLine={updateImportLine}

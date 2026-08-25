@@ -5074,6 +5074,7 @@ class ProductController extends Controller
             'returning',
             'pending return',
             'pending_return',
+            'completed',
             'draft',
             'nhap',
             'huy',
@@ -6247,6 +6248,82 @@ class ProductController extends Controller
             ->all();
     }
 
+    protected function buildAttributeTextFallbackCandidates(array $valueArray): array
+    {
+        return collect($valueArray)
+            ->map(function ($value) {
+                $rawValue = trim((string) $value);
+                $normalizedName = $this->normalizeNameSearchText($rawValue);
+                $compactName = $this->compactSearchText($rawValue);
+
+                if (
+                    $normalizedName === ''
+                    || preg_match('/[a-z]/', $compactName) !== 1
+                    || preg_match('/\d/', $compactName) !== 1
+                ) {
+                    return null;
+                }
+
+                $tokens = $this->extractNameSearchTokens($normalizedName, $compactName);
+
+                if (empty($tokens)) {
+                    return null;
+                }
+
+                return [
+                    'tokens' => $tokens,
+                    'token_likes' => array_map(
+                        fn ($token) => '%' . $this->escapeLike($token) . '%',
+                        $tokens
+                    ),
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    protected function applyProductAttributeTextFallbackGroup(Builder $query, array $valueArray): void
+    {
+        $candidates = $this->buildAttributeTextFallbackCandidates($valueArray);
+
+        if (empty($candidates)) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        $nameExpr = $this->normalizedWordsExpression('products.name');
+        $compactNameExpr = $this->compactSearchExpression('products.name');
+        $compactSkuExpr = $this->compactSearchExpression('products.sku');
+
+        $query->where(function (Builder $fallbackQuery) use ($candidates, $nameExpr, $compactNameExpr, $compactSkuExpr) {
+            foreach ($candidates as $candidate) {
+                $tokenLikes = $candidate['token_likes'] ?? [];
+                if (empty($tokenLikes)) {
+                    continue;
+                }
+
+                $fallbackQuery->orWhere(function (Builder $candidateQuery) use ($tokenLikes, $nameExpr, $compactNameExpr, $compactSkuExpr) {
+                    foreach ($tokenLikes as $tokenLike) {
+                        $candidateQuery->where(function (Builder $tokenQuery) use ($tokenLike, $nameExpr, $compactNameExpr, $compactSkuExpr) {
+                            $tokenQuery
+                                ->whereRaw("{$nameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$compactNameExpr} LIKE ? ESCAPE '\\'", [$tokenLike])
+                                ->orWhereRaw("{$compactSkuExpr} LIKE ? ESCAPE '\\'", [$tokenLike]);
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    protected function applyProductAttributeTextFallbackGroups(Builder $query, array $filterGroups): void
+    {
+        foreach ($filterGroups as $filterGroup) {
+            $this->applyProductAttributeTextFallbackGroup($query, $filterGroup['values']);
+        }
+    }
+
     protected function normalizeAttributeFilterGroups($inputAttributes): array
     {
         if (!is_array($inputAttributes) || empty($inputAttributes)) {
@@ -6301,11 +6378,15 @@ class ProductController extends Controller
         $includeBundleItemMatches = array_key_exists('include_bundle_items', $options)
             ? (bool) $options['include_bundle_items']
             : false;
+        $includeTextFallbackMatches = array_key_exists('include_text_fallback', $options)
+            ? (bool) $options['include_text_fallback']
+            : false;
 
         $query->where(function (Builder $attributeQuery) use (
             $filterGroups,
             $includeVariationMatches,
-            $includeBundleItemMatches
+            $includeBundleItemMatches,
+            $includeTextFallbackMatches
         ) {
             $attributeQuery->where(function (Builder $ownAttributeQuery) use ($filterGroups) {
                 $this->applyOwnAttributeFilterGroups($ownAttributeQuery, $filterGroups);
@@ -6330,6 +6411,12 @@ class ProductController extends Controller
                                 $this->applyVariationAttributeFilterGroups($variationQuery, $filterGroups);
                             });
                     });
+                });
+            }
+
+            if ($includeTextFallbackMatches) {
+                $attributeQuery->orWhere(function (Builder $textFallbackQuery) use ($filterGroups) {
+                    $this->applyProductAttributeTextFallbackGroups($textFallbackQuery, $filterGroups);
                 });
             }
         });
@@ -7816,6 +7903,7 @@ class ProductController extends Controller
             $this->applyProductAttributeFilters($query, $request->input('attributes'), [
                 'include_variations' => true,
                 'include_bundle_items' => true,
+                'include_text_fallback' => true,
             ]);
             $this->applyProductBundleQuickFilters($query, $request->input('bundle_filters'));
         }
